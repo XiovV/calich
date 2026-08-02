@@ -17,6 +17,12 @@ export function getCalendarById(id: string): Calendar | undefined {
     .find((calendar) => calendar.id === id);
 }
 
+export function getCheckedCalendars(checkedCalendarIds: Set<string>): Calendar[] {
+  return mockCalendarSections
+    .flatMap((section) => section.calendars)
+    .filter((calendar) => checkedCalendarIds.has(calendar.id));
+}
+
 export const mockCalendarSections: CalendarSection[] = [
   {
     label: "My calendars",

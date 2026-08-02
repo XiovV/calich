@@ -21,7 +21,7 @@ A titled time block belonging to a single Calendar, with a start, an end, and ze
 _Avoid_: appointment, meeting, entry
 
 **Draft block**:
-The in-progress time selection made by dragging on the grid, before it is confirmed into an Event via the creation modal. Discarded, not saved, if the modal is cancelled.
+A proposed time window for a not-yet-saved Event, before it is confirmed via the creation modal — whether it originated from dragging on the grid or from a default (e.g. the sidebar's Create button). Discarded, not saved, if the modal is cancelled.
 _Avoid_: pending event, temp event
 
 **Reminder**:
