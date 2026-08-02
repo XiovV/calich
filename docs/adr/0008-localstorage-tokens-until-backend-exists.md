@@ -1,0 +1,7 @@
+# Tokens in localStorage until a real backend exists
+
+Access and refresh tokens are stored in `localStorage`, not in-memory-only or an `httpOnly` cookie. This is a known, deliberate simplification, not the intended long-term design: an `httpOnly` refresh-token cookie (set by the backend's response headers) is the standard secure pattern and the intended upgrade once a real backend exists — it can't be built now because there's no backend to issue the cookie. In-memory-only storage was also rejected for now: it would lose the session on every page refresh with nothing to silently re-authenticate against, since there's no backend to answer that call either. `localStorage` is the only option that lets the full login → persisted session → logout flow be built and demoed end-to-end today.
+
+A single hardcoded test user (in a `mockAuthApi` module, mirroring the existing `mockCalendars`/`mockEvents` pattern) stands in for the backend, with the same async shape a real API call would have — validating against a specific user rather than accepting any credentials, so the "invalid credentials" error path can also be demoed.
+
+Scoped out of this pass: a fetch/HTTP interceptor that attaches the access token and retries on 401 via the refresh token. The app makes no real API calls yet, so there's nothing to intercept — building that machinery now would be speculative. `refreshAccessToken` exists as a single callable action on the auth store, ready to be wired into an interceptor once real API traffic exists.

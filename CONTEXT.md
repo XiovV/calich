@@ -27,3 +27,17 @@ _Avoid_: pending event, temp event
 **Reminder**:
 A minutes-before-start offset attached to an Event, chosen from a fixed preset list (not free-form).
 _Avoid_: notification, alert
+
+## Authentication
+
+**Session**:
+The logged-in state for one user, represented by a stored access token + refresh token pair. Present or absent — there is no partial/expired-but-visible session state in this app.
+_Avoid_: login state, auth state
+
+**Access token**:
+The short-lived credential attached to authenticated requests. Not persisted for validation purposes by this app yet — no backend exists to reject it, so its presence in storage is trusted directly.
+_Avoid_: auth token, bearer token
+
+**Refresh token**:
+The credential used to obtain a new Access token without re-entering credentials, via `refreshAccessToken`. Stored client-side in `localStorage` for now — see ADR-0008 for why this is a known, temporary simplification rather than the intended long-term design.
+_Avoid_: renewal token

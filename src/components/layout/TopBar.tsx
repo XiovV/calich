@@ -2,6 +2,7 @@ import { ChevronLeft, ChevronRight, Settings } from "lucide-react";
 import { useShellStore } from "../../lib/shellStore";
 import { navigateDate } from "../../lib/navigateDate";
 import { formatDateLabel } from "../../lib/formatDateLabel";
+import { UserMenu } from "../../auth/UserMenu";
 import { ViewSwitcher } from "./ViewSwitcher";
 
 export function TopBar() {
@@ -59,6 +60,7 @@ export function TopBar() {
         >
           <Settings className="size-5" />
         </button>
+        <UserMenu />
       </div>
     </div>
   );
