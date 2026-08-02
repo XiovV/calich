@@ -41,9 +41,17 @@ func main() {
 	calendarService := service.NewCalendarService(repository.NewCalendarRepository(sqlDB))
 
 	ctx := context.Background()
-	if err := authService.Bootstrap(ctx); err != nil {
+	bootstrapUser, bootstrapCreatedUser, err := authService.Bootstrap(ctx)
+	if err != nil {
 		logger.Error("failed to bootstrap initial user", "error", err)
 		os.Exit(1)
+	}
+
+	if bootstrapCreatedUser {
+		if err := calendarService.EnsureDefaults(ctx, bootstrapUser.ID); err != nil {
+			logger.Error("failed to seed default calendars", "error", err)
+			os.Exit(1)
+		}
 	}
 
 	authHandler := handlers.NewAuthHandler(authService)

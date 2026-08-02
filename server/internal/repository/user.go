@@ -67,6 +67,14 @@ func (r *UserRepository) UpdatePassword(ctx context.Context, userID int64, passw
 	return nil
 }
 
+// First returns the earliest-created user — the sole user in today's
+// single-user instance (ADR-0010).
+func (r *UserRepository) First(ctx context.Context) (User, error) {
+	return r.scanUser(r.db.QueryRowContext(ctx,
+		`SELECT id, username, password_hash, must_change_password, created_at FROM users ORDER BY id LIMIT 1`,
+	))
+}
+
 func (r *UserRepository) Count(ctx context.Context) (int, error) {
 	var count int
 	if err := r.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM users`).Scan(&count); err != nil {

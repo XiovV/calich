@@ -31,13 +31,15 @@ func TestBootstrap_CreatesDefaultAdminWhenNoUsersAndNoEnvVars(t *testing.T) {
 	svc := newTestAuthService(t, "", "")
 	ctx := context.Background()
 
-	if err := svc.Bootstrap(ctx); err != nil {
+	user, created, err := svc.Bootstrap(ctx)
+	if err != nil {
 		t.Fatalf("bootstrap: %v", err)
 	}
-
-	user, err := svc.users.GetByUsername(ctx, "admin")
-	if err != nil {
-		t.Fatalf("get bootstrapped user: %v", err)
+	if !created {
+		t.Fatalf("expected bootstrap to report created=true for a fresh install")
+	}
+	if user.Username != "admin" {
+		t.Fatalf("expected bootstrapped user to be admin, got %q", user.Username)
 	}
 	if !user.MustChangePassword {
 		t.Fatalf("expected default bootstrap user to require a password change")
@@ -52,13 +54,15 @@ func TestBootstrap_UsesEnvCredentialsWhenBothSet(t *testing.T) {
 	svc := newTestAuthService(t, "alice", "hunter2")
 	ctx := context.Background()
 
-	if err := svc.Bootstrap(ctx); err != nil {
+	user, created, err := svc.Bootstrap(ctx)
+	if err != nil {
 		t.Fatalf("bootstrap: %v", err)
 	}
-
-	user, err := svc.users.GetByUsername(ctx, "alice")
-	if err != nil {
-		t.Fatalf("get bootstrapped user: %v", err)
+	if !created {
+		t.Fatalf("expected bootstrap to report created=true for a fresh install")
+	}
+	if user.Username != "alice" {
+		t.Fatalf("expected bootstrapped user to be alice, got %q", user.Username)
 	}
 	if user.MustChangePassword {
 		t.Fatalf("expected env-configured bootstrap user to skip forced password change")
@@ -77,8 +81,12 @@ func TestBootstrap_NoopWhenUsersExist(t *testing.T) {
 	svc := newTestAuthService(t, "", "")
 	ctx := context.Background()
 
-	if err := svc.Bootstrap(ctx); err != nil {
+	first, created, err := svc.Bootstrap(ctx)
+	if err != nil {
 		t.Fatalf("first bootstrap: %v", err)
+	}
+	if !created {
+		t.Fatalf("expected the first bootstrap to report created=true")
 	}
 
 	countBefore, err := svc.users.Count(ctx)
@@ -86,8 +94,15 @@ func TestBootstrap_NoopWhenUsersExist(t *testing.T) {
 		t.Fatalf("count: %v", err)
 	}
 
-	if err := svc.Bootstrap(ctx); err != nil {
+	second, created, err := svc.Bootstrap(ctx)
+	if err != nil {
 		t.Fatalf("second bootstrap: %v", err)
+	}
+	if created {
+		t.Fatalf("expected a second bootstrap against an existing install to report created=false")
+	}
+	if second.ID != first.ID {
+		t.Fatalf("expected the second bootstrap to return the same user, got %d and %d", first.ID, second.ID)
 	}
 
 	countAfter, err := svc.users.Count(ctx)
@@ -103,7 +118,7 @@ func TestBootstrap_NoopWhenUsersExist(t *testing.T) {
 func TestLogin_Success(t *testing.T) {
 	svc := newTestAuthService(t, "", "")
 	ctx := context.Background()
-	if err := svc.Bootstrap(ctx); err != nil {
+	if _, _, err := svc.Bootstrap(ctx); err != nil {
 		t.Fatalf("bootstrap: %v", err)
 	}
 
@@ -142,7 +157,7 @@ func TestLogin_Success(t *testing.T) {
 func TestLogin_WrongPassword(t *testing.T) {
 	svc := newTestAuthService(t, "", "")
 	ctx := context.Background()
-	if err := svc.Bootstrap(ctx); err != nil {
+	if _, _, err := svc.Bootstrap(ctx); err != nil {
 		t.Fatalf("bootstrap: %v", err)
 	}
 
@@ -155,7 +170,7 @@ func TestLogin_WrongPassword(t *testing.T) {
 func TestLogin_UnknownUsername(t *testing.T) {
 	svc := newTestAuthService(t, "", "")
 	ctx := context.Background()
-	if err := svc.Bootstrap(ctx); err != nil {
+	if _, _, err := svc.Bootstrap(ctx); err != nil {
 		t.Fatalf("bootstrap: %v", err)
 	}
 
@@ -170,7 +185,7 @@ func TestAuthenticate_RejectsWrongSigningSecret(t *testing.T) {
 	ctx := context.Background()
 
 	other := NewAuthService(svc.users, svc.sessions, []byte("a-different-secret"), "", "")
-	if err := other.Bootstrap(ctx); err != nil {
+	if _, _, err := other.Bootstrap(ctx); err != nil {
 		t.Fatalf("bootstrap: %v", err)
 	}
 
@@ -187,7 +202,7 @@ func TestAuthenticate_RejectsWrongSigningSecret(t *testing.T) {
 func TestAuthenticate_RejectsExpiredToken(t *testing.T) {
 	svc := newTestAuthService(t, "", "")
 	ctx := context.Background()
-	if err := svc.Bootstrap(ctx); err != nil {
+	if _, _, err := svc.Bootstrap(ctx); err != nil {
 		t.Fatalf("bootstrap: %v", err)
 	}
 
@@ -222,7 +237,7 @@ func TestAuthenticate_RejectsGarbage(t *testing.T) {
 func TestMustChangePassword_ReflectsUserFlag(t *testing.T) {
 	svc := newTestAuthService(t, "", "")
 	ctx := context.Background()
-	if err := svc.Bootstrap(ctx); err != nil {
+	if _, _, err := svc.Bootstrap(ctx); err != nil {
 		t.Fatalf("bootstrap: %v", err)
 	}
 
@@ -255,7 +270,7 @@ func TestMustChangePassword_ReflectsUserFlag(t *testing.T) {
 func TestChangePassword_SkipsCurrentPasswordCheckWhileMustChangePassword(t *testing.T) {
 	svc := newTestAuthService(t, "", "")
 	ctx := context.Background()
-	if err := svc.Bootstrap(ctx); err != nil {
+	if _, _, err := svc.Bootstrap(ctx); err != nil {
 		t.Fatalf("bootstrap: %v", err)
 	}
 
@@ -274,7 +289,7 @@ func TestChangePassword_SkipsCurrentPasswordCheckWhileMustChangePassword(t *test
 func TestChangePassword_RequiresCurrentPasswordOnceAlreadyChanged(t *testing.T) {
 	svc := newTestAuthService(t, "", "")
 	ctx := context.Background()
-	if err := svc.Bootstrap(ctx); err != nil {
+	if _, _, err := svc.Bootstrap(ctx); err != nil {
 		t.Fatalf("bootstrap: %v", err)
 	}
 
@@ -296,7 +311,7 @@ func TestChangePassword_RequiresCurrentPasswordOnceAlreadyChanged(t *testing.T) 
 func TestChangePassword_RejectsEmptyNewPassword(t *testing.T) {
 	svc := newTestAuthService(t, "", "")
 	ctx := context.Background()
-	if err := svc.Bootstrap(ctx); err != nil {
+	if _, _, err := svc.Bootstrap(ctx); err != nil {
 		t.Fatalf("bootstrap: %v", err)
 	}
 
@@ -314,7 +329,7 @@ func TestChangePassword_RejectsEmptyNewPassword(t *testing.T) {
 func TestChangePassword_NewPasswordWorksForLogin(t *testing.T) {
 	svc := newTestAuthService(t, "", "")
 	ctx := context.Background()
-	if err := svc.Bootstrap(ctx); err != nil {
+	if _, _, err := svc.Bootstrap(ctx); err != nil {
 		t.Fatalf("bootstrap: %v", err)
 	}
 
@@ -339,7 +354,7 @@ func TestChangePassword_NewPasswordWorksForLogin(t *testing.T) {
 func TestChangePassword_InvalidatesExistingSessions(t *testing.T) {
 	svc := newTestAuthService(t, "", "")
 	ctx := context.Background()
-	if err := svc.Bootstrap(ctx); err != nil {
+	if _, _, err := svc.Bootstrap(ctx); err != nil {
 		t.Fatalf("bootstrap: %v", err)
 	}
 
@@ -369,7 +384,7 @@ func mustUserID(t *testing.T, svc *AuthService, username string) int64 {
 func TestRefresh_ReturnsNewAccessTokenForValidRefreshToken(t *testing.T) {
 	svc := newTestAuthService(t, "", "")
 	ctx := context.Background()
-	if err := svc.Bootstrap(ctx); err != nil {
+	if _, _, err := svc.Bootstrap(ctx); err != nil {
 		t.Fatalf("bootstrap: %v", err)
 	}
 
@@ -412,7 +427,7 @@ func TestRefresh_RejectsUnknownToken(t *testing.T) {
 func TestRefresh_RejectsExpiredSession(t *testing.T) {
 	svc := newTestAuthService(t, "", "")
 	ctx := context.Background()
-	if err := svc.Bootstrap(ctx); err != nil {
+	if _, _, err := svc.Bootstrap(ctx); err != nil {
 		t.Fatalf("bootstrap: %v", err)
 	}
 
@@ -437,7 +452,7 @@ func TestRefresh_RejectsExpiredSession(t *testing.T) {
 func TestLogout_DeletesSessionSoRefreshNoLongerWorks(t *testing.T) {
 	svc := newTestAuthService(t, "", "")
 	ctx := context.Background()
-	if err := svc.Bootstrap(ctx); err != nil {
+	if _, _, err := svc.Bootstrap(ctx); err != nil {
 		t.Fatalf("bootstrap: %v", err)
 	}
 

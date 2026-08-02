@@ -118,3 +118,30 @@ func TestUserRepository_Count(t *testing.T) {
 		t.Fatalf("expected 1 user, got %d", count)
 	}
 }
+
+func TestUserRepository_First(t *testing.T) {
+	repo := newTestUserRepository(t)
+	ctx := context.Background()
+
+	created, err := repo.Create(ctx, "admin", "hash", true)
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+
+	first, err := repo.First(ctx)
+	if err != nil {
+		t.Fatalf("first: %v", err)
+	}
+	if first != created {
+		t.Fatalf("expected first user %+v to equal created user %+v", first, created)
+	}
+}
+
+func TestUserRepository_First_NotFound(t *testing.T) {
+	repo := newTestUserRepository(t)
+
+	_, err := repo.First(context.Background())
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected ErrNotFound, got %v", err)
+	}
+}

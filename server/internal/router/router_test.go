@@ -26,7 +26,7 @@ func newTestRouter(t *testing.T) http.Handler {
 	users := repository.NewUserRepository(sqlDB)
 	sessions := repository.NewSessionRepository(sqlDB)
 	authService := service.NewAuthService(users, sessions, []byte("test-secret"), "", "")
-	if err := authService.Bootstrap(context.Background()); err != nil {
+	if _, _, err := authService.Bootstrap(context.Background()); err != nil {
 		t.Fatalf("bootstrap: %v", err)
 	}
 	authHandler := handlers.NewAuthHandler(authService)

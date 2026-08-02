@@ -53,13 +53,22 @@ func NewAuthService(users *repository.UserRepository, sessions *repository.Sessi
 // Bootstrap creates the first user if none exist yet: the env-configured
 // initial credentials if both are set, otherwise a fixed admin/admin user
 // that must change its password before anything else can be done (ADR-0010).
-func (s *AuthService) Bootstrap(ctx context.Context) error {
+// It returns the resulting sole user either way, along with whether this
+// call is what created them — callers that only want to act on a genuinely
+// fresh install (e.g. seeding default calendars) should gate on that flag
+// rather than re-derive freshness from the user's current state, which can
+// drift after bootstrap (e.g. the user deletes their own data later).
+func (s *AuthService) Bootstrap(ctx context.Context) (user repository.User, created bool, err error) {
 	count, err := s.users.Count(ctx)
 	if err != nil {
-		return fmt.Errorf("count users: %w", err)
+		return repository.User{}, false, fmt.Errorf("count users: %w", err)
 	}
 	if count > 0 {
-		return nil
+		existing, err := s.users.First(ctx)
+		if err != nil {
+			return repository.User{}, false, fmt.Errorf("get existing user: %w", err)
+		}
+		return existing, false, nil
 	}
 
 	username, password, mustChangePassword := defaultBootstrapUsername, defaultBootstrapPassword, true
@@ -69,14 +78,15 @@ func (s *AuthService) Bootstrap(ctx context.Context) error {
 
 	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	if err != nil {
-		return fmt.Errorf("hash bootstrap password: %w", err)
+		return repository.User{}, false, fmt.Errorf("hash bootstrap password: %w", err)
 	}
 
-	if _, err := s.users.Create(ctx, username, string(hash), mustChangePassword); err != nil {
-		return fmt.Errorf("create bootstrap user: %w", err)
+	newUser, err := s.users.Create(ctx, username, string(hash), mustChangePassword)
+	if err != nil {
+		return repository.User{}, false, fmt.Errorf("create bootstrap user: %w", err)
 	}
 
-	return nil
+	return newUser, true, nil
 }
 
 type LoginResult struct {

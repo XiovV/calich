@@ -29,7 +29,7 @@ func newCalendarTestServer(t *testing.T) (baseURL string, accessToken string) {
 	users := repository.NewUserRepository(sqlDB)
 	sessions := repository.NewSessionRepository(sqlDB)
 	auth := service.NewAuthService(users, sessions, []byte("test-secret"), "alice", "hunter2")
-	if err := auth.Bootstrap(context.Background()); err != nil {
+	if _, _, err := auth.Bootstrap(context.Background()); err != nil {
 		t.Fatalf("bootstrap: %v", err)
 	}
 

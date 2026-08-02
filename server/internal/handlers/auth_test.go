@@ -29,7 +29,7 @@ func newAuthTestServer(t *testing.T) *httptest.Server {
 	sessions := repository.NewSessionRepository(sqlDB)
 	auth := service.NewAuthService(users, sessions, []byte("test-secret"), "", "")
 
-	if err := auth.Bootstrap(context.Background()); err != nil {
+	if _, _, err := auth.Bootstrap(context.Background()); err != nil {
 		t.Fatalf("bootstrap: %v", err)
 	}
 
