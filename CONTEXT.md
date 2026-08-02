@@ -30,14 +30,24 @@ _Avoid_: notification, alert
 
 ## Authentication
 
+**User**:
+The account record a Session belongs to, validated by the backend. One per self-hosted instance today; see ADR-0010 for why the schema doesn't treat this as a singleton.
+_Avoid_: account, profile
+
 **Session**:
-The logged-in state for one user, represented by a stored access token + refresh token pair. Present or absent — there is no partial/expired-but-visible session state in this app.
+The logged-in state for one User, established by the backend after validating credentials. Present or absent — there is no partial/expired-but-visible session state in this app.
 _Avoid_: login state, auth state
 
 **Access token**:
-The short-lived credential attached to authenticated requests. Not persisted for validation purposes by this app yet — no backend exists to reject it, so its presence in storage is trusted directly.
+The short-lived credential attached to authenticated requests, held in memory only on the client and re-obtained on page load via the Refresh token.
 _Avoid_: auth token, bearer token
 
 **Refresh token**:
-The credential used to obtain a new Access token without re-entering credentials, via `refreshAccessToken`. Stored client-side in `localStorage` for now — see ADR-0008 for why this is a known, temporary simplification rather than the intended long-term design.
+The credential used to obtain a new Access token without re-entering credentials, via `refreshAccessToken`. Issued by the backend as an `httpOnly`, `Secure` cookie — see ADR-0009.
 _Avoid_: renewal token
+
+## Deployment
+
+**Data directory**:
+The single directory (`DATA_DIR`, default `/data`) under which the backend stores all persistent state — currently the SQLite database, and any future runtime data (backups, attachments). The one path a self-hoster needs to mount as a volume.
+_Avoid_: data dir (in prose), storage path

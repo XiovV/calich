@@ -1,0 +1,3 @@
+# Pure-Go SQLite driver instead of cgo
+
+The backend uses `modernc.org/sqlite`, a pure-Go SQLite implementation, instead of the more commonly used `mattn/go-sqlite3` (a cgo wrapper around the C SQLite library). With no cgo dependency, `CGO_ENABLED=0` cross-compiles cleanly and produces a fully static binary, which keeps the multi-stage Docker build simple — no C toolchain in the builder image, no musl/glibc linking concerns in the final image. This matters here because the whole point of this project is to be trivially self-hostable via a single Docker image; the trade-off is `modernc.org/sqlite` being somewhat slower and less battle-tested than the C library, which is irrelevant at the scale of a single-user self-hosted calendar app.
