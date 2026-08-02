@@ -57,7 +57,7 @@ export function EventBlock({
         // event.detail is 0 for keyboard-triggered activations (Enter/Space)
         // and unset programmatic dispatches, but >=1 for real mouse clicks —
         // mouse clicks are already handled by the mousedown/mouseup drag-vs-click
-        // distance check in WeekGrid, so only keyboard activation reaches here.
+        // distance check in TimeGrid, so only keyboard activation reaches here.
         if (domEvent.detail === 0) {
           onEventClick(event);
         }

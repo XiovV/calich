@@ -1,0 +1,3 @@
+# Generalized TimeGrid for Day and Week views
+
+`WeekGrid` is renamed to `TimeGrid` and parameterized by `daysToShow: Date[]` instead of always computing a 7-day week internally, so Day and Week views share one implementation rather than duplicating the create-drag, move-drag, resize-drag, and overlap-layout wiring across two near-identical components. A new `CalendarView` component dispatches on `activeView`: Day and Week both render `TimeGrid` with a different day array; Month and Year — not yet built — render an explicit placeholder rather than silently falling back to Week, since a silent mismatch between the selected view and what's rendered is the exact bug this ADR's underlying work fixes.

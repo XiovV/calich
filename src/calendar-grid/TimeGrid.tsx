@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { addDays, format, isSameDay, startOfDay, startOfWeek } from "date-fns";
+import { format, isSameDay, startOfDay } from "date-fns";
 import { useShellStore } from "../lib/shellStore";
 import { useEventsStore } from "../lib/eventsStore";
 import { useCalendarsStore } from "../lib/calendarsStore";
@@ -23,7 +23,8 @@ import type { EventDragKind } from "./EventBlock";
 const NOW_REFRESH_INTERVAL_MS = 60_000;
 const CLICK_DISTANCE_THRESHOLD_PX = 4;
 
-interface WeekGridProps {
+interface TimeGridProps {
+  daysToShow: Date[];
   onDraftCreated: (day: Date, draft: DraftBlock) => void;
   onEventClick: (event: Event) => void;
 }
@@ -108,8 +109,11 @@ function computeEventDragPreview(
   };
 }
 
-export function WeekGrid({ onDraftCreated, onEventClick }: WeekGridProps) {
-  const selectedDate = useShellStore((state) => state.selectedDate);
+export function TimeGrid({
+  daysToShow,
+  onDraftCreated,
+  onEventClick,
+}: TimeGridProps) {
   const checkedCalendarIds = useShellStore((state) => state.checkedCalendarIds);
   const events = useEventsStore((state) => state.events);
   const updateEvent = useEventsStore((state) => state.updateEvent);
@@ -122,10 +126,6 @@ export function WeekGrid({ onDraftCreated, onEventClick }: WeekGridProps) {
   const [activeDrag, setActiveDrag] = useState<EventDragOrigin | null>(null);
   const [dragDelta, setDragDelta] = useState({ x: 0, y: 0 });
 
-  const weekStart = startOfWeek(selectedDate);
-  const weekDays = Array.from({ length: 7 }, (_, index) =>
-    addDays(weekStart, index),
-  );
   const visibleEvents = events.filter((event) =>
     checkedCalendarIds.has(event.calendarId),
   );
@@ -152,7 +152,8 @@ export function WeekGrid({ onDraftCreated, onEventClick }: WeekGridProps) {
     clientY: number,
   ) {
     const columnWidth =
-      (daysContainerRef.current?.getBoundingClientRect().width ?? 0) / 7;
+      (daysContainerRef.current?.getBoundingClientRect().width ?? 0) /
+      daysToShow.length;
     const origin: EventDragOrigin = {
       event,
       kind,
@@ -208,7 +209,7 @@ export function WeekGrid({ onDraftCreated, onEventClick }: WeekGridProps) {
     <div className="flex h-full flex-col">
       <div className="flex border-b border-border">
         <div className="w-14 shrink-0" />
-        {weekDays.map((day) => (
+        {daysToShow.map((day) => (
           <div
             key={day.toISOString()}
             className="flex-1 border-l border-border py-2 text-center"
@@ -221,7 +222,7 @@ export function WeekGrid({ onDraftCreated, onEventClick }: WeekGridProps) {
       <div ref={scrollRef} className="flex flex-1 overflow-y-auto">
         <TimeAxis pixelsPerHour={PIXELS_PER_HOUR} />
         <div ref={daysContainerRef} className="flex flex-1">
-          {weekDays.map((day) => (
+          {daysToShow.map((day) => (
             <DayColumn
               key={day.toISOString()}
               day={day}

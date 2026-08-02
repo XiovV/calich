@@ -2,7 +2,7 @@ import { useState } from "react";
 import { startOfDay } from "date-fns";
 import { TopBar } from "./TopBar";
 import { Sidebar } from "./Sidebar";
-import { WeekGrid } from "../../calendar-grid/WeekGrid";
+import { CalendarView } from "../../calendar-grid/CalendarView";
 import { EventModal } from "../../calendar-grid/EventModal";
 import { computeDefaultDraft, type DraftBlock } from "../../lib/gridTime";
 import type { Event } from "../../lib/mockEvents";
@@ -30,7 +30,7 @@ export function AppShell() {
           <Sidebar onCreateClick={handleCreateClick} />
         </nav>
         <main className="m-3 flex-1 overflow-hidden rounded-shell-lg bg-surface shadow-elevation-1">
-          <WeekGrid
+          <CalendarView
             onDraftCreated={(day, draft) =>
               setEventModalState({ mode: "create", day, draft })
             }
