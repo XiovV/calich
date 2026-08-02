@@ -6,6 +6,7 @@ import type { DraftBlock } from "../lib/gridTime";
 import { getCheckedCalendars } from "../lib/mockCalendars";
 import { useShellStore } from "../lib/shellStore";
 import { useEventsStore } from "../lib/eventsStore";
+import { useCalendarsStore } from "../lib/calendarsStore";
 import { REMINDER_PRESETS } from "../lib/reminderPresets";
 import { Select } from "../components/ui/Select";
 import { Checkbox } from "../components/ui/Checkbox";
@@ -24,8 +25,9 @@ function timeStringToDate(day: Date, time: string): Date {
 export function EventModal({ day, draft, onClose }: EventModalProps) {
   const checkedCalendarIds = useShellStore((state) => state.checkedCalendarIds);
   const addEvent = useEventsStore((state) => state.addEvent);
+  const calendars = useCalendarsStore((state) => state.calendars);
 
-  const checkedCalendars = getCheckedCalendars(checkedCalendarIds);
+  const checkedCalendars = getCheckedCalendars(calendars, checkedCalendarIds);
 
   const [title, setTitle] = useState("");
   const [startTime, setStartTime] = useState(() => format(draft.start, "HH:mm"));

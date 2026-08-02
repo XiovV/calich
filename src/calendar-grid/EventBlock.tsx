@@ -3,6 +3,7 @@ import type { EventLayout } from "../lib/layoutOverlappingEvents";
 import { durationToHeight, timeToY } from "../lib/gridTime";
 import { getCalendarById } from "../lib/mockCalendars";
 import { getCalendarColorClass } from "../lib/calendarColors";
+import { useCalendarsStore } from "../lib/calendarsStore";
 
 interface EventBlockProps {
   layout: EventLayout;
@@ -11,7 +12,8 @@ interface EventBlockProps {
 
 export function EventBlock({ layout, pixelsPerHour }: EventBlockProps) {
   const { event, column, columnCount } = layout;
-  const calendar = getCalendarById(event.calendarId);
+  const calendars = useCalendarsStore((state) => state.calendars);
+  const calendar = getCalendarById(calendars, event.calendarId);
 
   const top = timeToY(event.start, pixelsPerHour);
   const height = durationToHeight(event.start, event.end, pixelsPerHour);

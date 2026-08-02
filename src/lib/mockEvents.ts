@@ -54,7 +54,7 @@ export const mockEvents: Event[] = [
   },
   {
     id: "birthday-dinner",
-    calendarId: "birthdays",
+    calendarId: "family",
     title: "Birthday dinner",
     start: atTime(friday, 18, 0),
     end: atTime(friday, 19, 0),

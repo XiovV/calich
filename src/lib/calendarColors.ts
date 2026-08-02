@@ -8,6 +8,17 @@ export type CalendarColor =
   | "grape"
   | "graphite";
 
+export const CALENDAR_COLORS: CalendarColor[] = [
+  "tomato",
+  "flamingo",
+  "banana",
+  "sage",
+  "peacock",
+  "blueberry",
+  "grape",
+  "graphite",
+];
+
 const CALENDAR_COLOR_CLASSES: Record<CalendarColor, string> = {
   tomato: "bg-calendar-tomato",
   flamingo: "bg-calendar-flamingo",
@@ -21,4 +32,9 @@ const CALENDAR_COLOR_CLASSES: Record<CalendarColor, string> = {
 
 export function getCalendarColorClass(color: CalendarColor): string {
   return CALENDAR_COLOR_CLASSES[color];
+}
+
+export function getNextUnusedColor(usedColors: CalendarColor[]): CalendarColor {
+  const unused = CALENDAR_COLORS.find((color) => !usedColors.includes(color));
+  return unused ?? CALENDAR_COLORS[0];
 }
