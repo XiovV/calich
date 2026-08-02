@@ -1,18 +1,35 @@
 import { useState } from "react";
-import { Plus } from "lucide-react";
+import { Plus, Trash2 } from "lucide-react";
 import { Checkbox } from "../ui/Checkbox";
 import { getCalendarColorClass } from "../../lib/calendarColors";
 import { useCalendarsStore } from "../../lib/calendarsStore";
+import { useEventsStore } from "../../lib/eventsStore";
 import { useShellStore } from "../../lib/shellStore";
+import { deleteCalendarCascade } from "../../lib/deleteCalendarCascade";
 import { CreateCalendarModal } from "./CreateCalendarModal";
+import { DeleteCalendarConfirmation } from "./DeleteCalendarConfirmation";
 
 export function CalendarList() {
   const calendars = useCalendarsStore((state) => state.calendars);
+  const events = useEventsStore((state) => state.events);
   const checkedCalendarIds = useShellStore((state) => state.checkedCalendarIds);
   const toggleCalendarChecked = useShellStore(
     (state) => state.toggleCalendarChecked,
   );
   const [isCreateOpen, setIsCreateOpen] = useState(false);
+  const [deletingCalendarId, setDeletingCalendarId] = useState<string | null>(
+    null,
+  );
+
+  const deletingCalendar = calendars.find(
+    (calendar) => calendar.id === deletingCalendarId,
+  );
+
+  function handleConfirmDelete() {
+    if (!deletingCalendar) return;
+    deleteCalendarCascade(deletingCalendar.id);
+    setDeletingCalendarId(null);
+  }
 
   return (
     <div>
@@ -31,7 +48,10 @@ export function CalendarList() {
       </div>
       <ul>
         {calendars.map((calendar) => (
-          <li key={calendar.id} className="flex items-center gap-2 px-4 py-1.5">
+          <li
+            key={calendar.id}
+            className="group flex items-center gap-2 px-4 py-1.5"
+          >
             <span
               aria-hidden="true"
               className={`size-2.5 shrink-0 rounded-shell-sm ${getCalendarColorClass(calendar.color)}`}
@@ -39,6 +59,14 @@ export function CalendarList() {
             <span className="flex-1 truncate text-body text-ink">
               {calendar.name}
             </span>
+            <button
+              type="button"
+              onClick={() => setDeletingCalendarId(calendar.id)}
+              aria-label={`Delete ${calendar.name}`}
+              className="rounded-shell-pill p-1 text-ink-muted opacity-0 hover:bg-surface-hover focus-visible:opacity-100 group-hover:opacity-100"
+            >
+              <Trash2 className="size-3.5" />
+            </button>
             <Checkbox
               checked={checkedCalendarIds.has(calendar.id)}
               onCheckedChange={() => toggleCalendarChecked(calendar.id)}
@@ -49,6 +77,17 @@ export function CalendarList() {
       </ul>
       {isCreateOpen && (
         <CreateCalendarModal onClose={() => setIsCreateOpen(false)} />
+      )}
+      {deletingCalendar && (
+        <DeleteCalendarConfirmation
+          calendar={deletingCalendar}
+          eventCount={
+            events.filter((event) => event.calendarId === deletingCalendar.id)
+              .length
+          }
+          onConfirm={handleConfirmDelete}
+          onClose={() => setDeletingCalendarId(null)}
+        />
       )}
     </div>
   );

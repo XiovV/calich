@@ -1,0 +1,3 @@
+# Move/resize drag state lives in WeekGrid, not DayColumn
+
+Dragging an existing event to move or resize it is handled by state owned in `WeekGrid`, deliberately separate from the create-drag state that stays local to each `DayColumn`. Create-drag only ever needs the pointer's vertical position within one day column, but moving an event across day columns requires knowing which column the pointer is currently over — visibility only `WeekGrid` has. The two drag interactions intentionally live at different component levels rather than being unified under one mechanism, because unifying them would force create-drag to carry cross-day awareness it doesn't need.

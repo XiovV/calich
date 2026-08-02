@@ -11,6 +11,7 @@ interface ShellState {
   setActiveView: (view: ActiveView) => void;
   setCheckedCalendarIds: (ids: Iterable<string>) => void;
   toggleCalendarChecked: (id: string) => void;
+  removeCheckedCalendarId: (id: string) => void;
 }
 
 export const useShellStore = create<ShellState>((set) => ({
@@ -30,6 +31,12 @@ export const useShellStore = create<ShellState>((set) => ({
       } else {
         next.add(id);
       }
+      return { checkedCalendarIds: next };
+    }),
+  removeCheckedCalendarId: (id) =>
+    set((state) => {
+      const next = new Set(state.checkedCalendarIds);
+      next.delete(id);
       return { checkedCalendarIds: next };
     }),
 }));
