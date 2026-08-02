@@ -11,6 +11,12 @@ export interface CalendarSection {
   calendars: Calendar[];
 }
 
+export function getCalendarById(id: string): Calendar | undefined {
+  return mockCalendarSections
+    .flatMap((section) => section.calendars)
+    .find((calendar) => calendar.id === id);
+}
+
 export const mockCalendarSections: CalendarSection[] = [
   {
     label: "My calendars",

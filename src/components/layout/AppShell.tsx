@@ -1,5 +1,6 @@
 import { TopBar } from "./TopBar";
 import { Sidebar } from "./Sidebar";
+import { WeekGrid } from "../../calendar-grid/WeekGrid";
 
 export function AppShell() {
   return (
@@ -11,7 +12,9 @@ export function AppShell() {
         <nav className="w-72 shrink-0 border-r border-border bg-surface-sunken">
           <Sidebar />
         </nav>
-        <main className="m-3 flex-1 overflow-auto rounded-shell-lg bg-surface shadow-elevation-1" />
+        <main className="m-3 flex-1 overflow-hidden rounded-shell-lg bg-surface shadow-elevation-1">
+          <WeekGrid />
+        </main>
       </div>
     </div>
   );
