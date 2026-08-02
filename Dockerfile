@@ -12,12 +12,10 @@ WORKDIR /app
 COPY server/go.mod server/go.sum ./
 RUN go mod download
 COPY server/ ./
+COPY --from=frontend /app/dist ./internal/static/dist
 RUN CGO_ENABLED=0 go build -o /calendar-server ./cmd/server
 
 FROM gcr.io/distroless/static-debian12
 COPY --from=backend /calendar-server /calendar-server
-# Frontend static assets are not yet served (embedding into the Go binary is #16) —
-# copied here so the frontend build stage is part of this image's build graph.
-COPY --from=frontend /app/dist /dist
 EXPOSE 8080
 ENTRYPOINT ["/calendar-server"]

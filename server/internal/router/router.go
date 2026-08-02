@@ -1,6 +1,7 @@
 package router
 
 import (
+	"fmt"
 	"log/slog"
 	"net/http"
 	"time"
@@ -9,9 +10,11 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 
 	"github.com/XiovV/calendar/server/internal/handlers"
+	"github.com/XiovV/calendar/server/internal/spa"
+	"github.com/XiovV/calendar/server/internal/static"
 )
 
-func New(logger *slog.Logger) http.Handler {
+func New(logger *slog.Logger) (http.Handler, error) {
 	r := chi.NewRouter()
 	r.Use(requestLogger(logger))
 	r.Use(middleware.Recoverer)
@@ -20,7 +23,18 @@ func New(logger *slog.Logger) http.Handler {
 		r.Get("/health", handlers.Health)
 	})
 
-	return r
+	distFS, err := static.Dist()
+	if err != nil {
+		return nil, fmt.Errorf("load embedded frontend: %w", err)
+	}
+
+	spaHandler, err := spa.New(distFS)
+	if err != nil {
+		return nil, fmt.Errorf("build spa handler: %w", err)
+	}
+	r.Handle("/*", spaHandler)
+
+	return r, nil
 }
 
 func requestLogger(logger *slog.Logger) func(http.Handler) http.Handler {

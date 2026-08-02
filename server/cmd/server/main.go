@@ -25,9 +25,15 @@ func main() {
 	}
 	defer sqlDB.Close()
 
+	handler, err := router.New(logger)
+	if err != nil {
+		logger.Error("failed to build router", "error", err)
+		os.Exit(1)
+	}
+
 	srv := &http.Server{
 		Addr:    ":" + cfg.Port,
-		Handler: router.New(logger),
+		Handler: handler,
 	}
 
 	go func() {
