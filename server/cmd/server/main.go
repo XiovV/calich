@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
 	"log/slog"
 	"net/http"
 	"os"
@@ -11,7 +12,10 @@ import (
 
 	"github.com/XiovV/calendar/server/internal/config"
 	"github.com/XiovV/calendar/server/internal/db"
+	"github.com/XiovV/calendar/server/internal/handlers"
+	"github.com/XiovV/calendar/server/internal/repository"
 	"github.com/XiovV/calendar/server/internal/router"
+	"github.com/XiovV/calendar/server/internal/service"
 )
 
 func main() {
@@ -25,7 +29,25 @@ func main() {
 	}
 	defer sqlDB.Close()
 
-	handler, err := router.New(logger)
+	jwtSecret := make([]byte, 32)
+	if _, err := rand.Read(jwtSecret); err != nil {
+		logger.Error("failed to generate JWT signing secret", "error", err)
+		os.Exit(1)
+	}
+
+	users := repository.NewUserRepository(sqlDB)
+	sessions := repository.NewSessionRepository(sqlDB)
+	authService := service.NewAuthService(users, sessions, jwtSecret, cfg.InitialUsername, cfg.InitialPassword)
+
+	ctx := context.Background()
+	if err := authService.Bootstrap(ctx); err != nil {
+		logger.Error("failed to bootstrap initial user", "error", err)
+		os.Exit(1)
+	}
+
+	authHandler := handlers.NewAuthHandler(authService)
+
+	handler, err := router.New(logger, authHandler, authService)
 	if err != nil {
 		logger.Error("failed to build router", "error", err)
 		os.Exit(1)

@@ -1,18 +1,45 @@
 package router
 
 import (
+	"context"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/XiovV/calendar/server/internal/db"
+	"github.com/XiovV/calendar/server/internal/handlers"
+	"github.com/XiovV/calendar/server/internal/repository"
+	"github.com/XiovV/calendar/server/internal/service"
 )
 
-func TestRouter_APIRouteIsNotShadowedBySPACatchAll(t *testing.T) {
-	r, err := New(slog.New(slog.NewTextHandler(io.Discard, nil)))
+func newTestRouter(t *testing.T) http.Handler {
+	t.Helper()
+
+	sqlDB, err := db.OpenInMemory()
+	if err != nil {
+		t.Fatalf("open in-memory db: %v", err)
+	}
+	t.Cleanup(func() { sqlDB.Close() })
+
+	users := repository.NewUserRepository(sqlDB)
+	sessions := repository.NewSessionRepository(sqlDB)
+	authService := service.NewAuthService(users, sessions, []byte("test-secret"), "", "")
+	if err := authService.Bootstrap(context.Background()); err != nil {
+		t.Fatalf("bootstrap: %v", err)
+	}
+	authHandler := handlers.NewAuthHandler(authService)
+
+	r, err := New(slog.New(slog.NewTextHandler(io.Discard, nil)), authHandler, authService)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
+	return r
+}
+
+func TestRouter_APIRouteIsNotShadowedBySPACatchAll(t *testing.T) {
+	r := newTestRouter(t)
 
 	srv := httptest.NewServer(r)
 	defer srv.Close()
@@ -29,10 +56,7 @@ func TestRouter_APIRouteIsNotShadowedBySPACatchAll(t *testing.T) {
 }
 
 func TestRouter_UnknownClientRouteFallsBackToSPA(t *testing.T) {
-	r, err := New(slog.New(slog.NewTextHandler(io.Discard, nil)))
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
+	r := newTestRouter(t)
 
 	srv := httptest.NewServer(r)
 	defer srv.Close()

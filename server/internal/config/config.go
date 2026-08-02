@@ -3,14 +3,18 @@ package config
 import "os"
 
 type Config struct {
-	Port    string
-	DataDir string
+	Port            string
+	DataDir         string
+	InitialUsername string
+	InitialPassword string
 }
 
 func Load() Config {
 	return Config{
-		Port:    getEnv("PORT", "8080"),
-		DataDir: getEnv("DATA_DIR", "/data"),
+		Port:            getEnv("PORT", "8080"),
+		DataDir:         getEnv("DATA_DIR", "/data"),
+		InitialUsername: getEnv("INITIAL_USERNAME", ""),
+		InitialPassword: getEnv("INITIAL_PASSWORD", ""),
 	}
 }
 

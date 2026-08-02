@@ -10,17 +10,23 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 
 	"github.com/XiovV/calendar/server/internal/handlers"
+	"github.com/XiovV/calendar/server/internal/httpauth"
 	"github.com/XiovV/calendar/server/internal/spa"
 	"github.com/XiovV/calendar/server/internal/static"
 )
 
-func New(logger *slog.Logger) (http.Handler, error) {
+func New(logger *slog.Logger, authHandler *handlers.AuthHandler, authenticator httpauth.Authenticator) (http.Handler, error) {
 	r := chi.NewRouter()
 	r.Use(requestLogger(logger))
 	r.Use(middleware.Recoverer)
 
 	r.Route("/api", func(r chi.Router) {
 		r.Get("/health", handlers.Health)
+
+		r.Route("/auth", func(r chi.Router) {
+			r.Post("/login", authHandler.Login)
+			r.With(httpauth.RequireAuth(authenticator)).Get("/me", authHandler.Me)
+		})
 	})
 
 	distFS, err := static.Dist()
