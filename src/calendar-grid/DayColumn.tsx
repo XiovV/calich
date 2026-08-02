@@ -9,14 +9,23 @@ import {
   timeToY,
   type DraftBlock,
 } from "../lib/gridTime";
+import { columnLayoutToBox } from "../lib/eventBlockGeometry";
 import { EventBlock, type EventDragKind } from "./EventBlock";
 import { CurrentTimeLine } from "./CurrentTimeLine";
 import { DraftBlockPreview } from "./DraftBlockPreview";
 import { EventDragPreview } from "./EventDragPreview";
 
-interface EventDragPreviewData {
+const DRAFT_PSEUDO_EVENT_ID = "__draft-preview__";
+
+export interface EventDragPreviewData {
   top: number;
   height: number;
+  left: number;
+  width: number;
+  title: string;
+  start: Date;
+  end: Date;
+  colorClass: string;
 }
 
 interface DayColumnProps {
@@ -32,6 +41,7 @@ interface DayColumnProps {
     clientX: number,
     clientY: number,
   ) => void;
+  draggingEventId: string | null;
   eventDragPreview: EventDragPreviewData | null;
 }
 
@@ -43,15 +53,47 @@ export function DayColumn({
   onDraftCreated,
   onEventClick,
   onEventDragStart,
+  draggingEventId,
   eventDragPreview,
 }: DayColumnProps) {
   const dayEvents = events.filter((event) => isSameDay(event.start, day));
-  const layouts = layoutOverlappingEvents(dayEvents);
   const isToday = isSameDay(day, now);
 
   const columnRef = useRef<HTMLDivElement>(null);
   const [dragStartY, setDragStartY] = useState<number | null>(null);
   const [dragCurrentY, setDragCurrentY] = useState<number | null>(null);
+
+  const draftBlock =
+    dragStartY !== null && dragCurrentY !== null
+      ? computeDraftBlock(day, dragStartY, dragCurrentY, pixelsPerHour)
+      : null;
+
+  // While a draft is being created, include it as a pseudo-event in the same
+  // overlap-layout pass as the real events, so existing events shrink to make
+  // room for it instead of the preview overlapping them.
+  const layoutInputEvents: Event[] = draftBlock
+    ? [
+        ...dayEvents,
+        {
+          id: DRAFT_PSEUDO_EVENT_ID,
+          calendarId: "",
+          title: "",
+          start: draftBlock.start,
+          end: draftBlock.end,
+          reminders: [],
+        },
+      ]
+    : dayEvents;
+
+  const allLayouts = layoutOverlappingEvents(layoutInputEvents);
+  const layouts = allLayouts.filter(
+    (layout) =>
+      layout.event.id !== draggingEventId &&
+      layout.event.id !== DRAFT_PSEUDO_EVENT_ID,
+  );
+  const draftLayout = draftBlock
+    ? allLayouts.find((layout) => layout.event.id === DRAFT_PSEUDO_EVENT_ID)
+    : undefined;
 
   function offsetYFromEvent(clientY: number): number {
     const rect = columnRef.current?.getBoundingClientRect();
@@ -112,19 +154,23 @@ export function DayColumn({
         />
       ))}
       {isToday && <CurrentTimeLine now={now} pixelsPerHour={pixelsPerHour} />}
-      {dragStartY !== null &&
-        dragCurrentY !== null &&
+      {draftBlock &&
+        draftLayout &&
         (() => {
-          const draft = computeDraftBlock(
-            day,
-            dragStartY,
-            dragCurrentY,
-            pixelsPerHour,
+          const { left, width } = columnLayoutToBox(
+            draftLayout.column,
+            draftLayout.columnCount,
           );
           return (
             <DraftBlockPreview
-              top={timeToY(draft.start, pixelsPerHour)}
-              height={durationToHeight(draft.start, draft.end, pixelsPerHour)}
+              top={timeToY(draftBlock.start, pixelsPerHour)}
+              height={durationToHeight(
+                draftBlock.start,
+                draftBlock.end,
+                pixelsPerHour,
+              )}
+              left={left}
+              width={width}
             />
           );
         })()}
@@ -132,6 +178,12 @@ export function DayColumn({
         <EventDragPreview
           top={eventDragPreview.top}
           height={eventDragPreview.height}
+          left={eventDragPreview.left}
+          width={eventDragPreview.width}
+          title={eventDragPreview.title}
+          start={eventDragPreview.start}
+          end={eventDragPreview.end}
+          colorClass={eventDragPreview.colorClass}
         />
       )}
     </div>

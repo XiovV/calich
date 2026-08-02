@@ -80,4 +80,26 @@ body {
   font-family: var(--font-sans);
   font-size: var(--text-label-sm);
   color: var(--color-ink);
+  width: 100%;
+  max-width: 100%;
+}
+
+.rdp-months,
+.rdp-month {
+  width: 100%;
+  max-width: 100%;
+}
+
+.rdp-month_grid {
+  width: 100%;
+  table-layout: fixed;
+}
+
+/* react-day-picker's own stylesheet sets a fixed pixel width on each day
+   cell, which wins over table-layout:fixed's equal-column distribution in
+   most browsers (fixed layout takes its column widths from the first row).
+   Clearing it lets the 7 columns split the table's own 100% width evenly. */
+.rdp-weekday,
+.rdp-day {
+  width: auto;
 }

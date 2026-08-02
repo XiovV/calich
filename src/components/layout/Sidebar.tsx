@@ -8,7 +8,7 @@ interface SidebarProps {
 
 export function Sidebar({ onCreateClick }: SidebarProps) {
   return (
-    <div className="flex flex-col gap-4 overflow-y-auto py-4">
+    <div className="flex flex-col gap-4 overflow-x-hidden overflow-y-auto py-4">
       <button
         type="button"
         onClick={onCreateClick}

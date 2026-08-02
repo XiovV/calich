@@ -2,6 +2,11 @@ import { useEffect, useRef, useState } from "react";
 import { addDays, format, isSameDay, startOfDay, startOfWeek } from "date-fns";
 import { useShellStore } from "../lib/shellStore";
 import { useEventsStore } from "../lib/eventsStore";
+import { useCalendarsStore } from "../lib/calendarsStore";
+import { getCalendarById, type Calendar } from "../lib/mockCalendars";
+import { getCalendarColorClass } from "../lib/calendarColors";
+import { layoutOverlappingEvents } from "../lib/layoutOverlappingEvents";
+import { columnLayoutToBox } from "../lib/eventBlockGeometry";
 import type { Event } from "../lib/mockEvents";
 import {
   PIXELS_PER_HOUR,
@@ -12,7 +17,7 @@ import {
   type DraftBlock,
 } from "../lib/gridTime";
 import { TimeAxis } from "./TimeAxis";
-import { DayColumn } from "./DayColumn";
+import { DayColumn, type EventDragPreviewData } from "./DayColumn";
 import type { EventDragKind } from "./EventBlock";
 
 const NOW_REFRESH_INTERVAL_MS = 60_000;
@@ -58,11 +63,57 @@ function computeDragTimes(
   );
 }
 
+interface EventDragPreview {
+  day: Date;
+  data: EventDragPreviewData;
+}
+
+function computeEventDragPreview(
+  activeDrag: EventDragOrigin,
+  dragDelta: { x: number; y: number },
+  visibleEvents: Event[],
+  calendars: Calendar[],
+): EventDragPreview {
+  const { start, end } = computeDragTimes(activeDrag, dragDelta.x, dragDelta.y);
+  const originDay = startOfDay(activeDrag.event.start);
+  const day = activeDrag.kind === "move" ? startOfDay(start) : originDay;
+
+  const originDayEvents = visibleEvents.filter((event) =>
+    isSameDay(event.start, originDay),
+  );
+  const originLayout = layoutOverlappingEvents(originDayEvents).find(
+    (layout) => layout.event.id === activeDrag.event.id,
+  );
+  const { left, width } = originLayout
+    ? columnLayoutToBox(originLayout.column, originLayout.columnCount)
+    : columnLayoutToBox(0, 1);
+
+  const calendar = getCalendarById(calendars, activeDrag.event.calendarId);
+  const colorClass = calendar
+    ? getCalendarColorClass(calendar.color)
+    : "bg-calendar-graphite";
+
+  return {
+    day,
+    data: {
+      top: timeToY(start, PIXELS_PER_HOUR),
+      height: durationToHeight(start, end, PIXELS_PER_HOUR),
+      left,
+      width,
+      title: activeDrag.event.title,
+      start,
+      end,
+      colorClass,
+    },
+  };
+}
+
 export function WeekGrid({ onDraftCreated, onEventClick }: WeekGridProps) {
   const selectedDate = useShellStore((state) => state.selectedDate);
   const checkedCalendarIds = useShellStore((state) => state.checkedCalendarIds);
   const events = useEventsStore((state) => state.events);
   const updateEvent = useEventsStore((state) => state.updateEvent);
+  const calendars = useCalendarsStore((state) => state.calendars);
   const scrollRef = useRef<HTMLDivElement>(null);
   const daysContainerRef = useRef<HTMLDivElement>(null);
   const [now, setNow] = useState(() => new Date());
@@ -149,21 +200,9 @@ export function WeekGrid({ onDraftCreated, onEventClick }: WeekGridProps) {
     };
   }, [activeDrag, onEventClick, updateEvent]);
 
-  let dragPreviewDay: Date | null = null;
-  let dragPreviewTop = 0;
-  let dragPreviewHeight = 0;
-
-  if (activeDrag) {
-    const { start, end } = computeDragTimes(
-      activeDrag,
-      dragDelta.x,
-      dragDelta.y,
-    );
-    dragPreviewDay =
-      activeDrag.kind === "move" ? startOfDay(start) : startOfDay(activeDrag.event.start);
-    dragPreviewTop = timeToY(start, PIXELS_PER_HOUR);
-    dragPreviewHeight = durationToHeight(start, end, PIXELS_PER_HOUR);
-  }
+  const dragPreview = activeDrag
+    ? computeEventDragPreview(activeDrag, dragDelta, visibleEvents, calendars)
+    : null;
 
   return (
     <div className="flex h-full flex-col">
@@ -192,9 +231,10 @@ export function WeekGrid({ onDraftCreated, onEventClick }: WeekGridProps) {
               onDraftCreated={onDraftCreated}
               onEventClick={onEventClick}
               onEventDragStart={handleEventDragStart}
+              draggingEventId={activeDrag?.event.id ?? null}
               eventDragPreview={
-                dragPreviewDay && isSameDay(dragPreviewDay, day)
-                  ? { top: dragPreviewTop, height: dragPreviewHeight }
+                dragPreview && isSameDay(dragPreview.day, day)
+                  ? dragPreview.data
                   : null
               }
             />

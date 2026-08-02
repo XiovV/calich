@@ -25,7 +25,9 @@ export function Select<T extends string>({
         aria-label={ariaLabel}
         className="flex items-center gap-1 rounded-shell-sm border border-border bg-surface px-3 py-1.5 text-body text-ink hover:bg-surface-hover"
       >
-        <BaseSelect.Value />
+        <BaseSelect.Value>
+          {(selected: T) => options.find((option) => option.value === selected)?.label}
+        </BaseSelect.Value>
         <BaseSelect.Icon>
           <ChevronDown className="size-4 text-ink-muted" />
         </BaseSelect.Icon>

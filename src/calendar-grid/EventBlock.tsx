@@ -1,10 +1,11 @@
-import { format } from "date-fns";
 import type { EventLayout } from "../lib/layoutOverlappingEvents";
 import type { Event } from "../lib/mockEvents";
 import { durationToHeight, timeToY } from "../lib/gridTime";
 import { getCalendarById } from "../lib/mockCalendars";
 import { getCalendarColorClass } from "../lib/calendarColors";
 import { useCalendarsStore } from "../lib/calendarsStore";
+import { columnLayoutToBox } from "../lib/eventBlockGeometry";
+import { EventVisual } from "./EventVisual";
 
 export type EventDragKind = "move" | "resize-start" | "resize-end";
 
@@ -29,11 +30,13 @@ export function EventBlock({
   const { event, column, columnCount } = layout;
   const calendars = useCalendarsStore((state) => state.calendars);
   const calendar = getCalendarById(calendars, event.calendarId);
+  const colorClass = calendar
+    ? getCalendarColorClass(calendar.color)
+    : "bg-calendar-graphite";
 
   const top = timeToY(event.start, pixelsPerHour);
   const height = durationToHeight(event.start, event.end, pixelsPerHour);
-  const width = 100 / columnCount;
-  const left = column * width;
+  const { left, width } = columnLayoutToBox(column, columnCount);
 
   function handleEdgeMouseDown(
     domEvent: React.MouseEvent,
@@ -59,7 +62,7 @@ export function EventBlock({
           onEventClick(event);
         }
       }}
-      className={`absolute cursor-pointer overflow-hidden rounded-shell-sm px-1.5 py-1 text-left text-ink-inverse ${calendar ? getCalendarColorClass(calendar.color) : "bg-calendar-graphite"}`}
+      className="absolute cursor-pointer transition-[left,width] duration-100 ease-out"
       style={{
         top: `${top}px`,
         height: `${height}px`,
@@ -69,15 +72,17 @@ export function EventBlock({
     >
       <div
         onMouseDown={(domEvent) => handleEdgeMouseDown(domEvent, "resize-start")}
-        className="absolute inset-x-0 top-0 h-1.5 cursor-ns-resize"
+        className="absolute inset-x-0 top-0 z-10 h-1.5 cursor-ns-resize"
       />
-      <p className="truncate text-label-sm font-medium">{event.title}</p>
-      <p className="truncate text-label-sm opacity-90">
-        {format(event.start, "h:mm a")} – {format(event.end, "h:mm a")}
-      </p>
+      <EventVisual
+        title={event.title}
+        start={event.start}
+        end={event.end}
+        colorClass={colorClass}
+      />
       <div
         onMouseDown={(domEvent) => handleEdgeMouseDown(domEvent, "resize-end")}
-        className="absolute inset-x-0 bottom-0 h-1.5 cursor-ns-resize"
+        className="absolute inset-x-0 bottom-0 z-10 h-1.5 cursor-ns-resize"
       />
     </button>
   );
