@@ -13,6 +13,7 @@ interface DayColumnProps {
   pixelsPerHour: number;
   now: Date;
   onDraftCreated: (day: Date, draft: DraftBlock) => void;
+  onEventClick: (event: Event) => void;
 }
 
 export function DayColumn({
@@ -21,6 +22,7 @@ export function DayColumn({
   pixelsPerHour,
   now,
   onDraftCreated,
+  onEventClick,
 }: DayColumnProps) {
   const dayEvents = events.filter((event) => isSameDay(event.start, day));
   const layouts = layoutOverlappingEvents(dayEvents);
@@ -84,6 +86,7 @@ export function DayColumn({
           key={layout.event.id}
           layout={layout}
           pixelsPerHour={pixelsPerHour}
+          onEventClick={onEventClick}
         />
       ))}
       {isToday && <CurrentTimeLine now={now} pixelsPerHour={pixelsPerHour} />}

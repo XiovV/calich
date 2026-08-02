@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { addDays, format, startOfWeek } from "date-fns";
 import { useShellStore } from "../lib/shellStore";
 import { useEventsStore } from "../lib/eventsStore";
+import type { Event } from "../lib/mockEvents";
 import { PIXELS_PER_HOUR, timeToY, type DraftBlock } from "../lib/gridTime";
 import { TimeAxis } from "./TimeAxis";
 import { DayColumn } from "./DayColumn";
@@ -10,9 +11,10 @@ const NOW_REFRESH_INTERVAL_MS = 60_000;
 
 interface WeekGridProps {
   onDraftCreated: (day: Date, draft: DraftBlock) => void;
+  onEventClick: (event: Event) => void;
 }
 
-export function WeekGrid({ onDraftCreated }: WeekGridProps) {
+export function WeekGrid({ onDraftCreated, onEventClick }: WeekGridProps) {
   const selectedDate = useShellStore((state) => state.selectedDate);
   const checkedCalendarIds = useShellStore((state) => state.checkedCalendarIds);
   const events = useEventsStore((state) => state.events);
@@ -66,6 +68,7 @@ export function WeekGrid({ onDraftCreated }: WeekGridProps) {
             pixelsPerHour={PIXELS_PER_HOUR}
             now={now}
             onDraftCreated={onDraftCreated}
+            onEventClick={onEventClick}
           />
         ))}
       </div>

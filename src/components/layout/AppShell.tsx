@@ -5,18 +5,19 @@ import { Sidebar } from "./Sidebar";
 import { WeekGrid } from "../../calendar-grid/WeekGrid";
 import { EventModal } from "../../calendar-grid/EventModal";
 import { computeDefaultDraft, type DraftBlock } from "../../lib/gridTime";
+import type { Event } from "../../lib/mockEvents";
 
-interface PendingDraft {
-  day: Date;
-  draft: DraftBlock;
-}
+type EventModalState =
+  | { mode: "create"; day: Date; draft: DraftBlock }
+  | { mode: "edit"; event: Event }
+  | null;
 
 export function AppShell() {
-  const [pendingDraft, setPendingDraft] = useState<PendingDraft | null>(null);
+  const [eventModalState, setEventModalState] = useState<EventModalState>(null);
 
   function handleCreateClick() {
     const draft = computeDefaultDraft(new Date());
-    setPendingDraft({ day: startOfDay(draft.start), draft });
+    setEventModalState({ mode: "create", day: startOfDay(draft.start), draft });
   }
 
   return (
@@ -30,16 +31,28 @@ export function AppShell() {
         </nav>
         <main className="m-3 flex-1 overflow-hidden rounded-shell-lg bg-surface shadow-elevation-1">
           <WeekGrid
-            onDraftCreated={(day, draft) => setPendingDraft({ day, draft })}
+            onDraftCreated={(day, draft) =>
+              setEventModalState({ mode: "create", day, draft })
+            }
+            onEventClick={(event) => setEventModalState({ mode: "edit", event })}
           />
         </main>
       </div>
-      {pendingDraft && (
+      {eventModalState?.mode === "create" && (
         <EventModal
-          key={pendingDraft.draft.start.getTime()}
-          day={pendingDraft.day}
-          draft={pendingDraft.draft}
-          onClose={() => setPendingDraft(null)}
+          key={eventModalState.draft.start.getTime()}
+          mode="create"
+          day={eventModalState.day}
+          draft={eventModalState.draft}
+          onClose={() => setEventModalState(null)}
+        />
+      )}
+      {eventModalState?.mode === "edit" && (
+        <EventModal
+          key={eventModalState.event.id}
+          mode="edit"
+          event={eventModalState.event}
+          onClose={() => setEventModalState(null)}
         />
       )}
     </div>
