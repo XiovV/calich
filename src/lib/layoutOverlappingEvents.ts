@@ -1,4 +1,4 @@
-import type { Event } from "./mockEvents";
+import type { Event } from "./event";
 
 export interface EventLayout {
   event: Event;

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { layoutOverlappingEvents } from "./layoutOverlappingEvents";
-import type { Event } from "./mockEvents";
+import type { Event } from "./event";
 
 function makeEvent(
   id: string,
@@ -13,7 +13,6 @@ function makeEvent(
     title: id,
     start: new Date(2026, 7, 3, start[0], start[1]),
     end: new Date(2026, 7, 3, end[0], end[1]),
-    reminders: [],
   };
 }
 

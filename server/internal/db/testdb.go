@@ -5,7 +5,7 @@ import "database/sql"
 // OpenInMemory opens a fresh in-memory SQLite database with all migrations
 // applied. Intended for use in repository tests.
 func OpenInMemory() (*sql.DB, error) {
-	db, err := sql.Open("sqlite", ":memory:")
+	db, err := sql.Open("sqlite", ":memory:?_pragma=foreign_keys(1)")
 	if err != nil {
 		return nil, err
 	}

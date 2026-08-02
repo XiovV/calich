@@ -21,7 +21,10 @@ func Open(dataDir string) (*sql.DB, error) {
 		return nil, fmt.Errorf("create data dir: %w", err)
 	}
 
-	dsn := filepath.Join(dataDir, "calendar.db")
+	// SQLite disables foreign key enforcement per-connection by default —
+	// without this, the ON DELETE CASCADE constraints in our schema (e.g.
+	// events cascading off their calendar) would silently do nothing.
+	dsn := filepath.Join(dataDir, "calendar.db") + "?_pragma=foreign_keys(1)"
 
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {

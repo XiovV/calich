@@ -3,14 +3,12 @@ import { format, setHours, setMinutes, startOfDay } from "date-fns";
 import { Dialog } from "@base-ui/react/dialog";
 import { Field } from "@base-ui/react/field";
 import type { DraftBlock } from "../lib/gridTime";
-import type { Event } from "../lib/mockEvents";
+import type { Event } from "../lib/event";
 import { getCheckedCalendars } from "../lib/calendar";
 import { useShellStore } from "../lib/shellStore";
 import { useEventsStore } from "../lib/eventsStore";
 import { useCalendarsStore } from "../lib/calendarsStore";
-import { REMINDER_PRESETS } from "../lib/reminderPresets";
 import { Select } from "../components/ui/Select";
-import { Checkbox } from "../components/ui/Checkbox";
 import { DeleteEventConfirmation } from "./DeleteEventConfirmation";
 
 type EventModalProps =
@@ -23,7 +21,6 @@ interface InitialFormState {
   endTime: string;
   title: string;
   calendarId: string;
-  reminders: number[];
 }
 
 function timeStringToDate(day: Date, time: string): Date {
@@ -43,7 +40,6 @@ function deriveInitialFormState(
       endTime: format(event.end, "HH:mm"),
       title: event.title,
       calendarId: event.calendarId,
-      reminders: event.reminders,
     };
   }
 
@@ -53,7 +49,6 @@ function deriveInitialFormState(
     endTime: format(props.draft.end, "HH:mm"),
     title: "",
     calendarId: firstCheckedCalendarId,
-    reminders: [],
   };
 }
 
@@ -86,22 +81,11 @@ export function EventModal(props: EventModalProps) {
   const [startTime, setStartTime] = useState(initial.startTime);
   const [endTime, setEndTime] = useState(initial.endTime);
   const [calendarId, setCalendarId] = useState(initial.calendarId);
-  const [selectedReminders, setSelectedReminders] = useState<number[]>(
-    initial.reminders,
-  );
   const [isDeleteConfirmOpen, setIsDeleteConfirmOpen] = useState(false);
 
   const isTimeRangeValid =
     timeStringToDate(day, endTime) > timeStringToDate(day, startTime);
   const canSave = title.trim() !== "" && calendarId !== "" && isTimeRangeValid;
-
-  function toggleReminder(minutes: number) {
-    setSelectedReminders((current) =>
-      current.includes(minutes)
-        ? current.filter((value) => value !== minutes)
-        : [...current, minutes],
-    );
-  }
 
   function handleSave() {
     if (!canSave) return;
@@ -115,7 +99,6 @@ export function EventModal(props: EventModalProps) {
         title: title.trim(),
         start,
         end,
-        reminders: selectedReminders,
       });
     } else {
       addEvent({
@@ -124,7 +107,6 @@ export function EventModal(props: EventModalProps) {
         title: title.trim(),
         start,
         end,
-        reminders: selectedReminders,
       });
     }
     onClose();
@@ -206,22 +188,6 @@ export function EventModal(props: EventModalProps) {
                   aria-label="Calendar"
                 />
               </div>
-            </div>
-
-            <div className="mt-4">
-              <p className="text-label-sm text-ink-muted">Reminders</p>
-              <ul className="mt-1 flex flex-col gap-1.5">
-                {REMINDER_PRESETS.map((preset) => (
-                  <li key={preset.minutes} className="flex items-center gap-2">
-                    <Checkbox
-                      checked={selectedReminders.includes(preset.minutes)}
-                      onCheckedChange={() => toggleReminder(preset.minutes)}
-                      aria-label={preset.label}
-                    />
-                    <span className="text-body text-ink">{preset.label}</span>
-                  </li>
-                ))}
-              </ul>
             </div>
 
             <div className="mt-5 flex items-center justify-between gap-2">

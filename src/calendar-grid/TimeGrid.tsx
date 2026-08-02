@@ -7,7 +7,7 @@ import { getCalendarById, type Calendar } from "../lib/calendar";
 import { getCalendarColorClass } from "../lib/calendarColors";
 import { layoutOverlappingEvents } from "../lib/layoutOverlappingEvents";
 import { columnLayoutToBox } from "../lib/eventBlockGeometry";
-import type { Event } from "../lib/mockEvents";
+import type { Event } from "../lib/event";
 import {
   PIXELS_PER_HOUR,
   computeMovedEventTimes,

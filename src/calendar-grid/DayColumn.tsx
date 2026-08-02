@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { isSameDay } from "date-fns";
-import type { Event } from "../lib/mockEvents";
+import type { Event } from "../lib/event";
 import { layoutOverlappingEvents } from "../lib/layoutOverlappingEvents";
 import {
   HOURS_IN_DAY,
@@ -80,7 +80,6 @@ export function DayColumn({
           title: "",
           start: draftBlock.start,
           end: draftBlock.end,
-          reminders: [],
         },
       ]
     : dayEvents;

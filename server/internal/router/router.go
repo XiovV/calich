@@ -15,7 +15,7 @@ import (
 	"github.com/XiovV/calendar/server/internal/static"
 )
 
-func New(logger *slog.Logger, authHandler *handlers.AuthHandler, calendarHandler *handlers.CalendarHandler, authenticator httpauth.Authenticator, activeUserChecker httpauth.ActiveUserChecker) (http.Handler, error) {
+func New(logger *slog.Logger, authHandler *handlers.AuthHandler, calendarHandler *handlers.CalendarHandler, eventHandler *handlers.EventHandler, authenticator httpauth.Authenticator, activeUserChecker httpauth.ActiveUserChecker) (http.Handler, error) {
 	r := chi.NewRouter()
 	r.Use(requestLogger(logger))
 	r.Use(middleware.Recoverer)
@@ -46,6 +46,17 @@ func New(logger *slog.Logger, authHandler *handlers.AuthHandler, calendarHandler
 			r.Get("/{id}", calendarHandler.Get)
 			r.Patch("/{id}", calendarHandler.Update)
 			r.Delete("/{id}", calendarHandler.Delete)
+		})
+
+		r.Route("/events", func(r chi.Router) {
+			r.Use(httpauth.RequireAuth(authenticator))
+			r.Use(httpauth.RequireActiveUser(activeUserChecker))
+
+			r.Get("/", eventHandler.List)
+			r.Post("/", eventHandler.Create)
+			r.Get("/{id}", eventHandler.Get)
+			r.Patch("/{id}", eventHandler.Update)
+			r.Delete("/{id}", eventHandler.Delete)
 		})
 	})
 

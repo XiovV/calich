@@ -1,6 +1,6 @@
 import { addDays, startOfWeek } from "date-fns";
 import { useShellStore } from "../lib/shellStore";
-import type { Event } from "../lib/mockEvents";
+import type { Event } from "../lib/event";
 import type { DraftBlock } from "../lib/gridTime";
 import { TimeGrid } from "./TimeGrid";
 

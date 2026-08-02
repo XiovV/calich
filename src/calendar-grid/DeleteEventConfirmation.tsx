@@ -1,5 +1,5 @@
 import { AlertDialog } from "@base-ui/react/alert-dialog";
-import type { Event } from "../lib/mockEvents";
+import type { Event } from "../lib/event";
 
 interface DeleteEventConfirmationProps {
   event: Event;

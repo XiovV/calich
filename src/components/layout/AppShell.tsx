@@ -7,8 +7,9 @@ import { CalendarView } from "../../calendar-grid/CalendarView";
 import { EventModal } from "../../calendar-grid/EventModal";
 import { computeDefaultDraft, type DraftBlock } from "../../lib/gridTime";
 import { useCalendarsStore } from "../../lib/calendarsStore";
+import { useEventsStore } from "../../lib/eventsStore";
 import { useShellStore } from "../../lib/shellStore";
-import type { Event } from "../../lib/mockEvents";
+import type { Event } from "../../lib/event";
 
 type EventModalState =
   | { mode: "create"; day: Date; draft: DraftBlock }
@@ -18,6 +19,7 @@ type EventModalState =
 export function AppShell() {
   const [eventModalState, setEventModalState] = useState<EventModalState>(null);
   const fetchCalendars = useCalendarsStore((state) => state.fetchCalendars);
+  const fetchEvents = useEventsStore((state) => state.fetchEvents);
   const setCheckedCalendarIds = useShellStore(
     (state) => state.setCheckedCalendarIds,
   );
@@ -28,7 +30,8 @@ export function AppShell() {
         useCalendarsStore.getState().calendars.map((calendar) => calendar.id),
       );
     });
-  }, [fetchCalendars, setCheckedCalendarIds]);
+    fetchEvents();
+  }, [fetchCalendars, fetchEvents, setCheckedCalendarIds]);
 
   function handleCreateClick() {
     const draft = computeDefaultDraft(new Date());

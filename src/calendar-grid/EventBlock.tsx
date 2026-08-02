@@ -1,5 +1,5 @@
 import type { EventLayout } from "../lib/layoutOverlappingEvents";
-import type { Event } from "../lib/mockEvents";
+import type { Event } from "../lib/event";
 import { durationToHeight, timeToY } from "../lib/gridTime";
 import { getCalendarById } from "../lib/calendar";
 import { getCalendarColorClass } from "../lib/calendarColors";
