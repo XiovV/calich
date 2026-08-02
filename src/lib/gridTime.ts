@@ -78,3 +78,49 @@ export function computeDefaultDraft(
   const end = new Date(start.getTime() + durationMinutes * 60 * 1000);
   return { start, end };
 }
+
+export function computeMovedEventTimes(
+  originalStart: Date,
+  originalEnd: Date,
+  dayOffset: number,
+  minuteOffset: number,
+  snapMinutes = 15,
+): DraftBlock {
+  const snappedMinuteOffset =
+    Math.round(minuteOffset / snapMinutes) * snapMinutes;
+  const totalOffsetMs =
+    dayOffset * 24 * 60 * 60 * 1000 + snappedMinuteOffset * 60 * 1000;
+  const duration = originalEnd.getTime() - originalStart.getTime();
+  const start = new Date(originalStart.getTime() + totalOffsetMs);
+  const end = new Date(start.getTime() + duration);
+  return { start, end };
+}
+
+export function computeResizedEventTimes(
+  originalStart: Date,
+  originalEnd: Date,
+  edge: "start" | "end",
+  minuteOffset: number,
+  snapMinutes = 15,
+  minDurationMinutes = 15,
+): DraftBlock {
+  const snappedOffsetMs =
+    Math.round(minuteOffset / snapMinutes) * snapMinutes * 60 * 1000;
+  const minDurationMs = minDurationMinutes * 60 * 1000;
+
+  if (edge === "start") {
+    const start = new Date(originalStart.getTime() + snappedOffsetMs);
+    const latestStart = new Date(originalEnd.getTime() - minDurationMs);
+    return {
+      start: start.getTime() > latestStart.getTime() ? latestStart : start,
+      end: originalEnd,
+    };
+  }
+
+  const end = new Date(originalEnd.getTime() + snappedOffsetMs);
+  const earliestEnd = new Date(originalStart.getTime() + minDurationMs);
+  return {
+    start: originalStart,
+    end: end.getTime() < earliestEnd.getTime() ? earliestEnd : end,
+  };
+}

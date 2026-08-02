@@ -2,10 +2,22 @@ import { useEffect, useRef, useState } from "react";
 import { isSameDay } from "date-fns";
 import type { Event } from "../lib/mockEvents";
 import { layoutOverlappingEvents } from "../lib/layoutOverlappingEvents";
-import { HOURS_IN_DAY, computeDraftBlock, type DraftBlock } from "../lib/gridTime";
-import { EventBlock } from "./EventBlock";
+import {
+  HOURS_IN_DAY,
+  computeDraftBlock,
+  durationToHeight,
+  timeToY,
+  type DraftBlock,
+} from "../lib/gridTime";
+import { EventBlock, type EventDragKind } from "./EventBlock";
 import { CurrentTimeLine } from "./CurrentTimeLine";
 import { DraftBlockPreview } from "./DraftBlockPreview";
+import { EventDragPreview } from "./EventDragPreview";
+
+interface EventDragPreviewData {
+  top: number;
+  height: number;
+}
 
 interface DayColumnProps {
   day: Date;
@@ -14,6 +26,13 @@ interface DayColumnProps {
   now: Date;
   onDraftCreated: (day: Date, draft: DraftBlock) => void;
   onEventClick: (event: Event) => void;
+  onEventDragStart: (
+    event: Event,
+    kind: EventDragKind,
+    clientX: number,
+    clientY: number,
+  ) => void;
+  eventDragPreview: EventDragPreviewData | null;
 }
 
 export function DayColumn({
@@ -23,6 +42,8 @@ export function DayColumn({
   now,
   onDraftCreated,
   onEventClick,
+  onEventDragStart,
+  eventDragPreview,
 }: DayColumnProps) {
   const dayEvents = events.filter((event) => isSameDay(event.start, day));
   const layouts = layoutOverlappingEvents(dayEvents);
@@ -87,13 +108,30 @@ export function DayColumn({
           layout={layout}
           pixelsPerHour={pixelsPerHour}
           onEventClick={onEventClick}
+          onDragStart={onEventDragStart}
         />
       ))}
       {isToday && <CurrentTimeLine now={now} pixelsPerHour={pixelsPerHour} />}
-      {dragStartY !== null && dragCurrentY !== null && (
-        <DraftBlockPreview
-          top={Math.min(dragStartY, dragCurrentY)}
-          height={Math.abs(dragCurrentY - dragStartY)}
+      {dragStartY !== null &&
+        dragCurrentY !== null &&
+        (() => {
+          const draft = computeDraftBlock(
+            day,
+            dragStartY,
+            dragCurrentY,
+            pixelsPerHour,
+          );
+          return (
+            <DraftBlockPreview
+              top={timeToY(draft.start, pixelsPerHour)}
+              height={durationToHeight(draft.start, draft.end, pixelsPerHour)}
+            />
+          );
+        })()}
+      {eventDragPreview && (
+        <EventDragPreview
+          top={eventDragPreview.top}
+          height={eventDragPreview.height}
         />
       )}
     </div>
