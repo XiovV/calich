@@ -218,3 +218,224 @@ func TestAuthenticate_RejectsGarbage(t *testing.T) {
 		t.Fatalf("expected an error authenticating a malformed token")
 	}
 }
+
+func TestMustChangePassword_ReflectsUserFlag(t *testing.T) {
+	svc := newTestAuthService(t, "", "")
+	ctx := context.Background()
+	if err := svc.Bootstrap(ctx); err != nil {
+		t.Fatalf("bootstrap: %v", err)
+	}
+
+	user, err := svc.users.GetByUsername(ctx, "admin")
+	if err != nil {
+		t.Fatalf("get user: %v", err)
+	}
+
+	mustChange, err := svc.MustChangePassword(ctx, user.ID)
+	if err != nil {
+		t.Fatalf("must change password: %v", err)
+	}
+	if !mustChange {
+		t.Fatalf("expected default bootstrap user to require a password change")
+	}
+
+	if err := svc.ChangePassword(ctx, user.ID, "admin", "a-new-password"); err != nil {
+		t.Fatalf("change password: %v", err)
+	}
+
+	mustChange, err = svc.MustChangePassword(ctx, user.ID)
+	if err != nil {
+		t.Fatalf("must change password: %v", err)
+	}
+	if mustChange {
+		t.Fatalf("expected must_change_password to be cleared after changing password")
+	}
+}
+
+func TestChangePassword_WrongCurrentPassword(t *testing.T) {
+	svc := newTestAuthService(t, "", "")
+	ctx := context.Background()
+	if err := svc.Bootstrap(ctx); err != nil {
+		t.Fatalf("bootstrap: %v", err)
+	}
+
+	user, err := svc.users.GetByUsername(ctx, "admin")
+	if err != nil {
+		t.Fatalf("get user: %v", err)
+	}
+
+	err = svc.ChangePassword(ctx, user.ID, "wrong-current-password", "a-new-password")
+	if !errors.Is(err, ErrInvalidCredentials) {
+		t.Fatalf("expected ErrInvalidCredentials, got %v", err)
+	}
+}
+
+func TestChangePassword_RejectsEmptyNewPassword(t *testing.T) {
+	svc := newTestAuthService(t, "", "")
+	ctx := context.Background()
+	if err := svc.Bootstrap(ctx); err != nil {
+		t.Fatalf("bootstrap: %v", err)
+	}
+
+	user, err := svc.users.GetByUsername(ctx, "admin")
+	if err != nil {
+		t.Fatalf("get user: %v", err)
+	}
+
+	err = svc.ChangePassword(ctx, user.ID, "admin", "")
+	if !errors.Is(err, ErrInvalidPassword) {
+		t.Fatalf("expected ErrInvalidPassword, got %v", err)
+	}
+}
+
+func TestChangePassword_NewPasswordWorksForLogin(t *testing.T) {
+	svc := newTestAuthService(t, "", "")
+	ctx := context.Background()
+	if err := svc.Bootstrap(ctx); err != nil {
+		t.Fatalf("bootstrap: %v", err)
+	}
+
+	user, err := svc.users.GetByUsername(ctx, "admin")
+	if err != nil {
+		t.Fatalf("get user: %v", err)
+	}
+
+	if err := svc.ChangePassword(ctx, user.ID, "admin", "a-new-password"); err != nil {
+		t.Fatalf("change password: %v", err)
+	}
+
+	if _, err := svc.Login(ctx, "admin", "admin"); !errors.Is(err, ErrInvalidCredentials) {
+		t.Fatalf("expected old password to no longer work, got %v", err)
+	}
+
+	if _, err := svc.Login(ctx, "admin", "a-new-password"); err != nil {
+		t.Fatalf("expected new password to work, got %v", err)
+	}
+}
+
+func TestChangePassword_InvalidatesExistingSessions(t *testing.T) {
+	svc := newTestAuthService(t, "", "")
+	ctx := context.Background()
+	if err := svc.Bootstrap(ctx); err != nil {
+		t.Fatalf("bootstrap: %v", err)
+	}
+
+	login, err := svc.Login(ctx, "admin", "admin")
+	if err != nil {
+		t.Fatalf("login: %v", err)
+	}
+
+	if err := svc.ChangePassword(ctx, mustUserID(t, svc, "admin"), "admin", "a-new-password"); err != nil {
+		t.Fatalf("change password: %v", err)
+	}
+
+	if _, err := svc.Refresh(ctx, login.RefreshToken); !errors.Is(err, ErrInvalidSession) {
+		t.Fatalf("expected the refresh token issued before the password change to be invalidated, got %v", err)
+	}
+}
+
+func mustUserID(t *testing.T, svc *AuthService, username string) int64 {
+	t.Helper()
+	user, err := svc.users.GetByUsername(context.Background(), username)
+	if err != nil {
+		t.Fatalf("get user %q: %v", username, err)
+	}
+	return user.ID
+}
+
+func TestRefresh_ReturnsNewAccessTokenForValidRefreshToken(t *testing.T) {
+	svc := newTestAuthService(t, "", "")
+	ctx := context.Background()
+	if err := svc.Bootstrap(ctx); err != nil {
+		t.Fatalf("bootstrap: %v", err)
+	}
+
+	login, err := svc.Login(ctx, "admin", "admin")
+	if err != nil {
+		t.Fatalf("login: %v", err)
+	}
+
+	accessToken, err := svc.Refresh(ctx, login.RefreshToken)
+	if err != nil {
+		t.Fatalf("refresh: %v", err)
+	}
+	if accessToken == "" {
+		t.Fatalf("expected a non-empty access token")
+	}
+
+	userID, err := svc.Authenticate(ctx, accessToken)
+	if err != nil {
+		t.Fatalf("authenticate refreshed token: %v", err)
+	}
+
+	user, err := svc.users.GetByUsername(ctx, "admin")
+	if err != nil {
+		t.Fatalf("get user: %v", err)
+	}
+	if userID != user.ID {
+		t.Fatalf("expected refreshed token subject %d to match user id %d", userID, user.ID)
+	}
+}
+
+func TestRefresh_RejectsUnknownToken(t *testing.T) {
+	svc := newTestAuthService(t, "", "")
+
+	_, err := svc.Refresh(context.Background(), "not-a-real-refresh-token")
+	if !errors.Is(err, ErrInvalidSession) {
+		t.Fatalf("expected ErrInvalidSession, got %v", err)
+	}
+}
+
+func TestRefresh_RejectsExpiredSession(t *testing.T) {
+	svc := newTestAuthService(t, "", "")
+	ctx := context.Background()
+	if err := svc.Bootstrap(ctx); err != nil {
+		t.Fatalf("bootstrap: %v", err)
+	}
+
+	user, err := svc.users.GetByUsername(ctx, "admin")
+	if err != nil {
+		t.Fatalf("get user: %v", err)
+	}
+
+	refreshToken, refreshTokenHash, err := newOpaqueToken()
+	if err != nil {
+		t.Fatalf("new opaque token: %v", err)
+	}
+	if _, err := svc.sessions.Create(ctx, user.ID, refreshTokenHash, time.Now().Add(-time.Minute)); err != nil {
+		t.Fatalf("create expired session: %v", err)
+	}
+
+	if _, err := svc.Refresh(ctx, refreshToken); !errors.Is(err, ErrInvalidSession) {
+		t.Fatalf("expected ErrInvalidSession, got %v", err)
+	}
+}
+
+func TestLogout_DeletesSessionSoRefreshNoLongerWorks(t *testing.T) {
+	svc := newTestAuthService(t, "", "")
+	ctx := context.Background()
+	if err := svc.Bootstrap(ctx); err != nil {
+		t.Fatalf("bootstrap: %v", err)
+	}
+
+	login, err := svc.Login(ctx, "admin", "admin")
+	if err != nil {
+		t.Fatalf("login: %v", err)
+	}
+
+	if err := svc.Logout(ctx, login.RefreshToken); err != nil {
+		t.Fatalf("logout: %v", err)
+	}
+
+	if _, err := svc.Refresh(ctx, login.RefreshToken); !errors.Is(err, ErrInvalidSession) {
+		t.Fatalf("expected ErrInvalidSession after logout, got %v", err)
+	}
+}
+
+func TestLogout_NoopForUnknownToken(t *testing.T) {
+	svc := newTestAuthService(t, "", "")
+
+	if err := svc.Logout(context.Background(), "not-a-real-refresh-token"); err != nil {
+		t.Fatalf("expected logout to be a no-op for an unknown token, got %v", err)
+	}
+}

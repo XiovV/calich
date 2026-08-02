@@ -68,6 +68,32 @@ func TestUserRepository_Create_DuplicateUsername(t *testing.T) {
 	}
 }
 
+func TestUserRepository_UpdatePassword(t *testing.T) {
+	repo := newTestUserRepository(t)
+	ctx := context.Background()
+
+	created, err := repo.Create(ctx, "admin", "old-hash", true)
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+
+	if err := repo.UpdatePassword(ctx, created.ID, "new-hash"); err != nil {
+		t.Fatalf("update password: %v", err)
+	}
+
+	updated, err := repo.GetByID(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("get by id: %v", err)
+	}
+
+	if updated.PasswordHash != "new-hash" {
+		t.Fatalf("expected password hash to be updated, got %q", updated.PasswordHash)
+	}
+	if updated.MustChangePassword {
+		t.Fatalf("expected must_change_password to be cleared after updating password")
+	}
+}
+
 func TestUserRepository_Count(t *testing.T) {
 	repo := newTestUserRepository(t)
 	ctx := context.Background()

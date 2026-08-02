@@ -4,11 +4,14 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"time"
 
 	"github.com/XiovV/calendar/server/internal/httpauth"
 	"github.com/XiovV/calendar/server/internal/httpresponse"
 	"github.com/XiovV/calendar/server/internal/service"
 )
+
+const refreshCookieName = "refresh_token"
 
 type AuthHandler struct {
 	auth *service.AuthService
@@ -45,15 +48,7 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	http.SetCookie(w, &http.Cookie{
-		Name:     "refresh_token",
-		Value:    result.RefreshToken,
-		Path:     "/",
-		Expires:  result.RefreshTokenExpiresAt,
-		HttpOnly: true,
-		Secure:   true,
-		SameSite: http.SameSiteLaxMode,
-	})
+	setRefreshCookie(w, result.RefreshToken, result.RefreshTokenExpiresAt)
 
 	httpresponse.JSON(w, http.StatusOK, loginResponse{
 		AccessToken:        result.AccessToken,
@@ -84,5 +79,99 @@ func (h *AuthHandler) Me(w http.ResponseWriter, r *http.Request) {
 		ID:                 user.ID,
 		Username:           user.Username,
 		MustChangePassword: user.MustChangePassword,
+	})
+}
+
+type refreshResponse struct {
+	AccessToken string `json:"access_token"`
+}
+
+func (h *AuthHandler) Refresh(w http.ResponseWriter, r *http.Request) {
+	cookie, err := r.Cookie(refreshCookieName)
+	if err != nil {
+		httpresponse.Error(w, http.StatusUnauthorized, "unauthorized", "missing refresh token")
+		return
+	}
+
+	accessToken, err := h.auth.Refresh(r.Context(), cookie.Value)
+	if errors.Is(err, service.ErrInvalidSession) {
+		httpresponse.Error(w, http.StatusUnauthorized, "unauthorized", "invalid or expired refresh token")
+		return
+	}
+	if err != nil {
+		httpresponse.Error(w, http.StatusInternalServerError, "internal_error", "failed to refresh session")
+		return
+	}
+
+	httpresponse.JSON(w, http.StatusOK, refreshResponse{AccessToken: accessToken})
+}
+
+func (h *AuthHandler) Logout(w http.ResponseWriter, r *http.Request) {
+	if cookie, err := r.Cookie(refreshCookieName); err == nil {
+		if err := h.auth.Logout(r.Context(), cookie.Value); err != nil {
+			httpresponse.Error(w, http.StatusInternalServerError, "internal_error", "failed to log out")
+			return
+		}
+	}
+
+	clearRefreshCookie(w)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+type changePasswordRequest struct {
+	CurrentPassword string `json:"current_password"`
+	NewPassword     string `json:"new_password"`
+}
+
+func (h *AuthHandler) ChangePassword(w http.ResponseWriter, r *http.Request) {
+	userID, ok := httpauth.UserIDFromContext(r.Context())
+	if !ok {
+		httpresponse.Error(w, http.StatusUnauthorized, "unauthorized", "authentication required")
+		return
+	}
+
+	var req changePasswordRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httpresponse.Error(w, http.StatusBadRequest, "invalid_request", "request body must be valid JSON")
+		return
+	}
+
+	err := h.auth.ChangePassword(r.Context(), userID, req.CurrentPassword, req.NewPassword)
+	switch {
+	case errors.Is(err, service.ErrInvalidCredentials):
+		httpresponse.Error(w, http.StatusUnauthorized, "invalid_credentials", "current password is incorrect")
+		return
+	case errors.Is(err, service.ErrInvalidPassword):
+		httpresponse.Error(w, http.StatusBadRequest, "invalid_request", "new password must not be empty")
+		return
+	case err != nil:
+		httpresponse.Error(w, http.StatusInternalServerError, "internal_error", "failed to change password")
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func setRefreshCookie(w http.ResponseWriter, value string, expires time.Time) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     refreshCookieName,
+		Value:    value,
+		Path:     "/",
+		Expires:  expires,
+		HttpOnly: true,
+		Secure:   true,
+		SameSite: http.SameSiteLaxMode,
+	})
+}
+
+func clearRefreshCookie(w http.ResponseWriter) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     refreshCookieName,
+		Value:    "",
+		Path:     "/",
+		MaxAge:   -1,
+		HttpOnly: true,
+		Secure:   true,
+		SameSite: http.SameSiteLaxMode,
 	})
 }

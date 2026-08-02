@@ -84,3 +84,41 @@ func TestSessionRepository_Delete(t *testing.T) {
 		t.Fatalf("expected ErrNotFound after delete, got %v", err)
 	}
 }
+
+func TestSessionRepository_DeleteAllForUser(t *testing.T) {
+	sessions, users := newTestSessionRepository(t)
+	ctx := context.Background()
+
+	userA, err := users.Create(ctx, "admin", "hash", true)
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	userB, err := users.Create(ctx, "someone-else", "hash", true)
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+
+	if _, err := sessions.Create(ctx, userA.ID, "session-1-for-a", time.Now().Add(time.Hour)); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	if _, err := sessions.Create(ctx, userA.ID, "session-2-for-a", time.Now().Add(time.Hour)); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	if _, err := sessions.Create(ctx, userB.ID, "session-for-b", time.Now().Add(time.Hour)); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	if err := sessions.DeleteAllForUser(ctx, userA.ID); err != nil {
+		t.Fatalf("delete all for user: %v", err)
+	}
+
+	if _, err := sessions.GetByRefreshTokenHash(ctx, "session-1-for-a"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected ErrNotFound for user A's first session, got %v", err)
+	}
+	if _, err := sessions.GetByRefreshTokenHash(ctx, "session-2-for-a"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected ErrNotFound for user A's second session, got %v", err)
+	}
+	if _, err := sessions.GetByRefreshTokenHash(ctx, "session-for-b"); err != nil {
+		t.Fatalf("expected user B's session to be untouched, got %v", err)
+	}
+}

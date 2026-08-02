@@ -15,7 +15,7 @@ import (
 	"github.com/XiovV/calendar/server/internal/static"
 )
 
-func New(logger *slog.Logger, authHandler *handlers.AuthHandler, authenticator httpauth.Authenticator) (http.Handler, error) {
+func New(logger *slog.Logger, authHandler *handlers.AuthHandler, authenticator httpauth.Authenticator, activeUserChecker httpauth.ActiveUserChecker) (http.Handler, error) {
 	r := chi.NewRouter()
 	r.Use(requestLogger(logger))
 	r.Use(middleware.Recoverer)
@@ -25,7 +25,16 @@ func New(logger *slog.Logger, authHandler *handlers.AuthHandler, authenticator h
 
 		r.Route("/auth", func(r chi.Router) {
 			r.Post("/login", authHandler.Login)
-			r.With(httpauth.RequireAuth(authenticator)).Get("/me", authHandler.Me)
+			r.Post("/refresh", authHandler.Refresh)
+			r.Post("/logout", authHandler.Logout)
+
+			r.With(httpauth.RequireAuth(authenticator)).Post("/change-password", authHandler.ChangePassword)
+
+			r.Group(func(r chi.Router) {
+				r.Use(httpauth.RequireAuth(authenticator))
+				r.Use(httpauth.RequireActiveUser(activeUserChecker))
+				r.Get("/me", authHandler.Me)
+			})
 		})
 	})
 

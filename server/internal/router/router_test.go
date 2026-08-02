@@ -31,7 +31,7 @@ func newTestRouter(t *testing.T) http.Handler {
 	}
 	authHandler := handlers.NewAuthHandler(authService)
 
-	r, err := New(slog.New(slog.NewTextHandler(io.Discard, nil)), authHandler, authService)
+	r, err := New(slog.New(slog.NewTextHandler(io.Discard, nil)), authHandler, authService, authService)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

@@ -26,7 +26,11 @@ const (
 	defaultBootstrapPassword = "admin"
 )
 
-var ErrInvalidCredentials = errors.New("invalid credentials")
+var (
+	ErrInvalidCredentials = errors.New("invalid credentials")
+	ErrInvalidSession     = errors.New("invalid session")
+	ErrInvalidPassword    = errors.New("password must not be empty")
+)
 
 type AuthService struct {
 	users           *repository.UserRepository
@@ -171,8 +175,93 @@ func newOpaqueToken() (token string, hash string, err error) {
 	}
 
 	token = base64.RawURLEncoding.EncodeToString(raw)
-	sum := sha256.Sum256([]byte(token))
-	hash = hex.EncodeToString(sum[:])
+	return token, hashToken(token), nil
+}
 
-	return token, hash, nil
+func hashToken(token string) string {
+	sum := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(sum[:])
+}
+
+// MustChangePassword reports whether the given user still needs to change
+// their password before using anything but the change-password endpoint.
+func (s *AuthService) MustChangePassword(ctx context.Context, userID int64) (bool, error) {
+	user, err := s.users.GetByID(ctx, userID)
+	if err != nil {
+		return false, fmt.Errorf("get user: %w", err)
+	}
+	return user.MustChangePassword, nil
+}
+
+func (s *AuthService) ChangePassword(ctx context.Context, userID int64, currentPassword, newPassword string) error {
+	user, err := s.users.GetByID(ctx, userID)
+	if err != nil {
+		return fmt.Errorf("get user: %w", err)
+	}
+
+	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(currentPassword)); err != nil {
+		return ErrInvalidCredentials
+	}
+
+	if newPassword == "" {
+		return ErrInvalidPassword
+	}
+
+	hash, err := bcrypt.GenerateFromPassword([]byte(newPassword), bcrypt.DefaultCost)
+	if err != nil {
+		return fmt.Errorf("hash new password: %w", err)
+	}
+
+	if err := s.users.UpdatePassword(ctx, userID, string(hash)); err != nil {
+		return fmt.Errorf("update password: %w", err)
+	}
+
+	// Invalidate every outstanding session: a refresh token issued before the
+	// password change (e.g. one an attacker had stolen) must stop working.
+	if err := s.sessions.DeleteAllForUser(ctx, userID); err != nil {
+		return fmt.Errorf("invalidate sessions: %w", err)
+	}
+
+	return nil
+}
+
+// Refresh mints a new access token for the session identified by the given
+// (raw, unhashed) refresh token, without rotating the refresh token itself.
+func (s *AuthService) Refresh(ctx context.Context, refreshToken string) (string, error) {
+	session, err := s.sessions.GetByRefreshTokenHash(ctx, hashToken(refreshToken))
+	if errors.Is(err, repository.ErrNotFound) {
+		return "", ErrInvalidSession
+	}
+	if err != nil {
+		return "", fmt.Errorf("get session: %w", err)
+	}
+
+	if time.Now().After(session.RefreshTokenExpiresAt) {
+		return "", ErrInvalidSession
+	}
+
+	accessToken, err := s.newAccessToken(session.UserID)
+	if err != nil {
+		return "", fmt.Errorf("issue access token: %w", err)
+	}
+
+	return accessToken, nil
+}
+
+// Logout invalidates the session for the given (raw, unhashed) refresh token.
+// It is a no-op — not an error — if the token doesn't match any session.
+func (s *AuthService) Logout(ctx context.Context, refreshToken string) error {
+	session, err := s.sessions.GetByRefreshTokenHash(ctx, hashToken(refreshToken))
+	if errors.Is(err, repository.ErrNotFound) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("get session: %w", err)
+	}
+
+	if err := s.sessions.Delete(ctx, session.ID); err != nil {
+		return fmt.Errorf("delete session: %w", err)
+	}
+
+	return nil
 }

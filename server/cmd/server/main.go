@@ -47,7 +47,7 @@ func main() {
 
 	authHandler := handlers.NewAuthHandler(authService)
 
-	handler, err := router.New(logger, authHandler, authService)
+	handler, err := router.New(logger, authHandler, authService, authService)
 	if err != nil {
 		logger.Error("failed to build router", "error", err)
 		os.Exit(1)

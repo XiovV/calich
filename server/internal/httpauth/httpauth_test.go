@@ -73,3 +73,61 @@ func TestRequireAuth_ValidToken_SetsUserIDInContext(t *testing.T) {
 		t.Fatalf("expected user id 42, got %d", gotUserID)
 	}
 }
+
+type fakeActiveUserChecker struct {
+	mustChangePassword bool
+	err                error
+}
+
+func (f fakeActiveUserChecker) MustChangePassword(ctx context.Context, userID int64) (bool, error) {
+	return f.mustChangePassword, f.err
+}
+
+func TestRequireActiveUser_NoUserIDInContext_Returns401(t *testing.T) {
+	handler := RequireActiveUser(fakeActiveUserChecker{})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatalf("next handler should not be called")
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", rec.Code)
+	}
+}
+
+func TestRequireActiveUser_MustChangePassword_Returns403(t *testing.T) {
+	handler := RequireActiveUser(fakeActiveUserChecker{mustChangePassword: true})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatalf("next handler should not be called")
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req = req.WithContext(withUserID(req.Context(), 1))
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d", rec.Code)
+	}
+}
+
+func TestRequireActiveUser_ActiveUser_CallsNext(t *testing.T) {
+	called := false
+	handler := RequireActiveUser(fakeActiveUserChecker{mustChangePassword: false})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req = req.WithContext(withUserID(req.Context(), 1))
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	if !called {
+		t.Fatalf("expected next handler to be called")
+	}
+}

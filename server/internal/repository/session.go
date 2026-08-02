@@ -55,6 +55,15 @@ func (r *SessionRepository) Delete(ctx context.Context, id int64) error {
 	return nil
 }
 
+// DeleteAllForUser invalidates every session belonging to a user — used when
+// their password changes, so a stolen refresh token stops working.
+func (r *SessionRepository) DeleteAllForUser(ctx context.Context, userID int64) error {
+	if _, err := r.db.ExecContext(ctx, `DELETE FROM sessions WHERE user_id = ?`, userID); err != nil {
+		return fmt.Errorf("delete sessions for user: %w", err)
+	}
+	return nil
+}
+
 func (r *SessionRepository) getByID(ctx context.Context, id int64) (Session, error) {
 	return r.scanSession(r.db.QueryRowContext(ctx,
 		`SELECT id, user_id, refresh_token_hash, refresh_token_expires_at, created_at FROM sessions WHERE id = ?`, id,

@@ -55,6 +55,18 @@ func (r *UserRepository) GetByUsername(ctx context.Context, username string) (Us
 	))
 }
 
+// UpdatePassword sets a new password hash and clears must_change_password.
+func (r *UserRepository) UpdatePassword(ctx context.Context, userID int64, passwordHash string) error {
+	_, err := r.db.ExecContext(ctx,
+		`UPDATE users SET password_hash = ?, must_change_password = 0 WHERE id = ?`,
+		passwordHash, userID,
+	)
+	if err != nil {
+		return fmt.Errorf("update password: %w", err)
+	}
+	return nil
+}
+
 func (r *UserRepository) Count(ctx context.Context) (int, error) {
 	var count int
 	if err := r.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM users`).Scan(&count); err != nil {

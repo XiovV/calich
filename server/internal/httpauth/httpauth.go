@@ -54,6 +54,39 @@ func RequireAuth(auth Authenticator) func(http.Handler) http.Handler {
 	}
 }
 
+// ActiveUserChecker reports whether a user still needs to change their
+// password before doing anything else.
+type ActiveUserChecker interface {
+	MustChangePassword(ctx context.Context, userID int64) (bool, error)
+}
+
+// RequireActiveUser blocks requests from a user who still has
+// must_change_password set, with a 403 password_change_required response.
+// It must run after RequireAuth, which populates the user id in context.
+func RequireActiveUser(checker ActiveUserChecker) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			userID, ok := UserIDFromContext(r.Context())
+			if !ok {
+				httpresponse.Error(w, http.StatusUnauthorized, "unauthorized", "authentication required")
+				return
+			}
+
+			mustChangePassword, err := checker.MustChangePassword(r.Context(), userID)
+			if err != nil {
+				httpresponse.Error(w, http.StatusInternalServerError, "internal_error", "failed to check user status")
+				return
+			}
+			if mustChangePassword {
+				httpresponse.Error(w, http.StatusForbidden, "password_change_required", "password must be changed before continuing")
+				return
+			}
+
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
 func bearerToken(r *http.Request) (string, bool) {
 	const prefix = "Bearer "
 

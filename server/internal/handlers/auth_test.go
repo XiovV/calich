@@ -37,11 +37,48 @@ func newAuthTestServer(t *testing.T) *httptest.Server {
 
 	r := chi.NewRouter()
 	r.Post("/api/auth/login", h.Login)
-	r.With(httpauth.RequireAuth(auth)).Get("/api/auth/me", h.Me)
+	r.Post("/api/auth/refresh", h.Refresh)
+	r.Post("/api/auth/logout", h.Logout)
+	r.With(httpauth.RequireAuth(auth)).Post("/api/auth/change-password", h.ChangePassword)
+	r.With(httpauth.RequireAuth(auth), httpauth.RequireActiveUser(auth)).Get("/api/auth/me", h.Me)
 
 	srv := httptest.NewServer(r)
 	t.Cleanup(srv.Close)
 	return srv
+}
+
+func changePassword(t *testing.T, srv *httptest.Server, accessToken, currentPassword, newPassword string) *http.Response {
+	t.Helper()
+
+	body, err := json.Marshal(changePasswordRequest{CurrentPassword: currentPassword, NewPassword: newPassword})
+	if err != nil {
+		t.Fatalf("marshal change password request: %v", err)
+	}
+
+	req, err := http.NewRequest(http.MethodPost, srv.URL+"/api/auth/change-password", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST /api/auth/change-password: %v", err)
+	}
+	return resp
+}
+
+func refreshCookieFrom(t *testing.T, resp *http.Response) *http.Cookie {
+	t.Helper()
+
+	for _, c := range resp.Cookies() {
+		if c.Name == refreshCookieName {
+			return c
+		}
+	}
+	t.Fatalf("expected a refresh_token cookie in response")
+	return nil
 }
 
 func login(t *testing.T, srv *httptest.Server, username, password string) *http.Response {
@@ -128,7 +165,7 @@ func TestMe_NoToken_Returns401(t *testing.T) {
 	}
 }
 
-func TestMe_ValidToken_ReturnsUser(t *testing.T) {
+func TestMe_MustChangePassword_Returns403(t *testing.T) {
 	srv := newAuthTestServer(t)
 
 	loginResp := login(t, srv, "admin", "admin")
@@ -151,8 +188,41 @@ func TestMe_ValidToken_ReturnsUser(t *testing.T) {
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("expected 403 for a user who still must change their password, got %d", resp.StatusCode)
+	}
+}
+
+func TestMe_ValidToken_ReturnsUser_AfterPasswordChange(t *testing.T) {
+	srv := newAuthTestServer(t)
+
+	loginResp := login(t, srv, "admin", "admin")
+	defer loginResp.Body.Close()
+	var loggedIn loginResponse
+	if err := json.NewDecoder(loginResp.Body).Decode(&loggedIn); err != nil {
+		t.Fatalf("decode login response: %v", err)
+	}
+
+	changeResp := changePassword(t, srv, loggedIn.AccessToken, "admin", "a-new-password")
+	defer changeResp.Body.Close()
+	if changeResp.StatusCode != http.StatusNoContent {
+		t.Fatalf("expected 204 from change-password, got %d", changeResp.StatusCode)
+	}
+
+	req, err := http.NewRequest(http.MethodGet, srv.URL+"/api/auth/me", nil)
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+loggedIn.AccessToken)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET /api/auth/me: %v", err)
+	}
+	defer resp.Body.Close()
+
 	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("expected 200, got %d", resp.StatusCode)
+		t.Fatalf("expected 200 after password change, got %d", resp.StatusCode)
 	}
 
 	var me meResponse
@@ -162,7 +232,137 @@ func TestMe_ValidToken_ReturnsUser(t *testing.T) {
 	if me.Username != "admin" {
 		t.Fatalf("expected username 'admin', got %q", me.Username)
 	}
-	if !me.MustChangePassword {
-		t.Fatalf("expected must_change_password to be true")
+	if me.MustChangePassword {
+		t.Fatalf("expected must_change_password to be false after changing password")
+	}
+}
+
+func TestChangePassword_AllowedEvenWhileMustChangePassword(t *testing.T) {
+	// change-password itself must stay reachable for a user who is otherwise
+	// blocked everywhere else — that's the whole point of this ticket.
+	srv := newAuthTestServer(t)
+
+	loginResp := login(t, srv, "admin", "admin")
+	defer loginResp.Body.Close()
+	var loggedIn loginResponse
+	if err := json.NewDecoder(loginResp.Body).Decode(&loggedIn); err != nil {
+		t.Fatalf("decode login response: %v", err)
+	}
+
+	resp := changePassword(t, srv, loggedIn.AccessToken, "admin", "a-new-password")
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("expected 204, got %d", resp.StatusCode)
+	}
+}
+
+func TestChangePassword_WrongCurrentPassword_Returns401(t *testing.T) {
+	srv := newAuthTestServer(t)
+
+	loginResp := login(t, srv, "admin", "admin")
+	defer loginResp.Body.Close()
+	var loggedIn loginResponse
+	if err := json.NewDecoder(loginResp.Body).Decode(&loggedIn); err != nil {
+		t.Fatalf("decode login response: %v", err)
+	}
+
+	resp := changePassword(t, srv, loggedIn.AccessToken, "wrong-password", "a-new-password")
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", resp.StatusCode)
+	}
+}
+
+func TestRefresh_ReturnsNewAccessTokenFromCookie(t *testing.T) {
+	srv := newAuthTestServer(t)
+
+	loginResp := login(t, srv, "admin", "admin")
+	defer loginResp.Body.Close()
+	cookie := refreshCookieFrom(t, loginResp)
+
+	req, err := http.NewRequest(http.MethodPost, srv.URL+"/api/auth/refresh", nil)
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	req.AddCookie(cookie)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST /api/auth/refresh: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	var body refreshResponse
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if body.AccessToken == "" {
+		t.Fatalf("expected a non-empty access token")
+	}
+}
+
+func TestRefresh_NoCookie_Returns401(t *testing.T) {
+	srv := newAuthTestServer(t)
+
+	resp, err := http.Post(srv.URL+"/api/auth/refresh", "application/json", nil)
+	if err != nil {
+		t.Fatalf("POST /api/auth/refresh: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", resp.StatusCode)
+	}
+}
+
+func TestLogout_ClearsCookieAndInvalidatesSession(t *testing.T) {
+	srv := newAuthTestServer(t)
+
+	loginResp := login(t, srv, "admin", "admin")
+	defer loginResp.Body.Close()
+	cookie := refreshCookieFrom(t, loginResp)
+
+	logoutReq, err := http.NewRequest(http.MethodPost, srv.URL+"/api/auth/logout", nil)
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	logoutReq.AddCookie(cookie)
+
+	logoutResp, err := http.DefaultClient.Do(logoutReq)
+	if err != nil {
+		t.Fatalf("POST /api/auth/logout: %v", err)
+	}
+	defer logoutResp.Body.Close()
+
+	if logoutResp.StatusCode != http.StatusNoContent {
+		t.Fatalf("expected 204, got %d", logoutResp.StatusCode)
+	}
+
+	cleared := refreshCookieFrom(t, logoutResp)
+	if cleared.MaxAge >= 0 {
+		t.Fatalf("expected logout to clear the refresh_token cookie (negative Max-Age), got %d", cleared.MaxAge)
+	}
+
+	// The old refresh token must no longer work after logout.
+	refreshReq, err := http.NewRequest(http.MethodPost, srv.URL+"/api/auth/refresh", nil)
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	refreshReq.AddCookie(cookie)
+
+	refreshResp, err := http.DefaultClient.Do(refreshReq)
+	if err != nil {
+		t.Fatalf("POST /api/auth/refresh: %v", err)
+	}
+	defer refreshResp.Body.Close()
+
+	if refreshResp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected 401 refreshing with a logged-out session, got %d", refreshResp.StatusCode)
 	}
 }
