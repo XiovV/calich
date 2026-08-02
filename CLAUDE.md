@@ -7,3 +7,8 @@ Issues live in GitHub Issues (XiovV/calendar), via the `gh` CLI. See `docs/agent
 ### Domain docs
 
 Single-context: `CONTEXT.md` + `docs/adr/` at the repo root. See `docs/agents/domain.md`.
+
+## Workflow rules
+
+- Never run `git commit` (or push). Leave changes staged/unstaged for the user to commit themselves.
+- Never launch dev servers or run browser tests (Playwright, chromium-cli, etc.) yourself. The user runs dev servers and does browser testing manually.
