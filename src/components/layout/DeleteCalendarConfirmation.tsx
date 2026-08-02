@@ -1,5 +1,5 @@
 import { AlertDialog } from "@base-ui/react/alert-dialog";
-import type { Calendar } from "../../lib/mockCalendars";
+import type { Calendar } from "../../lib/calendar";
 
 interface DeleteCalendarConfirmationProps {
   calendar: Calendar;

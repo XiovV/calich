@@ -1,10 +1,13 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { startOfDay } from "date-fns";
 import { TopBar } from "./TopBar";
 import { Sidebar } from "./Sidebar";
+import { Toaster } from "../ui/Toaster";
 import { CalendarView } from "../../calendar-grid/CalendarView";
 import { EventModal } from "../../calendar-grid/EventModal";
 import { computeDefaultDraft, type DraftBlock } from "../../lib/gridTime";
+import { useCalendarsStore } from "../../lib/calendarsStore";
+import { useShellStore } from "../../lib/shellStore";
 import type { Event } from "../../lib/mockEvents";
 
 type EventModalState =
@@ -14,6 +17,18 @@ type EventModalState =
 
 export function AppShell() {
   const [eventModalState, setEventModalState] = useState<EventModalState>(null);
+  const fetchCalendars = useCalendarsStore((state) => state.fetchCalendars);
+  const setCheckedCalendarIds = useShellStore(
+    (state) => state.setCheckedCalendarIds,
+  );
+
+  useEffect(() => {
+    fetchCalendars().then(() => {
+      setCheckedCalendarIds(
+        useCalendarsStore.getState().calendars.map((calendar) => calendar.id),
+      );
+    });
+  }, [fetchCalendars, setCheckedCalendarIds]);
 
   function handleCreateClick() {
     const draft = computeDefaultDraft(new Date());
@@ -55,6 +70,7 @@ export function AppShell() {
           onClose={() => setEventModalState(null)}
         />
       )}
+      <Toaster />
     </div>
   );
 }

@@ -38,6 +38,7 @@ func main() {
 	users := repository.NewUserRepository(sqlDB)
 	sessions := repository.NewSessionRepository(sqlDB)
 	authService := service.NewAuthService(users, sessions, jwtSecret, cfg.InitialUsername, cfg.InitialPassword)
+	calendarService := service.NewCalendarService(repository.NewCalendarRepository(sqlDB))
 
 	ctx := context.Background()
 	if err := authService.Bootstrap(ctx); err != nil {
@@ -46,8 +47,9 @@ func main() {
 	}
 
 	authHandler := handlers.NewAuthHandler(authService)
+	calendarHandler := handlers.NewCalendarHandler(calendarService)
 
-	handler, err := router.New(logger, authHandler, authService, authService)
+	handler, err := router.New(logger, authHandler, calendarHandler, authService, authService)
 	if err != nil {
 		logger.Error("failed to build router", "error", err)
 		os.Exit(1)

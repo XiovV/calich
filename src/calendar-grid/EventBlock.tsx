@@ -1,7 +1,7 @@
 import type { EventLayout } from "../lib/layoutOverlappingEvents";
 import type { Event } from "../lib/mockEvents";
 import { durationToHeight, timeToY } from "../lib/gridTime";
-import { getCalendarById } from "../lib/mockCalendars";
+import { getCalendarById } from "../lib/calendar";
 import { getCalendarColorClass } from "../lib/calendarColors";
 import { useCalendarsStore } from "../lib/calendarsStore";
 import { columnLayoutToBox } from "../lib/eventBlockGeometry";

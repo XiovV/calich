@@ -1,12 +1,13 @@
 import { useState } from "react";
-import { Plus, Trash2 } from "lucide-react";
+import { Pencil, Plus, Trash2 } from "lucide-react";
 import { Checkbox } from "../ui/Checkbox";
+import type { Calendar } from "../../lib/calendar";
 import { getCalendarColorClass } from "../../lib/calendarColors";
 import { useCalendarsStore } from "../../lib/calendarsStore";
 import { useEventsStore } from "../../lib/eventsStore";
 import { useShellStore } from "../../lib/shellStore";
 import { deleteCalendarCascade } from "../../lib/deleteCalendarCascade";
-import { CreateCalendarModal } from "./CreateCalendarModal";
+import { CalendarModal } from "./CalendarModal";
 import { DeleteCalendarConfirmation } from "./DeleteCalendarConfirmation";
 
 export function CalendarList() {
@@ -17,6 +18,7 @@ export function CalendarList() {
     (state) => state.toggleCalendarChecked,
   );
   const [isCreateOpen, setIsCreateOpen] = useState(false);
+  const [editingCalendar, setEditingCalendar] = useState<Calendar | null>(null);
   const [deletingCalendarId, setDeletingCalendarId] = useState<string | null>(
     null,
   );
@@ -61,6 +63,14 @@ export function CalendarList() {
             </span>
             <button
               type="button"
+              onClick={() => setEditingCalendar(calendar)}
+              aria-label={`Edit ${calendar.name}`}
+              className="rounded-shell-pill p-1 text-ink-muted opacity-0 hover:bg-surface-hover focus-visible:opacity-100 group-hover:opacity-100"
+            >
+              <Pencil className="size-3.5" />
+            </button>
+            <button
+              type="button"
               onClick={() => setDeletingCalendarId(calendar.id)}
               aria-label={`Delete ${calendar.name}`}
               className="rounded-shell-pill p-1 text-ink-muted opacity-0 hover:bg-surface-hover focus-visible:opacity-100 group-hover:opacity-100"
@@ -76,7 +86,14 @@ export function CalendarList() {
         ))}
       </ul>
       {isCreateOpen && (
-        <CreateCalendarModal onClose={() => setIsCreateOpen(false)} />
+        <CalendarModal mode="create" onClose={() => setIsCreateOpen(false)} />
+      )}
+      {editingCalendar && (
+        <CalendarModal
+          mode="edit"
+          calendar={editingCalendar}
+          onClose={() => setEditingCalendar(null)}
+        />
       )}
       {deletingCalendar && (
         <DeleteCalendarConfirmation

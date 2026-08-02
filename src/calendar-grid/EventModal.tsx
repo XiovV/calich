@@ -4,7 +4,7 @@ import { Dialog } from "@base-ui/react/dialog";
 import { Field } from "@base-ui/react/field";
 import type { DraftBlock } from "../lib/gridTime";
 import type { Event } from "../lib/mockEvents";
-import { getCheckedCalendars } from "../lib/mockCalendars";
+import { getCheckedCalendars } from "../lib/calendar";
 import { useShellStore } from "../lib/shellStore";
 import { useEventsStore } from "../lib/eventsStore";
 import { useCalendarsStore } from "../lib/calendarsStore";

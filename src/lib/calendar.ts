@@ -19,9 +19,3 @@ export function getCheckedCalendars(
 ): Calendar[] {
   return calendars.filter((calendar) => checkedCalendarIds.has(calendar.id));
 }
-
-export const mockCalendars: Calendar[] = [
-  { id: "personal", name: "Personal", color: "peacock" },
-  { id: "work", name: "Work", color: "tomato" },
-  { id: "family", name: "Family", color: "sage" },
-];

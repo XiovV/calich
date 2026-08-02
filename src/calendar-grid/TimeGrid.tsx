@@ -3,7 +3,7 @@ import { format, isSameDay, startOfDay } from "date-fns";
 import { useShellStore } from "../lib/shellStore";
 import { useEventsStore } from "../lib/eventsStore";
 import { useCalendarsStore } from "../lib/calendarsStore";
-import { getCalendarById, type Calendar } from "../lib/mockCalendars";
+import { getCalendarById, type Calendar } from "../lib/calendar";
 import { getCalendarColorClass } from "../lib/calendarColors";
 import { layoutOverlappingEvents } from "../lib/layoutOverlappingEvents";
 import { columnLayoutToBox } from "../lib/eventBlockGeometry";

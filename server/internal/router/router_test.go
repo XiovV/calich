@@ -30,8 +30,10 @@ func newTestRouter(t *testing.T) http.Handler {
 		t.Fatalf("bootstrap: %v", err)
 	}
 	authHandler := handlers.NewAuthHandler(authService)
+	calendarService := service.NewCalendarService(repository.NewCalendarRepository(sqlDB))
+	calendarHandler := handlers.NewCalendarHandler(calendarService)
 
-	r, err := New(slog.New(slog.NewTextHandler(io.Discard, nil)), authHandler, authService, authService)
+	r, err := New(slog.New(slog.NewTextHandler(io.Discard, nil)), authHandler, calendarHandler, authService, authService)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
