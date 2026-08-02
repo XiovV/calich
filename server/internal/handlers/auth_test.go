@@ -257,7 +257,7 @@ func TestChangePassword_AllowedEvenWhileMustChangePassword(t *testing.T) {
 	}
 }
 
-func TestChangePassword_WrongCurrentPassword_Returns401(t *testing.T) {
+func TestChangePassword_SkipsCurrentPasswordCheckWhileMustChangePassword(t *testing.T) {
 	srv := newAuthTestServer(t)
 
 	loginResp := login(t, srv, "admin", "admin")
@@ -267,11 +267,37 @@ func TestChangePassword_WrongCurrentPassword_Returns401(t *testing.T) {
 		t.Fatalf("decode login response: %v", err)
 	}
 
-	resp := changePassword(t, srv, loggedIn.AccessToken, "wrong-password", "a-new-password")
+	// The bootstrap default is a publicly documented value, so the forced
+	// change doesn't need the (already-known) current password re-typed.
+	resp := changePassword(t, srv, loggedIn.AccessToken, "this-is-not-the-current-password", "a-new-password")
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("expected 204, got %d", resp.StatusCode)
+	}
+}
+
+func TestChangePassword_RequiresCurrentPasswordOnceAlreadyChanged(t *testing.T) {
+	srv := newAuthTestServer(t)
+
+	loginResp := login(t, srv, "admin", "admin")
+	defer loginResp.Body.Close()
+	var loggedIn loginResponse
+	if err := json.NewDecoder(loginResp.Body).Decode(&loggedIn); err != nil {
+		t.Fatalf("decode login response: %v", err)
+	}
+
+	firstChange := changePassword(t, srv, loggedIn.AccessToken, "admin", "first-new-password")
+	defer firstChange.Body.Close()
+	if firstChange.StatusCode != http.StatusNoContent {
+		t.Fatalf("expected first change-password to succeed with 204, got %d", firstChange.StatusCode)
+	}
+
+	resp := changePassword(t, srv, loggedIn.AccessToken, "wrong-password", "second-new-password")
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusUnauthorized {
-		t.Fatalf("expected 401, got %d", resp.StatusCode)
+		t.Fatalf("expected 401 once must_change_password is false, got %d", resp.StatusCode)
 	}
 }
 

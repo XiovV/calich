@@ -199,8 +199,14 @@ func (s *AuthService) ChangePassword(ctx context.Context, userID int64, currentP
 		return fmt.Errorf("get user: %w", err)
 	}
 
-	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(currentPassword)); err != nil {
-		return ErrInvalidCredentials
+	// A user forced to change their password is always on the fixed, publicly
+	// documented bootstrap default (ADR-0010) — verifying it back adds
+	// friction without any real security value. Once they're past that (this
+	// flag is false), a change requires proving the current password as usual.
+	if !user.MustChangePassword {
+		if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(currentPassword)); err != nil {
+			return ErrInvalidCredentials
+		}
 	}
 
 	if newPassword == "" {

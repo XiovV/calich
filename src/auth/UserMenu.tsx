@@ -4,14 +4,14 @@ import { useNavigate } from "react-router";
 import { useAuthStore } from "../lib/authStore";
 
 export function UserMenu() {
-  const session = useAuthStore((state) => state.session);
+  const user = useAuthStore((state) => state.user);
   const logout = useAuthStore((state) => state.logout);
   const navigate = useNavigate();
 
-  if (!session) return null;
+  if (!user) return null;
 
-  function handleLogout() {
-    logout();
+  async function handleLogout() {
+    await logout();
     navigate("/login", { replace: true });
   }
 
@@ -27,7 +27,7 @@ export function UserMenu() {
         <Menu.Positioner sideOffset={4} align="end">
           <Menu.Popup className="rounded-shell-md border border-border bg-surface py-1 shadow-elevation-2">
             <div className="px-3 py-1.5 text-label-sm text-ink-muted">
-              {session.user.email}
+              {user.username}
             </div>
             <Menu.Item
               onClick={handleLogout}

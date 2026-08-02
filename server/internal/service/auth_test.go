@@ -252,7 +252,7 @@ func TestMustChangePassword_ReflectsUserFlag(t *testing.T) {
 	}
 }
 
-func TestChangePassword_WrongCurrentPassword(t *testing.T) {
+func TestChangePassword_SkipsCurrentPasswordCheckWhileMustChangePassword(t *testing.T) {
 	svc := newTestAuthService(t, "", "")
 	ctx := context.Background()
 	if err := svc.Bootstrap(ctx); err != nil {
@@ -264,9 +264,32 @@ func TestChangePassword_WrongCurrentPassword(t *testing.T) {
 		t.Fatalf("get user: %v", err)
 	}
 
-	err = svc.ChangePassword(ctx, user.ID, "wrong-current-password", "a-new-password")
+	// The bootstrap default is a publicly documented value — while
+	// must_change_password is true, the current password isn't checked at all.
+	if err := svc.ChangePassword(ctx, user.ID, "this-is-not-the-current-password", "a-new-password"); err != nil {
+		t.Fatalf("expected the current password check to be skipped, got %v", err)
+	}
+}
+
+func TestChangePassword_RequiresCurrentPasswordOnceAlreadyChanged(t *testing.T) {
+	svc := newTestAuthService(t, "", "")
+	ctx := context.Background()
+	if err := svc.Bootstrap(ctx); err != nil {
+		t.Fatalf("bootstrap: %v", err)
+	}
+
+	user, err := svc.users.GetByUsername(ctx, "admin")
+	if err != nil {
+		t.Fatalf("get user: %v", err)
+	}
+
+	if err := svc.ChangePassword(ctx, user.ID, "admin", "first-new-password"); err != nil {
+		t.Fatalf("first change password: %v", err)
+	}
+
+	err = svc.ChangePassword(ctx, user.ID, "wrong-current-password", "second-new-password")
 	if !errors.Is(err, ErrInvalidCredentials) {
-		t.Fatalf("expected ErrInvalidCredentials, got %v", err)
+		t.Fatalf("expected ErrInvalidCredentials once must_change_password is false, got %v", err)
 	}
 }
 

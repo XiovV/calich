@@ -1,63 +1,89 @@
 import { create } from "zustand";
-import { mockAuthApi, type Session } from "./mockAuthApi";
+import { ApiError, authApi, type User } from "./authApi";
 
-const STORAGE_KEY = "calendar.session";
-
-function isSessionShaped(value: unknown): value is Session {
-  if (typeof value !== "object" || value === null) return false;
-  const candidate = value as Record<string, unknown>;
-  return (
-    typeof candidate.accessToken === "string" &&
-    typeof candidate.refreshToken === "string" &&
-    typeof candidate.user === "object" &&
-    candidate.user !== null &&
-    typeof (candidate.user as Record<string, unknown>).email === "string"
-  );
-}
-
-function loadStoredSession(): Session | null {
-  const raw = localStorage.getItem(STORAGE_KEY);
-  if (!raw) return null;
-  try {
-    const parsed: unknown = JSON.parse(raw);
-    return isSessionShaped(parsed) ? parsed : null;
-  } catch {
-    return null;
-  }
-}
-
-function persistSession(session: Session | null) {
-  if (session) {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(session));
-  } else {
-    localStorage.removeItem(STORAGE_KEY);
-  }
-}
+export type AuthStatus = "loading" | "unauthenticated" | "must-change-password" | "authenticated";
 
 interface AuthState {
-  session: Session | null;
-  login: (email: string, password: string) => Promise<void>;
-  logout: () => void;
-  refreshAccessToken: () => Promise<void>;
+  status: AuthStatus;
+  user: User | null;
+  // The username typed at login, kept only for display on the forced
+  // password-change screen — GET /api/auth/me is blocked (403) while a
+  // password change is still required, so the full User record isn't
+  // available yet. Cleared once authenticated.
+  pendingUsername: string | null;
+  accessToken: string | null;
+  bootstrap: () => Promise<void>;
+  login: (username: string, password: string) => Promise<void>;
+  logout: () => Promise<void>;
+  changePassword: (currentPassword: string, newPassword: string) => Promise<void>;
+}
+
+type AuthFields = Pick<AuthState, "status" | "user" | "pendingUsername" | "accessToken">;
+
+function unauthenticated(): AuthFields {
+  return { status: "unauthenticated", user: null, pendingUsername: null, accessToken: null };
+}
+
+function mustChangePassword(accessToken: string, pendingUsername: string | null): AuthFields {
+  return { status: "must-change-password", user: null, pendingUsername, accessToken };
+}
+
+function authenticated(user: User, accessToken: string): AuthFields {
+  return { status: "authenticated", user, pendingUsername: null, accessToken };
 }
 
 export const useAuthStore = create<AuthState>((set, get) => ({
-  session: loadStoredSession(),
-  login: async (email, password) => {
-    const session = await mockAuthApi.login(email, password);
-    persistSession(session);
-    set({ session });
+  ...unauthenticated(),
+  status: "loading",
+
+  bootstrap: async () => {
+    let accessToken: string;
+    try {
+      ({ accessToken } = await authApi.refresh());
+    } catch {
+      set(unauthenticated());
+      return;
+    }
+
+    try {
+      const user = await authApi.me(accessToken);
+      set(authenticated(user, accessToken));
+    } catch (err) {
+      if (err instanceof ApiError && err.code === "password_change_required") {
+        set(mustChangePassword(accessToken, null));
+        return;
+      }
+      set(unauthenticated());
+    }
   },
-  logout: () => {
-    persistSession(null);
-    set({ session: null });
+
+  login: async (username, password) => {
+    const { accessToken, mustChangePassword: passwordChangeRequired } = await authApi.login(username, password);
+
+    if (passwordChangeRequired) {
+      set(mustChangePassword(accessToken, username));
+      return;
+    }
+
+    const user = await authApi.me(accessToken);
+    set(authenticated(user, accessToken));
   },
-  refreshAccessToken: async () => {
-    const { session } = get();
-    if (!session) return;
-    const { accessToken } = await mockAuthApi.refresh(session.refreshToken);
-    const nextSession = { ...session, accessToken };
-    persistSession(nextSession);
-    set({ session: nextSession });
+
+  logout: async () => {
+    // Best-effort: the local session ends regardless of whether the backend
+    // call succeeds (e.g. a network hiccup shouldn't trap the user logged in
+    // from their own point of view).
+    await authApi.logout().catch(() => {});
+    set(unauthenticated());
+  },
+
+  changePassword: async (currentPassword, newPassword) => {
+    const { accessToken } = get();
+    if (!accessToken) throw new Error("Not authenticated.");
+
+    await authApi.changePassword(accessToken, currentPassword, newPassword);
+
+    const user = await authApi.me(accessToken);
+    set(authenticated(user, accessToken));
   },
 }));
