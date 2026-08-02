@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { mockCalendarSections } from "./mockCalendars";
 
 export type ActiveView = "day" | "week" | "month" | "year";
 
@@ -15,7 +16,11 @@ interface ShellState {
 export const useShellStore = create<ShellState>((set) => ({
   selectedDate: new Date(),
   activeView: "month",
-  checkedCalendarIds: new Set(),
+  checkedCalendarIds: new Set(
+    mockCalendarSections.flatMap((section) =>
+      section.calendars.map((calendar) => calendar.id),
+    ),
+  ),
   setSelectedDate: (date) => set({ selectedDate: date }),
   setActiveView: (view) => set({ activeView: view }),
   setCheckedCalendarIds: (ids) => set({ checkedCalendarIds: new Set(ids) }),

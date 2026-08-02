@@ -31,6 +31,15 @@
   --shadow-elevation-1: 0 1px 2px rgba(31, 36, 48, 0.08);
   --shadow-elevation-2: 0 4px 12px rgba(31, 36, 48, 0.12);
   --shadow-elevation-3: 0 12px 32px rgba(31, 36, 48, 0.16);
+
+  --color-calendar-tomato: #e2483d;
+  --color-calendar-flamingo: #e67c9a;
+  --color-calendar-banana: #e4c441;
+  --color-calendar-sage: #6b9071;
+  --color-calendar-peacock: #12809c;
+  --color-calendar-blueberry: #3f51b5;
+  --color-calendar-grape: #8e44ad;
+  --color-calendar-graphite: #6b7280;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -56,4 +65,19 @@
 
 body {
   margin: 0;
+}
+
+.rdp-root {
+  --rdp-accent-color: var(--color-accent);
+  --rdp-accent-background-color: var(--color-accent-soft);
+  --rdp-day-height: 32px;
+  --rdp-day-width: 32px;
+  --rdp-day_button-height: 30px;
+  --rdp-day_button-width: 30px;
+  --rdp-nav_button-height: 1.75rem;
+  --rdp-nav_button-width: 1.75rem;
+  --rdp-nav-height: 2rem;
+  font-family: var(--font-sans);
+  font-size: var(--text-label-sm);
+  color: var(--color-ink);
 }
