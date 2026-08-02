@@ -16,7 +16,7 @@ interface ShellState {
 
 export const useShellStore = create<ShellState>((set) => ({
   selectedDate: new Date(),
-  activeView: "month",
+  activeView: "week",
   checkedCalendarIds: new Set(
     useCalendarsStore.getState().calendars.map((calendar) => calendar.id),
   ),
