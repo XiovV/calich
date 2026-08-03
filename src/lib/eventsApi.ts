@@ -7,6 +7,8 @@ interface EventWire {
   title: string;
   start: string;
   end: string;
+  // Absent (omitted by the backend) for a non-recurring event.
+  rrule?: string;
 }
 
 function fromWire(wire: EventWire): Event {
@@ -16,6 +18,7 @@ function fromWire(wire: EventWire): Event {
     title: wire.title,
     start: new Date(wire.start),
     end: new Date(wire.end),
+    rrule: wire.rrule || undefined,
   };
 }
 
@@ -33,7 +36,14 @@ export const eventsApi = {
 
   async create(
     accessToken: string,
-    event: { id: string; calendarId: string; title: string; start: Date; end: Date },
+    event: {
+      id: string;
+      calendarId: string;
+      title: string;
+      start: Date;
+      end: Date;
+      rrule?: string;
+    },
   ): Promise<Event> {
     const response = await fetch("/api/events/", {
       method: "POST",
@@ -45,6 +55,7 @@ export const eventsApi = {
         title: event.title,
         start: event.start.toISOString(),
         end: event.end.toISOString(),
+        rrule: event.rrule ?? "",
       }),
     });
     if (!response.ok) throw await errorFromResponse(response);
@@ -55,7 +66,13 @@ export const eventsApi = {
   async update(
     accessToken: string,
     id: string,
-    changes: { calendarId: string; title: string; start: Date; end: Date },
+    changes: {
+      calendarId: string;
+      title: string;
+      start: Date;
+      end: Date;
+      rrule?: string;
+    },
   ): Promise<Event> {
     const response = await fetch(`/api/events/${id}`, {
       method: "PATCH",
@@ -66,6 +83,7 @@ export const eventsApi = {
         title: changes.title,
         start: changes.start.toISOString(),
         end: changes.end.toISOString(),
+        rrule: changes.rrule ?? "",
       }),
     });
     if (!response.ok) throw await errorFromResponse(response);

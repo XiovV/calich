@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { format } from "date-fns";
-import type { Event } from "../lib/event";
+import { occurrenceKey, type Occurrence } from "../lib/occurrence";
 import type { DraftBlock } from "../lib/gridTime";
 import { getCalendarById } from "../lib/calendar";
 import { getCalendarColorClass } from "../lib/calendarColors";
@@ -16,10 +16,14 @@ interface MonthDayCellProps {
   inCurrentMonth: boolean;
   isToday: boolean;
   isDragHover: boolean;
-  events: Event[];
+  occurrences: Occurrence[];
   onDraftCreated: (day: Date, draft: DraftBlock) => void;
-  onEventClick: (event: Event) => void;
-  onEventDragStart: (event: Event, clientX: number, clientY: number) => void;
+  onOccurrenceClick: (occurrence: Occurrence) => void;
+  onOccurrenceDragStart: (
+    occurrence: Occurrence,
+    clientX: number,
+    clientY: number,
+  ) => void;
 }
 
 export function MonthDayCell({
@@ -27,10 +31,10 @@ export function MonthDayCell({
   inCurrentMonth,
   isToday,
   isDragHover,
-  events,
+  occurrences,
   onDraftCreated,
-  onEventClick,
-  onEventDragStart,
+  onOccurrenceClick,
+  onOccurrenceDragStart,
 }: MonthDayCellProps) {
   const calendars = useCalendarsStore((state) => state.calendars);
   const setSelectedDate = useShellStore((state) => state.setSelectedDate);
@@ -60,12 +64,12 @@ export function MonthDayCell({
   }
 
   const { visibleCount, overflowCount } = computeChipCapacity(
-    events.length,
+    occurrences.length,
     availableHeight,
     CHIP_ROW_HEIGHT_PX,
     MORE_ROW_HEIGHT_PX,
   );
-  const visibleEvents = events.slice(0, visibleCount);
+  const visibleOccurrences = occurrences.slice(0, visibleCount);
 
   return (
     <div
@@ -91,18 +95,25 @@ export function MonthDayCell({
         ref={eventsContainerRef}
         className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-hidden"
       >
-        {visibleEvents.map((event) => {
-          const calendar = getCalendarById(calendars, event.calendarId);
+        {visibleOccurrences.map((occurrence) => {
+          const calendar = getCalendarById(
+            calendars,
+            occurrence.event.calendarId,
+          );
           const colorClass = calendar
             ? getCalendarColorClass(calendar.color)
             : "bg-calendar-graphite";
           return (
             <button
-              key={event.id}
+              key={occurrenceKey(occurrence)}
               type="button"
               onMouseDown={(domEvent) => {
                 domEvent.stopPropagation();
-                onEventDragStart(event, domEvent.clientX, domEvent.clientY);
+                onOccurrenceDragStart(
+                  occurrence,
+                  domEvent.clientX,
+                  domEvent.clientY,
+                );
               }}
               onClick={(domEvent) => {
                 domEvent.stopPropagation();
@@ -110,12 +121,12 @@ export function MonthDayCell({
                 // drag-vs-click distance check started above; only keyboard
                 // activation (Enter/Space, event.detail === 0) reaches here.
                 if (domEvent.detail === 0) {
-                  onEventClick(event);
+                  onOccurrenceClick(occurrence);
                 }
               }}
               className={`cursor-pointer truncate rounded-shell-sm px-1 text-left text-label-sm text-ink-inverse ${colorClass}`}
             >
-              {format(event.start, "h:mm a")} {event.title}
+              {format(occurrence.start, "h:mm a")} {occurrence.event.title}
             </button>
           );
         })}

@@ -50,7 +50,7 @@ func TestEventRepository_CreateAndGetByID(t *testing.T) {
 	start := time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC)
 	end := time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC)
 
-	created, err := repo.Create(ctx, "evt-1", userID, calendarID, "Standup", start, end)
+	created, err := repo.Create(ctx, "evt-1", userID, calendarID, "Standup", start, end, "")
 	if err != nil {
 		t.Fatalf("create event: %v", err)
 	}
@@ -136,7 +136,7 @@ func TestEventRepository_Update(t *testing.T) {
 	newStart := mustParseTime(t, "2026-01-01T11:00:00Z")
 	newEnd := mustParseTime(t, "2026-01-01T12:00:00Z")
 
-	updated, err := repo.Update(ctx, userID, "evt-1", calendarID, "Renamed", newStart, newEnd)
+	updated, err := repo.Update(ctx, userID, "evt-1", calendarID, "Renamed", newStart, newEnd, "")
 	if err != nil {
 		t.Fatalf("update: %v", err)
 	}
@@ -151,7 +151,7 @@ func TestEventRepository_Update_NotFound(t *testing.T) {
 	start := mustParseTime(t, "2026-01-01T09:00:00Z")
 	end := mustParseTime(t, "2026-01-01T10:00:00Z")
 
-	_, err := repo.Update(context.Background(), userID, "nope", calendarID, "Renamed", start, end)
+	_, err := repo.Update(context.Background(), userID, "nope", calendarID, "Renamed", start, end, "")
 	if !errors.Is(err, ErrNotFound) {
 		t.Fatalf("expected ErrNotFound, got %v", err)
 	}
@@ -166,7 +166,7 @@ func TestEventRepository_Update_ScopedToUser(t *testing.T) {
 	start := mustParseTime(t, "2026-01-01T11:00:00Z")
 	end := mustParseTime(t, "2026-01-01T12:00:00Z")
 
-	_, err := repo.Update(ctx, 99999, "evt-1", calendarID, "Renamed", start, end)
+	_, err := repo.Update(ctx, 99999, "evt-1", calendarID, "Renamed", start, end, "")
 	if !errors.Is(err, ErrNotFound) {
 		t.Fatalf("expected ErrNotFound updating another user's event, got %v", err)
 	}
@@ -247,7 +247,7 @@ func TestEventRepository_CascadeDeletesWhenCalendarDeleted(t *testing.T) {
 
 func mustCreateEvent(t *testing.T, repo *EventRepository, id string, userID int64, calendarID, start, end string) {
 	t.Helper()
-	if _, err := repo.Create(context.Background(), id, userID, calendarID, id, mustParseTime(t, start), mustParseTime(t, end)); err != nil {
+	if _, err := repo.Create(context.Background(), id, userID, calendarID, id, mustParseTime(t, start), mustParseTime(t, end), ""); err != nil {
 		t.Fatalf("create event %q: %v", id, err)
 	}
 }

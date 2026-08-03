@@ -95,9 +95,32 @@ describe("eventsApi.create", () => {
           title: "Standup",
           start: "2026-01-01T09:00:00.000Z",
           end: "2026-01-01T10:00:00.000Z",
+          rrule: "",
         }),
       }),
     );
+  });
+
+  it("sends the rrule and maps it back on the created event", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        jsonResponse(201, { ...wireEvent, rrule: "FREQ=WEEKLY;BYDAY=TH" }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const created = await eventsApi.create("token-123", {
+      id: "evt-1",
+      calendarId: "cal-1",
+      title: "Standup",
+      start: new Date("2026-01-01T09:00:00Z"),
+      end: new Date("2026-01-01T10:00:00Z"),
+      rrule: "FREQ=WEEKLY;BYDAY=TH",
+    });
+
+    expect(created.rrule).toBe("FREQ=WEEKLY;BYDAY=TH");
+    const body = JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string);
+    expect(body.rrule).toBe("FREQ=WEEKLY;BYDAY=TH");
   });
 
   it("throws an ApiError with the backend's code on validation failure", async () => {
@@ -143,6 +166,7 @@ describe("eventsApi.update", () => {
           title: "Renamed",
           start: "2026-01-01T09:00:00.000Z",
           end: "2026-01-01T10:00:00.000Z",
+          rrule: "",
         }),
       }),
     );

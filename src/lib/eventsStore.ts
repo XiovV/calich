@@ -58,6 +58,7 @@ export const useEventsStore = create<EventsState>((set, get) => ({
         title: updated.title,
         start: updated.start,
         end: updated.end,
+        rrule: updated.rrule,
       });
     } catch {
       set({ events: previousEvents });

@@ -1,18 +1,20 @@
-import type { Event } from "./event";
+import type { Occurrence } from "./occurrence";
 
-export interface EventLayout {
-  event: Event;
+export interface OccurrenceLayout {
+  occurrence: Occurrence;
   column: number;
   columnCount: number;
 }
 
-export function layoutOverlappingEvents(events: Event[]): EventLayout[] {
-  const sorted = [...events].sort(
+export function layoutOverlappingEvents(
+  occurrences: Occurrence[],
+): OccurrenceLayout[] {
+  const sorted = [...occurrences].sort(
     (a, b) => a.start.getTime() - b.start.getTime(),
   );
 
-  const layouts: EventLayout[] = [];
-  let clusterAssignments: { event: Event; column: number }[] = [];
+  const layouts: OccurrenceLayout[] = [];
+  let clusterAssignments: { occurrence: Occurrence; column: number }[] = [];
   let clusterColumnEnds: number[] = [];
   let clusterEnd = -Infinity;
 
@@ -20,7 +22,7 @@ export function layoutOverlappingEvents(events: Event[]): EventLayout[] {
     const columnCount = clusterColumnEnds.length;
     for (const assignment of clusterAssignments) {
       layouts.push({
-        event: assignment.event,
+        occurrence: assignment.occurrence,
         column: assignment.column,
         columnCount,
       });
@@ -29,24 +31,27 @@ export function layoutOverlappingEvents(events: Event[]): EventLayout[] {
     clusterColumnEnds = [];
   }
 
-  for (const event of sorted) {
-    if (clusterAssignments.length > 0 && event.start.getTime() >= clusterEnd) {
+  for (const occurrence of sorted) {
+    if (
+      clusterAssignments.length > 0 &&
+      occurrence.start.getTime() >= clusterEnd
+    ) {
       flushCluster();
       clusterEnd = -Infinity;
     }
 
     let columnIndex = clusterColumnEnds.findIndex(
-      (endTime) => endTime <= event.start.getTime(),
+      (endTime) => endTime <= occurrence.start.getTime(),
     );
     if (columnIndex === -1) {
       columnIndex = clusterColumnEnds.length;
-      clusterColumnEnds.push(event.end.getTime());
+      clusterColumnEnds.push(occurrence.end.getTime());
     } else {
-      clusterColumnEnds[columnIndex] = event.end.getTime();
+      clusterColumnEnds[columnIndex] = occurrence.end.getTime();
     }
 
-    clusterAssignments.push({ event, column: columnIndex });
-    clusterEnd = Math.max(clusterEnd, event.end.getTime());
+    clusterAssignments.push({ occurrence, column: columnIndex });
+    clusterEnd = Math.max(clusterEnd, occurrence.end.getTime());
   }
   flushCluster();
 

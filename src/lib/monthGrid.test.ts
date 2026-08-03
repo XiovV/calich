@@ -4,9 +4,9 @@ import {
   computeCellDraft,
   computeChipCapacity,
   computeMoveToDate,
-  getEventsForDay,
+  getOccurrencesForDay,
 } from "./monthGrid";
-import type { Event } from "./event";
+import type { Occurrence } from "./occurrence";
 
 describe("buildMonthGrid", () => {
   it("returns 42 cells", () => {
@@ -84,50 +84,54 @@ describe("buildMonthGrid", () => {
   });
 });
 
-describe("getEventsForDay", () => {
-  function makeEvent(id: string, start: Date, end: Date): Event {
-    return { id, calendarId: "cal-1", title: id, start, end };
+describe("getOccurrencesForDay", () => {
+  function makeOccurrence(id: string, start: Date, end: Date): Occurrence {
+    return {
+      event: { id, calendarId: "cal-1", title: id, start, end },
+      start,
+      end,
+    };
   }
 
-  it("returns only events that fall on the given day", () => {
+  it("returns only occurrences that fall on the given day", () => {
     const day = new Date(2026, 7, 10);
-    const matching = makeEvent(
+    const matching = makeOccurrence(
       "on-day",
       new Date(2026, 7, 10, 9, 0),
       new Date(2026, 7, 10, 10, 0),
     );
-    const other = makeEvent(
+    const other = makeOccurrence(
       "other-day",
       new Date(2026, 7, 11, 9, 0),
       new Date(2026, 7, 11, 10, 0),
     );
 
-    const result = getEventsForDay([matching, other], day);
+    const result = getOccurrencesForDay([matching, other], day);
 
     expect(result).toEqual([matching]);
   });
 
-  it("orders same-day events by start time", () => {
+  it("orders same-day occurrences by start time", () => {
     const day = new Date(2026, 7, 10);
-    const late = makeEvent(
+    const late = makeOccurrence(
       "late",
       new Date(2026, 7, 10, 14, 0),
       new Date(2026, 7, 10, 15, 0),
     );
-    const early = makeEvent(
+    const early = makeOccurrence(
       "early",
       new Date(2026, 7, 10, 8, 0),
       new Date(2026, 7, 10, 9, 0),
     );
-    const middle = makeEvent(
+    const middle = makeOccurrence(
       "middle",
       new Date(2026, 7, 10, 11, 0),
       new Date(2026, 7, 10, 12, 0),
     );
 
-    const result = getEventsForDay([late, early, middle], day);
+    const result = getOccurrencesForDay([late, early, middle], day);
 
-    expect(result.map((event) => event.id)).toEqual(["early", "middle", "late"]);
+    expect(result.map((o) => o.event.id)).toEqual(["early", "middle", "late"]);
   });
 });
 

@@ -1,11 +1,17 @@
 import { useEffect, useRef, useState } from "react";
-import { isSameDay } from "date-fns";
+import { addDays, isSameDay, startOfDay } from "date-fns";
 import { useShellStore } from "../lib/shellStore";
 import { useEventsStore } from "../lib/eventsStore";
 import { useCalendarsStore } from "../lib/calendarsStore";
 import { getCalendarById } from "../lib/calendar";
 import { getCalendarColorClass } from "../lib/calendarColors";
-import { buildMonthGrid, computeMoveToDate, getEventsForDay } from "../lib/monthGrid";
+import {
+  buildMonthGrid,
+  computeMoveToDate,
+  getOccurrencesForDay,
+} from "../lib/monthGrid";
+import { useVisibleOccurrences } from "../hooks/useVisibleOccurrences";
+import { occurrenceKey, seriesEditChanges, type Occurrence } from "../lib/occurrence";
 import { MonthDayCell } from "./MonthDayCell";
 import { MonthEventDragPreview } from "./MonthEventDragPreview";
 import type { Event } from "../lib/event";
@@ -20,7 +26,7 @@ interface MonthGridProps {
 }
 
 interface EventDragOrigin {
-  event: Event;
+  occurrence: Occurrence;
   startClientX: number;
   startClientY: number;
 }
@@ -41,8 +47,6 @@ function getCellDateAtPoint(
 
 export function MonthGrid({ onDraftCreated, onEventClick }: MonthGridProps) {
   const selectedDate = useShellStore((state) => state.selectedDate);
-  const checkedCalendarIds = useShellStore((state) => state.checkedCalendarIds);
-  const events = useEventsStore((state) => state.events);
   const updateEvent = useEventsStore((state) => state.updateEvent);
   const calendars = useCalendarsStore((state) => state.calendars);
 
@@ -62,14 +66,30 @@ export function MonthGrid({ onDraftCreated, onEventClick }: MonthGridProps) {
     onDraftCreated(day, draft);
   }
 
-  const visibleEvents = events.filter((event) =>
-    checkedCalendarIds.has(event.calendarId),
-  );
   const cells = buildMonthGrid(selectedDate);
+
+  // The grid renders Occurrences, not raw Events: each master is expanded over
+  // the six-week window the grid displays. A non-recurring Event yields exactly
+  // one Occurrence, so nothing changes for it.
+  const windowStart = startOfDay(cells[0].date);
+  const windowEnd = startOfDay(addDays(cells[cells.length - 1].date, 1));
+  const visibleOccurrences = useVisibleOccurrences(
+    windowStart.getTime(),
+    windowEnd.getTime(),
+  );
+
   const now = new Date();
 
-  function handleEventDragStart(event: Event, clientX: number, clientY: number) {
-    const origin: EventDragOrigin = { event, startClientX: clientX, startClientY: clientY };
+  function handleOccurrenceDragStart(
+    occurrence: Occurrence,
+    clientX: number,
+    clientY: number,
+  ) {
+    const origin: EventDragOrigin = {
+      occurrence,
+      startClientX: clientX,
+      startClientY: clientY,
+    };
     dragOriginRef.current = origin;
     setDragPosition({ x: clientX, y: clientY });
     setActiveDrag(origin);
@@ -91,7 +111,7 @@ export function MonthGrid({ onDraftCreated, onEventClick }: MonthGridProps) {
       const distance = Math.max(Math.abs(deltaX), Math.abs(deltaY));
 
       if (distance < CLICK_DISTANCE_THRESHOLD_PX) {
-        onEventClick(origin.event);
+        onEventClick(origin.occurrence.event);
       } else {
         suppressNextCellClickRef.current = true;
         setTimeout(() => {
@@ -101,11 +121,14 @@ export function MonthGrid({ onDraftCreated, onEventClick }: MonthGridProps) {
         const targetDate = getCellDateAtPoint(cells, domEvent.clientX, domEvent.clientY);
         if (targetDate) {
           const { start, end } = computeMoveToDate(
-            origin.event.start,
-            origin.event.end,
+            origin.occurrence.start,
+            origin.occurrence.end,
             targetDate,
           );
-          updateEvent(origin.event.id, { start, end });
+          updateEvent(
+            origin.occurrence.event.id,
+            seriesEditChanges(origin.occurrence.event, start, end),
+          );
         }
       }
 
@@ -123,11 +146,12 @@ export function MonthGrid({ onDraftCreated, onEventClick }: MonthGridProps) {
   }, [activeDrag, cells, onEventClick, updateEvent]);
 
   const dragCalendar = activeDrag
-    ? getCalendarById(calendars, activeDrag.event.calendarId)
+    ? getCalendarById(calendars, activeDrag.occurrence.event.calendarId)
     : undefined;
   const dragColorClass = dragCalendar
     ? getCalendarColorClass(dragCalendar.color)
     : "bg-calendar-graphite";
+  const draggingKey = activeDrag ? occurrenceKey(activeDrag.occurrence) : null;
 
   return (
     <div className="flex h-full flex-col">
@@ -149,12 +173,12 @@ export function MonthGrid({ onDraftCreated, onEventClick }: MonthGridProps) {
             inCurrentMonth={inCurrentMonth}
             isToday={isSameDay(date, now)}
             isDragHover={hoveredCellKey === date.toDateString()}
-            events={getEventsForDay(visibleEvents, date).filter(
-              (event) => event.id !== activeDrag?.event.id,
+            occurrences={getOccurrencesForDay(visibleOccurrences, date).filter(
+              (occurrence) => occurrenceKey(occurrence) !== draggingKey,
             )}
             onDraftCreated={handleDraftCreated}
-            onEventClick={onEventClick}
-            onEventDragStart={handleEventDragStart}
+            onOccurrenceClick={(occurrence) => onEventClick(occurrence.event)}
+            onOccurrenceDragStart={handleOccurrenceDragStart}
           />
         ))}
       </div>
@@ -162,8 +186,8 @@ export function MonthGrid({ onDraftCreated, onEventClick }: MonthGridProps) {
         <MonthEventDragPreview
           x={dragPosition.x}
           y={dragPosition.y}
-          title={activeDrag.event.title}
-          start={activeDrag.event.start}
+          title={activeDrag.occurrence.event.title}
+          start={activeDrag.occurrence.start}
           colorClass={dragColorClass}
         />
       )}

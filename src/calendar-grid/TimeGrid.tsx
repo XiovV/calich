@@ -1,12 +1,13 @@
 import { useEffect, useRef, useState } from "react";
-import { format, isSameDay, startOfDay } from "date-fns";
-import { useShellStore } from "../lib/shellStore";
+import { addDays, format, isSameDay, startOfDay } from "date-fns";
 import { useEventsStore } from "../lib/eventsStore";
 import { useCalendarsStore } from "../lib/calendarsStore";
 import { getCalendarById, type Calendar } from "../lib/calendar";
 import { getCalendarColorClass } from "../lib/calendarColors";
 import { layoutOverlappingEvents } from "../lib/layoutOverlappingEvents";
 import { columnLayoutToBox } from "../lib/eventBlockGeometry";
+import { useVisibleOccurrences } from "../hooks/useVisibleOccurrences";
+import { occurrenceKey, seriesEditChanges, type Occurrence } from "../lib/occurrence";
 import type { Event } from "../lib/event";
 import {
   PIXELS_PER_HOUR,
@@ -30,7 +31,7 @@ interface TimeGridProps {
 }
 
 interface EventDragOrigin {
-  event: Event;
+  occurrence: Occurrence;
   kind: EventDragKind;
   startClientX: number;
   startClientY: number;
@@ -48,8 +49,8 @@ function computeDragTimes(
     const dayOffset =
       origin.columnWidth > 0 ? Math.round(deltaX / origin.columnWidth) : 0;
     return computeMovedEventTimes(
-      origin.event.start,
-      origin.event.end,
+      origin.occurrence.start,
+      origin.occurrence.end,
       dayOffset,
       minuteOffset,
     );
@@ -57,8 +58,8 @@ function computeDragTimes(
 
   const edge = origin.kind === "resize-start" ? "start" : "end";
   return computeResizedEventTimes(
-    origin.event.start,
-    origin.event.end,
+    origin.occurrence.start,
+    origin.occurrence.end,
     edge,
     minuteOffset,
   );
@@ -72,24 +73,28 @@ interface EventDragPreview {
 function computeEventDragPreview(
   activeDrag: EventDragOrigin,
   dragDelta: { x: number; y: number },
-  visibleEvents: Event[],
+  visibleOccurrences: Occurrence[],
   calendars: Calendar[],
 ): EventDragPreview {
   const { start, end } = computeDragTimes(activeDrag, dragDelta.x, dragDelta.y);
-  const originDay = startOfDay(activeDrag.event.start);
+  const originDay = startOfDay(activeDrag.occurrence.start);
   const day = activeDrag.kind === "move" ? startOfDay(start) : originDay;
 
-  const originDayEvents = visibleEvents.filter((event) =>
-    isSameDay(event.start, originDay),
+  const originDayOccurrences = visibleOccurrences.filter((occurrence) =>
+    isSameDay(occurrence.start, originDay),
   );
-  const originLayout = layoutOverlappingEvents(originDayEvents).find(
-    (layout) => layout.event.id === activeDrag.event.id,
+  const activeKey = occurrenceKey(activeDrag.occurrence);
+  const originLayout = layoutOverlappingEvents(originDayOccurrences).find(
+    (layout) => occurrenceKey(layout.occurrence) === activeKey,
   );
   const { left, width } = originLayout
     ? columnLayoutToBox(originLayout.column, originLayout.columnCount)
     : columnLayoutToBox(0, 1);
 
-  const calendar = getCalendarById(calendars, activeDrag.event.calendarId);
+  const calendar = getCalendarById(
+    calendars,
+    activeDrag.occurrence.event.calendarId,
+  );
   const colorClass = calendar
     ? getCalendarColorClass(calendar.color)
     : "bg-calendar-graphite";
@@ -101,7 +106,7 @@ function computeEventDragPreview(
       height: durationToHeight(start, end, PIXELS_PER_HOUR),
       left,
       width,
-      title: activeDrag.event.title,
+      title: activeDrag.occurrence.event.title,
       start,
       end,
       colorClass,
@@ -114,8 +119,6 @@ export function TimeGrid({
   onDraftCreated,
   onEventClick,
 }: TimeGridProps) {
-  const checkedCalendarIds = useShellStore((state) => state.checkedCalendarIds);
-  const events = useEventsStore((state) => state.events);
   const updateEvent = useEventsStore((state) => state.updateEvent);
   const calendars = useCalendarsStore((state) => state.calendars);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -127,8 +130,14 @@ export function TimeGrid({
   const [activeDrag, setActiveDrag] = useState<EventDragOrigin | null>(null);
   const [dragDelta, setDragDelta] = useState({ x: 0, y: 0 });
 
-  const visibleEvents = events.filter((event) =>
-    checkedCalendarIds.has(event.calendarId),
+  // The grid renders Occurrences, not raw Events: each master is expanded over
+  // the visible window (first day 00:00 to the day after the last). A
+  // non-recurring Event yields exactly one Occurrence, so nothing changes for it.
+  const windowStart = startOfDay(daysToShow[0]);
+  const windowEnd = startOfDay(addDays(daysToShow[daysToShow.length - 1], 1));
+  const visibleOccurrences = useVisibleOccurrences(
+    windowStart.getTime(),
+    windowEnd.getTime(),
   );
 
   useEffect(() => {
@@ -147,8 +156,8 @@ export function TimeGrid({
     container.scrollTop = Math.max(0, nowY - container.clientHeight / 2);
   }, []);
 
-  function handleEventDragStart(
-    event: Event,
+  function handleOccurrenceDragStart(
+    occurrence: Occurrence,
     kind: EventDragKind,
     clientX: number,
     clientY: number,
@@ -157,7 +166,7 @@ export function TimeGrid({
       (daysContainerRef.current?.getBoundingClientRect().width ?? 0) /
       daysToShow.length;
     const origin: EventDragOrigin = {
-      event,
+      occurrence,
       kind,
       startClientX: clientX,
       startClientY: clientY,
@@ -185,10 +194,13 @@ export function TimeGrid({
       const distance = Math.max(Math.abs(deltaX), Math.abs(deltaY));
 
       if (origin.kind === "move" && distance < CLICK_DISTANCE_THRESHOLD_PX) {
-        onEventClick(origin.event);
+        onEventClick(origin.occurrence.event);
       } else if (distance >= CLICK_DISTANCE_THRESHOLD_PX) {
         const { start, end } = computeDragTimes(origin, deltaX, deltaY);
-        updateEvent(origin.event.id, { start, end });
+        updateEvent(
+          origin.occurrence.event.id,
+          seriesEditChanges(origin.occurrence.event, start, end),
+        );
       }
 
       dragOriginRef.current = null;
@@ -204,7 +216,12 @@ export function TimeGrid({
   }, [activeDrag, onEventClick, updateEvent]);
 
   const dragPreview = activeDrag
-    ? computeEventDragPreview(activeDrag, dragDelta, visibleEvents, calendars)
+    ? computeEventDragPreview(
+        activeDrag,
+        dragDelta,
+        visibleOccurrences,
+        calendars,
+      )
     : null;
 
   return (
@@ -232,13 +249,15 @@ export function TimeGrid({
               <DayColumn
                 key={day.toISOString()}
                 day={day}
-                events={visibleEvents}
+                occurrences={visibleOccurrences}
                 pixelsPerHour={PIXELS_PER_HOUR}
                 now={now}
                 onDraftCreated={onDraftCreated}
-                onEventClick={onEventClick}
-                onEventDragStart={handleEventDragStart}
-                draggingEventId={activeDrag?.event.id ?? null}
+                onOccurrenceClick={(occurrence) => onEventClick(occurrence.event)}
+                onOccurrenceDragStart={handleOccurrenceDragStart}
+                draggingKey={
+                  activeDrag ? occurrenceKey(activeDrag.occurrence) : null
+                }
                 eventDragPreview={
                   dragPreview && isSameDay(dragPreview.day, day)
                     ? dragPreview.data

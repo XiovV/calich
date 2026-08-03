@@ -1,5 +1,5 @@
 import { addDays, isSameDay, isSameMonth, startOfMonth, startOfWeek } from "date-fns";
-import type { Event } from "./event";
+import type { Occurrence } from "./occurrence";
 import { roundUpToIncrement, type DraftBlock } from "./gridTime";
 
 export const MONTH_GRID_ROWS = 6;
@@ -21,9 +21,12 @@ export function buildMonthGrid(selectedDate: Date): MonthGridCell[] {
   });
 }
 
-export function getEventsForDay(events: Event[], day: Date): Event[] {
-  return events
-    .filter((event) => isSameDay(event.start, day))
+export function getOccurrencesForDay(
+  occurrences: Occurrence[],
+  day: Date,
+): Occurrence[] {
+  return occurrences
+    .filter((occurrence) => isSameDay(occurrence.start, day))
     .sort((a, b) => a.start.getTime() - b.start.getTime());
 }
 

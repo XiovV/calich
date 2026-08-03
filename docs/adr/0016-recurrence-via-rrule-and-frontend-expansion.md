@@ -36,6 +36,8 @@ Expansion = expand master `rrule` over the window → drop starts matching an ex
 
 ## Editing semantics (Tier 3, full parity)
 
+> **Interim (as shipped in #34):** the scope picker below does not exist yet. Until Overrides/Exceptions and the This-event/This-and-following options land (#35, #36), editing, deleting, or dragging a recurring Occurrence always operates on the whole series — i.e. the **All events** path only. Dragging additionally re-anchors the rule to the new start (a "Weekly on Tuesday" series dragged to a Wednesday becomes "Weekly on Wednesday") so the master's rule never falls out of sync with its start.
+
 Edit/delete/drag on a recurring Occurrence prompt **This event / This and following / All events** (default *This event*):
 
 - **This event** → write an override (edit) or exception (delete).

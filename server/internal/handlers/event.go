@@ -29,10 +29,11 @@ type eventResponse struct {
 	Title      string    `json:"title"`
 	Start      time.Time `json:"start"`
 	End        time.Time `json:"end"`
+	Rrule      string    `json:"rrule,omitempty"`
 }
 
 func toEventResponse(e repository.Event) eventResponse {
-	return eventResponse{ID: e.ID, CalendarID: e.CalendarID, Title: e.Title, Start: e.Start, End: e.End}
+	return eventResponse{ID: e.ID, CalendarID: e.CalendarID, Title: e.Title, Start: e.Start, End: e.End, Rrule: e.Rrule}
 }
 
 func (h *EventHandler) List(w http.ResponseWriter, r *http.Request) {
@@ -85,6 +86,7 @@ type createEventRequest struct {
 	Title      string    `json:"title"`
 	Start      time.Time `json:"start"`
 	End        time.Time `json:"end"`
+	Rrule      string    `json:"rrule"`
 }
 
 func (h *EventHandler) Create(w http.ResponseWriter, r *http.Request) {
@@ -105,13 +107,16 @@ func (h *EventHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	event, err := h.events.Create(r.Context(), userID, req.ID, req.CalendarID, req.Title, req.Start, req.End)
+	event, err := h.events.Create(r.Context(), userID, req.ID, req.CalendarID, req.Title, req.Start, req.End, req.Rrule)
 	switch {
 	case errors.Is(err, service.ErrInvalidTitle):
 		httpresponse.Error(w, http.StatusBadRequest, "invalid_request", "title must not be empty")
 		return
 	case errors.Is(err, service.ErrInvalidTimeRange):
 		httpresponse.Error(w, http.StatusBadRequest, "invalid_request", "end must be after start")
+		return
+	case errors.Is(err, service.ErrInvalidRecurrenceRule):
+		httpresponse.Error(w, http.StatusBadRequest, "invalid_request", "recurrence rule is invalid")
 		return
 	case errors.Is(err, service.ErrCalendarNotFound):
 		httpresponse.Error(w, http.StatusBadRequest, "invalid_request", "calendar not found")
@@ -151,6 +156,7 @@ type updateEventRequest struct {
 	Title      string    `json:"title"`
 	Start      time.Time `json:"start"`
 	End        time.Time `json:"end"`
+	Rrule      string    `json:"rrule"`
 }
 
 func (h *EventHandler) Update(w http.ResponseWriter, r *http.Request) {
@@ -168,13 +174,16 @@ func (h *EventHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	event, err := h.events.Update(r.Context(), userID, id, req.CalendarID, req.Title, req.Start, req.End)
+	event, err := h.events.Update(r.Context(), userID, id, req.CalendarID, req.Title, req.Start, req.End, req.Rrule)
 	switch {
 	case errors.Is(err, service.ErrInvalidTitle):
 		httpresponse.Error(w, http.StatusBadRequest, "invalid_request", "title must not be empty")
 		return
 	case errors.Is(err, service.ErrInvalidTimeRange):
 		httpresponse.Error(w, http.StatusBadRequest, "invalid_request", "end must be after start")
+		return
+	case errors.Is(err, service.ErrInvalidRecurrenceRule):
+		httpresponse.Error(w, http.StatusBadRequest, "invalid_request", "recurrence rule is invalid")
 		return
 	case errors.Is(err, service.ErrCalendarNotFound):
 		httpresponse.Error(w, http.StatusBadRequest, "invalid_request", "calendar not found")

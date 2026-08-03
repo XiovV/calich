@@ -99,6 +99,38 @@ func TestEventHandler_CreateAndList(t *testing.T) {
 	}
 }
 
+func TestEventHandler_Create_RoundTripsRrule(t *testing.T) {
+	baseURL, accessToken, calendarID := newEventTestServer(t)
+
+	start, _ := time.Parse(time.RFC3339, "2026-01-01T09:00:00Z")
+	end, _ := time.Parse(time.RFC3339, "2026-01-01T10:00:00Z")
+	body, _ := json.Marshal(createEventRequest{
+		ID:         "22222222-2222-2222-2222-222222222222",
+		CalendarID: calendarID,
+		Title:      "Standup",
+		Start:      start,
+		End:        end,
+		Rrule:      "FREQ=WEEKLY;BYDAY=TH",
+	})
+
+	req, _ := http.NewRequest(http.MethodPost, baseURL+"/api/events/", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	defer resp.Body.Close()
+
+	var created eventResponse
+	if err := json.NewDecoder(resp.Body).Decode(&created); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if created.Rrule != "FREQ=WEEKLY;BYDAY=TH" {
+		t.Fatalf("expected rrule to round-trip, got %q", created.Rrule)
+	}
+}
+
 func TestEventHandler_List_FiltersByFromTo(t *testing.T) {
 	baseURL, accessToken, calendarID := newEventTestServer(t)
 

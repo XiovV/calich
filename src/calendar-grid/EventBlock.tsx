@@ -1,5 +1,5 @@
-import type { EventLayout } from "../lib/layoutOverlappingEvents";
-import type { Event } from "../lib/event";
+import type { OccurrenceLayout } from "../lib/layoutOverlappingEvents";
+import type { Occurrence } from "../lib/occurrence";
 import { durationToHeight, timeToY } from "../lib/gridTime";
 import { getCalendarById } from "../lib/calendar";
 import { getCalendarColorClass } from "../lib/calendarColors";
@@ -10,12 +10,12 @@ import { EventVisual } from "./EventVisual";
 export type EventDragKind = "move" | "resize-start" | "resize-end";
 
 interface EventBlockProps {
-  layout: EventLayout;
+  layout: OccurrenceLayout;
   pixelsPerHour: number;
   now: Date;
-  onEventClick: (event: Event) => void;
+  onOccurrenceClick: (occurrence: Occurrence) => void;
   onDragStart: (
-    event: Event,
+    occurrence: Occurrence,
     kind: EventDragKind,
     clientX: number,
     clientY: number,
@@ -26,19 +26,20 @@ export function EventBlock({
   layout,
   pixelsPerHour,
   now,
-  onEventClick,
+  onOccurrenceClick,
   onDragStart,
 }: EventBlockProps) {
-  const { event, column, columnCount } = layout;
-  const isPast = event.end < now;
+  const { occurrence, column, columnCount } = layout;
+  const { event } = occurrence;
+  const isPast = occurrence.end < now;
   const calendars = useCalendarsStore((state) => state.calendars);
   const calendar = getCalendarById(calendars, event.calendarId);
   const colorClass = calendar
     ? getCalendarColorClass(calendar.color)
     : "bg-calendar-graphite";
 
-  const top = timeToY(event.start, pixelsPerHour);
-  const height = durationToHeight(event.start, event.end, pixelsPerHour);
+  const top = timeToY(occurrence.start, pixelsPerHour);
+  const height = durationToHeight(occurrence.start, occurrence.end, pixelsPerHour);
   const { left, width } = columnLayoutToBox(column, columnCount);
 
   function handleEdgeMouseDown(
@@ -46,7 +47,7 @@ export function EventBlock({
     kind: "resize-start" | "resize-end",
   ) {
     domEvent.stopPropagation();
-    onDragStart(event, kind, domEvent.clientX, domEvent.clientY);
+    onDragStart(occurrence, kind, domEvent.clientX, domEvent.clientY);
   }
 
   return (
@@ -54,7 +55,7 @@ export function EventBlock({
       type="button"
       onMouseDown={(domEvent) => {
         domEvent.stopPropagation();
-        onDragStart(event, "move", domEvent.clientX, domEvent.clientY);
+        onDragStart(occurrence, "move", domEvent.clientX, domEvent.clientY);
       }}
       onClick={(domEvent) => {
         // event.detail is 0 for keyboard-triggered activations (Enter/Space)
@@ -62,7 +63,7 @@ export function EventBlock({
         // mouse clicks are already handled by the mousedown/mouseup drag-vs-click
         // distance check in TimeGrid, so only keyboard activation reaches here.
         if (domEvent.detail === 0) {
-          onEventClick(event);
+          onOccurrenceClick(occurrence);
         }
       }}
       className="absolute cursor-pointer transition-[left,width] duration-100 ease-out"
@@ -79,8 +80,8 @@ export function EventBlock({
       />
       <EventVisual
         title={event.title}
-        start={event.start}
-        end={event.end}
+        start={occurrence.start}
+        end={occurrence.end}
         colorClass={colorClass}
         isPast={isPast}
       />

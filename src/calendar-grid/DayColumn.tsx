@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { isSameDay } from "date-fns";
-import type { Event } from "../lib/event";
 import { layoutOverlappingEvents } from "../lib/layoutOverlappingEvents";
+import { occurrenceKey, type Occurrence } from "../lib/occurrence";
 import {
   HOURS_IN_DAY,
   computeDraftBlock,
@@ -30,33 +30,35 @@ export interface EventDragPreviewData {
 
 interface DayColumnProps {
   day: Date;
-  events: Event[];
+  occurrences: Occurrence[];
   pixelsPerHour: number;
   now: Date;
   onDraftCreated: (day: Date, draft: DraftBlock) => void;
-  onEventClick: (event: Event) => void;
-  onEventDragStart: (
-    event: Event,
+  onOccurrenceClick: (occurrence: Occurrence) => void;
+  onOccurrenceDragStart: (
+    occurrence: Occurrence,
     kind: EventDragKind,
     clientX: number,
     clientY: number,
   ) => void;
-  draggingEventId: string | null;
+  draggingKey: string | null;
   eventDragPreview: EventDragPreviewData | null;
 }
 
 export function DayColumn({
   day,
-  events,
+  occurrences,
   pixelsPerHour,
   now,
   onDraftCreated,
-  onEventClick,
-  onEventDragStart,
-  draggingEventId,
+  onOccurrenceClick,
+  onOccurrenceDragStart,
+  draggingKey,
   eventDragPreview,
 }: DayColumnProps) {
-  const dayEvents = events.filter((event) => isSameDay(event.start, day));
+  const dayOccurrences = occurrences.filter((occurrence) =>
+    isSameDay(occurrence.start, day),
+  );
   const isToday = isSameDay(day, now);
 
   const columnRef = useRef<HTMLDivElement>(null);
@@ -68,30 +70,36 @@ export function DayColumn({
       ? computeDraftBlock(day, dragStartY, dragCurrentY, pixelsPerHour)
       : null;
 
-  // While a draft is being created, include it as a pseudo-event in the same
-  // overlap-layout pass as the real events, so existing events shrink to make
-  // room for it instead of the preview overlapping them.
-  const layoutInputEvents: Event[] = draftBlock
-    ? [
-        ...dayEvents,
-        {
+  // While a draft is being created, include it as a pseudo-occurrence in the
+  // same overlap-layout pass as the real occurrences, so existing events shrink
+  // to make room for it instead of the preview overlapping them.
+  const draftOccurrence: Occurrence | null = draftBlock
+    ? {
+        event: {
           id: DRAFT_PSEUDO_EVENT_ID,
           calendarId: "",
           title: "",
           start: draftBlock.start,
           end: draftBlock.end,
         },
-      ]
-    : dayEvents;
+        start: draftBlock.start,
+        end: draftBlock.end,
+      }
+    : null;
+  const layoutInput = draftOccurrence
+    ? [...dayOccurrences, draftOccurrence]
+    : dayOccurrences;
 
-  const allLayouts = layoutOverlappingEvents(layoutInputEvents);
+  const allLayouts = layoutOverlappingEvents(layoutInput);
   const layouts = allLayouts.filter(
     (layout) =>
-      layout.event.id !== draggingEventId &&
-      layout.event.id !== DRAFT_PSEUDO_EVENT_ID,
+      layout.occurrence.event.id !== DRAFT_PSEUDO_EVENT_ID &&
+      occurrenceKey(layout.occurrence) !== draggingKey,
   );
   const draftLayout = draftBlock
-    ? allLayouts.find((layout) => layout.event.id === DRAFT_PSEUDO_EVENT_ID)
+    ? allLayouts.find(
+        (layout) => layout.occurrence.event.id === DRAFT_PSEUDO_EVENT_ID,
+      )
     : undefined;
 
   function offsetYFromEvent(clientY: number): number {
@@ -145,12 +153,12 @@ export function DayColumn({
       ))}
       {layouts.map((layout) => (
         <EventBlock
-          key={layout.event.id}
+          key={occurrenceKey(layout.occurrence)}
           layout={layout}
           pixelsPerHour={pixelsPerHour}
           now={now}
-          onEventClick={onEventClick}
-          onDragStart={onEventDragStart}
+          onOccurrenceClick={onOccurrenceClick}
+          onDragStart={onOccurrenceDragStart}
         />
       ))}
       {isToday && <CurrentTimeLine now={now} pixelsPerHour={pixelsPerHour} />}

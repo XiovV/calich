@@ -3,6 +3,13 @@ import { format, setHours, setMinutes, startOfDay } from "date-fns";
 import { Dialog } from "@base-ui/react/dialog";
 import type { DraftBlock } from "../lib/gridTime";
 import type { Event } from "../lib/event";
+import {
+  RECURRENCE_PRESETS,
+  buildRule,
+  presetFromRule,
+  presetLabel,
+  type RecurrencePreset,
+} from "../lib/recurrencePresets";
 import { getCheckedCalendars } from "../lib/calendar";
 import { useShellStore } from "../lib/shellStore";
 import { useEventsStore } from "../lib/eventsStore";
@@ -23,6 +30,7 @@ interface InitialFormState {
   endTime: string;
   title: string;
   calendarId: string;
+  repeat: RecurrencePreset;
 }
 
 function timeStringToDate(day: Date, time: string): Date {
@@ -42,6 +50,7 @@ function deriveInitialFormState(
       endTime: format(event.end, "HH:mm"),
       title: event.title,
       calendarId: event.calendarId,
+      repeat: presetFromRule(event.rrule),
     };
   }
 
@@ -51,6 +60,7 @@ function deriveInitialFormState(
     endTime: format(props.draft.end, "HH:mm"),
     title: "",
     calendarId: firstCheckedCalendarId,
+    repeat: "none",
   };
 }
 
@@ -83,7 +93,16 @@ export function EventModal(props: EventModalProps) {
   const [startTime, setStartTime] = useState(initial.startTime);
   const [endTime, setEndTime] = useState(initial.endTime);
   const [calendarId, setCalendarId] = useState(initial.calendarId);
+  const [repeat, setRepeat] = useState<RecurrencePreset>(initial.repeat);
   const [isDeleteConfirmOpen, setIsDeleteConfirmOpen] = useState(false);
+
+  // Preset labels are derived from the event's start date, so e.g. "Weekly on
+  // Tuesday" tracks the day the event lives on.
+  const startForRule = timeStringToDate(day, startTime);
+  const repeatOptions = RECURRENCE_PRESETS.map((preset) => ({
+    value: preset,
+    label: presetLabel(preset, startForRule),
+  }));
 
   const isTimeRangeValid =
     timeStringToDate(day, endTime) > timeStringToDate(day, startTime);
@@ -94,6 +113,7 @@ export function EventModal(props: EventModalProps) {
 
     const start = timeStringToDate(day, startTime);
     const end = timeStringToDate(day, endTime);
+    const rrule = buildRule(repeat, start);
 
     if (mode === "edit") {
       updateEvent(props.event.id, {
@@ -101,6 +121,7 @@ export function EventModal(props: EventModalProps) {
         title: title.trim(),
         start,
         end,
+        rrule,
       });
     } else {
       addEvent({
@@ -109,6 +130,7 @@ export function EventModal(props: EventModalProps) {
         title: title.trim(),
         start,
         end,
+        rrule,
       });
     }
     onClose();
@@ -201,6 +223,15 @@ export function EventModal(props: EventModalProps) {
                   value: calendar.id,
                   label: calendar.name,
                 }))}
+              />
+            </div>
+
+            <div className="mt-4">
+              <Select
+                label="Repeat"
+                value={repeat}
+                onValueChange={setRepeat}
+                options={repeatOptions}
               />
             </div>
 

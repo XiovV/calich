@@ -1,5 +1,5 @@
 import { format } from "date-fns";
-import type { Event } from "./event";
+import type { Occurrence } from "./occurrence";
 
 export const MONTHS_PER_YEAR = 12;
 
@@ -19,17 +19,18 @@ export function buildYearMonths(selectedDate: Date): Date[] {
 
 /**
  * The set of day keys that should carry an Event-presence dot: every day with
- * at least one Event on a checked Calendar. Events on unchecked Calendars are
- * excluded, and multiple Events on one day collapse to a single key.
+ * at least one Occurrence on a checked Calendar. Occurrences on unchecked
+ * Calendars are excluded, and multiple Occurrences on one day collapse to a
+ * single key.
  */
 export function buildDaysWithEvents(
-  events: Event[],
+  occurrences: Occurrence[],
   checkedCalendarIds: Set<string>,
 ): Set<string> {
   const days = new Set<string>();
-  for (const event of events) {
-    if (!checkedCalendarIds.has(event.calendarId)) continue;
-    days.add(dayKey(event.start));
+  for (const occurrence of occurrences) {
+    if (!checkedCalendarIds.has(occurrence.event.calendarId)) continue;
+    days.add(dayKey(occurrence.start));
   }
   return days;
 }
