@@ -6,10 +6,15 @@ import type { Event } from "../lib/event";
 import {
   RECURRENCE_PRESETS,
   buildRule,
-  presetFromRule,
+  matchPreset,
   presetLabel,
   type RecurrencePreset,
 } from "../lib/recurrencePresets";
+import {
+  defaultCustomRecurrence,
+  parseCustomRule,
+  summarizeCustomRule,
+} from "../lib/customRecurrence";
 import { getCheckedCalendars } from "../lib/calendar";
 import { useShellStore } from "../lib/shellStore";
 import { useEventsStore } from "../lib/eventsStore";
@@ -19,6 +24,11 @@ import { Input } from "../components/ui/Input";
 import { Button } from "../components/ui/Button";
 import { buttonClasses } from "../components/ui/buttonClasses";
 import { DeleteEventConfirmation } from "./DeleteEventConfirmation";
+import { CustomRecurrenceDialog } from "./CustomRecurrenceDialog";
+
+// The Repeat dropdown offers the fixed presets plus a "Custom…" entry that opens
+// the Custom recurrence dialog (issue #35).
+type RepeatChoice = RecurrencePreset | "custom";
 
 type EventModalProps =
   | { mode: "create"; day: Date; draft: DraftBlock; onClose: () => void }
@@ -30,7 +40,9 @@ interface InitialFormState {
   endTime: string;
   title: string;
   calendarId: string;
-  repeat: RecurrencePreset;
+  repeat: RepeatChoice;
+  /** The stored rule when `repeat` is "custom"; undefined otherwise. */
+  customRule: string | undefined;
 }
 
 function timeStringToDate(day: Date, time: string): Date {
@@ -44,13 +56,18 @@ function deriveInitialFormState(
 ): InitialFormState {
   if (props.mode === "edit") {
     const { event } = props;
+    // A stored rule is either one of the presets or a custom recurrence; edit
+    // re-opens whichever it was, with the custom dialog re-populated from it.
+    const matched = matchPreset(event.rrule, event.start);
+    const repeat: RepeatChoice = !event.rrule ? "none" : (matched ?? "custom");
     return {
       day: startOfDay(event.start),
       startTime: format(event.start, "HH:mm"),
       endTime: format(event.end, "HH:mm"),
       title: event.title,
       calendarId: event.calendarId,
-      repeat: presetFromRule(event.rrule),
+      repeat,
+      customRule: repeat === "custom" ? event.rrule : undefined,
     };
   }
 
@@ -61,6 +78,7 @@ function deriveInitialFormState(
     title: "",
     calendarId: firstCheckedCalendarId,
     repeat: "none",
+    customRule: undefined,
   };
 }
 
@@ -93,16 +111,44 @@ export function EventModal(props: EventModalProps) {
   const [startTime, setStartTime] = useState(initial.startTime);
   const [endTime, setEndTime] = useState(initial.endTime);
   const [calendarId, setCalendarId] = useState(initial.calendarId);
-  const [repeat, setRepeat] = useState<RecurrencePreset>(initial.repeat);
+  const [repeat, setRepeat] = useState<RepeatChoice>(initial.repeat);
+  const [customRule, setCustomRule] = useState<string | undefined>(
+    initial.customRule,
+  );
+  const [isCustomDialogOpen, setIsCustomDialogOpen] = useState(false);
   const [isDeleteConfirmOpen, setIsDeleteConfirmOpen] = useState(false);
 
   // Preset labels are derived from the event's start date, so e.g. "Weekly on
   // Tuesday" tracks the day the event lives on.
   const startForRule = timeStringToDate(day, startTime);
-  const repeatOptions = RECURRENCE_PRESETS.map((preset) => ({
-    value: preset,
-    label: presetLabel(preset, startForRule),
-  }));
+  const repeatOptions = [
+    ...RECURRENCE_PRESETS.map((preset) => ({
+      value: preset as RepeatChoice,
+      label: presetLabel(preset, startForRule),
+    })),
+    {
+      value: "custom" as RepeatChoice,
+      label: customRule
+        ? summarizeCustomRule(customRule, startForRule)
+        : "Custom…",
+    },
+  ];
+
+  function handleRepeatChange(value: RepeatChoice) {
+    // Selecting "Custom…" opens the dialog rather than committing immediately;
+    // the choice is confirmed only when the dialog's Done button fires.
+    if (value === "custom") {
+      setIsCustomDialogOpen(true);
+      return;
+    }
+    setRepeat(value);
+  }
+
+  function handleCustomConfirm(rule: string) {
+    setCustomRule(rule);
+    setRepeat("custom");
+    setIsCustomDialogOpen(false);
+  }
 
   const isTimeRangeValid =
     timeStringToDate(day, endTime) > timeStringToDate(day, startTime);
@@ -113,7 +159,8 @@ export function EventModal(props: EventModalProps) {
 
     const start = timeStringToDate(day, startTime);
     const end = timeStringToDate(day, endTime);
-    const rrule = buildRule(repeat, start);
+    const rrule =
+      repeat === "custom" ? customRule : buildRule(repeat, start);
 
     if (mode === "edit") {
       updateEvent(props.event.id, {
@@ -230,9 +277,18 @@ export function EventModal(props: EventModalProps) {
               <Select
                 label="Repeat"
                 value={repeat}
-                onValueChange={setRepeat}
+                onValueChange={handleRepeatChange}
                 options={repeatOptions}
               />
+              {repeat === "custom" && (
+                <button
+                  type="button"
+                  onClick={() => setIsCustomDialogOpen(true)}
+                  className="mt-1.5 text-label-sm text-accent hover:underline"
+                >
+                  Edit custom recurrence
+                </button>
+              )}
             </div>
 
             <div className="mt-5 flex items-center justify-between gap-2">
@@ -267,6 +323,18 @@ export function EventModal(props: EventModalProps) {
           </Dialog.Popup>
         </Dialog.Portal>
       </Dialog.Root>
+      {isCustomDialogOpen && (
+        <CustomRecurrenceDialog
+          start={startForRule}
+          initial={
+            customRule
+              ? parseCustomRule(customRule, startForRule)
+              : defaultCustomRecurrence(startForRule)
+          }
+          onConfirm={handleCustomConfirm}
+          onClose={() => setIsCustomDialogOpen(false)}
+        />
+      )}
       {mode === "edit" && isDeleteConfirmOpen && (
         <DeleteEventConfirmation
           event={props.event}

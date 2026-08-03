@@ -12,12 +12,12 @@ import {
 } from "../lib/monthGrid";
 import { useVisibleOccurrences } from "../hooks/useVisibleOccurrences";
 import { occurrenceKey, seriesEditChanges, type Occurrence } from "../lib/occurrence";
+import { WEEKDAY_SHORT_NAMES } from "../lib/rruleParts";
 import { MonthDayCell } from "./MonthDayCell";
 import { MonthEventDragPreview } from "./MonthEventDragPreview";
 import type { Event } from "../lib/event";
 import type { DraftBlock } from "../lib/gridTime";
 
-const WEEKDAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const CLICK_DISTANCE_THRESHOLD_PX = 4;
 
 interface MonthGridProps {
@@ -156,7 +156,7 @@ export function MonthGrid({ onDraftCreated, onEventClick }: MonthGridProps) {
   return (
     <div className="flex h-full flex-col">
       <div className="grid grid-cols-7 border-t border-border">
-        {WEEKDAY_LABELS.map((label) => (
+        {WEEKDAY_SHORT_NAMES.map((label) => (
           <div
             key={label}
             className="border-b border-l border-border py-2 text-center text-label-sm text-ink-muted"

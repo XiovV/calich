@@ -1,4 +1,5 @@
 import { format } from "date-fns";
+import { ORDINALS, nthWeekdayOfMonth, weekdayCode } from "./rruleParts";
 
 /**
  * The fixed set of recurrence presets offered in the event modal's Repeat
@@ -23,15 +24,7 @@ export const RECURRENCE_PRESETS: RecurrencePreset[] = [
   "weekday",
 ];
 
-// RRULE two-letter weekday codes indexed by JS Date.getDay() (0 = Sunday).
-const RRULE_WEEKDAYS = ["SU", "MO", "TU", "WE", "TH", "FR", "SA"] as const;
 const WEEKDAY_MON_TO_FRI = "MO,TU,WE,TH,FR";
-const ORDINALS = ["first", "second", "third", "fourth", "fifth"] as const;
-
-/** 1-based position of `date`'s weekday within its month (e.g. the 3rd Tuesday). */
-function nthWeekdayOfMonth(date: Date): number {
-  return Math.floor((date.getDate() - 1) / 7) + 1;
-}
 
 /**
  * The RRULE for a preset, anchored at `start`, or undefined for "Does not
@@ -42,7 +35,7 @@ export function buildRule(
   preset: RecurrencePreset,
   start: Date,
 ): string | undefined {
-  const weekday = RRULE_WEEKDAYS[start.getDay()];
+  const weekday = weekdayCode(start);
   switch (preset) {
     case "none":
       return undefined;
@@ -101,6 +94,24 @@ export function presetFromRule(rrule: string | undefined): RecurrencePreset {
     return rrule.includes(WEEKDAY_MON_TO_FRI) ? "weekday" : "weekly";
   }
   return "none";
+}
+
+/**
+ * The preset whose rule exactly equals `rrule` (anchored at `start`), or null
+ * when no preset matches — i.e. the rule is a custom recurrence. Both the preset
+ * and custom builders emit canonical rule strings, so an exact string match is
+ * reliable. Lets the event modal decide whether to show a preset or "Custom".
+ */
+export function matchPreset(
+  rrule: string | undefined,
+  start: Date,
+): RecurrencePreset | null {
+  if (!rrule) return null;
+  for (const preset of RECURRENCE_PRESETS) {
+    if (preset === "none") continue;
+    if (buildRule(preset, start) === rrule) return preset;
+  }
+  return null;
 }
 
 /**
