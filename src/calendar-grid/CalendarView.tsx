@@ -4,18 +4,11 @@ import type { Event } from "../lib/event";
 import type { DraftBlock } from "../lib/gridTime";
 import { TimeGrid } from "./TimeGrid";
 import { MonthGrid } from "./MonthGrid";
+import { YearGrid } from "./YearGrid";
 
 interface CalendarViewProps {
   onDraftCreated: (day: Date, draft: DraftBlock) => void;
   onEventClick: (event: Event) => void;
-}
-
-function ComingSoonPlaceholder({ label }: { label: string }) {
-  return (
-    <div className="flex h-full items-center justify-center text-body text-ink-muted">
-      {label} view is coming soon.
-    </div>
-  );
 }
 
 export function CalendarView({ onDraftCreated, onEventClick }: CalendarViewProps) {
@@ -49,6 +42,6 @@ export function CalendarView({ onDraftCreated, onEventClick }: CalendarViewProps
         <MonthGrid onDraftCreated={onDraftCreated} onEventClick={onEventClick} />
       );
     case "year":
-      return <ComingSoonPlaceholder label="Year" />;
+      return <YearGrid />;
   }
 }

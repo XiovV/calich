@@ -353,3 +353,22 @@ body {
 .rdp-day {
   width: auto;
 }
+
+/* Year view's Mini-months. The Event-presence dot is a colorless density hint:
+   a small neutral dot below the day number, carrying no Calendar color and no
+   count. Positioned on the day cell, which the `hasEvent` modifier flags. */
+.rdp-day-has-event {
+  position: relative;
+}
+
+.rdp-day-has-event::after {
+  content: "";
+  position: absolute;
+  bottom: 3px;
+  left: 50%;
+  width: 4px;
+  height: 4px;
+  transform: translateX(-50%);
+  border-radius: var(--radius-shell-pill);
+  background-color: var(--color-ink-muted);
+}

@@ -17,8 +17,35 @@ A named, colored, independently-toggleable collection that groups events (e.g. "
 _Avoid_: calendar list item, source
 
 **Event**:
-A titled time block belonging to a single Calendar, with a start, an end, and zero or more Reminders. Rendered on the grid in its Calendar's color.
+The stored, saved unit — a titled time block belonging to a single Calendar, with a start, an end, zero or more Reminders, and an optional Recurrence rule. Its start/end define the first occurrence and the duration every Occurrence inherits. A non-recurring Event is a series of one. Distinct from the Occurrences it produces on the grid.
 _Avoid_: appointment, meeting, entry
+
+**Recurrence rule**:
+The rule on an Event describing how it repeats, stored as an iCalendar `RRULE` string (RFC 5545) so it round-trips through CalDAV unchanged. Absent on a non-recurring Event. See ADR-0016.
+_Avoid_: repeat pattern, schedule, recurrence pattern
+
+**Occurrence**:
+A single dated instance produced by expanding an Event's Recurrence rule over a date window. Occurrences are computed, never stored; they are what the grid actually renders (an Event chip or timed block is an Occurrence, not an Event). A non-recurring Event yields exactly one Occurrence. Identified by `(eventId, occurrenceStart)`, where `occurrenceStart` is the datetime the rule produced (its iCalendar `RECURRENCE-ID`).
+
+**Master**:
+The Event row that carries the Recurrence rule and anchors a series. Its title/start/end/calendar are the defaults every Occurrence inherits unless an Override replaces them. A non-recurring Event is a Master with no rule.
+_Avoid_: parent event, root event
+
+**Override**:
+A stored Event row that replaces one Occurrence of a series with its own full title/start/end/calendar, keyed to the Occurrence it replaces by its original start (iCalendar `RECURRENCE-ID`). Produced by editing "this event" on a recurring Occurrence. A complete standalone instance, not a diff.
+_Avoid_: exception (that's the cancellation), detached event, instance edit
+
+**Exception**:
+A cancelled single Occurrence — the rule still generates that slot, but it is suppressed from the grid (iCalendar `EXDATE`). Produced by deleting "this event" on a recurring Occurrence. Distinct from an Override, which replaces rather than removes.
+_Avoid_: deleted occurrence, skip, override
+
+**All-day Event**:
+An Event that occupies whole dates rather than a time range, flagged by `allDay`. Stored with the iCalendar half-open date convention — `start` is the date, `end` is the exclusive next day (a single-day all-day Event spans one day). Its start/end are wall-clock dates, serialized as date-only strings and never timezone-converted. Rendered in the all-day lane, not on the hourly grid. Multi-day all-day Events are out of scope for now.
+_Avoid_: full-day event, date event
+
+**All-day lane**:
+The horizontal strip above the hourly grid in Day and Week view where all-day Occurrences are shown, separate from the timed grid below it.
+_Avoid_: all-day row, header row
 
 **Draft block**:
 A proposed time window for a not-yet-saved Event, before it is confirmed via the creation modal — whether it originated from dragging on the grid or from a default (e.g. the sidebar's Create button). Discarded, not saved, if the modal is cancelled.
