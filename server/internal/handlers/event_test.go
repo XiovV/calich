@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -98,6 +99,56 @@ func TestEventHandler_CreateAndList(t *testing.T) {
 	}
 	if len(events) != 1 {
 		t.Fatalf("expected 1 event, got %d", len(events))
+	}
+}
+
+// The wire format for an all-day Event's start/end is a date-only string,
+// never an RFC3339 instant, so a viewer in any timezone sees the same date
+// (ADR-0017).
+func TestEventHandler_Create_RoundTripsAllDayAsDateOnly(t *testing.T) {
+	baseURL, accessToken, calendarID := newEventTestServer(t)
+
+	rawBody := `{"id":"22222222-2222-2222-2222-222222222222","calendarId":"` + calendarID + `","title":"Holiday","start":"2026-08-04","end":"2026-08-05","allDay":true}`
+	req, _ := http.NewRequest(http.MethodPost, baseURL+"/api/events/", bytes.NewReader([]byte(rawBody)))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("expected 201, got %d", resp.StatusCode)
+	}
+
+	rawResponse, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+
+	var wire map[string]any
+	if err := json.Unmarshal(rawResponse, &wire); err != nil {
+		t.Fatalf("decode raw: %v", err)
+	}
+	if wire["start"] != "2026-08-04" || wire["end"] != "2026-08-05" {
+		t.Fatalf("expected date-only start/end on the wire, got %+v", wire)
+	}
+	if wire["allDay"] != true {
+		t.Fatalf("expected allDay to round-trip true, got %+v", wire)
+	}
+
+	var created eventResponse
+	if err := json.Unmarshal(rawResponse, &created); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !created.AllDay {
+		t.Fatalf("expected created event to be all-day, got %+v", created)
+	}
+	if !created.Start.Equal(time.Date(2026, 8, 4, 0, 0, 0, 0, time.UTC)) {
+		t.Fatalf("expected start 2026-08-04, got %v", created.Start)
+	}
+	if !created.End.Equal(time.Date(2026, 8, 5, 0, 0, 0, 0, time.UTC)) {
+		t.Fatalf("expected end 2026-08-05, got %v", created.End)
 	}
 }
 

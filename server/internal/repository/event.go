@@ -15,6 +15,10 @@ type Event struct {
 	Title      string
 	Start      time.Time
 	End        time.Time
+	// AllDay flags this Event as occupying whole dates rather than a time
+	// range. Start/end still hold the half-open date range (start = the date,
+	// end = the exclusive next day). See ADR-0017.
+	AllDay bool
 	// Rrule is the event's iCalendar RRULE as opaque text, empty when the event
 	// does not recur. Stored and returned verbatim; expansion happens on the
 	// frontend (ADR-0016).
@@ -39,10 +43,10 @@ func NewEventRepository(db *sql.DB) *EventRepository {
 	return &EventRepository{db: db}
 }
 
-func (r *EventRepository) Create(ctx context.Context, id string, userID int64, calendarID, title string, start, end time.Time, rrule string, parentID *string, recurrenceID *time.Time) (Event, error) {
+func (r *EventRepository) Create(ctx context.Context, id string, userID int64, calendarID, title string, start, end time.Time, allDay bool, rrule string, parentID *string, recurrenceID *time.Time) (Event, error) {
 	if _, err := r.db.ExecContext(ctx,
-		`INSERT INTO events (id, user_id, calendar_id, title, "start", "end", rrule, parent_id, recurrence_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		id, userID, calendarID, title, start, end, rrule, parentID, recurrenceID,
+		`INSERT INTO events (id, user_id, calendar_id, title, "start", "end", all_day, rrule, parent_id, recurrence_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		id, userID, calendarID, title, start, end, allDay, rrule, parentID, recurrenceID,
 	); err != nil {
 		return Event{}, fmt.Errorf("insert event: %w", err)
 	}
@@ -52,7 +56,7 @@ func (r *EventRepository) Create(ctx context.Context, id string, userID int64, c
 
 func (r *EventRepository) GetByID(ctx context.Context, userID int64, id string) (Event, error) {
 	return scanEvent(r.db.QueryRowContext(ctx,
-		`SELECT id, user_id, calendar_id, title, "start", "end", rrule, parent_id, recurrence_id, created_at FROM events WHERE user_id = ? AND id = ?`,
+		`SELECT id, user_id, calendar_id, title, "start", "end", all_day, rrule, parent_id, recurrence_id, created_at FROM events WHERE user_id = ? AND id = ?`,
 		userID, id,
 	))
 }
@@ -61,7 +65,7 @@ func (r *EventRepository) GetByID(ctx context.Context, userID int64, id string) 
 // non-nil, only events overlapping that half-open range are returned; either
 // may be nil to leave that side of the range unbounded.
 func (r *EventRepository) ListByUser(ctx context.Context, userID int64, from, to *time.Time) ([]Event, error) {
-	query := `SELECT id, user_id, calendar_id, title, "start", "end", rrule, parent_id, recurrence_id, created_at FROM events WHERE user_id = ?`
+	query := `SELECT id, user_id, calendar_id, title, "start", "end", all_day, rrule, parent_id, recurrence_id, created_at FROM events WHERE user_id = ?`
 	args := []any{userID}
 
 	if from != nil {
@@ -95,10 +99,10 @@ func (r *EventRepository) ListByUser(ctx context.Context, userID int64, from, to
 	return events, nil
 }
 
-func (r *EventRepository) Update(ctx context.Context, userID int64, id, calendarID, title string, start, end time.Time, rrule string) (Event, error) {
+func (r *EventRepository) Update(ctx context.Context, userID int64, id, calendarID, title string, start, end time.Time, allDay bool, rrule string) (Event, error) {
 	res, err := r.db.ExecContext(ctx,
-		`UPDATE events SET calendar_id = ?, title = ?, "start" = ?, "end" = ?, rrule = ? WHERE user_id = ? AND id = ?`,
-		calendarID, title, start, end, rrule, userID, id,
+		`UPDATE events SET calendar_id = ?, title = ?, "start" = ?, "end" = ?, all_day = ?, rrule = ? WHERE user_id = ? AND id = ?`,
+		calendarID, title, start, end, allDay, rrule, userID, id,
 	)
 	if err != nil {
 		return Event{}, fmt.Errorf("update event: %w", err)
@@ -168,7 +172,7 @@ func scanEvent(row scanner) (Event, error) {
 	var e Event
 	var parentID sql.NullString
 	var recurrenceID sql.NullTime
-	err := row.Scan(&e.ID, &e.UserID, &e.CalendarID, &e.Title, &e.Start, &e.End, &e.Rrule, &parentID, &recurrenceID, &e.CreatedAt)
+	err := row.Scan(&e.ID, &e.UserID, &e.CalendarID, &e.Title, &e.Start, &e.End, &e.AllDay, &e.Rrule, &parentID, &recurrenceID, &e.CreatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Event{}, ErrNotFound
 	}

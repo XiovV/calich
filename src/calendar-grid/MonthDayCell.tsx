@@ -126,7 +126,9 @@ export function MonthDayCell({
               }}
               className={`cursor-pointer truncate rounded-shell-sm px-1 text-left text-label-sm text-ink-inverse ${colorClass}`}
             >
-              {format(occurrence.start, "h:mm a")} {occurrence.event.title}
+              {occurrence.event.allDay
+                ? occurrence.event.title
+                : `${format(occurrence.start, "h:mm a")} ${occurrence.event.title}`}
             </button>
           );
         })}

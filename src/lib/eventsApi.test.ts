@@ -95,6 +95,7 @@ describe("eventsApi.create", () => {
           title: "Standup",
           start: "2026-01-01T09:00:00.000Z",
           end: "2026-01-01T10:00:00.000Z",
+          allDay: false,
           rrule: "",
         }),
       }),
@@ -141,6 +142,91 @@ describe("eventsApi.create", () => {
   });
 });
 
+describe("eventsApi all-day serialization", () => {
+  it("create sends date-only start/end for an all-day event, never toISOString", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(201, {
+        id: "evt-1",
+        calendarId: "cal-1",
+        title: "Holiday",
+        start: "2026-08-04",
+        end: "2026-08-05",
+        allDay: true,
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const created = await eventsApi.create("token-123", {
+      id: "evt-1",
+      calendarId: "cal-1",
+      title: "Holiday",
+      start: new Date(2026, 7, 4),
+      end: new Date(2026, 7, 5),
+      allDay: true,
+    });
+
+    const body = JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string);
+    expect(body.start).toBe("2026-08-04");
+    expect(body.end).toBe("2026-08-05");
+    expect(body.allDay).toBe(true);
+
+    expect(created.allDay).toBe(true);
+    expect(created.start).toEqual(new Date(2026, 7, 4));
+    expect(created.end).toEqual(new Date(2026, 7, 5));
+  });
+
+  it("update sends date-only start/end for an all-day event", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(200, {
+        id: "evt-1",
+        calendarId: "cal-1",
+        title: "Holiday",
+        start: "2026-08-04",
+        end: "2026-08-05",
+        allDay: true,
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await eventsApi.update("token-123", "evt-1", {
+      calendarId: "cal-1",
+      title: "Holiday",
+      start: new Date(2026, 7, 4),
+      end: new Date(2026, 7, 5),
+      allDay: true,
+    });
+
+    const body = JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string);
+    expect(body.start).toBe("2026-08-04");
+    expect(body.end).toBe("2026-08-05");
+    expect(body.allDay).toBe(true);
+  });
+
+  it("list round-trips an all-day event's date-only start/end without shifting the day", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(200, [
+        {
+          id: "evt-1",
+          calendarId: "cal-1",
+          title: "Holiday",
+          start: "2026-08-04",
+          end: "2026-08-05",
+          allDay: true,
+        },
+      ]),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const [event] = await eventsApi.list("token-123");
+
+    expect(event.allDay).toBe(true);
+    // Local midnight on the 4th/5th, not a UTC instant that could read back
+    // as a different local day in another timezone.
+    expect(event.start).toEqual(new Date(2026, 7, 4));
+    expect(event.end).toEqual(new Date(2026, 7, 5));
+  });
+});
+
 describe("eventsApi.update", () => {
   it("patches the event and returns the mapped updated record", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
@@ -166,6 +252,7 @@ describe("eventsApi.update", () => {
           title: "Renamed",
           start: "2026-01-01T09:00:00.000Z",
           end: "2026-01-01T10:00:00.000Z",
+          allDay: false,
           rrule: "",
         }),
       }),

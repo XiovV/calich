@@ -3,6 +3,7 @@ package handlers
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"time"
 
@@ -23,13 +24,39 @@ func NewEventHandler(events *service.EventService) *EventHandler {
 	return &EventHandler{events: events}
 }
 
+// dateOnlyLayout is the wire format for an all-day Event's start/end: a
+// timezone-free date, e.g. "2026-08-04" (ADR-0017). A timed Event's start/end
+// use the default time.Time RFC3339 encoding instead.
+const dateOnlyLayout = "2006-01-02"
+
+// parseEventTime parses a wire start/end string, branching on allDay so an
+// all-day date-only string is never run through timezone-aware RFC3339
+// parsing (ADR-0017).
+func parseEventTime(raw string, allDay bool) (time.Time, error) {
+	if allDay {
+		return time.ParseInLocation(dateOnlyLayout, raw, time.UTC)
+	}
+	return time.Parse(time.RFC3339, raw)
+}
+
+// formatEventTime is parseEventTime's inverse for wire responses.
+func formatEventTime(t time.Time, allDay bool) string {
+	if allDay {
+		return t.UTC().Format(dateOnlyLayout)
+	}
+	return t.Format(time.RFC3339Nano)
+}
+
 type eventResponse struct {
 	ID         string    `json:"id"`
 	CalendarID string    `json:"calendarId"`
 	Title      string    `json:"title"`
-	Start      time.Time `json:"start"`
-	End        time.Time `json:"end"`
-	Rrule      string    `json:"rrule,omitempty"`
+	Start      time.Time `json:"-"`
+	End        time.Time `json:"-"`
+	// AllDay flags this Event as occupying whole dates rather than a time
+	// range — see ADR-0017 and CONTEXT.md's All-day Event.
+	AllDay bool   `json:"allDay,omitempty"`
+	Rrule  string `json:"rrule,omitempty"`
 	// ParentID and RecurrenceID are present only on an Override — a standalone
 	// Event that replaces one Occurrence of its parent's series (ADR-0016).
 	ParentID     *string    `json:"parentId,omitempty"`
@@ -39,6 +66,64 @@ type eventResponse struct {
 	Exdates []time.Time `json:"exdates,omitempty"`
 }
 
+// eventResponseWire is eventResponse's actual JSON shape: start/end are
+// strings so their format can branch on AllDay (ADR-0017).
+type eventResponseWire struct {
+	ID           string      `json:"id"`
+	CalendarID   string      `json:"calendarId"`
+	Title        string      `json:"title"`
+	Start        string      `json:"start"`
+	End          string      `json:"end"`
+	AllDay       bool        `json:"allDay,omitempty"`
+	Rrule        string      `json:"rrule,omitempty"`
+	ParentID     *string     `json:"parentId,omitempty"`
+	RecurrenceID *time.Time  `json:"recurrenceId,omitempty"`
+	Exdates      []time.Time `json:"exdates,omitempty"`
+}
+
+func (r eventResponse) MarshalJSON() ([]byte, error) {
+	return json.Marshal(eventResponseWire{
+		ID:           r.ID,
+		CalendarID:   r.CalendarID,
+		Title:        r.Title,
+		Start:        formatEventTime(r.Start, r.AllDay),
+		End:          formatEventTime(r.End, r.AllDay),
+		AllDay:       r.AllDay,
+		Rrule:        r.Rrule,
+		ParentID:     r.ParentID,
+		RecurrenceID: r.RecurrenceID,
+		Exdates:      r.Exdates,
+	})
+}
+
+func (r *eventResponse) UnmarshalJSON(data []byte) error {
+	var wire eventResponseWire
+	if err := json.Unmarshal(data, &wire); err != nil {
+		return err
+	}
+	start, err := parseEventTime(wire.Start, wire.AllDay)
+	if err != nil {
+		return fmt.Errorf("invalid start: %w", err)
+	}
+	end, err := parseEventTime(wire.End, wire.AllDay)
+	if err != nil {
+		return fmt.Errorf("invalid end: %w", err)
+	}
+	*r = eventResponse{
+		ID:           wire.ID,
+		CalendarID:   wire.CalendarID,
+		Title:        wire.Title,
+		Start:        start,
+		End:          end,
+		AllDay:       wire.AllDay,
+		Rrule:        wire.Rrule,
+		ParentID:     wire.ParentID,
+		RecurrenceID: wire.RecurrenceID,
+		Exdates:      wire.Exdates,
+	}
+	return nil
+}
+
 func toEventResponse(e repository.Event) eventResponse {
 	return eventResponse{
 		ID:           e.ID,
@@ -46,6 +131,7 @@ func toEventResponse(e repository.Event) eventResponse {
 		Title:        e.Title,
 		Start:        e.Start,
 		End:          e.End,
+		AllDay:       e.AllDay,
 		Rrule:        e.Rrule,
 		ParentID:     e.ParentID,
 		RecurrenceID: e.RecurrenceID,
@@ -98,14 +184,70 @@ func parseOptionalTimeParam(w http.ResponseWriter, r *http.Request, name string)
 }
 
 type createEventRequest struct {
+	ID           string     `json:"-"`
+	CalendarID   string     `json:"-"`
+	Title        string     `json:"-"`
+	Start        time.Time  `json:"-"`
+	End          time.Time  `json:"-"`
+	AllDay       bool       `json:"-"`
+	Rrule        string     `json:"-"`
+	ParentID     *string    `json:"-"`
+	RecurrenceID *time.Time `json:"-"`
+}
+
+// createEventRequestWire is createEventRequest's actual JSON shape: start/end
+// are strings so their format can branch on AllDay (ADR-0017).
+type createEventRequestWire struct {
 	ID           string     `json:"id"`
 	CalendarID   string     `json:"calendarId"`
 	Title        string     `json:"title"`
-	Start        time.Time  `json:"start"`
-	End          time.Time  `json:"end"`
+	Start        string     `json:"start"`
+	End          string     `json:"end"`
+	AllDay       bool       `json:"allDay,omitempty"`
 	Rrule        string     `json:"rrule"`
 	ParentID     *string    `json:"parentId,omitempty"`
 	RecurrenceID *time.Time `json:"recurrenceId,omitempty"`
+}
+
+func (r createEventRequest) MarshalJSON() ([]byte, error) {
+	return json.Marshal(createEventRequestWire{
+		ID:           r.ID,
+		CalendarID:   r.CalendarID,
+		Title:        r.Title,
+		Start:        formatEventTime(r.Start, r.AllDay),
+		End:          formatEventTime(r.End, r.AllDay),
+		AllDay:       r.AllDay,
+		Rrule:        r.Rrule,
+		ParentID:     r.ParentID,
+		RecurrenceID: r.RecurrenceID,
+	})
+}
+
+func (r *createEventRequest) UnmarshalJSON(data []byte) error {
+	var wire createEventRequestWire
+	if err := json.Unmarshal(data, &wire); err != nil {
+		return err
+	}
+	start, err := parseEventTime(wire.Start, wire.AllDay)
+	if err != nil {
+		return fmt.Errorf("invalid start: %w", err)
+	}
+	end, err := parseEventTime(wire.End, wire.AllDay)
+	if err != nil {
+		return fmt.Errorf("invalid end: %w", err)
+	}
+	*r = createEventRequest{
+		ID:           wire.ID,
+		CalendarID:   wire.CalendarID,
+		Title:        wire.Title,
+		Start:        start,
+		End:          end,
+		AllDay:       wire.AllDay,
+		Rrule:        wire.Rrule,
+		ParentID:     wire.ParentID,
+		RecurrenceID: wire.RecurrenceID,
+	}
+	return nil
 }
 
 func (h *EventHandler) Create(w http.ResponseWriter, r *http.Request) {
@@ -126,7 +268,7 @@ func (h *EventHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	event, err := h.events.Create(r.Context(), userID, req.ID, req.CalendarID, req.Title, req.Start, req.End, req.Rrule, req.ParentID, req.RecurrenceID)
+	event, err := h.events.Create(r.Context(), userID, req.ID, req.CalendarID, req.Title, req.Start, req.End, req.AllDay, req.Rrule, req.ParentID, req.RecurrenceID)
 	switch {
 	case errors.Is(err, service.ErrInvalidTitle):
 		httpresponse.Error(w, http.StatusBadRequest, "invalid_request", "title must not be empty")
@@ -180,11 +322,58 @@ func (h *EventHandler) Get(w http.ResponseWriter, r *http.Request) {
 }
 
 type updateEventRequest struct {
-	CalendarID string    `json:"calendarId"`
-	Title      string    `json:"title"`
-	Start      time.Time `json:"start"`
-	End        time.Time `json:"end"`
-	Rrule      string    `json:"rrule"`
+	CalendarID string    `json:"-"`
+	Title      string    `json:"-"`
+	Start      time.Time `json:"-"`
+	End        time.Time `json:"-"`
+	AllDay     bool      `json:"-"`
+	Rrule      string    `json:"-"`
+}
+
+// updateEventRequestWire is updateEventRequest's actual JSON shape: start/end
+// are strings so their format can branch on AllDay (ADR-0017).
+type updateEventRequestWire struct {
+	CalendarID string `json:"calendarId"`
+	Title      string `json:"title"`
+	Start      string `json:"start"`
+	End        string `json:"end"`
+	AllDay     bool   `json:"allDay,omitempty"`
+	Rrule      string `json:"rrule"`
+}
+
+func (r updateEventRequest) MarshalJSON() ([]byte, error) {
+	return json.Marshal(updateEventRequestWire{
+		CalendarID: r.CalendarID,
+		Title:      r.Title,
+		Start:      formatEventTime(r.Start, r.AllDay),
+		End:        formatEventTime(r.End, r.AllDay),
+		AllDay:     r.AllDay,
+		Rrule:      r.Rrule,
+	})
+}
+
+func (r *updateEventRequest) UnmarshalJSON(data []byte) error {
+	var wire updateEventRequestWire
+	if err := json.Unmarshal(data, &wire); err != nil {
+		return err
+	}
+	start, err := parseEventTime(wire.Start, wire.AllDay)
+	if err != nil {
+		return fmt.Errorf("invalid start: %w", err)
+	}
+	end, err := parseEventTime(wire.End, wire.AllDay)
+	if err != nil {
+		return fmt.Errorf("invalid end: %w", err)
+	}
+	*r = updateEventRequest{
+		CalendarID: wire.CalendarID,
+		Title:      wire.Title,
+		Start:      start,
+		End:        end,
+		AllDay:     wire.AllDay,
+		Rrule:      wire.Rrule,
+	}
+	return nil
 }
 
 func (h *EventHandler) Update(w http.ResponseWriter, r *http.Request) {
@@ -202,7 +391,7 @@ func (h *EventHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	event, err := h.events.Update(r.Context(), userID, id, req.CalendarID, req.Title, req.Start, req.End, req.Rrule)
+	event, err := h.events.Update(r.Context(), userID, id, req.CalendarID, req.Title, req.Start, req.End, req.AllDay, req.Rrule)
 	switch {
 	case errors.Is(err, service.ErrInvalidTitle):
 		httpresponse.Error(w, http.StatusBadRequest, "invalid_request", "title must not be empty")

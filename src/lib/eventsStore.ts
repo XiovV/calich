@@ -6,6 +6,7 @@ import { resolveMaster, seriesEditChanges, type Occurrence } from "./occurrence"
 import {
   makeException,
   makeOverride,
+  resolveAllDay,
   shouldDiscardChildren,
   splitFollowing,
   truncateSeriesBefore,
@@ -105,6 +106,7 @@ export const useEventsStore = create<EventsState>((set, get) => ({
         title: updated.title,
         start: updated.start,
         end: updated.end,
+        allDay: updated.allDay,
         rrule: updated.rrule,
       });
     } catch {
@@ -155,6 +157,7 @@ export const useEventsStore = create<EventsState>((set, get) => ({
         title: changes.title,
         start: seriesChanges.start,
         end: seriesChanges.end,
+        allDay: resolveAllDay(changes, master),
         rrule,
       };
       const updatedMaster: Event = { ...master, ...patch };
@@ -239,6 +242,7 @@ export const useEventsStore = create<EventsState>((set, get) => ({
         title: changes.title,
         start: changes.start,
         end: changes.end,
+        allDay: resolveAllDay(changes, master),
       });
       return;
     }

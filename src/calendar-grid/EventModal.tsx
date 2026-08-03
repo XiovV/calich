@@ -1,5 +1,5 @@
 import { useState, type KeyboardEvent } from "react";
-import { format, setHours, setMinutes, startOfDay } from "date-fns";
+import { addDays, format, setHours, setMinutes, startOfDay } from "date-fns";
 import { Dialog } from "@base-ui/react/dialog";
 import type { DraftBlock } from "../lib/gridTime";
 import type { Event } from "../lib/event";
@@ -27,6 +27,7 @@ import { useEventsStore } from "../lib/eventsStore";
 import { useCalendarsStore } from "../lib/calendarsStore";
 import { Select } from "../components/ui/Select";
 import { Input } from "../components/ui/Input";
+import { Checkbox } from "../components/ui/Checkbox";
 import { Button } from "../components/ui/Button";
 import { buttonClasses } from "../components/ui/buttonClasses";
 import { DeleteEventConfirmation } from "./DeleteEventConfirmation";
@@ -51,6 +52,7 @@ interface InitialFormState {
   repeat: RepeatChoice;
   /** The stored rule when `repeat` is "custom"; undefined otherwise. */
   customRule: string | undefined;
+  allDay: boolean;
 }
 
 function timeStringToDate(day: Date, time: string): Date {
@@ -79,6 +81,7 @@ function deriveInitialFormState(
       calendarId: event.calendarId,
       repeat,
       customRule: repeat === "custom" ? rrule : undefined,
+      allDay: Boolean(event.allDay),
     };
   }
 
@@ -90,6 +93,7 @@ function deriveInitialFormState(
     calendarId: firstCheckedCalendarId,
     repeat: "none",
     customRule: undefined,
+    allDay: false,
   };
 }
 
@@ -136,6 +140,7 @@ export function EventModal(props: EventModalProps) {
   const [startTime, setStartTime] = useState(initial.startTime);
   const [endTime, setEndTime] = useState(initial.endTime);
   const [calendarId, setCalendarId] = useState(initial.calendarId);
+  const [allDay, setAllDay] = useState(initial.allDay);
   const [repeat, setRepeat] = useState<RepeatChoice>(initial.repeat);
   const [customRule, setCustomRule] = useState<string | undefined>(
     initial.customRule,
@@ -150,7 +155,7 @@ export function EventModal(props: EventModalProps) {
 
   // Preset labels are derived from the event's start date, so e.g. "Weekly on
   // Tuesday" tracks the day the event lives on.
-  const startForRule = timeStringToDate(day, startTime);
+  const startForRule = allDay ? startOfDay(day) : timeStringToDate(day, startTime);
   const repeatOptions = [
     ...RECURRENCE_PRESETS.map((preset) => ({
       value: preset as RepeatChoice,
@@ -180,17 +185,21 @@ export function EventModal(props: EventModalProps) {
     setIsCustomDialogOpen(false);
   }
 
+  // All-day skips the time-range check entirely — there's no time inputs to
+  // validate (ADR-0017).
   const isTimeRangeValid =
-    timeStringToDate(day, endTime) > timeStringToDate(day, startTime);
+    allDay || timeStringToDate(day, endTime) > timeStringToDate(day, startTime);
   const canSave = title.trim() !== "" && calendarId !== "" && isTimeRangeValid;
 
   function handleSave() {
     if (!canSave) return;
 
-    const start = timeStringToDate(day, startTime);
-    const end = timeStringToDate(day, endTime);
+    // An all-day Event's start/end are whole dates: start is the day itself,
+    // end is the exclusive next day (ADR-0017).
+    const start = allDay ? startOfDay(day) : timeStringToDate(day, startTime);
+    const end = allDay ? addDays(startOfDay(day), 1) : timeStringToDate(day, endTime);
     const rrule = repeat === "custom" ? customRule : buildRule(repeat, start);
-    const changes = { calendarId, title: title.trim(), start, end, rrule };
+    const changes = { calendarId, title: title.trim(), start, end, allDay, rrule };
 
     if (mode !== "edit") {
       addEvent({ id: crypto.randomUUID(), ...changes });
@@ -309,28 +318,41 @@ export function EventModal(props: EventModalProps) {
               className="mt-4"
             />
 
-            <div className="mt-4 flex gap-3">
-              <Input
-                label="Start"
-                type="time"
-                value={startTime}
-                onChange={(event) => setStartTime(event.target.value)}
-                invalid={!isTimeRangeValid}
-                className="flex-1"
+            <label className="mt-4 flex items-center gap-2 text-label-sm text-ink">
+              <Checkbox
+                checked={allDay}
+                onCheckedChange={setAllDay}
+                aria-label="All day"
               />
-              <Input
-                label="End"
-                type="time"
-                value={endTime}
-                onChange={(event) => setEndTime(event.target.value)}
-                invalid={!isTimeRangeValid}
-                className="flex-1"
-              />
-            </div>
-            {!isTimeRangeValid && (
-              <p className="mt-1 text-label-sm text-danger">
-                End time must be after start time.
-              </p>
+              All day
+            </label>
+
+            {!allDay && (
+              <>
+                <div className="mt-4 flex gap-3">
+                  <Input
+                    label="Start"
+                    type="time"
+                    value={startTime}
+                    onChange={(event) => setStartTime(event.target.value)}
+                    invalid={!isTimeRangeValid}
+                    className="flex-1"
+                  />
+                  <Input
+                    label="End"
+                    type="time"
+                    value={endTime}
+                    onChange={(event) => setEndTime(event.target.value)}
+                    invalid={!isTimeRangeValid}
+                    className="flex-1"
+                  />
+                </div>
+                {!isTimeRangeValid && (
+                  <p className="mt-1 text-label-sm text-danger">
+                    End time must be after start time.
+                  </p>
+                )}
+              </>
             )}
 
             <div className="mt-4">

@@ -1,4 +1,5 @@
 import { RRule } from "rrule";
+import { addDays, differenceInCalendarDays } from "date-fns";
 import type { Event } from "./event";
 import type { Occurrence } from "./occurrence";
 import { fromFloating, toFloating } from "./floatingTime";
@@ -65,6 +66,12 @@ export function expandOccurrences(
     const exdateKeys = new Set((event.exdates ?? []).map(instantKey));
     const overridesByRecurrenceId = overridesByParent.get(event.id);
     const durationMs = event.end.getTime() - event.start.getTime();
+    // All-day duration is measured in calendar days, not milliseconds, so a
+    // recurring all-day Occurrence's end lands on the next whole date even
+    // across a DST transition (ADR-0017).
+    const durationDays = event.allDay
+      ? differenceInCalendarDays(event.end, event.start)
+      : 0;
 
     if (!event.rrule) {
       if (overlapsWindow(event.start, event.end, windowStart, windowEnd)) {
@@ -100,7 +107,9 @@ export function expandOccurrences(
         continue;
       }
 
-      const end = new Date(start.getTime() + durationMs);
+      const end = event.allDay
+        ? addDays(start, durationDays)
+        : new Date(start.getTime() + durationMs);
       if (overlapsWindow(start, end, windowStart, windowEnd)) {
         occurrences.push({ event, start, end });
       }

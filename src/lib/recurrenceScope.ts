@@ -16,6 +16,18 @@ export interface EventFieldChanges {
   title: string;
   start: Date;
   end: Date;
+  // Absent from a drag-only edit (allDay isn't draggable yet); the caller
+  // falls back to the master's own allDay in that case.
+  allDay?: boolean;
+}
+
+/** `changes`' allDay, falling back to `master`'s own when the edit didn't
+ * touch it (a drag-only edit, which can't yet change allDay-ness). */
+export function resolveAllDay(
+  changes: Pick<EventFieldChanges, "allDay">,
+  master: Event,
+): boolean | undefined {
+  return changes.allDay ?? master.allDay;
 }
 
 /**
@@ -38,6 +50,7 @@ export function makeOverride(
     title: changes.title,
     start: changes.start,
     end: changes.end,
+    allDay: resolveAllDay(changes, master),
   };
 }
 
@@ -118,7 +131,7 @@ export function splitFollowing(
 ): SplitResult {
   return {
     truncatedMaster: { rrule: truncateSeriesBefore(master, splitStart) },
-    newMaster: { ...changes, rrule: master.rrule },
+    newMaster: { ...changes, allDay: resolveAllDay(changes, master), rrule: master.rrule },
     reparentFromStart: splitStart,
   };
 }

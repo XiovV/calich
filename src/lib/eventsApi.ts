@@ -1,3 +1,4 @@
+import { format } from "date-fns";
 import { authHeader, errorFromResponse } from "./apiClient";
 import type { Event } from "./event";
 
@@ -8,6 +9,7 @@ interface EventWire {
   start: string;
   end: string;
   // Absent (omitted by the backend) for a non-recurring event.
+  allDay?: boolean;
   rrule?: string;
   // Present only on an Override (ADR-0016).
   parentId?: string;
@@ -16,13 +18,39 @@ interface EventWire {
   exdates?: string[];
 }
 
+/**
+ * A local Date parsed from an all-day Event's date-only wire string
+ * ("2026-08-04") as local midnight — never through `new Date(string)`, which
+ * reads a bare date as UTC midnight and can land on the wrong local day
+ * (ADR-0017).
+ */
+function fromDateOnly(value: string): Date {
+  const [year, month, day] = value.split("-").map(Number);
+  return new Date(year, month - 1, day);
+}
+
+/** `fromDateOnly`'s inverse: a date-only wire string from a local Date's own
+ * calendar fields, never `toISOString()` (ADR-0017). */
+function toDateOnly(date: Date): string {
+  return format(date, "yyyy-MM-dd");
+}
+
+function parseEventTime(value: string, allDay: boolean | undefined): Date {
+  return allDay ? fromDateOnly(value) : new Date(value);
+}
+
+function serializeEventTime(date: Date, allDay: boolean | undefined): string {
+  return allDay ? toDateOnly(date) : date.toISOString();
+}
+
 function fromWire(wire: EventWire): Event {
   return {
     id: wire.id,
     calendarId: wire.calendarId,
     title: wire.title,
-    start: new Date(wire.start),
-    end: new Date(wire.end),
+    start: parseEventTime(wire.start, wire.allDay),
+    end: parseEventTime(wire.end, wire.allDay),
+    allDay: wire.allDay || undefined,
     rrule: wire.rrule || undefined,
     parentId: wire.parentId,
     recurrenceId: wire.recurrenceId ? new Date(wire.recurrenceId) : undefined,
@@ -50,6 +78,7 @@ export const eventsApi = {
       title: string;
       start: Date;
       end: Date;
+      allDay?: boolean;
       rrule?: string;
       parentId?: string;
       recurrenceId?: Date;
@@ -63,8 +92,9 @@ export const eventsApi = {
         id: event.id,
         calendarId: event.calendarId,
         title: event.title,
-        start: event.start.toISOString(),
-        end: event.end.toISOString(),
+        start: serializeEventTime(event.start, event.allDay),
+        end: serializeEventTime(event.end, event.allDay),
+        allDay: event.allDay ?? false,
         rrule: event.rrule ?? "",
         parentId: event.parentId,
         recurrenceId: event.recurrenceId?.toISOString(),
@@ -83,6 +113,7 @@ export const eventsApi = {
       title: string;
       start: Date;
       end: Date;
+      allDay?: boolean;
       rrule?: string;
     },
   ): Promise<Event> {
@@ -93,8 +124,9 @@ export const eventsApi = {
       body: JSON.stringify({
         calendarId: changes.calendarId,
         title: changes.title,
-        start: changes.start.toISOString(),
-        end: changes.end.toISOString(),
+        start: serializeEventTime(changes.start, changes.allDay),
+        end: serializeEventTime(changes.end, changes.allDay),
+        allDay: changes.allDay ?? false,
         rrule: changes.rrule ?? "",
       }),
     });

@@ -189,3 +189,65 @@ describe("expandOccurrences", () => {
     expect(occurrences).toHaveLength(2);
   });
 });
+
+describe("expandOccurrences all-day", () => {
+  it("yields a whole-date Occurrence for a non-recurring all-day Event", () => {
+    const event = makeEvent({
+      allDay: true,
+      start: new Date(2026, 7, 4),
+      end: new Date(2026, 7, 5),
+    });
+    const occurrences = expandOccurrences(
+      [event],
+      new Date(2026, 7, 1),
+      new Date(2026, 7, 8),
+    );
+    expect(occurrences).toHaveLength(1);
+    expect(occurrences[0].start).toEqual(new Date(2026, 7, 4));
+    expect(occurrences[0].end).toEqual(new Date(2026, 7, 5));
+  });
+
+  it("expands a recurring all-day Event into whole-date Occurrences", () => {
+    const event = makeEvent({
+      allDay: true,
+      start: new Date(2026, 0, 6),
+      end: new Date(2026, 0, 7),
+      rrule: "FREQ=WEEKLY;BYDAY=TU",
+    });
+    const occurrences = expandOccurrences(
+      [event],
+      new Date(2026, 0, 1),
+      new Date(2026, 0, 27),
+    );
+    const starts = occurrences
+      .map((o) => o.start)
+      .sort((a, b) => a.getTime() - b.getTime());
+    expect(starts).toEqual([
+      new Date(2026, 0, 6),
+      new Date(2026, 0, 13),
+      new Date(2026, 0, 20),
+    ]);
+    for (const o of occurrences) {
+      expect(o.end).toEqual(new Date(o.start.getFullYear(), o.start.getMonth(), o.start.getDate() + 1));
+    }
+  });
+
+  // America/New_York springs forward on 2026-03-08; a ms-based duration would
+  // land the end 23 hours after start instead of at the next date's midnight.
+  it("keeps a recurring all-day Occurrence's end at the next whole date across a DST transition", () => {
+    const event = makeEvent({
+      allDay: true,
+      start: new Date(2026, 2, 6),
+      end: new Date(2026, 2, 7),
+      rrule: "FREQ=DAILY",
+    });
+    const occurrences = expandOccurrences(
+      [event],
+      new Date(2026, 2, 6),
+      new Date(2026, 2, 10),
+    );
+    const marchEighth = occurrences.find((o) => o.start.getDate() === 8);
+    expect(marchEighth).toBeDefined();
+    expect(marchEighth!.end).toEqual(new Date(2026, 2, 9));
+  });
+});

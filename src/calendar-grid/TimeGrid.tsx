@@ -16,6 +16,7 @@ import {
   type DraftBlock,
 } from "../lib/gridTime";
 import { TimeAxis } from "./TimeAxis";
+import { AllDayLane } from "./AllDayLane";
 import { DayColumn, type EventDragPreviewData } from "./DayColumn";
 import type { EventDragKind } from "./EventBlock";
 import { ScopePicker } from "./ScopePicker";
@@ -135,10 +136,14 @@ export function TimeGrid({
   // non-recurring Event yields exactly one Occurrence, so nothing changes for it.
   const windowStart = startOfDay(daysToShow[0]);
   const windowEnd = startOfDay(addDays(daysToShow[daysToShow.length - 1], 1));
-  const visibleOccurrences = useVisibleOccurrences(
+  const allOccurrences = useVisibleOccurrences(
     windowStart.getTime(),
     windowEnd.getTime(),
   );
+  // All-day Occurrences render in the pinned all-day lane, not the hourly
+  // grid (ADR-0017).
+  const allDayOccurrences = allOccurrences.filter((occurrence) => occurrence.event.allDay);
+  const visibleOccurrences = allOccurrences.filter((occurrence) => !occurrence.event.allDay);
 
   useEffect(() => {
     const interval = setInterval(
@@ -226,18 +231,25 @@ export function TimeGrid({
       <div ref={scrollRef} className="flex-1 overflow-y-auto">
         <div
           ref={headerRef}
-          className="sticky top-0 z-10 flex border-b border-border bg-surface"
+          className="sticky top-0 z-10 border-b border-border bg-surface"
         >
-          <div className="w-14 shrink-0" />
-          {daysToShow.map((day) => (
-            <div
-              key={day.toISOString()}
-              className="flex-1 border-l border-border py-2 text-center"
-            >
-              <p className="text-label-sm text-ink-muted">{format(day, "EEE")}</p>
-              <p className="text-body text-ink">{format(day, "d")}</p>
-            </div>
-          ))}
+          <div className="flex">
+            <div className="w-14 shrink-0" />
+            {daysToShow.map((day) => (
+              <div
+                key={day.toISOString()}
+                className="flex-1 border-l border-border py-2 text-center"
+              >
+                <p className="text-label-sm text-ink-muted">{format(day, "EEE")}</p>
+                <p className="text-body text-ink">{format(day, "d")}</p>
+              </div>
+            ))}
+          </div>
+          <AllDayLane
+            daysToShow={daysToShow}
+            occurrences={allDayOccurrences}
+            onOccurrenceClick={onOccurrenceClick}
+          />
         </div>
         <div className="flex">
           <TimeAxis pixelsPerHour={PIXELS_PER_HOUR} />

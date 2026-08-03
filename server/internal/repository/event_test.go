@@ -51,7 +51,7 @@ func TestEventRepository_CreateAndGetByID(t *testing.T) {
 	start := time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC)
 	end := time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC)
 
-	created, err := repo.Create(ctx, "evt-1", userID, calendarID, "Standup", start, end, "", nil, nil)
+	created, err := repo.Create(ctx, "evt-1", userID, calendarID, "Standup", start, end, false, "", nil, nil)
 	if err != nil {
 		t.Fatalf("create event: %v", err)
 	}
@@ -65,6 +65,38 @@ func TestEventRepository_CreateAndGetByID(t *testing.T) {
 	}
 	if !reflect.DeepEqual(fetched, created) {
 		t.Fatalf("expected fetched event %+v to equal created event %+v", fetched, created)
+	}
+}
+
+func TestEventRepository_CreateAndUpdate_PersistsAllDay(t *testing.T) {
+	repo, userID, calendarID, _ := newTestEventRepository(t)
+	ctx := context.Background()
+
+	start := time.Date(2026, 8, 4, 0, 0, 0, 0, time.UTC)
+	end := time.Date(2026, 8, 5, 0, 0, 0, 0, time.UTC)
+
+	created, err := repo.Create(ctx, "evt-1", userID, calendarID, "Holiday", start, end, true, "", nil, nil)
+	if err != nil {
+		t.Fatalf("create event: %v", err)
+	}
+	if !created.AllDay {
+		t.Fatalf("expected created event to be all-day, got %+v", created)
+	}
+
+	fetched, err := repo.GetByID(ctx, userID, "evt-1")
+	if err != nil {
+		t.Fatalf("get by id: %v", err)
+	}
+	if !fetched.AllDay {
+		t.Fatalf("expected fetched event to be all-day, got %+v", fetched)
+	}
+
+	updated, err := repo.Update(ctx, userID, "evt-1", calendarID, "Holiday", start, end, false, "")
+	if err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	if updated.AllDay {
+		t.Fatalf("expected updated event to no longer be all-day, got %+v", updated)
 	}
 }
 
@@ -137,7 +169,7 @@ func TestEventRepository_Update(t *testing.T) {
 	newStart := mustParseTime(t, "2026-01-01T11:00:00Z")
 	newEnd := mustParseTime(t, "2026-01-01T12:00:00Z")
 
-	updated, err := repo.Update(ctx, userID, "evt-1", calendarID, "Renamed", newStart, newEnd, "")
+	updated, err := repo.Update(ctx, userID, "evt-1", calendarID, "Renamed", newStart, newEnd, false, "")
 	if err != nil {
 		t.Fatalf("update: %v", err)
 	}
@@ -152,7 +184,7 @@ func TestEventRepository_Update_NotFound(t *testing.T) {
 	start := mustParseTime(t, "2026-01-01T09:00:00Z")
 	end := mustParseTime(t, "2026-01-01T10:00:00Z")
 
-	_, err := repo.Update(context.Background(), userID, "nope", calendarID, "Renamed", start, end, "")
+	_, err := repo.Update(context.Background(), userID, "nope", calendarID, "Renamed", start, end, false, "")
 	if !errors.Is(err, ErrNotFound) {
 		t.Fatalf("expected ErrNotFound, got %v", err)
 	}
@@ -167,7 +199,7 @@ func TestEventRepository_Update_ScopedToUser(t *testing.T) {
 	start := mustParseTime(t, "2026-01-01T11:00:00Z")
 	end := mustParseTime(t, "2026-01-01T12:00:00Z")
 
-	_, err := repo.Update(ctx, 99999, "evt-1", calendarID, "Renamed", start, end, "")
+	_, err := repo.Update(ctx, 99999, "evt-1", calendarID, "Renamed", start, end, false, "")
 	if !errors.Is(err, ErrNotFound) {
 		t.Fatalf("expected ErrNotFound updating another user's event, got %v", err)
 	}
@@ -254,7 +286,7 @@ func TestEventRepository_CascadeDeletesOverridesWhenMasterDeleted(t *testing.T) 
 
 	parentID := "master"
 	recurrenceID := mustParseTime(t, "2026-01-02T09:00:00Z")
-	if _, err := repo.Create(ctx, "override", userID, calendarID, "Moved", mustParseTime(t, "2026-01-02T11:00:00Z"), mustParseTime(t, "2026-01-02T12:00:00Z"), "", &parentID, &recurrenceID); err != nil {
+	if _, err := repo.Create(ctx, "override", userID, calendarID, "Moved", mustParseTime(t, "2026-01-02T11:00:00Z"), mustParseTime(t, "2026-01-02T12:00:00Z"), false, "", &parentID, &recurrenceID); err != nil {
 		t.Fatalf("create override: %v", err)
 	}
 
@@ -276,11 +308,11 @@ func TestEventRepository_ReparentOverridesFrom(t *testing.T) {
 
 	oldParentID := "old-master"
 	beforeSplit := mustParseTime(t, "2026-01-02T09:00:00Z")
-	if _, err := repo.Create(ctx, "before-split", userID, calendarID, "Before", mustParseTime(t, "2026-01-02T11:00:00Z"), mustParseTime(t, "2026-01-02T12:00:00Z"), "", &oldParentID, &beforeSplit); err != nil {
+	if _, err := repo.Create(ctx, "before-split", userID, calendarID, "Before", mustParseTime(t, "2026-01-02T11:00:00Z"), mustParseTime(t, "2026-01-02T12:00:00Z"), false, "", &oldParentID, &beforeSplit); err != nil {
 		t.Fatalf("create override before split: %v", err)
 	}
 	afterSplit := mustParseTime(t, "2026-01-06T09:00:00Z")
-	if _, err := repo.Create(ctx, "after-split", userID, calendarID, "After", mustParseTime(t, "2026-01-06T11:00:00Z"), mustParseTime(t, "2026-01-06T12:00:00Z"), "", &oldParentID, &afterSplit); err != nil {
+	if _, err := repo.Create(ctx, "after-split", userID, calendarID, "After", mustParseTime(t, "2026-01-06T11:00:00Z"), mustParseTime(t, "2026-01-06T12:00:00Z"), false, "", &oldParentID, &afterSplit); err != nil {
 		t.Fatalf("create override after split: %v", err)
 	}
 
@@ -314,7 +346,7 @@ func TestEventRepository_DeleteChildrenOf(t *testing.T) {
 
 	parentID := "master"
 	recurrenceID := mustParseTime(t, "2026-01-02T09:00:00Z")
-	if _, err := repo.Create(ctx, "override", userID, calendarID, "Moved", mustParseTime(t, "2026-01-02T11:00:00Z"), mustParseTime(t, "2026-01-02T12:00:00Z"), "", &parentID, &recurrenceID); err != nil {
+	if _, err := repo.Create(ctx, "override", userID, calendarID, "Moved", mustParseTime(t, "2026-01-02T11:00:00Z"), mustParseTime(t, "2026-01-02T12:00:00Z"), false, "", &parentID, &recurrenceID); err != nil {
 		t.Fatalf("create override: %v", err)
 	}
 
@@ -332,7 +364,7 @@ func TestEventRepository_DeleteChildrenOf(t *testing.T) {
 
 func mustCreateEvent(t *testing.T, repo *EventRepository, id string, userID int64, calendarID, start, end string) {
 	t.Helper()
-	if _, err := repo.Create(context.Background(), id, userID, calendarID, id, mustParseTime(t, start), mustParseTime(t, end), "", nil, nil); err != nil {
+	if _, err := repo.Create(context.Background(), id, userID, calendarID, id, mustParseTime(t, start), mustParseTime(t, end), false, "", nil, nil); err != nil {
 		t.Fatalf("create event %q: %v", id, err)
 	}
 }
