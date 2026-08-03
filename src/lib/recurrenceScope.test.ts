@@ -3,7 +3,6 @@ import { describe, expect, it } from "vitest";
 import type { Event } from "./event";
 import { toFloating } from "./floatingTime";
 import {
-  applyAllEventsChanges,
   makeException,
   makeOverride,
   shouldDiscardChildren,
@@ -153,25 +152,6 @@ describe("splitFollowing", () => {
   });
 });
 
-describe("applyAllEventsChanges", () => {
-  it("keeps the master's own date, taking only the edited time of day", () => {
-    // Editing from the 5th Occurrence (Jan 5) must not move the master's
-    // Jan 1 DTSTART — that would truncate every earlier Occurrence.
-    const changes = {
-      calendarId: "cal-2",
-      title: "Standup (renamed)",
-      start: new Date(2026, 0, 5, 10, 0),
-      end: new Date(2026, 0, 5, 10, 30),
-    };
-
-    expect(applyAllEventsChanges(master, changes)).toEqual({
-      calendarId: "cal-2",
-      title: "Standup (renamed)",
-      start: new Date(2026, 0, 1, 10, 0),
-      end: new Date(2026, 0, 1, 10, 30),
-    });
-  });
-});
 
 describe("shouldDiscardChildren", () => {
   it("is false when the rule is unchanged", () => {

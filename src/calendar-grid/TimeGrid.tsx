@@ -1,13 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import { addDays, format, isSameDay, startOfDay } from "date-fns";
-import { useEventsStore } from "../lib/eventsStore";
 import { useCalendarsStore } from "../lib/calendarsStore";
 import { getCalendarById, type Calendar } from "../lib/calendar";
 import { getCalendarColorClass } from "../lib/calendarColors";
 import { layoutOverlappingEvents } from "../lib/layoutOverlappingEvents";
 import { columnLayoutToBox } from "../lib/eventBlockGeometry";
 import { useVisibleOccurrences } from "../hooks/useVisibleOccurrences";
-import { occurrenceKey, seriesEditChanges, type Occurrence } from "../lib/occurrence";
+import { occurrenceKey, type Occurrence } from "../lib/occurrence";
 import {
   PIXELS_PER_HOUR,
   computeMovedEventTimes,
@@ -19,6 +18,8 @@ import {
 import { TimeAxis } from "./TimeAxis";
 import { DayColumn, type EventDragPreviewData } from "./DayColumn";
 import type { EventDragKind } from "./EventBlock";
+import { ScopePicker } from "./ScopePicker";
+import { useOccurrenceDragCommit } from "./useOccurrenceDragCommit";
 
 const NOW_REFRESH_INTERVAL_MS = 60_000;
 const CLICK_DISTANCE_THRESHOLD_PX = 4;
@@ -118,8 +119,8 @@ export function TimeGrid({
   onDraftCreated,
   onOccurrenceClick,
 }: TimeGridProps) {
-  const updateEvent = useEventsStore((state) => state.updateEvent);
   const calendars = useCalendarsStore((state) => state.calendars);
+  const dragCommit = useOccurrenceDragCommit();
   const scrollRef = useRef<HTMLDivElement>(null);
   const headerRef = useRef<HTMLDivElement>(null);
   const daysContainerRef = useRef<HTMLDivElement>(null);
@@ -196,10 +197,7 @@ export function TimeGrid({
         onOccurrenceClick(origin.occurrence);
       } else if (distance >= CLICK_DISTANCE_THRESHOLD_PX) {
         const { start, end } = computeDragTimes(origin, deltaX, deltaY);
-        updateEvent(
-          origin.occurrence.event.id,
-          seriesEditChanges(origin.occurrence, start, end),
-        );
+        dragCommit.commit(origin.occurrence, start, end);
       }
 
       dragOriginRef.current = null;
@@ -212,7 +210,7 @@ export function TimeGrid({
       window.removeEventListener("mousemove", handleMouseMove);
       window.removeEventListener("mouseup", handleMouseUp);
     };
-  }, [activeDrag, onOccurrenceClick, updateEvent]);
+  }, [activeDrag, onOccurrenceClick, dragCommit]);
 
   const dragPreview = activeDrag
     ? computeEventDragPreview(
@@ -267,6 +265,13 @@ export function TimeGrid({
           </div>
         </div>
       </div>
+      {dragCommit.isScopePickerOpen && (
+        <ScopePicker
+          action="Edit"
+          onConfirm={dragCommit.confirmScope}
+          onClose={dragCommit.cancel}
+        />
+      )}
     </div>
   );
 }

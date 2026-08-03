@@ -49,39 +49,40 @@ export function resolveMaster(events: Event[], occurrence: Occurrence): Event | 
 }
 
 /**
- * The Master's changes to apply when `occurrence` is dragged/resized to a new
- * `[newStart, newEnd)`. Interim behaviour (ADR-0016): editing a recurring
- * Occurrence edits the whole series (the "All events" path), re-anchoring the
- * master's rule to the new start so its rule never falls out of sync with its
- * start. A non-recurring Event just moves. This is the single place the
- * interim policy lives, so replacing it with the Tier-3 scope picker touches
- * one function.
+ * `master`'s changes for the "All events" scope, when `occurrence` (whichever
+ * instance was actually dragged, resized, or opened for editing) moves to a
+ * new `[newStart, newEnd)`. The whole series shifts by the *delta* `occurrence`
+ * moved by, re-anchoring the rule to the new start so it never falls out of
+ * sync (ADR-0016) — a non-recurring Event just moves, since it's its own
+ * Master and only Occurrence.
  *
- * The Master's own `start`/`end` are shifted by the *delta* the dragged
- * Occurrence moved by, not replaced with `newStart`/`newEnd` outright —
- * `occurrence.start` is only the Master's own start for the very first
- * Occurrence. Replacing it directly would re-anchor the Master's `DTSTART` to
- * whichever Occurrence happened to be dragged, silently truncating every
- * earlier Occurrence out of the series.
+ * `master`'s own `start`/`end` are shifted by that delta, not replaced with
+ * `newStart`/`newEnd` outright: `occurrence.start` only equals the Master's
+ * own start for its very first (or an as-yet-unmoved) Occurrence. Replacing
+ * it directly would re-anchor the Master's `DTSTART` to whichever Occurrence
+ * happened to be edited, silently truncating every earlier Occurrence out of
+ * the series. Taking `master` and `occurrence` as separate parameters also
+ * covers editing an already-Overridden Occurrence with "All events": the
+ * delta comes from how far the Override itself moved, applied to the actual
+ * Master rather than the Override.
  *
- * The rule itself is only rebuilt when the drag actually lands on a
+ * The rule itself is only rebuilt when the edit actually lands on a
  * different weekday. `reanchorRule` only understands the fixed presets, so
- * rebuilding it on every drag — including a same-day resize that changes
+ * rebuilding it on every edit — including a same-day resize that changes
  * nothing about *which* days repeat — would collapse a custom rule (e.g.
- * "every Mon/Wed/Fri", or an INTERVAL > 1) down to a single weekday the
- * moment any Occurrence in it is dragged at all.
+ * "every Mon/Wed/Fri", or an INTERVAL > 1) down to a single weekday.
  */
 export function seriesEditChanges(
+  master: Event,
   occurrence: Occurrence,
   newStart: Date,
   newEnd: Date,
 ): Pick<Event, "start" | "end" | "rrule"> {
-  const { event, start: occurrenceStart, end: occurrenceEnd } = occurrence;
-  const startDeltaMs = newStart.getTime() - occurrenceStart.getTime();
-  const endDeltaMs = newEnd.getTime() - occurrenceEnd.getTime();
-  const start = new Date(event.start.getTime() + startDeltaMs);
-  const end = new Date(event.end.getTime() + endDeltaMs);
-  const dayChanged = newStart.getDay() !== occurrenceStart.getDay();
-  const rrule = dayChanged ? reanchorRule(event.rrule, newStart) : event.rrule;
+  const startDeltaMs = newStart.getTime() - occurrence.start.getTime();
+  const endDeltaMs = newEnd.getTime() - occurrence.end.getTime();
+  const start = new Date(master.start.getTime() + startDeltaMs);
+  const end = new Date(master.end.getTime() + endDeltaMs);
+  const dayChanged = newStart.getDay() !== occurrence.start.getDay();
+  const rrule = dayChanged ? reanchorRule(master.rrule, newStart) : master.rrule;
   return { start, end, rrule };
 }

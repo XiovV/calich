@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { addDays, isSameDay, startOfDay } from "date-fns";
 import { useShellStore } from "../lib/shellStore";
-import { useEventsStore } from "../lib/eventsStore";
 import { useCalendarsStore } from "../lib/calendarsStore";
 import { getCalendarById } from "../lib/calendar";
 import { getCalendarColorClass } from "../lib/calendarColors";
@@ -11,10 +10,12 @@ import {
   getOccurrencesForDay,
 } from "../lib/monthGrid";
 import { useVisibleOccurrences } from "../hooks/useVisibleOccurrences";
-import { occurrenceKey, seriesEditChanges, type Occurrence } from "../lib/occurrence";
+import { occurrenceKey, type Occurrence } from "../lib/occurrence";
 import { WEEKDAY_SHORT_NAMES } from "../lib/rruleParts";
 import { MonthDayCell } from "./MonthDayCell";
 import { MonthEventDragPreview } from "./MonthEventDragPreview";
+import { ScopePicker } from "./ScopePicker";
+import { useOccurrenceDragCommit } from "./useOccurrenceDragCommit";
 import type { DraftBlock } from "../lib/gridTime";
 
 const CLICK_DISTANCE_THRESHOLD_PX = 4;
@@ -46,8 +47,8 @@ function getCellDateAtPoint(
 
 export function MonthGrid({ onDraftCreated, onOccurrenceClick }: MonthGridProps) {
   const selectedDate = useShellStore((state) => state.selectedDate);
-  const updateEvent = useEventsStore((state) => state.updateEvent);
   const calendars = useCalendarsStore((state) => state.calendars);
+  const dragCommit = useOccurrenceDragCommit();
 
   const dragOriginRef = useRef<EventDragOrigin | null>(null);
   const [activeDrag, setActiveDrag] = useState<EventDragOrigin | null>(null);
@@ -124,10 +125,7 @@ export function MonthGrid({ onDraftCreated, onOccurrenceClick }: MonthGridProps)
             origin.occurrence.end,
             targetDate,
           );
-          updateEvent(
-            origin.occurrence.event.id,
-            seriesEditChanges(origin.occurrence, start, end),
-          );
+          dragCommit.commit(origin.occurrence, start, end);
         }
       }
 
@@ -142,7 +140,7 @@ export function MonthGrid({ onDraftCreated, onOccurrenceClick }: MonthGridProps)
       window.removeEventListener("mousemove", handleMouseMove);
       window.removeEventListener("mouseup", handleMouseUp);
     };
-  }, [activeDrag, cells, onOccurrenceClick, updateEvent]);
+  }, [activeDrag, cells, onOccurrenceClick, dragCommit]);
 
   const dragCalendar = activeDrag
     ? getCalendarById(calendars, activeDrag.occurrence.event.calendarId)
@@ -188,6 +186,13 @@ export function MonthGrid({ onDraftCreated, onOccurrenceClick }: MonthGridProps)
           title={activeDrag.occurrence.event.title}
           start={activeDrag.occurrence.start}
           colorClass={dragColorClass}
+        />
+      )}
+      {dragCommit.isScopePickerOpen && (
+        <ScopePicker
+          action="Edit"
+          onConfirm={dragCommit.confirmScope}
+          onClose={dragCommit.cancel}
         />
       )}
     </div>

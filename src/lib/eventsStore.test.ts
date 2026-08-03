@@ -311,6 +311,60 @@ describe("editOccurrence", () => {
     expect(events[0].rrule).toBe("FREQ=WEEKLY;BYDAY=TH");
   });
 
+  it('scope "all": clears the rule entirely when the user picks "Does not repeat"', async () => {
+    useEventsStore.setState({ events: [recurringMaster] });
+    vi.mocked(eventsApi.update).mockResolvedValue({} as never);
+
+    // `rrule: undefined` here is a deliberate "does not repeat", distinct
+    // from omitting the field — the store must not fall back to keeping the
+    // old rule just because the new value happens to be undefined.
+    await useEventsStore.getState().editOccurrence(
+      occurrenceOf(recurringMaster, recurringMaster.start),
+      "all",
+      {
+        calendarId: "cal-1",
+        title: "Standup",
+        start: recurringMaster.start,
+        end: recurringMaster.end,
+        rrule: undefined,
+      },
+    );
+
+    const master = useEventsStore.getState().events.find((e) => e.id === "master-1")!;
+    expect(master.rrule).toBeUndefined();
+    expect(eventsApi.update).toHaveBeenCalledWith(
+      "token-123",
+      "master-1",
+      expect.objectContaining({ rrule: undefined }),
+    );
+  });
+
+  it('scope "all": a drag to a different day shifts the whole series and reanchors the rule', async () => {
+    useEventsStore.setState({ events: [recurringMaster] });
+    vi.mocked(eventsApi.update).mockResolvedValue({} as never);
+
+    // recurringMaster is FREQ=DAILY (weekday-agnostic), so use a weekly rule
+    // to exercise the day-changed reanchor path explicitly.
+    const weeklyMaster = { ...recurringMaster, rrule: "FREQ=WEEKLY;BYDAY=TH" };
+    useEventsStore.setState({ events: [weeklyMaster] });
+
+    // Jan 1 2026 is a Thursday; drag it one day later to a Friday.
+    await useEventsStore.getState().editOccurrence(
+      occurrenceOf(weeklyMaster, weeklyMaster.start),
+      "all",
+      {
+        calendarId: "cal-1",
+        title: "Standup",
+        start: new Date("2026-01-02T09:00:00Z"),
+        end: new Date("2026-01-02T09:30:00Z"),
+      },
+    );
+
+    const master = useEventsStore.getState().events.find((e) => e.id === "master-1")!;
+    expect(master.start).toEqual(new Date("2026-01-02T09:00:00Z"));
+    expect(master.rrule).toBe("FREQ=WEEKLY;BYDAY=FR");
+  });
+
   it('scope "following": truncates the old master and creates a new one for the remainder', async () => {
     useEventsStore.setState({ events: [recurringMaster] });
     vi.mocked(eventsApi.update).mockResolvedValue({} as never);

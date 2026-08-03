@@ -53,7 +53,7 @@ describe("seriesEditChanges", () => {
     const occurrence: Occurrence = { event, start: event.start, end: event.end };
     const newStart = new Date(2026, 7, 19, 10, 0);
     const newEnd = new Date(2026, 7, 19, 10, 30);
-    expect(seriesEditChanges(occurrence, newStart, newEnd)).toEqual({
+    expect(seriesEditChanges(event, occurrence, newStart, newEnd)).toEqual({
       start: newStart,
       end: newEnd,
       rrule: undefined,
@@ -66,7 +66,7 @@ describe("seriesEditChanges", () => {
     const occurrence: Occurrence = { event, start: event.start, end: event.end };
     const newStart = new Date(2026, 7, 19, 9, 0);
     const newEnd = new Date(2026, 7, 19, 9, 30);
-    expect(seriesEditChanges(occurrence, newStart, newEnd)).toEqual({
+    expect(seriesEditChanges(event, occurrence, newStart, newEnd)).toEqual({
       start: newStart,
       end: newEnd,
       rrule: "FREQ=WEEKLY;BYDAY=WE",
@@ -87,7 +87,7 @@ describe("seriesEditChanges", () => {
     const newStart = new Date(2026, 8, 8, 9, 0);
     const newEnd = new Date(2026, 8, 8, 9, 30);
 
-    expect(seriesEditChanges(draggedOccurrence, newStart, newEnd)).toEqual({
+    expect(seriesEditChanges(event, draggedOccurrence, newStart, newEnd)).toEqual({
       start: new Date(2026, 7, 25, 9, 0),
       end: new Date(2026, 7, 25, 9, 30),
       rrule: "FREQ=WEEKLY;BYDAY=TU",
@@ -105,7 +105,7 @@ describe("seriesEditChanges", () => {
     const newStart = draggedOccurrence.start;
     const newEnd = new Date(2026, 8, 1, 10, 0);
 
-    expect(seriesEditChanges(draggedOccurrence, newStart, newEnd)).toEqual({
+    expect(seriesEditChanges(event, draggedOccurrence, newStart, newEnd)).toEqual({
       start: event.start,
       end: new Date(2026, 7, 18, 10, 0),
       rrule: "FREQ=WEEKLY;BYDAY=TU",
@@ -126,7 +126,7 @@ describe("seriesEditChanges", () => {
     const newStart = draggedOccurrence.start;
     const newEnd = new Date(2026, 8, 2, 10, 0);
 
-    expect(seriesEditChanges(draggedOccurrence, newStart, newEnd).rrule).toBe(
+    expect(seriesEditChanges(event, draggedOccurrence, newStart, newEnd).rrule).toBe(
       "FREQ=WEEKLY;BYDAY=MO,WE,FR",
     );
   });
@@ -141,9 +141,37 @@ describe("seriesEditChanges", () => {
     const newStart = new Date(2026, 8, 3, 9, 0); // moved to Thursday
     const newEnd = new Date(2026, 8, 3, 9, 30);
 
-    expect(seriesEditChanges(draggedOccurrence, newStart, newEnd).rrule).toBe(
+    expect(seriesEditChanges(event, draggedOccurrence, newStart, newEnd).rrule).toBe(
       "FREQ=WEEKLY;BYDAY=TH",
     );
+  });
+
+  it("shifts the actual Master by the delta an already-Overridden Occurrence moved by", () => {
+    // Editing an Override with "All events" should still shift the real
+    // Master, using how far the Override itself moved — not the Override's
+    // own start as if it were the Master's anchor.
+    const master = makeEvent({ id: "master-1", rrule: "FREQ=WEEKLY;BYDAY=TU" });
+    const override = makeEvent({
+      id: "override-1",
+      parentId: "master-1",
+      recurrenceId: new Date(2026, 8, 1, 9, 0),
+      start: new Date(2026, 8, 1, 14, 0), // previously moved to 2pm
+      end: new Date(2026, 8, 1, 14, 30),
+    });
+    const overrideOccurrence: Occurrence = {
+      event: override,
+      start: override.start,
+      end: override.end,
+    };
+    // Moved another hour later, same day.
+    const newStart = new Date(2026, 8, 1, 15, 0);
+    const newEnd = new Date(2026, 8, 1, 15, 30);
+
+    expect(seriesEditChanges(master, overrideOccurrence, newStart, newEnd)).toEqual({
+      start: new Date(2026, 7, 18, 10, 0),
+      end: new Date(2026, 7, 18, 10, 30),
+      rrule: "FREQ=WEEKLY;BYDAY=TU",
+    });
   });
 });
 

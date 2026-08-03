@@ -2,9 +2,8 @@ import { create } from "zustand";
 import { useAuthStore } from "./authStore";
 import type { Event } from "./event";
 import { eventsApi } from "./eventsApi";
-import { resolveMaster, type Occurrence } from "./occurrence";
+import { resolveMaster, seriesEditChanges, type Occurrence } from "./occurrence";
 import {
-  applyAllEventsChanges,
   makeException,
   makeOverride,
   shouldDiscardChildren,
@@ -141,10 +140,24 @@ export const useEventsStore = create<EventsState>((set, get) => ({
     const accessToken = requireAccessToken();
 
     if (scope === "all") {
-      const rrule = changes.rrule ?? master.rrule;
+      // The whole series shifts by the delta `occurrence` moved by (see
+      // seriesEditChanges) — this covers both a drag (an explicit new
+      // date+time) and the modal (a time-only edit, so the delta has no day
+      // component and the master's own date survives untouched).
+      const seriesChanges = seriesEditChanges(master, occurrence, changes.start, changes.end);
+      // "rrule" may be present-but-undefined (the user picked "Does not
+      // repeat"), which must win over falling back to seriesChanges' own
+      // reanchored rule — hence an `in` check rather than `??`.
+      const rrule = "rrule" in changes ? changes.rrule : seriesChanges.rrule;
       const discardsChildren = shouldDiscardChildren(master.rrule, rrule);
-      const anchoredChanges = applyAllEventsChanges(master, changes);
-      const updatedMaster: Event = { ...master, ...anchoredChanges, rrule };
+      const patch = {
+        calendarId: changes.calendarId,
+        title: changes.title,
+        start: seriesChanges.start,
+        end: seriesChanges.end,
+        rrule,
+      };
+      const updatedMaster: Event = { ...master, ...patch };
       set((state) => ({
         events: state.events
           .map((event) => (event.id === master.id ? updatedMaster : event))
@@ -152,7 +165,7 @@ export const useEventsStore = create<EventsState>((set, get) => ({
       }));
 
       try {
-        await eventsApi.update(accessToken, master.id, { ...anchoredChanges, rrule });
+        await eventsApi.update(accessToken, master.id, patch);
       } catch {
         set({ events: previousEvents });
         toast.error("Failed to update event.");
