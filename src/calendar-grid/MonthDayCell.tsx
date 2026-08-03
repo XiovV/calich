@@ -15,18 +15,22 @@ interface MonthDayCellProps {
   date: Date;
   inCurrentMonth: boolean;
   isToday: boolean;
+  isDragHover: boolean;
   events: Event[];
   onDraftCreated: (day: Date, draft: DraftBlock) => void;
   onEventClick: (event: Event) => void;
+  onEventDragStart: (event: Event, clientX: number, clientY: number) => void;
 }
 
 export function MonthDayCell({
   date,
   inCurrentMonth,
   isToday,
+  isDragHover,
   events,
   onDraftCreated,
   onEventClick,
+  onEventDragStart,
 }: MonthDayCellProps) {
   const calendars = useCalendarsStore((state) => state.calendars);
   const setSelectedDate = useShellStore((state) => state.setSelectedDate);
@@ -66,7 +70,8 @@ export function MonthDayCell({
   return (
     <div
       onClick={handleCellClick}
-      className={`flex min-h-0 flex-col gap-1 overflow-hidden border-b border-l border-border p-1 ${inCurrentMonth ? "" : "bg-surface-sunken"}`}
+      data-cell-date={date.toDateString()}
+      className={`flex min-h-0 flex-col gap-1 overflow-hidden border-b border-l border-border p-1 ${inCurrentMonth ? "" : "bg-surface-sunken"} ${isDragHover ? "bg-accent-soft" : ""}`}
     >
       <button
         type="button"
@@ -95,9 +100,18 @@ export function MonthDayCell({
             <button
               key={event.id}
               type="button"
+              onMouseDown={(domEvent) => {
+                domEvent.stopPropagation();
+                onEventDragStart(event, domEvent.clientX, domEvent.clientY);
+              }}
               onClick={(domEvent) => {
                 domEvent.stopPropagation();
-                onEventClick(event);
+                // Real mouse clicks are handled by the mousedown/mouseup
+                // drag-vs-click distance check started above; only keyboard
+                // activation (Enter/Space, event.detail === 0) reaches here.
+                if (domEvent.detail === 0) {
+                  onEventClick(event);
+                }
               }}
               className={`cursor-pointer truncate rounded-shell-sm px-1 text-left text-label-sm text-ink-inverse ${colorClass}`}
             >
