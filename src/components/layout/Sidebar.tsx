@@ -1,6 +1,7 @@
 import { Plus } from "lucide-react";
 import { MiniCalendar } from "./MiniCalendar";
 import { CalendarList } from "./CalendarList";
+import { Button } from "../ui/Button";
 
 interface SidebarProps {
   onCreateClick: () => void;
@@ -8,15 +9,14 @@ interface SidebarProps {
 
 export function Sidebar({ onCreateClick }: SidebarProps) {
   return (
-    <div className="flex flex-col gap-4 overflow-x-hidden overflow-y-auto py-4">
-      <button
-        type="button"
+    <div className="flex h-full flex-col gap-3 overflow-x-hidden overflow-y-auto py-6 pe-3">
+      <Button
+        leadingIcon={<Plus className="size-4" />}
         onClick={onCreateClick}
-        className="mx-4 flex items-center gap-2 self-start rounded-shell-md border border-border bg-surface px-4 py-2 text-body text-ink shadow-elevation-1 hover:bg-surface-hover"
+        className="ms-4 self-start"
       >
-        <Plus className="size-4" />
         Create
-      </button>
+      </Button>
       <MiniCalendar />
       <CalendarList />
     </div>

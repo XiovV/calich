@@ -28,6 +28,30 @@ _Avoid_: pending event, temp event
 A minutes-before-start offset attached to an Event, chosen from a fixed preset list (not free-form).
 _Avoid_: notification, alert
 
+**Day cell**:
+A single day's box in the Month view grid. Holds that day's Event chips and is the target of create-clicks and drag-to-move drops.
+_Avoid_: day box, tile
+
+**Event chip**:
+The compact, single-line rendering of an Event inside a Day cell, drawn in its Calendar's color and showing start time and title. The Month-view counterpart to the grid's timed event block.
+_Avoid_: pill, event bar
+
+**Adjacent-month day**:
+A Day cell belonging to the month before or after the one being displayed, shown to fill the fixed six-row grid. Rendered dimmed but fully live — its Events show, and it accepts creates, edits, and drops like any other Day cell.
+_Avoid_: overflow day, padding day, out-of-month day
+
+**Mini-month**:
+A compact, read-only month shown in the Year view — day numbers only, no Event chips. One of twelve laid out in a grid.
+_Avoid_: month thumbnail, small calendar
+
+**Event-presence dot**:
+The marker on a Mini-month day indicating it has at least one visible Event. A density hint only — it carries no Calendar color and no count.
+_Avoid_: event indicator, badge
+
+**Theme preference**:
+The user's chosen appearance — Light, Dark, or System — persisted locally and applied by toggling a `.dark` class on the document root. System defers to the OS setting; Light and Dark pin the appearance regardless of the OS. See ADR-0014.
+_Avoid_: color scheme, mode, dark-mode toggle
+
 ## Authentication
 
 **User**:

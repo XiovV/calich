@@ -3,6 +3,7 @@ import { useShellStore } from "../lib/shellStore";
 import type { Event } from "../lib/event";
 import type { DraftBlock } from "../lib/gridTime";
 import { TimeGrid } from "./TimeGrid";
+import { MonthGrid } from "./MonthGrid";
 
 interface CalendarViewProps {
   onDraftCreated: (day: Date, draft: DraftBlock) => void;
@@ -44,7 +45,9 @@ export function CalendarView({ onDraftCreated, onEventClick }: CalendarViewProps
       );
     }
     case "month":
-      return <ComingSoonPlaceholder label="Month" />;
+      return (
+        <MonthGrid onDraftCreated={onDraftCreated} onEventClick={onEventClick} />
+      );
     case "year":
       return <ComingSoonPlaceholder label="Year" />;
   }

@@ -1,7 +1,6 @@
-import { useState } from "react";
+import { useState, type KeyboardEvent } from "react";
 import { format, setHours, setMinutes, startOfDay } from "date-fns";
 import { Dialog } from "@base-ui/react/dialog";
-import { Field } from "@base-ui/react/field";
 import type { DraftBlock } from "../lib/gridTime";
 import type { Event } from "../lib/event";
 import { getCheckedCalendars } from "../lib/calendar";
@@ -9,6 +8,9 @@ import { useShellStore } from "../lib/shellStore";
 import { useEventsStore } from "../lib/eventsStore";
 import { useCalendarsStore } from "../lib/calendarsStore";
 import { Select } from "../components/ui/Select";
+import { Input } from "../components/ui/Input";
+import { Button } from "../components/ui/Button";
+import { buttonClasses } from "../components/ui/buttonClasses";
 import { DeleteEventConfirmation } from "./DeleteEventConfirmation";
 
 type EventModalProps =
@@ -118,6 +120,22 @@ export function EventModal(props: EventModalProps) {
     onClose();
   }
 
+  // Submit on Enter from anywhere in the dialog (base-ui may leave focus on the
+  // popup rather than a field — e.g. when editing, where inputs are pre-filled),
+  // but not from buttons (Cancel/Delete/Select) or a textarea.
+  function handleEnterToSave(event: KeyboardEvent) {
+    const target = event.target as HTMLElement;
+    if (
+      event.key === "Enter" &&
+      !event.shiftKey &&
+      target.tagName !== "BUTTON" &&
+      target.tagName !== "TEXTAREA"
+    ) {
+      event.preventDefault();
+      handleSave();
+    }
+  }
+
   return (
     <>
       <Dialog.Root
@@ -127,95 +145,94 @@ export function EventModal(props: EventModalProps) {
         }}
       >
         <Dialog.Portal>
-          <Dialog.Backdrop className="fixed inset-0 bg-ink/20" />
-          <Dialog.Popup className="fixed top-1/2 left-1/2 w-96 -translate-x-1/2 -translate-y-1/2 rounded-shell-lg bg-surface p-5 shadow-elevation-3">
+          <Dialog.Backdrop className="fixed inset-0 z-40 bg-ink/20" />
+          <Dialog.Popup
+            onKeyDown={handleEnterToSave}
+            className="fixed top-1/2 left-1/2 z-50 w-96 -translate-x-1/2 -translate-y-1/2 rounded-shell-lg bg-surface p-5 shadow-elevation-3"
+          >
             <Dialog.Title className="text-heading font-medium text-ink">
               {mode === "edit" ? "Edit event" : "New event"}
             </Dialog.Title>
 
-            <Field.Root className="mt-4">
-              <Field.Label className="block text-label-sm text-ink-muted">
-                Title
-              </Field.Label>
-              <Field.Control
-                value={title}
-                onChange={(event) => setTitle(event.target.value)}
-                placeholder="Add title"
-                className="mt-1 w-full rounded-shell-sm border border-border px-3 py-1.5 text-body text-ink"
-              />
-            </Field.Root>
+            <form
+              onSubmit={(event) => {
+                event.preventDefault();
+                handleSave();
+              }}
+            >
+            <Input
+              label="Title"
+              value={title}
+              onChange={(event) => setTitle(event.target.value)}
+              placeholder="Add title"
+              className="mt-4"
+            />
 
             <div className="mt-4 flex gap-3">
-              <Field.Root className="flex-1">
-                <Field.Label className="block text-label-sm text-ink-muted">
-                  Start
-                </Field.Label>
-                <Field.Control
-                  type="time"
-                  value={startTime}
-                  onChange={(event) => setStartTime(event.target.value)}
-                  className="mt-1 w-full rounded-shell-sm border border-border px-3 py-1.5 text-body text-ink"
-                />
-              </Field.Root>
-              <Field.Root className="flex-1">
-                <Field.Label className="block text-label-sm text-ink-muted">
-                  End
-                </Field.Label>
-                <Field.Control
-                  type="time"
-                  value={endTime}
-                  onChange={(event) => setEndTime(event.target.value)}
-                  className="mt-1 w-full rounded-shell-sm border border-border px-3 py-1.5 text-body text-ink"
-                />
-              </Field.Root>
+              <Input
+                label="Start"
+                type="time"
+                value={startTime}
+                onChange={(event) => setStartTime(event.target.value)}
+                invalid={!isTimeRangeValid}
+                className="flex-1"
+              />
+              <Input
+                label="End"
+                type="time"
+                value={endTime}
+                onChange={(event) => setEndTime(event.target.value)}
+                invalid={!isTimeRangeValid}
+                className="flex-1"
+              />
             </div>
             {!isTimeRangeValid && (
-              <p className="mt-1 text-label-sm text-calendar-tomato">
+              <p className="mt-1 text-label-sm text-danger">
                 End time must be after start time.
               </p>
             )}
 
             <div className="mt-4">
-              <p className="text-label-sm text-ink-muted">Calendar</p>
-              <div className="mt-1">
-                <Select
-                  value={calendarId}
-                  onValueChange={setCalendarId}
-                  options={calendarOptions.map((calendar) => ({
-                    value: calendar.id,
-                    label: calendar.name,
-                  }))}
-                  aria-label="Calendar"
-                />
-              </div>
+              <Select
+                label="Calendar"
+                value={calendarId}
+                onValueChange={setCalendarId}
+                options={calendarOptions.map((calendar) => ({
+                  value: calendar.id,
+                  label: calendar.name,
+                }))}
+              />
             </div>
 
             <div className="mt-5 flex items-center justify-between gap-2">
               {mode === "edit" ? (
-                <button
-                  type="button"
+                <Button
+                  variant="outline"
+                  color="danger"
+                  size="small"
                   onClick={() => setIsDeleteConfirmOpen(true)}
-                  className="rounded-shell-sm border border-border px-3 py-1.5 text-body text-calendar-tomato hover:bg-surface-hover"
                 >
                   Delete
-                </button>
+                </Button>
               ) : (
                 <span />
               )}
               <div className="flex gap-2">
-                <Dialog.Close className="rounded-shell-sm border border-border px-3 py-1.5 text-body text-ink hover:bg-surface-hover">
+                <Dialog.Close
+                  className={buttonClasses({
+                    variant: "outline",
+                    color: "secondary",
+                    size: "small",
+                  })}
+                >
                   Cancel
                 </Dialog.Close>
-                <button
-                  type="button"
-                  onClick={handleSave}
-                  disabled={!canSave}
-                  className="rounded-shell-sm bg-accent px-3 py-1.5 text-body text-ink-inverse hover:bg-accent-hover disabled:opacity-50"
-                >
+                <Button type="submit" size="small" disabled={!canSave}>
                   Save
-                </button>
+                </Button>
               </div>
             </div>
+            </form>
           </Dialog.Popup>
         </Dialog.Portal>
       </Dialog.Root>

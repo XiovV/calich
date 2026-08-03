@@ -1,7 +1,8 @@
 import { useState } from "react";
 import { Navigate, useNavigate } from "react-router";
-import { Field } from "@base-ui/react/field";
 import { useAuthStore } from "../lib/authStore";
+import { Button } from "../components/ui/Button";
+import { Input } from "../components/ui/Input";
 
 export function LoginPage() {
   const status = useAuthStore((state) => state.status);
@@ -50,43 +51,35 @@ export function LoginPage() {
           Sign in to access your calendar.
         </p>
 
-        <Field.Root className="mt-5">
-          <Field.Label className="block text-label-sm text-ink-muted">
-            Username
-          </Field.Label>
-          <Field.Control
-            type="text"
-            value={username}
-            onChange={(domEvent) => setUsername(domEvent.target.value)}
-            placeholder="admin"
-            className="mt-1 w-full rounded-shell-sm border border-border px-3 py-1.5 text-body text-ink"
-          />
-        </Field.Root>
+        <Input
+          label="Username"
+          type="text"
+          value={username}
+          onChange={(domEvent) => setUsername(domEvent.target.value)}
+          placeholder="admin"
+          className="mt-5"
+        />
 
-        <Field.Root className="mt-4">
-          <Field.Label className="block text-label-sm text-ink-muted">
-            Password
-          </Field.Label>
-          <Field.Control
-            type="password"
-            value={password}
-            onChange={(domEvent) => setPassword(domEvent.target.value)}
-            placeholder="••••••••"
-            className="mt-1 w-full rounded-shell-sm border border-border px-3 py-1.5 text-body text-ink"
-          />
-        </Field.Root>
+        <Input
+          label="Password"
+          type="password"
+          value={password}
+          onChange={(domEvent) => setPassword(domEvent.target.value)}
+          placeholder="••••••••"
+          className="mt-4"
+        />
 
-        {error && (
-          <p className="mt-3 text-label-sm text-calendar-tomato">{error}</p>
-        )}
+        {error && <p className="mt-3 text-label-sm text-danger">{error}</p>}
 
-        <button
+        <Button
           type="submit"
-          disabled={!canSubmit || isSubmitting}
-          className="mt-5 w-full rounded-shell-sm bg-accent px-3 py-2 text-body text-ink-inverse hover:bg-accent-hover disabled:opacity-50"
+          fullWidth
+          disabled={!canSubmit}
+          loading={isSubmitting}
+          className="mt-5"
         >
           {isSubmitting ? "Signing in…" : "Sign in"}
-        </button>
+        </Button>
       </form>
     </div>
   );

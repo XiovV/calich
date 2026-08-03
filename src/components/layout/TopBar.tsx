@@ -4,6 +4,9 @@ import { navigateDate } from "../../lib/navigateDate";
 import { formatDateLabel } from "../../lib/formatDateLabel";
 import { UserMenu } from "../../auth/UserMenu";
 import { ViewSwitcher } from "./ViewSwitcher";
+import { ThemeToggle } from "./ThemeToggle";
+import { Button } from "../ui/Button";
+import { IconButton } from "../ui/IconButton";
 
 export function TopBar() {
   const selectedDate = useShellStore((state) => state.selectedDate);
@@ -20,31 +23,22 @@ export function TopBar() {
     <div className="flex h-full items-center gap-4 px-4">
       <span className="text-heading font-medium text-ink">Calendar</span>
 
-      <button
-        type="button"
+      <Button
+        variant="outline"
+        color="secondary"
+        size="small"
         onClick={goToToday}
-        className="rounded-shell-sm border border-border px-3 py-1.5 text-body text-ink hover:bg-surface-hover"
       >
         Today
-      </button>
+      </Button>
 
       <div className="flex items-center gap-1">
-        <button
-          type="button"
-          onClick={goToPrevious}
-          aria-label="Previous period"
-          className="rounded-shell-pill p-1.5 text-ink-muted hover:bg-surface-hover"
-        >
+        <IconButton onClick={goToPrevious} aria-label="Previous period">
           <ChevronLeft className="size-5" />
-        </button>
-        <button
-          type="button"
-          onClick={goToNext}
-          aria-label="Next period"
-          className="rounded-shell-pill p-1.5 text-ink-muted hover:bg-surface-hover"
-        >
+        </IconButton>
+        <IconButton onClick={goToNext} aria-label="Next period">
           <ChevronRight className="size-5" />
-        </button>
+        </IconButton>
       </div>
 
       <span className="text-heading text-ink">
@@ -53,13 +47,10 @@ export function TopBar() {
 
       <div className="ml-auto flex items-center gap-2">
         <ViewSwitcher />
-        <button
-          type="button"
-          aria-label="Settings"
-          className="rounded-shell-pill p-1.5 text-ink-muted hover:bg-surface-hover"
-        >
+        <ThemeToggle />
+        <IconButton aria-label="Settings">
           <Settings className="size-5" />
-        </button>
+        </IconButton>
         <UserMenu />
       </div>
     </div>

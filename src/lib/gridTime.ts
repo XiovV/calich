@@ -1,4 +1,4 @@
-export const PIXELS_PER_HOUR = 60;
+export const PIXELS_PER_HOUR = 48;
 export const HOURS_IN_DAY = 24;
 
 export function timeToY(date: Date, pixelsPerHour: number): number {

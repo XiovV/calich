@@ -25,7 +25,7 @@ export function Toaster() {
   return (
     <Toast.Provider toastManager={toastManager}>
       <Toast.Portal>
-        <Toast.Viewport className="fixed bottom-4 right-4 z-50 flex flex-col gap-2">
+        <Toast.Viewport className="fixed bottom-4 right-4 z-[70] flex flex-col gap-2">
           <ToastList />
         </Toast.Viewport>
       </Toast.Portal>

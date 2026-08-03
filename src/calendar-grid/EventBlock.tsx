@@ -12,6 +12,7 @@ export type EventDragKind = "move" | "resize-start" | "resize-end";
 interface EventBlockProps {
   layout: EventLayout;
   pixelsPerHour: number;
+  now: Date;
   onEventClick: (event: Event) => void;
   onDragStart: (
     event: Event,
@@ -24,10 +25,12 @@ interface EventBlockProps {
 export function EventBlock({
   layout,
   pixelsPerHour,
+  now,
   onEventClick,
   onDragStart,
 }: EventBlockProps) {
   const { event, column, columnCount } = layout;
+  const isPast = event.end < now;
   const calendars = useCalendarsStore((state) => state.calendars);
   const calendar = getCalendarById(calendars, event.calendarId);
   const colorClass = calendar
@@ -79,6 +82,7 @@ export function EventBlock({
         start={event.start}
         end={event.end}
         colorClass={colorClass}
+        isPast={isPast}
       />
       <div
         onMouseDown={(domEvent) => handleEdgeMouseDown(domEvent, "resize-end")}
