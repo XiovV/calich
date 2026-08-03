@@ -57,6 +57,8 @@ func New(logger *slog.Logger, authHandler *handlers.AuthHandler, calendarHandler
 			r.Get("/{id}", eventHandler.Get)
 			r.Patch("/{id}", eventHandler.Update)
 			r.Delete("/{id}", eventHandler.Delete)
+			r.Post("/{id}/exceptions", eventHandler.AddException)
+			r.Post("/{id}/reparent", eventHandler.Reparent)
 		})
 	})
 

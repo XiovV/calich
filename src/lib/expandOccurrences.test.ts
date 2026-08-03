@@ -111,4 +111,81 @@ describe("expandOccurrences", () => {
     expect(occurrences[0].start.getDate()).toBe(3);
     expect(occurrences[1].start.getDate()).toBe(10);
   });
+
+  it("drops an Occurrence whose start matches an Exception (exdate)", () => {
+    const event = makeEvent({
+      rrule: "FREQ=WEEKLY;BYDAY=TU",
+      exdates: [new Date(2026, 0, 13, 9, 0)],
+    });
+    const occurrences = expandOccurrences(
+      [event],
+      new Date(2026, 0, 1),
+      new Date(2026, 0, 27),
+    );
+    const dates = occurrences.map((o) => o.start.getDate()).sort((a, b) => a - b);
+    expect(dates).toEqual([6, 20]);
+  });
+
+  it("substitutes an Override for the Occurrence it replaces", () => {
+    const master = makeEvent({ rrule: "FREQ=WEEKLY;BYDAY=TU" });
+    const override = makeEvent({
+      id: "evt-2",
+      title: "Standup (moved)",
+      parentId: master.id,
+      recurrenceId: new Date(2026, 0, 13, 9, 0),
+      start: new Date(2026, 0, 13, 14, 0),
+      end: new Date(2026, 0, 13, 14, 30),
+    });
+
+    const occurrences = expandOccurrences(
+      [master, override],
+      new Date(2026, 0, 1),
+      new Date(2026, 0, 27),
+    );
+
+    expect(occurrences).toHaveLength(3);
+    const jan13 = occurrences.find((o) => o.start.getDate() === 13);
+    expect(jan13?.event).toBe(override);
+    expect(jan13?.start).toEqual(override.start);
+    expect(jan13?.end).toEqual(override.end);
+  });
+
+  it("does not expand an Override as its own series", () => {
+    const master = makeEvent({ rrule: "FREQ=WEEKLY;BYDAY=TU" });
+    const override = makeEvent({
+      id: "evt-2",
+      parentId: master.id,
+      recurrenceId: new Date(2026, 0, 13, 9, 0),
+      start: new Date(2026, 0, 13, 14, 0),
+      end: new Date(2026, 0, 13, 14, 30),
+    });
+
+    const occurrences = expandOccurrences(
+      [override],
+      new Date(2026, 0, 1),
+      new Date(2026, 0, 27),
+    );
+
+    expect(occurrences).toHaveLength(0);
+  });
+
+  it("omits an Override outside the window even though its parent's slot is inside it", () => {
+    const master = makeEvent({ rrule: "FREQ=WEEKLY;BYDAY=TU" });
+    const override = makeEvent({
+      id: "evt-2",
+      parentId: master.id,
+      recurrenceId: new Date(2026, 0, 13, 9, 0),
+      start: new Date(2026, 1, 20, 9, 0),
+      end: new Date(2026, 1, 20, 9, 30),
+    });
+
+    const occurrences = expandOccurrences(
+      [master, override],
+      new Date(2026, 0, 1),
+      new Date(2026, 0, 27),
+    );
+
+    expect(occurrences.some((o) => o.start.getDate() === 13)).toBe(false);
+    expect(occurrences).toHaveLength(2);
+  });
 });

@@ -15,14 +15,13 @@ import { occurrenceKey, seriesEditChanges, type Occurrence } from "../lib/occurr
 import { WEEKDAY_SHORT_NAMES } from "../lib/rruleParts";
 import { MonthDayCell } from "./MonthDayCell";
 import { MonthEventDragPreview } from "./MonthEventDragPreview";
-import type { Event } from "../lib/event";
 import type { DraftBlock } from "../lib/gridTime";
 
 const CLICK_DISTANCE_THRESHOLD_PX = 4;
 
 interface MonthGridProps {
   onDraftCreated: (day: Date, draft: DraftBlock) => void;
-  onEventClick: (event: Event) => void;
+  onOccurrenceClick: (occurrence: Occurrence) => void;
 }
 
 interface EventDragOrigin {
@@ -45,7 +44,7 @@ function getCellDateAtPoint(
   return cell?.date ?? null;
 }
 
-export function MonthGrid({ onDraftCreated, onEventClick }: MonthGridProps) {
+export function MonthGrid({ onDraftCreated, onOccurrenceClick }: MonthGridProps) {
   const selectedDate = useShellStore((state) => state.selectedDate);
   const updateEvent = useEventsStore((state) => state.updateEvent);
   const calendars = useCalendarsStore((state) => state.calendars);
@@ -111,7 +110,7 @@ export function MonthGrid({ onDraftCreated, onEventClick }: MonthGridProps) {
       const distance = Math.max(Math.abs(deltaX), Math.abs(deltaY));
 
       if (distance < CLICK_DISTANCE_THRESHOLD_PX) {
-        onEventClick(origin.occurrence.event);
+        onOccurrenceClick(origin.occurrence);
       } else {
         suppressNextCellClickRef.current = true;
         setTimeout(() => {
@@ -127,7 +126,7 @@ export function MonthGrid({ onDraftCreated, onEventClick }: MonthGridProps) {
           );
           updateEvent(
             origin.occurrence.event.id,
-            seriesEditChanges(origin.occurrence.event, start, end),
+            seriesEditChanges(origin.occurrence, start, end),
           );
         }
       }
@@ -143,7 +142,7 @@ export function MonthGrid({ onDraftCreated, onEventClick }: MonthGridProps) {
       window.removeEventListener("mousemove", handleMouseMove);
       window.removeEventListener("mouseup", handleMouseUp);
     };
-  }, [activeDrag, cells, onEventClick, updateEvent]);
+  }, [activeDrag, cells, onOccurrenceClick, updateEvent]);
 
   const dragCalendar = activeDrag
     ? getCalendarById(calendars, activeDrag.occurrence.event.calendarId)
@@ -177,7 +176,7 @@ export function MonthGrid({ onDraftCreated, onEventClick }: MonthGridProps) {
               (occurrence) => occurrenceKey(occurrence) !== draggingKey,
             )}
             onDraftCreated={handleDraftCreated}
-            onOccurrenceClick={(occurrence) => onEventClick(occurrence.event)}
+            onOccurrenceClick={onOccurrenceClick}
             onOccurrenceDragStart={handleOccurrenceDragStart}
           />
         ))}

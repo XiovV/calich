@@ -8,7 +8,6 @@ import { layoutOverlappingEvents } from "../lib/layoutOverlappingEvents";
 import { columnLayoutToBox } from "../lib/eventBlockGeometry";
 import { useVisibleOccurrences } from "../hooks/useVisibleOccurrences";
 import { occurrenceKey, seriesEditChanges, type Occurrence } from "../lib/occurrence";
-import type { Event } from "../lib/event";
 import {
   PIXELS_PER_HOUR,
   computeMovedEventTimes,
@@ -27,7 +26,7 @@ const CLICK_DISTANCE_THRESHOLD_PX = 4;
 interface TimeGridProps {
   daysToShow: Date[];
   onDraftCreated: (day: Date, draft: DraftBlock) => void;
-  onEventClick: (event: Event) => void;
+  onOccurrenceClick: (occurrence: Occurrence) => void;
 }
 
 interface EventDragOrigin {
@@ -117,7 +116,7 @@ function computeEventDragPreview(
 export function TimeGrid({
   daysToShow,
   onDraftCreated,
-  onEventClick,
+  onOccurrenceClick,
 }: TimeGridProps) {
   const updateEvent = useEventsStore((state) => state.updateEvent);
   const calendars = useCalendarsStore((state) => state.calendars);
@@ -194,12 +193,12 @@ export function TimeGrid({
       const distance = Math.max(Math.abs(deltaX), Math.abs(deltaY));
 
       if (origin.kind === "move" && distance < CLICK_DISTANCE_THRESHOLD_PX) {
-        onEventClick(origin.occurrence.event);
+        onOccurrenceClick(origin.occurrence);
       } else if (distance >= CLICK_DISTANCE_THRESHOLD_PX) {
         const { start, end } = computeDragTimes(origin, deltaX, deltaY);
         updateEvent(
           origin.occurrence.event.id,
-          seriesEditChanges(origin.occurrence.event, start, end),
+          seriesEditChanges(origin.occurrence, start, end),
         );
       }
 
@@ -213,7 +212,7 @@ export function TimeGrid({
       window.removeEventListener("mousemove", handleMouseMove);
       window.removeEventListener("mouseup", handleMouseUp);
     };
-  }, [activeDrag, onEventClick, updateEvent]);
+  }, [activeDrag, onOccurrenceClick, updateEvent]);
 
   const dragPreview = activeDrag
     ? computeEventDragPreview(
@@ -253,7 +252,7 @@ export function TimeGrid({
                 pixelsPerHour={PIXELS_PER_HOUR}
                 now={now}
                 onDraftCreated={onDraftCreated}
-                onOccurrenceClick={(occurrence) => onEventClick(occurrence.event)}
+                onOccurrenceClick={onOccurrenceClick}
                 onOccurrenceDragStart={handleOccurrenceDragStart}
                 draggingKey={
                   activeDrag ? occurrenceKey(activeDrag.occurrence) : null

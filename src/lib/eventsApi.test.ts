@@ -173,6 +173,132 @@ describe("eventsApi.update", () => {
   });
 });
 
+describe("eventsApi.list overrides and exceptions", () => {
+  it("maps parentId/recurrenceId and exdates onto the mapped Event", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(200, [
+        {
+          ...wireEvent,
+          rrule: "FREQ=DAILY",
+          exdates: ["2026-01-03T09:00:00Z"],
+        },
+        {
+          id: "evt-2",
+          calendarId: "cal-1",
+          title: "Standup (moved)",
+          start: "2026-01-02T10:00:00Z",
+          end: "2026-01-02T10:30:00Z",
+          parentId: "evt-1",
+          recurrenceId: "2026-01-02T09:00:00Z",
+        },
+      ]),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const events = await eventsApi.list("token-123");
+
+    expect(events[0].exdates).toEqual([new Date("2026-01-03T09:00:00Z")]);
+    expect(events[1].parentId).toBe("evt-1");
+    expect(events[1].recurrenceId).toEqual(new Date("2026-01-02T09:00:00Z"));
+  });
+});
+
+describe("eventsApi.create override", () => {
+  it("sends parentId/recurrenceId for an override", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(201, {
+        id: "evt-2",
+        calendarId: "cal-1",
+        title: "Standup (moved)",
+        start: "2026-01-02T10:00:00Z",
+        end: "2026-01-02T10:30:00Z",
+        parentId: "evt-1",
+        recurrenceId: "2026-01-02T09:00:00Z",
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const created = await eventsApi.create("token-123", {
+      id: "evt-2",
+      calendarId: "cal-1",
+      title: "Standup (moved)",
+      start: new Date("2026-01-02T10:00:00Z"),
+      end: new Date("2026-01-02T10:30:00Z"),
+      parentId: "evt-1",
+      recurrenceId: new Date("2026-01-02T09:00:00Z"),
+    });
+
+    expect(created.parentId).toBe("evt-1");
+    expect(created.recurrenceId).toEqual(new Date("2026-01-02T09:00:00Z"));
+    const body = JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string);
+    expect(body.parentId).toBe("evt-1");
+    expect(body.recurrenceId).toBe("2026-01-02T09:00:00.000Z");
+  });
+});
+
+describe("eventsApi.addException", () => {
+  it("posts the occurrence start", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(emptyResponse(204));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      eventsApi.addException(
+        "token-123",
+        "evt-1",
+        new Date("2026-01-02T09:00:00Z"),
+      ),
+    ).resolves.toBeUndefined();
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/events/evt-1/exceptions",
+      expect.objectContaining({
+        method: "POST",
+        credentials: "include",
+        body: JSON.stringify({ occurrenceStart: "2026-01-02T09:00:00.000Z" }),
+      }),
+    );
+  });
+
+  it("throws on failure", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(404, { error: { code: "not_found", message: "event not found" } }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      eventsApi.addException("token-123", "evt-1", new Date()),
+    ).rejects.toMatchObject({ code: "not_found" });
+  });
+});
+
+describe("eventsApi.reparentSeries", () => {
+  it("posts the new parent and split boundary", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(emptyResponse(204));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      eventsApi.reparentSeries(
+        "token-123",
+        "old-master",
+        "new-master",
+        new Date("2026-01-05T00:00:00Z"),
+      ),
+    ).resolves.toBeUndefined();
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/events/old-master/reparent",
+      expect.objectContaining({
+        method: "POST",
+        credentials: "include",
+        body: JSON.stringify({
+          newParentId: "new-master",
+          fromStart: "2026-01-05T00:00:00.000Z",
+        }),
+      }),
+    );
+  });
+});
+
 describe("eventsApi.remove", () => {
   it("sends a DELETE request", async () => {
     const fetchMock = vi.fn().mockResolvedValue(emptyResponse(204));

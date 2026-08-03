@@ -30,10 +30,27 @@ type eventResponse struct {
 	Start      time.Time `json:"start"`
 	End        time.Time `json:"end"`
 	Rrule      string    `json:"rrule,omitempty"`
+	// ParentID and RecurrenceID are present only on an Override — a standalone
+	// Event that replaces one Occurrence of its parent's series (ADR-0016).
+	ParentID     *string    `json:"parentId,omitempty"`
+	RecurrenceID *time.Time `json:"recurrenceId,omitempty"`
+	// Exdates lists a Master's cancelled Occurrence starts (Exceptions).
+	// Always absent on an Override.
+	Exdates []time.Time `json:"exdates,omitempty"`
 }
 
 func toEventResponse(e repository.Event) eventResponse {
-	return eventResponse{ID: e.ID, CalendarID: e.CalendarID, Title: e.Title, Start: e.Start, End: e.End, Rrule: e.Rrule}
+	return eventResponse{
+		ID:           e.ID,
+		CalendarID:   e.CalendarID,
+		Title:        e.Title,
+		Start:        e.Start,
+		End:          e.End,
+		Rrule:        e.Rrule,
+		ParentID:     e.ParentID,
+		RecurrenceID: e.RecurrenceID,
+		Exdates:      e.Exdates,
+	}
 }
 
 func (h *EventHandler) List(w http.ResponseWriter, r *http.Request) {
@@ -81,12 +98,14 @@ func parseOptionalTimeParam(w http.ResponseWriter, r *http.Request, name string)
 }
 
 type createEventRequest struct {
-	ID         string    `json:"id"`
-	CalendarID string    `json:"calendarId"`
-	Title      string    `json:"title"`
-	Start      time.Time `json:"start"`
-	End        time.Time `json:"end"`
-	Rrule      string    `json:"rrule"`
+	ID           string     `json:"id"`
+	CalendarID   string     `json:"calendarId"`
+	Title        string     `json:"title"`
+	Start        time.Time  `json:"start"`
+	End          time.Time  `json:"end"`
+	Rrule        string     `json:"rrule"`
+	ParentID     *string    `json:"parentId,omitempty"`
+	RecurrenceID *time.Time `json:"recurrenceId,omitempty"`
 }
 
 func (h *EventHandler) Create(w http.ResponseWriter, r *http.Request) {
@@ -107,7 +126,7 @@ func (h *EventHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	event, err := h.events.Create(r.Context(), userID, req.ID, req.CalendarID, req.Title, req.Start, req.End, req.Rrule)
+	event, err := h.events.Create(r.Context(), userID, req.ID, req.CalendarID, req.Title, req.Start, req.End, req.Rrule, req.ParentID, req.RecurrenceID)
 	switch {
 	case errors.Is(err, service.ErrInvalidTitle):
 		httpresponse.Error(w, http.StatusBadRequest, "invalid_request", "title must not be empty")
@@ -117,6 +136,15 @@ func (h *EventHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	case errors.Is(err, service.ErrInvalidRecurrenceRule):
 		httpresponse.Error(w, http.StatusBadRequest, "invalid_request", "recurrence rule is invalid")
+		return
+	case errors.Is(err, service.ErrInvalidOverride):
+		httpresponse.Error(w, http.StatusBadRequest, "invalid_request", "an override must not have its own recurrence rule, and requires a recurrence id")
+		return
+	case errors.Is(err, service.ErrParentIsOverride):
+		httpresponse.Error(w, http.StatusBadRequest, "invalid_request", "parent event must be a master, not an override")
+		return
+	case errors.Is(err, service.ErrParentNotFound):
+		httpresponse.Error(w, http.StatusBadRequest, "invalid_request", "parent event not found")
 		return
 	case errors.Is(err, service.ErrCalendarNotFound):
 		httpresponse.Error(w, http.StatusBadRequest, "invalid_request", "calendar not found")
@@ -215,6 +243,83 @@ func (h *EventHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil {
 		httpresponse.Error(w, http.StatusInternalServerError, "internal_error", "failed to delete event")
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+type createExceptionRequest struct {
+	OccurrenceStart time.Time `json:"occurrenceStart"`
+}
+
+// AddException cancels a single Occurrence of a recurring master (deleting
+// "this event" on a recurring Occurrence), storing it as an iCalendar EXDATE
+// (ADR-0016).
+func (h *EventHandler) AddException(w http.ResponseWriter, r *http.Request) {
+	userID, ok := httpauth.UserIDFromContext(r.Context())
+	if !ok {
+		httpresponse.Error(w, http.StatusUnauthorized, "unauthorized", "authentication required")
+		return
+	}
+
+	id := chi.URLParam(r, "id")
+
+	var req createExceptionRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httpresponse.Error(w, http.StatusBadRequest, "invalid_request", "request body must be valid JSON")
+		return
+	}
+
+	err := h.events.AddException(r.Context(), userID, id, req.OccurrenceStart)
+	switch {
+	case errors.Is(err, service.ErrParentNotFound):
+		httpresponse.Error(w, http.StatusNotFound, "not_found", "event not found")
+		return
+	case errors.Is(err, service.ErrParentIsOverride):
+		httpresponse.Error(w, http.StatusBadRequest, "invalid_request", "parent event must be a master, not an override")
+		return
+	case errors.Is(err, service.ErrParentNotRecurring):
+		httpresponse.Error(w, http.StatusBadRequest, "invalid_request", "parent event does not recur")
+		return
+	case err != nil:
+		httpresponse.Error(w, http.StatusInternalServerError, "internal_error", "failed to add exception")
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+type reparentRequest struct {
+	NewParentID string    `json:"newParentId"`
+	FromStart   time.Time `json:"fromStart"`
+}
+
+// Reparent moves every Override/Exception of the named event at-or-after
+// fromStart to belong to newParentId instead — the "this and following" split
+// reparenting overrides/exceptions at the boundary (ADR-0016).
+func (h *EventHandler) Reparent(w http.ResponseWriter, r *http.Request) {
+	userID, ok := httpauth.UserIDFromContext(r.Context())
+	if !ok {
+		httpresponse.Error(w, http.StatusUnauthorized, "unauthorized", "authentication required")
+		return
+	}
+
+	id := chi.URLParam(r, "id")
+
+	var req reparentRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httpresponse.Error(w, http.StatusBadRequest, "invalid_request", "request body must be valid JSON")
+		return
+	}
+
+	err := h.events.ReparentFrom(r.Context(), userID, id, req.NewParentID, req.FromStart)
+	switch {
+	case errors.Is(err, service.ErrParentNotFound):
+		httpresponse.Error(w, http.StatusNotFound, "not_found", "event not found")
+		return
+	case err != nil:
+		httpresponse.Error(w, http.StatusInternalServerError, "internal_error", "failed to reparent series")
 		return
 	}
 

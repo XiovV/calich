@@ -18,7 +18,16 @@ type Event struct {
 	// Rrule is the event's iCalendar RRULE as opaque text, empty when the event
 	// does not recur. Stored and returned verbatim; expansion happens on the
 	// frontend (ADR-0016).
-	Rrule     string
+	Rrule string
+	// ParentID and RecurrenceID are set together and only on an Override: a
+	// standalone Event that replaces one Occurrence of its parent's series.
+	// Both are nil on a Master (recurring or not). See ADR-0016.
+	ParentID     *string
+	RecurrenceID *time.Time
+	// Exdates lists the cancelled Occurrence starts (Exceptions) for a Master.
+	// Not a column — populated by the service layer from event_exceptions when
+	// listing/reading a Master, so it is always empty on an Override.
+	Exdates   []time.Time
 	CreatedAt time.Time
 }
 
@@ -30,10 +39,10 @@ func NewEventRepository(db *sql.DB) *EventRepository {
 	return &EventRepository{db: db}
 }
 
-func (r *EventRepository) Create(ctx context.Context, id string, userID int64, calendarID, title string, start, end time.Time, rrule string) (Event, error) {
+func (r *EventRepository) Create(ctx context.Context, id string, userID int64, calendarID, title string, start, end time.Time, rrule string, parentID *string, recurrenceID *time.Time) (Event, error) {
 	if _, err := r.db.ExecContext(ctx,
-		`INSERT INTO events (id, user_id, calendar_id, title, "start", "end", rrule) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		id, userID, calendarID, title, start, end, rrule,
+		`INSERT INTO events (id, user_id, calendar_id, title, "start", "end", rrule, parent_id, recurrence_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		id, userID, calendarID, title, start, end, rrule, parentID, recurrenceID,
 	); err != nil {
 		return Event{}, fmt.Errorf("insert event: %w", err)
 	}
@@ -42,8 +51,8 @@ func (r *EventRepository) Create(ctx context.Context, id string, userID int64, c
 }
 
 func (r *EventRepository) GetByID(ctx context.Context, userID int64, id string) (Event, error) {
-	return r.scanEvent(r.db.QueryRowContext(ctx,
-		`SELECT id, user_id, calendar_id, title, "start", "end", rrule, created_at FROM events WHERE user_id = ? AND id = ?`,
+	return scanEvent(r.db.QueryRowContext(ctx,
+		`SELECT id, user_id, calendar_id, title, "start", "end", rrule, parent_id, recurrence_id, created_at FROM events WHERE user_id = ? AND id = ?`,
 		userID, id,
 	))
 }
@@ -52,7 +61,7 @@ func (r *EventRepository) GetByID(ctx context.Context, userID int64, id string) 
 // non-nil, only events overlapping that half-open range are returned; either
 // may be nil to leave that side of the range unbounded.
 func (r *EventRepository) ListByUser(ctx context.Context, userID int64, from, to *time.Time) ([]Event, error) {
-	query := `SELECT id, user_id, calendar_id, title, "start", "end", rrule, created_at FROM events WHERE user_id = ?`
+	query := `SELECT id, user_id, calendar_id, title, "start", "end", rrule, parent_id, recurrence_id, created_at FROM events WHERE user_id = ?`
 	args := []any{userID}
 
 	if from != nil {
@@ -73,8 +82,8 @@ func (r *EventRepository) ListByUser(ctx context.Context, userID int64, from, to
 
 	events := []Event{}
 	for rows.Next() {
-		var e Event
-		if err := rows.Scan(&e.ID, &e.UserID, &e.CalendarID, &e.Title, &e.Start, &e.End, &e.Rrule, &e.CreatedAt); err != nil {
+		e, err := scanEvent(rows)
+		if err != nil {
 			return nil, fmt.Errorf("scan event: %w", err)
 		}
 		events = append(events, e)
@@ -123,14 +132,54 @@ func (r *EventRepository) Delete(ctx context.Context, userID int64, id string) e
 	return nil
 }
 
-func (r *EventRepository) scanEvent(row *sql.Row) (Event, error) {
+// ReparentOverridesFrom moves every Override of oldParentID whose
+// recurrence_id is at-or-after fromStart to belong to newParentID instead —
+// the "this and following" split reparenting overrides at the boundary
+// (ADR-0016).
+func (r *EventRepository) ReparentOverridesFrom(ctx context.Context, userID int64, oldParentID, newParentID string, fromStart time.Time) error {
+	_, err := r.db.ExecContext(ctx,
+		`UPDATE events SET parent_id = ? WHERE user_id = ? AND parent_id = ? AND recurrence_id >= ?`,
+		newParentID, userID, oldParentID, fromStart,
+	)
+	if err != nil {
+		return fmt.Errorf("reparent overrides: %w", err)
+	}
+	return nil
+}
+
+// DeleteChildrenOf deletes every Override belonging to parentID (the master
+// keeps its own row). Used when a rule change forces the "All events" scope
+// and discards per-Occurrence edits (ADR-0016).
+func (r *EventRepository) DeleteChildrenOf(ctx context.Context, userID int64, parentID string) error {
+	_, err := r.db.ExecContext(ctx, `DELETE FROM events WHERE user_id = ? AND parent_id = ?`, userID, parentID)
+	if err != nil {
+		return fmt.Errorf("delete children: %w", err)
+	}
+	return nil
+}
+
+// scanner is satisfied by both *sql.Row and *sql.Rows, so scanEvent can hydrate
+// an Event from either a single-row query or a row within an iteration.
+type scanner interface {
+	Scan(dest ...any) error
+}
+
+func scanEvent(row scanner) (Event, error) {
 	var e Event
-	err := row.Scan(&e.ID, &e.UserID, &e.CalendarID, &e.Title, &e.Start, &e.End, &e.Rrule, &e.CreatedAt)
+	var parentID sql.NullString
+	var recurrenceID sql.NullTime
+	err := row.Scan(&e.ID, &e.UserID, &e.CalendarID, &e.Title, &e.Start, &e.End, &e.Rrule, &parentID, &recurrenceID, &e.CreatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Event{}, ErrNotFound
 	}
 	if err != nil {
 		return Event{}, fmt.Errorf("scan event: %w", err)
+	}
+	if parentID.Valid {
+		e.ParentID = &parentID.String
+	}
+	if recurrenceID.Valid {
+		e.RecurrenceID = &recurrenceID.Time
 	}
 	return e, nil
 }

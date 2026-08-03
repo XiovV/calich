@@ -39,7 +39,7 @@ func main() {
 	sessions := repository.NewSessionRepository(sqlDB)
 	authService := service.NewAuthService(users, sessions, jwtSecret, cfg.InitialUsername, cfg.InitialPassword)
 	calendarService := service.NewCalendarService(repository.NewCalendarRepository(sqlDB))
-	eventService := service.NewEventService(repository.NewEventRepository(sqlDB), calendarService)
+	eventService := service.NewEventService(repository.NewEventRepository(sqlDB), repository.NewEventExceptionRepository(sqlDB), calendarService)
 
 	ctx := context.Background()
 	bootstrapUser, bootstrapCreatedUser, err := authService.Bootstrap(ctx)

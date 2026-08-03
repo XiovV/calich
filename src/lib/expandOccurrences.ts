@@ -13,13 +13,39 @@ function overlapsWindow(
   return start < windowEnd && end > windowStart;
 }
 
+/** A Date's identity as an absolute instant, for keying exdates/overrides. */
+function instantKey(date: Date): number {
+  return date.getTime();
+}
+
+/** Every Override, grouped by parent id and keyed by the Occurrence it replaces. */
+function indexOverrides(events: Event[]): Map<string, Map<number, Event>> {
+  const byParent = new Map<string, Map<number, Event>>();
+  for (const event of events) {
+    if (!event.parentId || !event.recurrenceId) continue;
+    let byRecurrenceId = byParent.get(event.parentId);
+    if (!byRecurrenceId) {
+      byRecurrenceId = new Map();
+      byParent.set(event.parentId, byRecurrenceId);
+    }
+    byRecurrenceId.set(instantKey(event.recurrenceId), event);
+  }
+  return byParent;
+}
+
 /**
- * Expands each Event into the Occurrences that fall within
+ * Expands each Master Event into the Occurrences that fall within
  * `[windowStart, windowEnd)`. A non-recurring Event is a series of one — it
  * yields a single Occurrence when it overlaps the window. A recurring Event's
  * rule is expanded over the window only, so an unbounded ("Never ends") series
  * is always safe: `rule.between` is bounded by the window and never enumerates
  * the whole infinite series.
+ *
+ * Overrides (rows with `parentId`/`recurrenceId`) are never expanded on their
+ * own — they replace one Occurrence of their parent's series, so a matching
+ * Occurrence renders the override's own fields instead of the master's
+ * (`occurrence.event` becomes the override). Exceptions (`exdates` on the
+ * master) drop their Occurrence entirely. See ADR-0016.
  *
  * Pure: depends only on its arguments (and the ambient timezone, for wall-clock
  * conversion). Occurrences are returned unsorted.
@@ -29,9 +55,15 @@ export function expandOccurrences(
   windowStart: Date,
   windowEnd: Date,
 ): Occurrence[] {
+  const overridesByParent = indexOverrides(events);
   const occurrences: Occurrence[] = [];
 
   for (const event of events) {
+    // Overrides are substituted in below, not expanded as their own series.
+    if (event.parentId) continue;
+
+    const exdateKeys = new Set((event.exdates ?? []).map(instantKey));
+    const overridesByRecurrenceId = overridesByParent.get(event.id);
     const durationMs = event.end.getTime() - event.start.getTime();
 
     if (!event.rrule) {
@@ -58,6 +90,16 @@ export function expandOccurrences(
 
     for (const floatingStart of floatingStarts) {
       const start = fromFloating(floatingStart);
+      if (exdateKeys.has(instantKey(start))) continue;
+
+      const override = overridesByRecurrenceId?.get(instantKey(start));
+      if (override) {
+        if (overlapsWindow(override.start, override.end, windowStart, windowEnd)) {
+          occurrences.push({ event: override, start: override.start, end: override.end });
+        }
+        continue;
+      }
+
       const end = new Date(start.getTime() + durationMs);
       if (overlapsWindow(start, end, windowStart, windowEnd)) {
         occurrences.push({ event, start, end });

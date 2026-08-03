@@ -3,6 +3,12 @@ import { format, setHours, setMinutes, startOfDay } from "date-fns";
 import { Dialog } from "@base-ui/react/dialog";
 import type { DraftBlock } from "../lib/gridTime";
 import type { Event } from "../lib/event";
+import { isRecurringOccurrence, resolveMaster, type Occurrence } from "../lib/occurrence";
+import {
+  shouldDiscardChildren,
+  type EditScope,
+  type EventFieldChanges,
+} from "../lib/recurrenceScope";
 import {
   RECURRENCE_PRESETS,
   buildRule,
@@ -25,6 +31,8 @@ import { Button } from "../components/ui/Button";
 import { buttonClasses } from "../components/ui/buttonClasses";
 import { DeleteEventConfirmation } from "./DeleteEventConfirmation";
 import { CustomRecurrenceDialog } from "./CustomRecurrenceDialog";
+import { ScopePicker } from "./ScopePicker";
+import { DiscardRecurrenceWarning } from "./DiscardRecurrenceWarning";
 
 // The Repeat dropdown offers the fixed presets plus a "Custom…" entry that opens
 // the Custom recurrence dialog (issue #35).
@@ -32,7 +40,7 @@ type RepeatChoice = RecurrencePreset | "custom";
 
 type EventModalProps =
   | { mode: "create"; day: Date; draft: DraftBlock; onClose: () => void }
-  | { mode: "edit"; event: Event; onClose: () => void };
+  | { mode: "edit"; occurrence: Occurrence; onClose: () => void };
 
 interface InitialFormState {
   day: Date;
@@ -52,22 +60,25 @@ function timeStringToDate(day: Date, time: string): Date {
 
 function deriveInitialFormState(
   props: EventModalProps,
+  master: Event | undefined,
   firstCheckedCalendarId: string,
 ): InitialFormState {
   if (props.mode === "edit") {
-    const { event } = props;
-    // A stored rule is either one of the presets or a custom recurrence; edit
-    // re-opens whichever it was, with the custom dialog re-populated from it.
-    const matched = matchPreset(event.rrule, event.start);
-    const repeat: RepeatChoice = !event.rrule ? "none" : (matched ?? "custom");
+    const { occurrence } = props;
+    const { event } = occurrence;
+    // The Repeat dropdown always reflects the series' actual rule (the
+    // Master's), even when opening an Override, which never carries its own.
+    const rrule = master?.rrule;
+    const matched = matchPreset(rrule, occurrence.start);
+    const repeat: RepeatChoice = !rrule ? "none" : (matched ?? "custom");
     return {
-      day: startOfDay(event.start),
-      startTime: format(event.start, "HH:mm"),
-      endTime: format(event.end, "HH:mm"),
+      day: startOfDay(occurrence.start),
+      startTime: format(occurrence.start, "HH:mm"),
+      endTime: format(occurrence.end, "HH:mm"),
       title: event.title,
       calendarId: event.calendarId,
       repeat,
-      customRule: repeat === "custom" ? event.rrule : undefined,
+      customRule: repeat === "custom" ? rrule : undefined,
     };
   }
 
@@ -86,24 +97,38 @@ export function EventModal(props: EventModalProps) {
   const { mode, onClose } = props;
 
   const checkedCalendarIds = useShellStore((state) => state.checkedCalendarIds);
+  const events = useEventsStore((state) => state.events);
   const addEvent = useEventsStore((state) => state.addEvent);
   const updateEvent = useEventsStore((state) => state.updateEvent);
   const removeEvent = useEventsStore((state) => state.removeEvent);
+  const editOccurrence = useEventsStore((state) => state.editOccurrence);
+  const deleteOccurrence = useEventsStore((state) => state.deleteOccurrence);
   const calendars = useCalendarsStore((state) => state.calendars);
 
+  const isRecurring = mode === "edit" && isRecurringOccurrence(props.occurrence);
+  const master =
+    mode === "edit"
+      ? (resolveMaster(events, props.occurrence) ?? props.occurrence.event)
+      : undefined;
+  const masterHasChildren =
+    master !== undefined &&
+    (events.some((event) => event.parentId === master.id) ||
+      (master.exdates?.length ?? 0) > 0);
+
+  const eventForOptions = mode === "edit" ? props.occurrence.event : undefined;
   const checkedCalendars = getCheckedCalendars(calendars, checkedCalendarIds);
   // An event's calendar may have been unchecked (hidden) since it was created —
   // still include it as an option so its current selection isn't silently lost.
   const calendarOptions =
-    mode === "edit" && !checkedCalendars.some((c) => c.id === props.event.calendarId)
+    eventForOptions && !checkedCalendars.some((c) => c.id === eventForOptions.calendarId)
       ? [
           ...checkedCalendars,
-          ...calendars.filter((c) => c.id === props.event.calendarId),
+          ...calendars.filter((c) => c.id === eventForOptions.calendarId),
         ]
       : checkedCalendars;
 
   const [initial] = useState(() =>
-    deriveInitialFormState(props, checkedCalendars[0]?.id ?? ""),
+    deriveInitialFormState(props, master, checkedCalendars[0]?.id ?? ""),
   );
   const { day } = initial;
 
@@ -117,6 +142,11 @@ export function EventModal(props: EventModalProps) {
   );
   const [isCustomDialogOpen, setIsCustomDialogOpen] = useState(false);
   const [isDeleteConfirmOpen, setIsDeleteConfirmOpen] = useState(false);
+  const [pendingEditChanges, setPendingEditChanges] = useState<
+    (EventFieldChanges & { rrule?: string }) | null
+  >(null);
+  const [isDiscardWarningOpen, setIsDiscardWarningOpen] = useState(false);
+  const [isDeleteScopePickerOpen, setIsDeleteScopePickerOpen] = useState(false);
 
   // Preset labels are derived from the event's start date, so e.g. "Weekly on
   // Tuesday" tracks the day the event lives on.
@@ -159,33 +189,75 @@ export function EventModal(props: EventModalProps) {
 
     const start = timeStringToDate(day, startTime);
     const end = timeStringToDate(day, endTime);
-    const rrule =
-      repeat === "custom" ? customRule : buildRule(repeat, start);
+    const rrule = repeat === "custom" ? customRule : buildRule(repeat, start);
+    const changes = { calendarId, title: title.trim(), start, end, rrule };
 
-    if (mode === "edit") {
-      updateEvent(props.event.id, {
-        calendarId,
-        title: title.trim(),
-        start,
-        end,
-        rrule,
-      });
-    } else {
-      addEvent({
-        id: crypto.randomUUID(),
-        calendarId,
-        title: title.trim(),
-        start,
-        end,
-        rrule,
-      });
+    if (mode !== "edit") {
+      addEvent({ id: crypto.randomUUID(), ...changes });
+      onClose();
+      return;
     }
+
+    if (!isRecurring) {
+      updateEvent(props.occurrence.event.id, changes);
+      onClose();
+      return;
+    }
+
+    if (master && shouldDiscardChildren(master.rrule, rrule)) {
+      // A rule change is forced to "All events"; warn first only if there's
+      // something to lose.
+      if (masterHasChildren) {
+        setPendingEditChanges(changes);
+        setIsDiscardWarningOpen(true);
+        return;
+      }
+      editOccurrence(props.occurrence, "all", changes);
+      onClose();
+      return;
+    }
+
+    // The rule is unchanged — ask which Occurrences the edit applies to.
+    setPendingEditChanges(changes);
+  }
+
+  function handleConfirmDiscardWarning() {
+    if (mode === "edit" && pendingEditChanges) {
+      editOccurrence(props.occurrence, "all", pendingEditChanges);
+    }
+    setIsDiscardWarningOpen(false);
+    setPendingEditChanges(null);
     onClose();
+  }
+
+  function handleScopeConfirm(scope: EditScope) {
+    if (mode === "edit" && pendingEditChanges) {
+      editOccurrence(props.occurrence, scope, pendingEditChanges);
+    }
+    setPendingEditChanges(null);
+    onClose();
+  }
+
+  function handleDeleteClick() {
+    // A recurring Occurrence's scope picker doubles as its delete
+    // confirmation; a non-recurring Event still gets the plain "sure?" prompt.
+    if (mode === "edit" && isRecurring) {
+      setIsDeleteScopePickerOpen(true);
+      return;
+    }
+    setIsDeleteConfirmOpen(true);
   }
 
   function handleConfirmDelete() {
     if (mode !== "edit") return;
-    removeEvent(props.event.id);
+    removeEvent(props.occurrence.event.id);
+    onClose();
+  }
+
+  function handleDeleteScopeConfirm(scope: EditScope) {
+    if (mode === "edit") {
+      deleteOccurrence(props.occurrence, scope);
+    }
     onClose();
   }
 
@@ -297,7 +369,7 @@ export function EventModal(props: EventModalProps) {
                   variant="outline"
                   color="danger"
                   size="small"
-                  onClick={() => setIsDeleteConfirmOpen(true)}
+                  onClick={handleDeleteClick}
                 >
                   Delete
                 </Button>
@@ -337,9 +409,32 @@ export function EventModal(props: EventModalProps) {
       )}
       {mode === "edit" && isDeleteConfirmOpen && (
         <DeleteEventConfirmation
-          event={props.event}
+          event={props.occurrence.event}
           onConfirm={handleConfirmDelete}
           onClose={() => setIsDeleteConfirmOpen(false)}
+        />
+      )}
+      {mode === "edit" && isDeleteScopePickerOpen && (
+        <ScopePicker
+          action="Delete"
+          onConfirm={handleDeleteScopeConfirm}
+          onClose={() => setIsDeleteScopePickerOpen(false)}
+        />
+      )}
+      {pendingEditChanges && !isDiscardWarningOpen && (
+        <ScopePicker
+          action="Edit"
+          onConfirm={handleScopeConfirm}
+          onClose={() => setPendingEditChanges(null)}
+        />
+      )}
+      {isDiscardWarningOpen && (
+        <DiscardRecurrenceWarning
+          onConfirm={handleConfirmDiscardWarning}
+          onClose={() => {
+            setIsDiscardWarningOpen(false);
+            setPendingEditChanges(null);
+          }}
         />
       )}
     </>

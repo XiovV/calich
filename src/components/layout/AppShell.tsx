@@ -9,11 +9,11 @@ import { computeDefaultDraft, type DraftBlock } from "../../lib/gridTime";
 import { useCalendarsStore } from "../../lib/calendarsStore";
 import { useEventsStore } from "../../lib/eventsStore";
 import { useShellStore } from "../../lib/shellStore";
-import type { Event } from "../../lib/event";
+import { occurrenceKey, type Occurrence } from "../../lib/occurrence";
 
 type EventModalState =
   | { mode: "create"; day: Date; draft: DraftBlock }
-  | { mode: "edit"; event: Event }
+  | { mode: "edit"; occurrence: Occurrence }
   | null;
 
 export function AppShell() {
@@ -52,7 +52,9 @@ export function AppShell() {
             onDraftCreated={(day, draft) =>
               setEventModalState({ mode: "create", day, draft })
             }
-            onEventClick={(event) => setEventModalState({ mode: "edit", event })}
+            onOccurrenceClick={(occurrence) =>
+              setEventModalState({ mode: "edit", occurrence })
+            }
           />
         </main>
       </div>
@@ -67,9 +69,9 @@ export function AppShell() {
       )}
       {eventModalState?.mode === "edit" && (
         <EventModal
-          key={eventModalState.event.id}
+          key={occurrenceKey(eventModalState.occurrence)}
           mode="edit"
-          event={eventModalState.event}
+          occurrence={eventModalState.occurrence}
           onClose={() => setEventModalState(null)}
         />
       )}

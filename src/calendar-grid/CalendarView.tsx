@@ -1,6 +1,6 @@
 import { addDays, startOfWeek } from "date-fns";
 import { useShellStore } from "../lib/shellStore";
-import type { Event } from "../lib/event";
+import type { Occurrence } from "../lib/occurrence";
 import type { DraftBlock } from "../lib/gridTime";
 import { TimeGrid } from "./TimeGrid";
 import { MonthGrid } from "./MonthGrid";
@@ -8,10 +8,10 @@ import { YearGrid } from "./YearGrid";
 
 interface CalendarViewProps {
   onDraftCreated: (day: Date, draft: DraftBlock) => void;
-  onEventClick: (event: Event) => void;
+  onOccurrenceClick: (occurrence: Occurrence) => void;
 }
 
-export function CalendarView({ onDraftCreated, onEventClick }: CalendarViewProps) {
+export function CalendarView({ onDraftCreated, onOccurrenceClick }: CalendarViewProps) {
   const activeView = useShellStore((state) => state.activeView);
   const selectedDate = useShellStore((state) => state.selectedDate);
 
@@ -21,7 +21,7 @@ export function CalendarView({ onDraftCreated, onEventClick }: CalendarViewProps
         <TimeGrid
           daysToShow={[selectedDate]}
           onDraftCreated={onDraftCreated}
-          onEventClick={onEventClick}
+          onOccurrenceClick={onOccurrenceClick}
         />
       );
     case "week": {
@@ -33,13 +33,13 @@ export function CalendarView({ onDraftCreated, onEventClick }: CalendarViewProps
         <TimeGrid
           daysToShow={weekDays}
           onDraftCreated={onDraftCreated}
-          onEventClick={onEventClick}
+          onOccurrenceClick={onOccurrenceClick}
         />
       );
     }
     case "month":
       return (
-        <MonthGrid onDraftCreated={onDraftCreated} onEventClick={onEventClick} />
+        <MonthGrid onDraftCreated={onDraftCreated} onOccurrenceClick={onOccurrenceClick} />
       );
     case "year":
       return <YearGrid />;
