@@ -1,0 +1,126 @@
+import { describe, expect, it } from "vitest";
+import { buildMonthGrid, getEventsForDay } from "./monthGrid";
+import type { Event } from "./event";
+
+describe("buildMonthGrid", () => {
+  it("returns 42 cells", () => {
+    const grid = buildMonthGrid(new Date(2026, 7, 15));
+    expect(grid).toHaveLength(42);
+  });
+
+  it("starts every row on a Sunday", () => {
+    const grid = buildMonthGrid(new Date(2026, 7, 15));
+    for (let row = 0; row < 6; row++) {
+      expect(grid[row * 7].date.getDay()).toBe(0);
+    }
+  });
+
+  it("marks leading/trailing days from a month that starts on Saturday", () => {
+    // August 2026 starts on a Saturday, so the grid begins on Sunday, July 26.
+    const grid = buildMonthGrid(new Date(2026, 7, 15));
+
+    expect(grid[0].date).toEqual(new Date(2026, 6, 26));
+    expect(grid[0].inCurrentMonth).toBe(false);
+
+    // Leading days: July 26-31 (6 cells)
+    for (let i = 0; i < 6; i++) {
+      expect(grid[i].inCurrentMonth).toBe(false);
+    }
+
+    // In-month days: August 1-31 (31 cells)
+    for (let i = 6; i < 37; i++) {
+      expect(grid[i].date.getMonth()).toBe(7);
+      expect(grid[i].inCurrentMonth).toBe(true);
+    }
+
+    // Trailing days: September 1-5 (5 cells)
+    for (let i = 37; i < 42; i++) {
+      expect(grid[i].date.getMonth()).toBe(8);
+      expect(grid[i].inCurrentMonth).toBe(false);
+    }
+  });
+
+  it("still fills six rows for a month that starts on Sunday", () => {
+    // February 2026 starts on a Sunday and has 28 days, so it only spans
+    // 4 calendar rows on its own — the grid still pads to six.
+    const grid = buildMonthGrid(new Date(2026, 1, 10));
+
+    expect(grid).toHaveLength(42);
+    expect(grid[0].date).toEqual(new Date(2026, 1, 1));
+    expect(grid[0].inCurrentMonth).toBe(true);
+    expect(grid[27].date).toEqual(new Date(2026, 1, 28));
+    expect(grid[27].inCurrentMonth).toBe(true);
+    expect(grid[28].date).toEqual(new Date(2026, 2, 1));
+    expect(grid[28].inCurrentMonth).toBe(false);
+    expect(grid[41].date).toEqual(new Date(2026, 2, 14));
+    expect(grid[41].inCurrentMonth).toBe(false);
+  });
+
+  it("handles a December -> January year boundary", () => {
+    // December 2025 starts on a Monday, so the grid begins on Sunday,
+    // November 30, and trails into January 2026.
+    const grid = buildMonthGrid(new Date(2025, 11, 10));
+
+    expect(grid[0].date).toEqual(new Date(2025, 10, 30));
+    expect(grid[0].inCurrentMonth).toBe(false);
+
+    expect(grid[1].date).toEqual(new Date(2025, 11, 1));
+    expect(grid[1].inCurrentMonth).toBe(true);
+
+    expect(grid[31].date).toEqual(new Date(2025, 11, 31));
+    expect(grid[31].inCurrentMonth).toBe(true);
+
+    expect(grid[32].date).toEqual(new Date(2026, 0, 1));
+    expect(grid[32].inCurrentMonth).toBe(false);
+
+    expect(grid[41].date).toEqual(new Date(2026, 0, 10));
+    expect(grid[41].inCurrentMonth).toBe(false);
+  });
+});
+
+describe("getEventsForDay", () => {
+  function makeEvent(id: string, start: Date, end: Date): Event {
+    return { id, calendarId: "cal-1", title: id, start, end };
+  }
+
+  it("returns only events that fall on the given day", () => {
+    const day = new Date(2026, 7, 10);
+    const matching = makeEvent(
+      "on-day",
+      new Date(2026, 7, 10, 9, 0),
+      new Date(2026, 7, 10, 10, 0),
+    );
+    const other = makeEvent(
+      "other-day",
+      new Date(2026, 7, 11, 9, 0),
+      new Date(2026, 7, 11, 10, 0),
+    );
+
+    const result = getEventsForDay([matching, other], day);
+
+    expect(result).toEqual([matching]);
+  });
+
+  it("orders same-day events by start time", () => {
+    const day = new Date(2026, 7, 10);
+    const late = makeEvent(
+      "late",
+      new Date(2026, 7, 10, 14, 0),
+      new Date(2026, 7, 10, 15, 0),
+    );
+    const early = makeEvent(
+      "early",
+      new Date(2026, 7, 10, 8, 0),
+      new Date(2026, 7, 10, 9, 0),
+    );
+    const middle = makeEvent(
+      "middle",
+      new Date(2026, 7, 10, 11, 0),
+      new Date(2026, 7, 10, 12, 0),
+    );
+
+    const result = getEventsForDay([late, early, middle], day);
+
+    expect(result.map((event) => event.id)).toEqual(["early", "middle", "late"]);
+  });
+});

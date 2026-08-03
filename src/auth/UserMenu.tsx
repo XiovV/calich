@@ -2,6 +2,7 @@ import { Menu } from "@base-ui/react/menu";
 import { CircleUserRound, LogOut } from "lucide-react";
 import { useNavigate } from "react-router";
 import { useAuthStore } from "../lib/authStore";
+import { iconButtonClasses } from "../components/ui/iconButtonClasses";
 
 export function UserMenu() {
   const user = useAuthStore((state) => state.user);
@@ -17,14 +18,11 @@ export function UserMenu() {
 
   return (
     <Menu.Root>
-      <Menu.Trigger
-        aria-label="Account menu"
-        className="rounded-shell-pill p-1.5 text-ink-muted hover:bg-surface-hover"
-      >
+      <Menu.Trigger aria-label="Account menu" className={iconButtonClasses()}>
         <CircleUserRound className="size-5" />
       </Menu.Trigger>
       <Menu.Portal>
-        <Menu.Positioner sideOffset={4} align="end">
+        <Menu.Positioner sideOffset={4} align="end" className="z-[60]">
           <Menu.Popup className="rounded-shell-md border border-border bg-surface py-1 shadow-elevation-2">
             <div className="px-3 py-1.5 text-label-sm text-ink-muted">
               {user.username}

@@ -1,11 +1,14 @@
-import { useState } from "react";
+import { useState, type KeyboardEvent } from "react";
 import { Dialog } from "@base-ui/react/dialog";
-import { Field } from "@base-ui/react/field";
 import type { Calendar } from "../../lib/calendar";
 import { getNextUnusedColor } from "../../lib/calendarColors";
 import { useCalendarsStore } from "../../lib/calendarsStore";
 import { useShellStore } from "../../lib/shellStore";
 import { ColorSwatchPicker } from "./ColorSwatchPicker";
+import { Button } from "../ui/Button";
+import { buttonClasses } from "../ui/buttonClasses";
+import { Input } from "../ui/Input";
+import { fieldLabelClass } from "../ui/fieldStyles";
 
 type CalendarModalProps =
   | { mode: "create"; onClose: () => void }
@@ -43,6 +46,22 @@ export function CalendarModal(props: CalendarModalProps) {
     onClose();
   }
 
+  // Submit on Enter from anywhere in the dialog (base-ui may leave focus on the
+  // popup rather than a field — e.g. when editing, where the name is pre-filled),
+  // but not from buttons (Cancel/Save/color swatches).
+  function handleEnterToSave(event: KeyboardEvent) {
+    const target = event.target as HTMLElement;
+    if (
+      event.key === "Enter" &&
+      !event.shiftKey &&
+      target.tagName !== "BUTTON" &&
+      target.tagName !== "TEXTAREA"
+    ) {
+      event.preventDefault();
+      handleSave();
+    }
+  }
+
   return (
     <Dialog.Root
       open
@@ -51,44 +70,51 @@ export function CalendarModal(props: CalendarModalProps) {
       }}
     >
       <Dialog.Portal>
-        <Dialog.Backdrop className="fixed inset-0 bg-ink/20" />
-        <Dialog.Popup className="fixed top-1/2 left-1/2 w-80 -translate-x-1/2 -translate-y-1/2 rounded-shell-lg bg-surface p-5 shadow-elevation-3">
+        <Dialog.Backdrop className="fixed inset-0 z-40 bg-ink/20" />
+        <Dialog.Popup
+          onKeyDown={handleEnterToSave}
+          className="fixed top-1/2 left-1/2 z-50 w-80 -translate-x-1/2 -translate-y-1/2 rounded-shell-lg bg-surface p-5 shadow-elevation-3"
+        >
           <Dialog.Title className="text-heading font-medium text-ink">
             {mode === "edit" ? "Edit calendar" : "New calendar"}
           </Dialog.Title>
 
-          <Field.Root className="mt-4">
-            <Field.Label className="block text-label-sm text-ink-muted">
-              Name
-            </Field.Label>
-            <Field.Control
-              value={name}
-              onChange={(event) => setName(event.target.value)}
-              placeholder="Calendar name"
-              className="mt-1 w-full rounded-shell-sm border border-border px-3 py-1.5 text-body text-ink"
-            />
-          </Field.Root>
+          <form
+            onSubmit={(event) => {
+              event.preventDefault();
+              handleSave();
+            }}
+          >
+          <Input
+            label="Name"
+            value={name}
+            onChange={(event) => setName(event.target.value)}
+            placeholder="Calendar name"
+            className="mt-4"
+          />
 
           <div className="mt-4">
-            <p className="text-label-sm text-ink-muted">Color</p>
-            <div className="mt-1">
+            <p className={fieldLabelClass}>Color</p>
+            <div className="mt-2">
               <ColorSwatchPicker value={color} onValueChange={setColor} />
             </div>
           </div>
 
           <div className="mt-5 flex justify-end gap-2">
-            <Dialog.Close className="rounded-shell-sm border border-border px-3 py-1.5 text-body text-ink hover:bg-surface-hover">
+            <Dialog.Close
+              className={buttonClasses({
+                variant: "outline",
+                color: "secondary",
+                size: "small",
+              })}
+            >
               Cancel
             </Dialog.Close>
-            <button
-              type="button"
-              onClick={handleSave}
-              disabled={!canSave}
-              className="rounded-shell-sm bg-accent px-3 py-1.5 text-body text-ink-inverse hover:bg-accent-hover disabled:opacity-50"
-            >
+            <Button type="submit" size="small" disabled={!canSave}>
               Save
-            </button>
+            </Button>
           </div>
+          </form>
         </Dialog.Popup>
       </Dialog.Portal>
     </Dialog.Root>

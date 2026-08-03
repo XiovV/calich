@@ -1,5 +1,7 @@
+import { useId } from "react";
 import { Select as BaseSelect } from "@base-ui/react/select";
-import { ChevronDown } from "lucide-react";
+import { Check, ChevronDown } from "lucide-react";
+import { fieldLabelClass } from "./fieldStyles";
 
 interface SelectOption<T extends string> {
   value: T;
@@ -10,20 +12,32 @@ interface SelectProps<T extends string> {
   value: T;
   onValueChange: (value: T) => void;
   options: SelectOption<T>[];
+  label?: string;
   "aria-label"?: string;
 }
 
+// Styled after Immich's @immich/ui Select: a pill trigger with a ring that
+// lights up on open, a chevron, and a popup that picks up an indigo tint in
+// dark mode (dark:bg-primary-100) with a check on the selected item.
 export function Select<T extends string>({
   value,
   onValueChange,
   options,
+  label,
   "aria-label": ariaLabel,
 }: SelectProps<T>) {
+  const labelId = useId();
   return (
     <BaseSelect.Root value={value} onValueChange={(next) => onValueChange(next as T)}>
+      {label && (
+        <label id={labelId} className={`mb-1.5 block ${fieldLabelClass}`}>
+          {label}
+        </label>
+      )}
       <BaseSelect.Trigger
         aria-label={ariaLabel}
-        className="flex items-center gap-1 rounded-shell-sm border border-border bg-surface px-3 py-1.5 text-body text-ink hover:bg-surface-hover"
+        aria-labelledby={label ? labelId : undefined}
+        className="inline-flex items-center gap-1.5 rounded-shell-pill bg-surface-sunken px-4 py-1.5 text-body text-ink ring-1 ring-border transition-colors outline-none hover:bg-surface-hover data-[popup-open]:ring-2 data-[popup-open]:ring-accent"
       >
         <BaseSelect.Value>
           {(selected: T) => options.find((option) => option.value === selected)?.label}
@@ -33,15 +47,18 @@ export function Select<T extends string>({
         </BaseSelect.Icon>
       </BaseSelect.Trigger>
       <BaseSelect.Portal>
-        <BaseSelect.Positioner sideOffset={4}>
-          <BaseSelect.Popup className="rounded-shell-md border border-border bg-surface py-1 shadow-elevation-2">
+        <BaseSelect.Positioner sideOffset={4} className="z-[60]">
+          <BaseSelect.Popup className="min-w-[--anchor-width] rounded-shell-md border border-border bg-surface py-1.5 shadow-elevation-2 dark:bg-primary-100">
             {options.map((option) => (
               <BaseSelect.Item
                 key={option.value}
                 value={option.value}
-                className="cursor-default px-3 py-1.5 text-body text-ink data-[highlighted]:bg-surface-hover"
+                className="mx-1.5 flex cursor-default items-center gap-3 rounded-shell-sm px-3 py-1.5 text-body text-ink data-[highlighted]:bg-surface-hover dark:data-[highlighted]:bg-primary-200"
               >
                 <BaseSelect.ItemText>{option.label}</BaseSelect.ItemText>
+                <BaseSelect.ItemIndicator className="ms-auto flex">
+                  <Check className="size-4 text-accent" />
+                </BaseSelect.ItemIndicator>
               </BaseSelect.Item>
             ))}
           </BaseSelect.Popup>

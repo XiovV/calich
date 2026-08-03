@@ -148,6 +148,7 @@ export function DayColumn({
           key={layout.event.id}
           layout={layout}
           pixelsPerHour={pixelsPerHour}
+          now={now}
           onEventClick={onEventClick}
           onDragStart={onEventDragStart}
         />

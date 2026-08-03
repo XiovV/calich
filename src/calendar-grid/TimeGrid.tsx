@@ -119,6 +119,7 @@ export function TimeGrid({
   const updateEvent = useEventsStore((state) => state.updateEvent);
   const calendars = useCalendarsStore((state) => state.calendars);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const headerRef = useRef<HTMLDivElement>(null);
   const daysContainerRef = useRef<HTMLDivElement>(null);
   const [now, setNow] = useState(() => new Date());
 
@@ -141,7 +142,8 @@ export function TimeGrid({
   useEffect(() => {
     const container = scrollRef.current;
     if (!container) return;
-    const nowY = timeToY(new Date(), PIXELS_PER_HOUR);
+    const headerHeight = headerRef.current?.offsetHeight ?? 0;
+    const nowY = headerHeight + timeToY(new Date(), PIXELS_PER_HOUR);
     container.scrollTop = Math.max(0, nowY - container.clientHeight / 2);
   }, []);
 
@@ -207,39 +209,44 @@ export function TimeGrid({
 
   return (
     <div className="flex h-full flex-col">
-      <div className="flex border-b border-border">
-        <div className="w-14 shrink-0" />
-        {daysToShow.map((day) => (
-          <div
-            key={day.toISOString()}
-            className="flex-1 border-l border-border py-2 text-center"
-          >
-            <p className="text-label-sm text-ink-muted">{format(day, "EEE")}</p>
-            <p className="text-body text-ink">{format(day, "d")}</p>
-          </div>
-        ))}
-      </div>
-      <div ref={scrollRef} className="flex flex-1 overflow-y-auto">
-        <TimeAxis pixelsPerHour={PIXELS_PER_HOUR} />
-        <div ref={daysContainerRef} className="flex flex-1">
+      <div ref={scrollRef} className="flex-1 overflow-y-auto">
+        <div
+          ref={headerRef}
+          className="sticky top-0 z-10 flex border-b border-border bg-surface"
+        >
+          <div className="w-14 shrink-0" />
           {daysToShow.map((day) => (
-            <DayColumn
+            <div
               key={day.toISOString()}
-              day={day}
-              events={visibleEvents}
-              pixelsPerHour={PIXELS_PER_HOUR}
-              now={now}
-              onDraftCreated={onDraftCreated}
-              onEventClick={onEventClick}
-              onEventDragStart={handleEventDragStart}
-              draggingEventId={activeDrag?.event.id ?? null}
-              eventDragPreview={
-                dragPreview && isSameDay(dragPreview.day, day)
-                  ? dragPreview.data
-                  : null
-              }
-            />
+              className="flex-1 border-l border-border py-2 text-center"
+            >
+              <p className="text-label-sm text-ink-muted">{format(day, "EEE")}</p>
+              <p className="text-body text-ink">{format(day, "d")}</p>
+            </div>
           ))}
+        </div>
+        <div className="flex">
+          <TimeAxis pixelsPerHour={PIXELS_PER_HOUR} />
+          <div ref={daysContainerRef} className="flex flex-1">
+            {daysToShow.map((day) => (
+              <DayColumn
+                key={day.toISOString()}
+                day={day}
+                events={visibleEvents}
+                pixelsPerHour={PIXELS_PER_HOUR}
+                now={now}
+                onDraftCreated={onDraftCreated}
+                onEventClick={onEventClick}
+                onEventDragStart={handleEventDragStart}
+                draggingEventId={activeDrag?.event.id ?? null}
+                eventDragPreview={
+                  dragPreview && isSameDay(dragPreview.day, day)
+                    ? dragPreview.data
+                    : null
+                }
+              />
+            ))}
+          </div>
         </div>
       </div>
     </div>

@@ -5,6 +5,20 @@
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>calendar</title>
+    <script>
+      // Apply the stored theme preference before first paint to avoid a flash.
+      // Mirrors src/lib/themeStore.ts — keep the storage key in sync.
+      (function () {
+        try {
+          var pref = localStorage.getItem("calendar-theme");
+          var dark =
+            pref === "dark" ||
+            ((pref === null || pref === "system") &&
+              window.matchMedia("(prefers-color-scheme: dark)").matches);
+          if (dark) document.documentElement.classList.add("dark");
+        } catch (e) {}
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

@@ -1,5 +1,7 @@
 import { AlertDialog } from "@base-ui/react/alert-dialog";
 import type { Event } from "../lib/event";
+import { Button } from "../components/ui/Button";
+import { buttonClasses } from "../components/ui/buttonClasses";
 
 interface DeleteEventConfirmationProps {
   event: Event;
@@ -20,8 +22,8 @@ export function DeleteEventConfirmation({
       }}
     >
       <AlertDialog.Portal>
-        <AlertDialog.Backdrop className="fixed inset-0 bg-ink/20" />
-        <AlertDialog.Popup className="fixed top-1/2 left-1/2 w-80 -translate-x-1/2 -translate-y-1/2 rounded-shell-lg bg-surface p-5 shadow-elevation-3">
+        <AlertDialog.Backdrop className="fixed inset-0 z-40 bg-ink/20" />
+        <AlertDialog.Popup className="fixed top-1/2 left-1/2 z-50 w-80 -translate-x-1/2 -translate-y-1/2 rounded-shell-lg bg-surface p-5 shadow-elevation-3">
           <AlertDialog.Title className="text-heading font-medium text-ink">
             Delete "{event.title}"?
           </AlertDialog.Title>
@@ -30,16 +32,18 @@ export function DeleteEventConfirmation({
           </AlertDialog.Description>
 
           <div className="mt-5 flex justify-end gap-2">
-            <AlertDialog.Close className="rounded-shell-sm border border-border px-3 py-1.5 text-body text-ink hover:bg-surface-hover">
+            <AlertDialog.Close
+              className={buttonClasses({
+                variant: "outline",
+                color: "secondary",
+                size: "small",
+              })}
+            >
               Cancel
             </AlertDialog.Close>
-            <button
-              type="button"
-              onClick={onConfirm}
-              className="rounded-shell-sm bg-calendar-tomato px-3 py-1.5 text-body text-ink-inverse hover:opacity-90"
-            >
+            <Button color="danger" size="small" onClick={onConfirm}>
               Delete
-            </button>
+            </Button>
           </div>
         </AlertDialog.Popup>
       </AlertDialog.Portal>

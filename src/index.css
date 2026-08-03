@@ -1,5 +1,7 @@
 @import "tailwindcss";
 
+/* Static design tokens: type scale, radii, shadows, fonts, and the per-Calendar
+   event swatch colors (domain data — deliberately not part of the Immich reskin). */
 @theme {
   --font-sans: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
 
@@ -10,27 +12,14 @@
   --text-heading: 1.375rem;
   --text-heading--line-height: 1.3;
 
-  --color-surface: #ffffff;
-  --color-surface-sunken: #f6f8fc;
-  --color-surface-hover: #eef1f8;
-  --color-border: #dde3ea;
-
-  --color-ink: #1f2430;
-  --color-ink-muted: #5f6470;
-  --color-ink-inverse: #ffffff;
-
-  --color-accent: #3f6fee;
-  --color-accent-hover: #3660d1;
-  --color-accent-soft: #e8edfd;
-
-  --radius-shell-sm: 6px;
-  --radius-shell-md: 10px;
+  --radius-shell-sm: 8px;
+  --radius-shell-md: 12px;
   --radius-shell-lg: 16px;
   --radius-shell-pill: 999px;
 
-  --shadow-elevation-1: 0 1px 2px rgba(31, 36, 48, 0.08);
-  --shadow-elevation-2: 0 4px 12px rgba(31, 36, 48, 0.12);
-  --shadow-elevation-3: 0 12px 32px rgba(31, 36, 48, 0.16);
+  --shadow-elevation-1: 0 1px 2px rgba(23, 23, 23, 0.08);
+  --shadow-elevation-2: 0 4px 12px rgba(23, 23, 23, 0.12);
+  --shadow-elevation-3: 0 12px 32px rgba(23, 23, 23, 0.16);
 
   --color-calendar-tomato: #e2483d;
   --color-calendar-flamingo: #e67c9a;
@@ -42,20 +31,255 @@
   --color-calendar-graphite: #6b7280;
 }
 
-@media (prefers-color-scheme: dark) {
+/* Immich's colour scales, imported verbatim from @immich/ui default.css.
+   `inline` so utilities reference the runtime --immich-ui-* vars, which the
+   `.dark` class flips (see @layer base below). */
+@theme inline {
+  --color-primary-50: var(--immich-ui-primary-50);
+  --color-primary-100: var(--immich-ui-primary-100);
+  --color-primary-200: var(--immich-ui-primary-200);
+  --color-primary-300: var(--immich-ui-primary-300);
+  --color-primary-400: var(--immich-ui-primary-400);
+  --color-primary-500: var(--immich-ui-primary-500);
+  --color-primary-600: var(--immich-ui-primary-600);
+  --color-primary-700: var(--immich-ui-primary-700);
+  --color-primary-800: var(--immich-ui-primary-800);
+  --color-primary-900: var(--immich-ui-primary-900);
+  --color-primary-950: var(--immich-ui-primary-950);
+
+  --color-success-50: var(--immich-ui-success-50);
+  --color-success-100: var(--immich-ui-success-100);
+  --color-success-200: var(--immich-ui-success-200);
+  --color-success-300: var(--immich-ui-success-300);
+  --color-success-400: var(--immich-ui-success-400);
+  --color-success-500: var(--immich-ui-success-500);
+  --color-success-600: var(--immich-ui-success-600);
+  --color-success-700: var(--immich-ui-success-700);
+  --color-success-800: var(--immich-ui-success-800);
+  --color-success-900: var(--immich-ui-success-900);
+  --color-success-950: var(--immich-ui-success-950);
+
+  --color-danger-50: var(--immich-ui-danger-50);
+  --color-danger-100: var(--immich-ui-danger-100);
+  --color-danger-200: var(--immich-ui-danger-200);
+  --color-danger-300: var(--immich-ui-danger-300);
+  --color-danger-400: var(--immich-ui-danger-400);
+  --color-danger-500: var(--immich-ui-danger-500);
+  --color-danger-600: var(--immich-ui-danger-600);
+  --color-danger-700: var(--immich-ui-danger-700);
+  --color-danger-800: var(--immich-ui-danger-800);
+  --color-danger-900: var(--immich-ui-danger-900);
+  --color-danger-950: var(--immich-ui-danger-950);
+
+  --color-warning-50: var(--immich-ui-warning-50);
+  --color-warning-100: var(--immich-ui-warning-100);
+  --color-warning-200: var(--immich-ui-warning-200);
+  --color-warning-300: var(--immich-ui-warning-300);
+  --color-warning-400: var(--immich-ui-warning-400);
+  --color-warning-500: var(--immich-ui-warning-500);
+  --color-warning-600: var(--immich-ui-warning-600);
+  --color-warning-700: var(--immich-ui-warning-700);
+  --color-warning-800: var(--immich-ui-warning-800);
+  --color-warning-900: var(--immich-ui-warning-900);
+  --color-warning-950: var(--immich-ui-warning-950);
+
+  --color-info-50: var(--immich-ui-info-50);
+  --color-info-100: var(--immich-ui-info-100);
+  --color-info-200: var(--immich-ui-info-200);
+  --color-info-300: var(--immich-ui-info-300);
+  --color-info-400: var(--immich-ui-info-400);
+  --color-info-500: var(--immich-ui-info-500);
+  --color-info-600: var(--immich-ui-info-600);
+  --color-info-700: var(--immich-ui-info-700);
+  --color-info-800: var(--immich-ui-info-800);
+  --color-info-900: var(--immich-ui-info-900);
+  --color-info-950: var(--immich-ui-info-950);
+
+  --color-primary: var(--immich-ui-primary-500);
+  --color-success: var(--immich-ui-success-500);
+  --color-danger: var(--immich-ui-danger-500);
+  --color-warning: var(--immich-ui-warning-500);
+  --color-info: var(--immich-ui-info-500);
+}
+
+/* Our semantic tokens, aliased onto Immich's scales. Non-inline so the vars are
+   emitted at :root and can be referenced directly (e.g. the react-day-picker
+   block below). Values are runtime vars, so they still flip under `.dark`. */
+@theme {
+  --color-surface: var(--immich-ui-light);
+  --color-surface-sunken: var(--immich-ui-light-100);
+  --color-surface-hover: var(--immich-ui-light-200);
+  --color-border: var(--immich-ui-default-border);
+
+  --color-ink: var(--immich-ui-dark);
+  --color-ink-muted: var(--immich-ui-light-500);
+  --color-ink-inverse: var(--immich-ui-light);
+
+  --color-accent: var(--immich-ui-primary-500);
+  --color-accent-hover: var(--immich-ui-primary-600);
+  --color-accent-soft: var(--immich-ui-primary-100);
+}
+
+@custom-variant dark (&:where(.dark, .dark *):not(.light));
+
+@layer base {
   :root {
-    --color-surface: #16171d;
-    --color-surface-sunken: #1c1e26;
-    --color-surface-hover: #262835;
-    --color-border: #2e303a;
+    /* light */
+    --immich-ui-primary-50: oklch(0.9616 0.0166 271.24);
+    --immich-ui-primary-100: oklch(0.897 0.033 281.96);
+    --immich-ui-primary-200: oklch(0.787 0.07 281.03);
+    --immich-ui-primary-300: oklch(0.686 0.106 278.96);
+    --immich-ui-primary-400: oklch(0.577 0.142 275.93);
+    --immich-ui-primary-500: #4250af;
+    --immich-ui-primary-600: oklch(0.404 0.129 273.18);
+    --immich-ui-primary-700: oklch(0.343 0.109 272.56);
+    --immich-ui-primary-800: oklch(0.272 0.088 272.94);
+    --immich-ui-primary-900: oklch(0.211 0.068 273.01);
+    --immich-ui-primary-950: oklch(0.15 0.05 273.01);
 
-    --color-ink: #f3f4f6;
-    --color-ink-muted: #9ca3af;
-    --color-ink-inverse: #16171d;
+    --immich-ui-success-50: oklch(0.983 0.0115 162.06);
+    --immich-ui-success-100: oklch(0.937 0.109 148.66);
+    --immich-ui-success-200: oklch(0.863 0.249 147.5);
+    --immich-ui-success-300: oklch(0.813 0.234 147.54);
+    --immich-ui-success-400: oklch(0.762 0.219 147.59);
+    --immich-ui-success-500: oklch(0.708 0.204 147.56);
+    --immich-ui-success-600: oklch(0.594 0.171 147.56);
+    --immich-ui-success-700: oklch(0.476 0.136 147.69);
+    --immich-ui-success-800: oklch(0.36 0.104 147.58);
+    --immich-ui-success-900: oklch(0.252 0.073 147.47);
+    --immich-ui-success-950: oklch(0.194 0.056 147.87);
 
-    --color-accent: #7d9dfc;
-    --color-accent-hover: #91adfd;
-    --color-accent-soft: rgba(125, 157, 252, 0.15);
+    --immich-ui-danger-50: oklch(0.9747 0.0109 24.32);
+    --immich-ui-danger-100: oklch(0.926 0.034 17.84);
+    --immich-ui-danger-200: oklch(0.853 0.074 19.77);
+    --immich-ui-danger-300: oklch(0.774 0.125 21.53);
+    --immich-ui-danger-400: oklch(0.701 0.178 23.61);
+    --immich-ui-danger-500: oklch(0.633 0.24 28.79);
+    --immich-ui-danger-600: oklch(0.533 0.204 28.97);
+    --immich-ui-danger-700: oklch(0.433 0.166 28.91);
+    --immich-ui-danger-800: oklch(0.342 0.131 28.79);
+    --immich-ui-danger-900: oklch(0.245 0.094 29.51);
+    --immich-ui-danger-950: oklch(0.186 0.07 29.56);
+
+    --immich-ui-warning-50: oklch(0.983 0.01 58.27);
+    --immich-ui-warning-100: oklch(0.959 0.027 63.96);
+    --immich-ui-warning-200: oklch(0.925 0.051 64.24);
+    --immich-ui-warning-300: oklch(0.882 0.086 67.45);
+    --immich-ui-warning-400: oklch(0.85 0.12 70.92);
+    --immich-ui-warning-500: oklch(0.812 0.17 76.3);
+    --immich-ui-warning-600: oklch(0.679 0.142 76.48);
+    --immich-ui-warning-700: oklch(0.539 0.113 76.63);
+    --immich-ui-warning-800: oklch(0.408 0.086 75.75);
+    --immich-ui-warning-900: oklch(0.27 0.057 76.33);
+    --immich-ui-warning-950: oklch(0.209 0.044 77.51);
+
+    --immich-ui-info-50: oklch(0.9801 0.0096 252.81);
+    --immich-ui-info-100: oklch(0.922 0.036 268.3);
+    --immich-ui-info-200: oklch(0.845 0.073 265.19);
+    --immich-ui-info-300: oklch(0.769 0.114 261.53);
+    --immich-ui-info-400: oklch(0.691 0.159 256.82);
+    --immich-ui-info-500: oklch(0.611 0.177 252.85);
+    --immich-ui-info-600: oklch(0.519 0.149 252.81);
+    --immich-ui-info-700: oklch(0.422 0.123 252.93);
+    --immich-ui-info-800: oklch(0.328 0.096 253.05);
+    --immich-ui-info-900: oklch(0.234 0.067 252.62);
+    --immich-ui-info-950: oklch(0.178 0.052 253.61);
+
+    --immich-ui-light-50: var(--color-neutral-50);
+    --immich-ui-light-100: var(--color-neutral-100);
+    --immich-ui-light-200: var(--color-neutral-200);
+    --immich-ui-light-300: var(--color-neutral-300);
+    --immich-ui-light-400: var(--color-neutral-400);
+    --immich-ui-light-500: var(--color-neutral-500);
+    --immich-ui-light-600: var(--color-neutral-600);
+    --immich-ui-light-700: var(--color-neutral-700);
+    --immich-ui-light-800: var(--color-neutral-800);
+    --immich-ui-light-900: var(--color-neutral-900);
+    --immich-ui-light-950: var(--color-neutral-950);
+
+    --immich-ui-light: oklch(100% 0 0);
+    --immich-ui-dark: oklch(36% 0 17);
+    --immich-ui-muted: oklch(71% 0 271);
+    --immich-ui-default-border: var(--immich-ui-light-300);
+  }
+
+  .dark {
+    --immich-ui-primary-950: oklch(0.982 0.007 268.63);
+    --immich-ui-primary-900: oklch(0.966 0.015 260.75);
+    --immich-ui-primary-800: oklch(0.932 0.03 262.55);
+    --immich-ui-primary-700: oklch(0.906 0.041 260.95);
+    --immich-ui-primary-600: oklch(0.871 0.057 259.89);
+    --immich-ui-primary-500: oklch(0.836 0.074 258.58);
+    --immich-ui-primary-400: oklch(0.526 0.063 256.86);
+    --immich-ui-primary-300: oklch(0.449 0.054 257.6);
+    --immich-ui-primary-200: oklch(0.372 0.045 257.42);
+    --immich-ui-primary-100: oklch(0.258 0.032 258.31);
+    --immich-ui-primary-50: oklch(0.198 0.023 257.29);
+
+    --immich-ui-success-950: oklch(0.979 0.027 157.32);
+    --immich-ui-success-900: oklch(0.969 0.043 155.86);
+    --immich-ui-success-800: oklch(0.937 0.09 156.81);
+    --immich-ui-success-700: oklch(0.894 0.164 156.29);
+    --immich-ui-success-600: oklch(0.866 0.186 156.06);
+    --immich-ui-success-500: oklch(0.842 0.181 156.04);
+    --immich-ui-success-400: oklch(0.699 0.151 155.85);
+    --immich-ui-success-300: oklch(0.555 0.119 156.26);
+    --immich-ui-success-200: oklch(0.419 0.089 156.41);
+    --immich-ui-success-100: oklch(0.279 0.06 155.24);
+    --immich-ui-success-50: oklch(0.181 0.04 155.24);
+
+    --immich-ui-danger-950: oklch(0.975 0.011 17.5);
+    --immich-ui-danger-900: oklch(0.943 0.025 17.67);
+    --immich-ui-danger-800: oklch(0.894 0.049 18.13);
+    --immich-ui-danger-700: oklch(0.836 0.079 18.9);
+    --immich-ui-danger-600: oklch(0.781 0.112 19.92);
+    --immich-ui-danger-500: oklch(0.727 0.149 21.41);
+    --immich-ui-danger-400: oklch(0.622 0.232 27.33);
+    --immich-ui-danger-300: oklch(0.505 0.188 27.33);
+    --immich-ui-danger-200: oklch(0.387 0.144 27.27);
+    --immich-ui-danger-100: oklch(0.262 0.097 27.31);
+    --immich-ui-danger-50: oklch(0.207 0.077 27.3);
+
+    --immich-ui-warning-950: oklch(0.993 0.005 67.8);
+    --immich-ui-warning-900: oklch(0.975 0.017 67.63);
+    --immich-ui-warning-800: oklch(0.958 0.029 67.47);
+    --immich-ui-warning-700: oklch(0.934 0.048 69.18);
+    --immich-ui-warning-600: oklch(0.907 0.07 70.22);
+    --immich-ui-warning-500: oklch(0.888 0.089 72.24);
+    --immich-ui-warning-400: oklch(0.738 0.153 79.79);
+    --immich-ui-warning-300: oklch(0.589 0.122 79.52);
+    --immich-ui-warning-200: oklch(0.442 0.092 79.1);
+    --immich-ui-warning-100: oklch(0.286 0.059 78.61);
+    --immich-ui-warning-50: oklch(0.197 0.039 78.61);
+
+    --immich-ui-info-950: oklch(0.975 0.012 259.84);
+    --immich-ui-info-900: oklch(0.956 0.021 261.78);
+    --immich-ui-info-800: oklch(0.905 0.046 259.51);
+    --immich-ui-info-700: oklch(0.861 0.068 259.36);
+    --immich-ui-info-600: oklch(0.811 0.096 255.92);
+    --immich-ui-info-500: oklch(0.767 0.122 253.35);
+    --immich-ui-info-400: oklch(0.638 0.166 246.52);
+    --immich-ui-info-300: oklch(0.516 0.135 246.69);
+    --immich-ui-info-200: oklch(0.386 0.1 246.5);
+    --immich-ui-info-100: oklch(0.265 0.07 247.05);
+    --immich-ui-info-50: oklch(0.186 0.049 247.05);
+
+    --immich-ui-light-50: var(--color-neutral-950);
+    --immich-ui-light-100: var(--color-neutral-900);
+    --immich-ui-light-200: var(--color-neutral-800);
+    --immich-ui-light-300: var(--color-neutral-700);
+    --immich-ui-light-400: var(--color-neutral-600);
+    --immich-ui-light-500: var(--color-neutral-500);
+    --immich-ui-light-600: var(--color-neutral-400);
+    --immich-ui-light-700: var(--color-neutral-300);
+    --immich-ui-light-800: var(--color-neutral-200);
+    --immich-ui-light-900: var(--color-neutral-100);
+    --immich-ui-light-950: var(--color-neutral-50);
+
+    --immich-ui-light: oklch(0% 0 0);
+    --immich-ui-dark: oklch(89% 0 271);
+    --immich-ui-muted: oklch(87% 0 271);
+    --immich-ui-default-border: var(--immich-ui-light-200);
 
     --shadow-elevation-1: 0 1px 2px rgba(0, 0, 0, 0.3);
     --shadow-elevation-2: 0 4px 12px rgba(0, 0, 0, 0.35);
@@ -67,7 +291,33 @@ body {
   margin: 0;
 }
 
-.rdp-root {
+/* Thin, Immich-style scrollbars applied globally (Immich's auto-hide-on-hover
+   is scoped to a .immich-scrollbar class; we keep the thin look but always-on). */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in oklab, var(--immich-ui-muted) 40%, transparent)
+    transparent;
+}
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+*::-webkit-scrollbar-thumb {
+  background-color: color-mix(in oklab, var(--immich-ui-muted) 35%, transparent);
+  border-radius: 4px;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background-color: color-mix(
+    in oklab,
+    var(--immich-ui-primary-500) 70%,
+    transparent
+  );
+}
+
+:root .rdp-root {
   --rdp-accent-color: var(--color-accent);
   --rdp-accent-background-color: var(--color-accent-soft);
   --rdp-day-height: 32px;

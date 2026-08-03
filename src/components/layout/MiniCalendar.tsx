@@ -21,7 +21,7 @@ export function MiniCalendar() {
       onSelect={(date) => date && setSelectedDate(date)}
       month={displayMonth}
       onMonthChange={setDisplayMonth}
-      className="px-2"
+      className="ps-4 pe-1"
     />
   );
 }

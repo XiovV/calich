@@ -1,6 +1,7 @@
 import { useState } from "react";
-import { Field } from "@base-ui/react/field";
 import { useAuthStore } from "../lib/authStore";
+import { Button } from "../components/ui/Button";
+import { Input } from "../components/ui/Input";
 
 export function ChangePasswordScreen() {
   const changePassword = useAuthStore((state) => state.changePassword);
@@ -46,46 +47,39 @@ export function ChangePasswordScreen() {
           You must set a new password before continuing.
         </p>
 
-        <Field.Root className="mt-5">
-          <Field.Label className="block text-label-sm text-ink-muted">
-            New password
-          </Field.Label>
-          <Field.Control
-            type="password"
-            value={newPassword}
-            onChange={(domEvent) => setNewPassword(domEvent.target.value)}
-            className="mt-1 w-full rounded-shell-sm border border-border px-3 py-1.5 text-body text-ink"
-          />
-        </Field.Root>
+        <Input
+          label="New password"
+          type="password"
+          value={newPassword}
+          onChange={(domEvent) => setNewPassword(domEvent.target.value)}
+          className="mt-5"
+        />
 
-        <Field.Root className="mt-4">
-          <Field.Label className="block text-label-sm text-ink-muted">
-            Confirm new password
-          </Field.Label>
-          <Field.Control
-            type="password"
-            value={confirmPassword}
-            onChange={(domEvent) => setConfirmPassword(domEvent.target.value)}
-            className="mt-1 w-full rounded-shell-sm border border-border px-3 py-1.5 text-body text-ink"
-          />
-          {confirmPassword !== "" && !passwordsMatch && (
-            <p className="mt-1 text-label-sm text-calendar-tomato">
-              Passwords don't match.
-            </p>
-          )}
-        </Field.Root>
-
-        {error && (
-          <p className="mt-3 text-label-sm text-calendar-tomato">{error}</p>
+        <Input
+          label="Confirm new password"
+          type="password"
+          value={confirmPassword}
+          onChange={(domEvent) => setConfirmPassword(domEvent.target.value)}
+          invalid={confirmPassword !== "" && !passwordsMatch}
+          className="mt-4"
+        />
+        {confirmPassword !== "" && !passwordsMatch && (
+          <p className="mt-1 text-label-sm text-danger">
+            Passwords don't match.
+          </p>
         )}
 
-        <button
+        {error && <p className="mt-3 text-label-sm text-danger">{error}</p>}
+
+        <Button
           type="submit"
-          disabled={!canSubmit || isSubmitting}
-          className="mt-5 w-full rounded-shell-sm bg-accent px-3 py-2 text-body text-ink-inverse hover:bg-accent-hover disabled:opacity-50"
+          fullWidth
+          disabled={!canSubmit}
+          loading={isSubmitting}
+          className="mt-5"
         >
           {isSubmitting ? "Updating…" : "Update password"}
-        </button>
+        </Button>
       </form>
     </div>
   );
