@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildMonthGrid, getEventsForDay } from "./monthGrid";
+import { buildMonthGrid, computeChipCapacity, getEventsForDay } from "./monthGrid";
 import type { Event } from "./event";
 
 describe("buildMonthGrid", () => {
@@ -122,5 +122,32 @@ describe("getEventsForDay", () => {
     const result = getEventsForDay([late, early, middle], day);
 
     expect(result.map((event) => event.id)).toEqual(["early", "middle", "late"]);
+  });
+});
+
+describe("computeChipCapacity", () => {
+  it("shows every chip with no overflow when everything just fits", () => {
+    const result = computeChipCapacity(3, 60, 20, 20);
+    expect(result).toEqual({ visibleCount: 3, overflowCount: 0 });
+  });
+
+  it("reserves the last line for a +N more indicator when events overflow", () => {
+    const result = computeChipCapacity(4, 60, 20, 20);
+    expect(result).toEqual({ visibleCount: 2, overflowCount: 2 });
+  });
+
+  it("adapts the visible count to a taller available height", () => {
+    const result = computeChipCapacity(4, 100, 20, 20);
+    expect(result).toEqual({ visibleCount: 4, overflowCount: 0 });
+  });
+
+  it("never shows a negative visible count when the height is smaller than one chip", () => {
+    const result = computeChipCapacity(2, 10, 20, 20);
+    expect(result).toEqual({ visibleCount: 0, overflowCount: 2 });
+  });
+
+  it("shows no chips and no overflow when there are no events", () => {
+    const result = computeChipCapacity(0, 60, 20, 20);
+    expect(result).toEqual({ visibleCount: 0, overflowCount: 0 });
   });
 });

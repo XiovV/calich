@@ -25,3 +25,24 @@ export function getEventsForDay(events: Event[], day: Date): Event[] {
     .filter((event) => isSameDay(event.start, day))
     .sort((a, b) => a.start.getTime() - b.start.getTime());
 }
+
+export interface ChipCapacity {
+  visibleCount: number;
+  overflowCount: number;
+}
+
+export function computeChipCapacity(
+  totalEvents: number,
+  availableHeight: number,
+  chipHeight: number,
+  moreRowHeight: number,
+): ChipCapacity {
+  const maxWithoutOverflowRow = Math.floor(availableHeight / chipHeight);
+  if (totalEvents <= maxWithoutOverflowRow) {
+    return { visibleCount: totalEvents, overflowCount: 0 };
+  }
+
+  const remainingHeight = availableHeight - moreRowHeight;
+  const visibleCount = Math.max(0, Math.floor(remainingHeight / chipHeight));
+  return { visibleCount, overflowCount: totalEvents - visibleCount };
+}
