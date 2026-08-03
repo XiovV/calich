@@ -3,10 +3,17 @@ import { useShellStore } from "../lib/shellStore";
 import { useEventsStore } from "../lib/eventsStore";
 import { buildMonthGrid, getEventsForDay } from "../lib/monthGrid";
 import { MonthDayCell } from "./MonthDayCell";
+import type { Event } from "../lib/event";
+import type { DraftBlock } from "../lib/gridTime";
 
 const WEEKDAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
-export function MonthGrid() {
+interface MonthGridProps {
+  onDraftCreated: (day: Date, draft: DraftBlock) => void;
+  onEventClick: (event: Event) => void;
+}
+
+export function MonthGrid({ onDraftCreated, onEventClick }: MonthGridProps) {
   const selectedDate = useShellStore((state) => state.selectedDate);
   const checkedCalendarIds = useShellStore((state) => state.checkedCalendarIds);
   const events = useEventsStore((state) => state.events);
@@ -37,6 +44,8 @@ export function MonthGrid() {
             inCurrentMonth={inCurrentMonth}
             isToday={isSameDay(date, now)}
             events={getEventsForDay(visibleEvents, date)}
+            onDraftCreated={onDraftCreated}
+            onEventClick={onEventClick}
           />
         ))}
       </div>

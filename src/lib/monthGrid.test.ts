@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { buildMonthGrid, computeChipCapacity, getEventsForDay } from "./monthGrid";
+import {
+  buildMonthGrid,
+  computeCellDraft,
+  computeChipCapacity,
+  getEventsForDay,
+} from "./monthGrid";
 import type { Event } from "./event";
 
 describe("buildMonthGrid", () => {
@@ -149,5 +154,44 @@ describe("computeChipCapacity", () => {
   it("shows no chips and no overflow when there are no events", () => {
     const result = computeChipCapacity(0, 60, 20, 20);
     expect(result).toEqual({ visibleCount: 0, overflowCount: 0 });
+  });
+});
+
+describe("computeCellDraft", () => {
+  it("rounds up to the next 15-minute slot, applied to the clicked date", () => {
+    const cellDate = new Date(2026, 7, 20);
+    const now = new Date(2026, 7, 3, 9, 5);
+
+    const result = computeCellDraft(cellDate, now);
+
+    expect(result.start).toEqual(new Date(2026, 7, 20, 9, 15));
+  });
+
+  it("gives the draft a 30-minute duration", () => {
+    const cellDate = new Date(2026, 7, 20);
+    const now = new Date(2026, 7, 3, 9, 5);
+
+    const result = computeCellDraft(cellDate, now);
+
+    expect(result.end).toEqual(new Date(2026, 7, 20, 9, 45));
+  });
+
+  it("lands at 00:00 on the clicked date when rounding pushes past midnight", () => {
+    const cellDate = new Date(2026, 7, 20);
+    const now = new Date(2026, 7, 3, 23, 50);
+
+    const result = computeCellDraft(cellDate, now);
+
+    expect(result.start).toEqual(new Date(2026, 7, 20, 0, 0));
+    expect(result.end).toEqual(new Date(2026, 7, 20, 0, 30));
+  });
+
+  it("leaves an already-on-increment time-of-day unchanged", () => {
+    const cellDate = new Date(2026, 7, 20);
+    const now = new Date(2026, 7, 3, 14, 30);
+
+    const result = computeCellDraft(cellDate, now);
+
+    expect(result.start).toEqual(new Date(2026, 7, 20, 14, 30));
   });
 });

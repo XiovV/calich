@@ -1,5 +1,6 @@
 import { addDays, isSameDay, isSameMonth, startOfMonth, startOfWeek } from "date-fns";
 import type { Event } from "./event";
+import { roundUpToIncrement, type DraftBlock } from "./gridTime";
 
 export const MONTH_GRID_ROWS = 6;
 export const MONTH_GRID_COLUMNS = 7;
@@ -45,4 +46,24 @@ export function computeChipCapacity(
   const remainingHeight = availableHeight - moreRowHeight;
   const visibleCount = Math.max(0, Math.floor(remainingHeight / chipHeight));
   return { visibleCount, overflowCount: totalEvents - visibleCount };
+}
+
+export function computeCellDraft(
+  cellDate: Date,
+  now: Date,
+  incrementMinutes = 15,
+  durationMinutes = 30,
+): DraftBlock {
+  const roundedNow = roundUpToIncrement(now, incrementMinutes);
+  const crossedMidnight = !isSameDay(roundedNow, now);
+
+  const start = new Date(cellDate);
+  if (crossedMidnight) {
+    start.setHours(0, 0, 0, 0);
+  } else {
+    start.setHours(roundedNow.getHours(), roundedNow.getMinutes(), 0, 0);
+  }
+
+  const end = new Date(start.getTime() + durationMinutes * 60 * 1000);
+  return { start, end };
 }

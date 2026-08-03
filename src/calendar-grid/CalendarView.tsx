@@ -45,7 +45,9 @@ export function CalendarView({ onDraftCreated, onEventClick }: CalendarViewProps
       );
     }
     case "month":
-      return <MonthGrid />;
+      return (
+        <MonthGrid onDraftCreated={onDraftCreated} onEventClick={onEventClick} />
+      );
     case "year":
       return <ComingSoonPlaceholder label="Year" />;
   }

@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import { format } from "date-fns";
 import type { Event } from "../lib/event";
+import type { DraftBlock } from "../lib/gridTime";
 import { getCalendarById } from "../lib/calendar";
 import { getCalendarColorClass } from "../lib/calendarColors";
 import { useCalendarsStore } from "../lib/calendarsStore";
 import { useShellStore } from "../lib/shellStore";
-import { computeChipCapacity } from "../lib/monthGrid";
+import { computeCellDraft, computeChipCapacity } from "../lib/monthGrid";
 
 const CHIP_ROW_HEIGHT_PX = 20;
 const MORE_ROW_HEIGHT_PX = 20;
@@ -15,6 +16,8 @@ interface MonthDayCellProps {
   inCurrentMonth: boolean;
   isToday: boolean;
   events: Event[];
+  onDraftCreated: (day: Date, draft: DraftBlock) => void;
+  onEventClick: (event: Event) => void;
 }
 
 export function MonthDayCell({
@@ -22,6 +25,8 @@ export function MonthDayCell({
   inCurrentMonth,
   isToday,
   events,
+  onDraftCreated,
+  onEventClick,
 }: MonthDayCellProps) {
   const calendars = useCalendarsStore((state) => state.calendars);
   const setSelectedDate = useShellStore((state) => state.setSelectedDate);
@@ -46,6 +51,10 @@ export function MonthDayCell({
     setActiveView("day");
   }
 
+  function handleCellClick() {
+    onDraftCreated(date, computeCellDraft(date, new Date()));
+  }
+
   const { visibleCount, overflowCount } = computeChipCapacity(
     events.length,
     availableHeight,
@@ -56,11 +65,15 @@ export function MonthDayCell({
 
   return (
     <div
+      onClick={handleCellClick}
       className={`flex min-h-0 flex-col gap-1 overflow-hidden border-b border-l border-border p-1 ${inCurrentMonth ? "" : "bg-surface-sunken"}`}
     >
       <button
         type="button"
-        onClick={openDayView}
+        onClick={(domEvent) => {
+          domEvent.stopPropagation();
+          openDayView();
+        }}
         className={`shrink-0 self-start text-label-sm ${inCurrentMonth ? "text-ink" : "text-ink-muted"} ${
           isToday
             ? "flex h-5 w-5 items-center justify-center rounded-shell-pill bg-accent text-ink-inverse"
@@ -79,18 +92,26 @@ export function MonthDayCell({
             ? getCalendarColorClass(calendar.color)
             : "bg-calendar-graphite";
           return (
-            <div
+            <button
               key={event.id}
-              className={`truncate rounded-shell-sm px-1 text-label-sm text-ink-inverse ${colorClass}`}
+              type="button"
+              onClick={(domEvent) => {
+                domEvent.stopPropagation();
+                onEventClick(event);
+              }}
+              className={`cursor-pointer truncate rounded-shell-sm px-1 text-left text-label-sm text-ink-inverse ${colorClass}`}
             >
               {format(event.start, "h:mm a")} {event.title}
-            </div>
+            </button>
           );
         })}
         {overflowCount > 0 && (
           <button
             type="button"
-            onClick={openDayView}
+            onClick={(domEvent) => {
+              domEvent.stopPropagation();
+              openDayView();
+            }}
             className="cursor-pointer truncate rounded-shell-sm px-1 text-left text-label-sm text-ink-muted hover:text-ink"
           >
             +{overflowCount} more
