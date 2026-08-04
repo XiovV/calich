@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { addDays, isSameDay, startOfDay } from "date-fns";
 import { useShellStore } from "../lib/shellStore";
 import { useCalendarsStore } from "../lib/calendarsStore";
@@ -7,6 +7,7 @@ import { getCalendarColorClass } from "../lib/calendarColors";
 import { buildMonthGrid, getOccurrencesForDay } from "../lib/monthGrid";
 import { computeMoveToDate } from "../lib/gridTime";
 import { useVisibleOccurrences } from "../hooks/useVisibleOccurrences";
+import { usePointerDrag, type DragState } from "../hooks/usePointerDrag";
 import { occurrenceKey, type Occurrence } from "../lib/occurrence";
 import { WEEKDAY_SHORT_NAMES } from "../lib/rruleParts";
 import { MonthDayCell } from "./MonthDayCell";
@@ -15,17 +16,9 @@ import { ScopePicker } from "./ScopePicker";
 import { useOccurrenceDragCommit } from "./useOccurrenceDragCommit";
 import type { DraftBlock } from "../lib/gridTime";
 
-const CLICK_DISTANCE_THRESHOLD_PX = 4;
-
 interface MonthGridProps {
   onDraftCreated: (day: Date, draft: DraftBlock) => void;
   onOccurrenceClick: (occurrence: Occurrence) => void;
-}
-
-interface EventDragOrigin {
-  occurrence: Occurrence;
-  startClientX: number;
-  startClientY: number;
 }
 
 function getCellDateAtPoint(
@@ -47,9 +40,6 @@ export function MonthGrid({ onDraftCreated, onOccurrenceClick }: MonthGridProps)
   const calendars = useCalendarsStore((state) => state.calendars);
   const dragCommit = useOccurrenceDragCommit();
 
-  const dragOriginRef = useRef<EventDragOrigin | null>(null);
-  const [activeDrag, setActiveDrag] = useState<EventDragOrigin | null>(null);
-  const [dragPosition, setDragPosition] = useState({ x: 0, y: 0 });
   const [hoveredCellKey, setHoveredCellKey] = useState<string | null>(null);
 
   // A drag that ends back inside its origin cell still fires a native "click"
@@ -77,75 +67,45 @@ export function MonthGrid({ onDraftCreated, onOccurrenceClick }: MonthGridProps)
 
   const now = new Date();
 
+  const eventDrag = usePointerDrag<Occurrence>({
+    onClick: (occurrence) => {
+      setHoveredCellKey(null);
+      onOccurrenceClick(occurrence);
+    },
+    onDrag: (occurrence, state: DragState) => {
+      setHoveredCellKey(null);
+      suppressNextCellClickRef.current = true;
+      setTimeout(() => {
+        suppressNextCellClickRef.current = false;
+      }, 0);
+
+      const targetDate = getCellDateAtPoint(cells, state.position.x, state.position.y);
+      if (targetDate) {
+        const { start, end } = computeMoveToDate(occurrence.start, occurrence.end, targetDate);
+        dragCommit.commit(occurrence, start, end);
+      }
+    },
+    onMove: (_occurrence, state: DragState) => {
+      const hoveredDate = getCellDateAtPoint(cells, state.position.x, state.position.y);
+      setHoveredCellKey(hoveredDate ? hoveredDate.toDateString() : null);
+    },
+  });
+
   function handleOccurrenceDragStart(
     occurrence: Occurrence,
     clientX: number,
     clientY: number,
   ) {
-    const origin: EventDragOrigin = {
-      occurrence,
-      startClientX: clientX,
-      startClientY: clientY,
-    };
-    dragOriginRef.current = origin;
-    setDragPosition({ x: clientX, y: clientY });
-    setActiveDrag(origin);
+    eventDrag.start(occurrence, clientX, clientY);
   }
 
-  useEffect(() => {
-    if (!dragOriginRef.current) return;
-    const origin = dragOriginRef.current;
-
-    function handleMouseMove(domEvent: MouseEvent) {
-      setDragPosition({ x: domEvent.clientX, y: domEvent.clientY });
-      const hoveredDate = getCellDateAtPoint(cells, domEvent.clientX, domEvent.clientY);
-      setHoveredCellKey(hoveredDate ? hoveredDate.toDateString() : null);
-    }
-
-    function handleMouseUp(domEvent: MouseEvent) {
-      const deltaX = domEvent.clientX - origin.startClientX;
-      const deltaY = domEvent.clientY - origin.startClientY;
-      const distance = Math.max(Math.abs(deltaX), Math.abs(deltaY));
-
-      if (distance < CLICK_DISTANCE_THRESHOLD_PX) {
-        onOccurrenceClick(origin.occurrence);
-      } else {
-        suppressNextCellClickRef.current = true;
-        setTimeout(() => {
-          suppressNextCellClickRef.current = false;
-        }, 0);
-
-        const targetDate = getCellDateAtPoint(cells, domEvent.clientX, domEvent.clientY);
-        if (targetDate) {
-          const { start, end } = computeMoveToDate(
-            origin.occurrence.start,
-            origin.occurrence.end,
-            targetDate,
-          );
-          dragCommit.commit(origin.occurrence, start, end);
-        }
-      }
-
-      dragOriginRef.current = null;
-      setActiveDrag(null);
-      setHoveredCellKey(null);
-    }
-
-    window.addEventListener("mousemove", handleMouseMove);
-    window.addEventListener("mouseup", handleMouseUp);
-    return () => {
-      window.removeEventListener("mousemove", handleMouseMove);
-      window.removeEventListener("mouseup", handleMouseUp);
-    };
-  }, [activeDrag, cells, onOccurrenceClick, dragCommit]);
-
-  const dragCalendar = activeDrag
-    ? getCalendarById(calendars, activeDrag.occurrence.event.calendarId)
+  const dragCalendar = eventDrag.active
+    ? getCalendarById(calendars, eventDrag.active.event.calendarId)
     : undefined;
   const dragColorClass = dragCalendar
     ? getCalendarColorClass(dragCalendar.color)
     : "bg-calendar-graphite";
-  const draggingKey = activeDrag ? occurrenceKey(activeDrag.occurrence) : null;
+  const draggingKey = eventDrag.active ? occurrenceKey(eventDrag.active) : null;
 
   return (
     <div className="flex h-full flex-col">
@@ -176,12 +136,12 @@ export function MonthGrid({ onDraftCreated, onOccurrenceClick }: MonthGridProps)
           />
         ))}
       </div>
-      {activeDrag && (
+      {eventDrag.active && (
         <MonthEventDragPreview
-          x={dragPosition.x}
-          y={dragPosition.y}
-          title={activeDrag.occurrence.event.title}
-          start={activeDrag.occurrence.start}
+          x={eventDrag.position.x}
+          y={eventDrag.position.y}
+          title={eventDrag.active.event.title}
+          start={eventDrag.active.start}
           colorClass={dragColorClass}
         />
       )}

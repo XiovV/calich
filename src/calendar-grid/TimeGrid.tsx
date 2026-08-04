@@ -6,6 +6,7 @@ import { getCalendarColorClass } from "../lib/calendarColors";
 import { layoutOverlappingEvents } from "../lib/layoutOverlappingEvents";
 import { columnLayoutToBox } from "../lib/eventBlockGeometry";
 import { useVisibleOccurrences } from "../hooks/useVisibleOccurrences";
+import { usePointerDrag, type DragState } from "../hooks/usePointerDrag";
 import { occurrenceKey, type Occurrence } from "../lib/occurrence";
 import {
   PIXELS_PER_HOUR,
@@ -25,7 +26,6 @@ import { ScopePicker } from "./ScopePicker";
 import { useOccurrenceDragCommit } from "./useOccurrenceDragCommit";
 
 const NOW_REFRESH_INTERVAL_MS = 60_000;
-const CLICK_DISTANCE_THRESHOLD_PX = 4;
 
 interface TimeGridProps {
   daysToShow: Date[];
@@ -33,21 +33,11 @@ interface TimeGridProps {
   onOccurrenceClick: (occurrence: Occurrence) => void;
 }
 
-interface EventDragOrigin {
+interface EventDragPayload {
   occurrence: Occurrence;
   kind: EventDragKind;
-  startClientX: number;
-  startClientY: number;
   columnWidth: number;
 }
-
-interface AllDayDragOrigin {
-  occurrence: Occurrence;
-  startClientX: number;
-  startClientY: number;
-}
-
-const ALL_DAY_CLICK_DISTANCE_THRESHOLD_PX = 4;
 
 function getAllDayDateAtPoint(
   days: Date[],
@@ -63,27 +53,27 @@ function getAllDayDateAtPoint(
 }
 
 function computeDragTimes(
-  origin: EventDragOrigin,
+  payload: EventDragPayload,
   deltaX: number,
   deltaY: number,
 ) {
   const minuteOffset = (deltaY / PIXELS_PER_HOUR) * 60;
 
-  if (origin.kind === "move") {
+  if (payload.kind === "move") {
     const dayOffset =
-      origin.columnWidth > 0 ? Math.round(deltaX / origin.columnWidth) : 0;
+      payload.columnWidth > 0 ? Math.round(deltaX / payload.columnWidth) : 0;
     return computeMovedEventTimes(
-      origin.occurrence.start,
-      origin.occurrence.end,
+      payload.occurrence.start,
+      payload.occurrence.end,
       dayOffset,
       minuteOffset,
     );
   }
 
-  const edge = origin.kind === "resize-start" ? "start" : "end";
+  const edge = payload.kind === "resize-start" ? "start" : "end";
   return computeResizedEventTimes(
-    origin.occurrence.start,
-    origin.occurrence.end,
+    payload.occurrence.start,
+    payload.occurrence.end,
     edge,
     minuteOffset,
   );
@@ -95,7 +85,7 @@ interface EventDragPreview {
 }
 
 function computeEventDragPreview(
-  activeDrag: EventDragOrigin,
+  activeDrag: EventDragPayload,
   dragDelta: { x: number; y: number },
   visibleOccurrences: Occurrence[],
   calendars: Calendar[],
@@ -150,13 +140,6 @@ export function TimeGrid({
   const daysContainerRef = useRef<HTMLDivElement>(null);
   const [now, setNow] = useState(() => new Date());
 
-  const dragOriginRef = useRef<EventDragOrigin | null>(null);
-  const [activeDrag, setActiveDrag] = useState<EventDragOrigin | null>(null);
-  const [dragDelta, setDragDelta] = useState({ x: 0, y: 0 });
-
-  const allDayDragOriginRef = useRef<AllDayDragOrigin | null>(null);
-  const [activeAllDayDrag, setActiveAllDayDrag] = useState<AllDayDragOrigin | null>(null);
-  const [allDayDragPosition, setAllDayDragPosition] = useState({ x: 0, y: 0 });
   const [allDayHoverDateKey, setAllDayHoverDateKey] = useState<string | null>(null);
 
   // The grid renders Occurrences, not raw Events: each master is expanded over
@@ -189,6 +172,16 @@ export function TimeGrid({
     container.scrollTop = Math.max(0, nowY - container.clientHeight / 2);
   }, []);
 
+  const eventDrag = usePointerDrag<EventDragPayload>({
+    onClick: (payload) => {
+      if (payload.kind === "move") onOccurrenceClick(payload.occurrence);
+    },
+    onDrag: (payload, state: DragState) => {
+      const { start, end } = computeDragTimes(payload, state.delta.x, state.delta.y);
+      dragCommit.commit(payload.occurrence, start, end);
+    },
+  });
+
   function handleOccurrenceDragStart(
     occurrence: Occurrence,
     kind: EventDragKind,
@@ -198,121 +191,47 @@ export function TimeGrid({
     const columnWidth =
       (daysContainerRef.current?.getBoundingClientRect().width ?? 0) /
       daysToShow.length;
-    const origin: EventDragOrigin = {
-      occurrence,
-      kind,
-      startClientX: clientX,
-      startClientY: clientY,
-      columnWidth,
-    };
-    dragOriginRef.current = origin;
-    setDragDelta({ x: 0, y: 0 });
-    setActiveDrag(origin);
+    eventDrag.start({ occurrence, kind, columnWidth }, clientX, clientY);
   }
 
-  useEffect(() => {
-    if (!dragOriginRef.current) return;
-    const origin = dragOriginRef.current!;
-
-    function handleMouseMove(domEvent: MouseEvent) {
-      setDragDelta({
-        x: domEvent.clientX - origin.startClientX,
-        y: domEvent.clientY - origin.startClientY,
-      });
-    }
-
-    function handleMouseUp(domEvent: MouseEvent) {
-      const deltaX = domEvent.clientX - origin.startClientX;
-      const deltaY = domEvent.clientY - origin.startClientY;
-      const distance = Math.max(Math.abs(deltaX), Math.abs(deltaY));
-
-      if (origin.kind === "move" && distance < CLICK_DISTANCE_THRESHOLD_PX) {
-        onOccurrenceClick(origin.occurrence);
-      } else if (distance >= CLICK_DISTANCE_THRESHOLD_PX) {
-        const { start, end } = computeDragTimes(origin, deltaX, deltaY);
-        dragCommit.commit(origin.occurrence, start, end);
-      }
-
-      dragOriginRef.current = null;
-      setActiveDrag(null);
-    }
-
-    window.addEventListener("mousemove", handleMouseMove);
-    window.addEventListener("mouseup", handleMouseUp);
-    return () => {
-      window.removeEventListener("mousemove", handleMouseMove);
-      window.removeEventListener("mouseup", handleMouseUp);
-    };
-  }, [activeDrag, onOccurrenceClick, dragCommit]);
-
-  const dragPreview = activeDrag
+  const dragPreview = eventDrag.active
     ? computeEventDragPreview(
-        activeDrag,
-        dragDelta,
+        eventDrag.active,
+        eventDrag.delta,
         visibleOccurrences,
         calendars,
       )
     : null;
+
+  const allDayDrag = usePointerDrag<Occurrence>({
+    onClick: (occurrence) => {
+      setAllDayHoverDateKey(null);
+      onOccurrenceClick(occurrence);
+    },
+    onDrag: (occurrence, state: DragState) => {
+      setAllDayHoverDateKey(null);
+      const targetDate = getAllDayDateAtPoint(daysToShow, state.position.x, state.position.y);
+      if (targetDate) {
+        const { start, end } = computeMoveToDate(occurrence.start, occurrence.end, targetDate);
+        dragCommit.commit(occurrence, start, end);
+      }
+    },
+    onMove: (_occurrence, state: DragState) => {
+      const hoveredDay = getAllDayDateAtPoint(daysToShow, state.position.x, state.position.y);
+      setAllDayHoverDateKey(hoveredDay ? hoveredDay.toDateString() : null);
+    },
+  });
 
   function handleAllDayDragStart(
     occurrence: Occurrence,
     clientX: number,
     clientY: number,
   ) {
-    const origin: AllDayDragOrigin = {
-      occurrence,
-      startClientX: clientX,
-      startClientY: clientY,
-    };
-    allDayDragOriginRef.current = origin;
-    setAllDayDragPosition({ x: clientX, y: clientY });
-    setActiveAllDayDrag(origin);
+    allDayDrag.start(occurrence, clientX, clientY);
   }
 
-  useEffect(() => {
-    if (!allDayDragOriginRef.current) return;
-    const origin = allDayDragOriginRef.current;
-
-    function handleMouseMove(domEvent: MouseEvent) {
-      setAllDayDragPosition({ x: domEvent.clientX, y: domEvent.clientY });
-      const hoveredDay = getAllDayDateAtPoint(daysToShow, domEvent.clientX, domEvent.clientY);
-      setAllDayHoverDateKey(hoveredDay ? hoveredDay.toDateString() : null);
-    }
-
-    function handleMouseUp(domEvent: MouseEvent) {
-      const deltaX = domEvent.clientX - origin.startClientX;
-      const deltaY = domEvent.clientY - origin.startClientY;
-      const distance = Math.max(Math.abs(deltaX), Math.abs(deltaY));
-
-      if (distance < ALL_DAY_CLICK_DISTANCE_THRESHOLD_PX) {
-        onOccurrenceClick(origin.occurrence);
-      } else {
-        const targetDate = getAllDayDateAtPoint(daysToShow, domEvent.clientX, domEvent.clientY);
-        if (targetDate) {
-          const { start, end } = computeMoveToDate(
-            origin.occurrence.start,
-            origin.occurrence.end,
-            targetDate,
-          );
-          dragCommit.commit(origin.occurrence, start, end);
-        }
-      }
-
-      allDayDragOriginRef.current = null;
-      setActiveAllDayDrag(null);
-      setAllDayHoverDateKey(null);
-    }
-
-    window.addEventListener("mousemove", handleMouseMove);
-    window.addEventListener("mouseup", handleMouseUp);
-    return () => {
-      window.removeEventListener("mousemove", handleMouseMove);
-      window.removeEventListener("mouseup", handleMouseUp);
-    };
-  }, [activeAllDayDrag, daysToShow, onOccurrenceClick, dragCommit]);
-
-  const allDayDragCalendar = activeAllDayDrag
-    ? getCalendarById(calendars, activeAllDayDrag.occurrence.event.calendarId)
+  const allDayDragCalendar = allDayDrag.active
+    ? getCalendarById(calendars, allDayDrag.active.event.calendarId)
     : undefined;
   const allDayDragColorClass = allDayDragCalendar
     ? getCalendarColorClass(allDayDragCalendar.color)
@@ -343,7 +262,7 @@ export function TimeGrid({
             onOccurrenceClick={onOccurrenceClick}
             onOccurrenceDragStart={handleAllDayDragStart}
             draggingKey={
-              activeAllDayDrag ? occurrenceKey(activeAllDayDrag.occurrence) : null
+              allDayDrag.active ? occurrenceKey(allDayDrag.active) : null
             }
             dragHoverDateKey={allDayHoverDateKey}
           />
@@ -362,7 +281,7 @@ export function TimeGrid({
                 onOccurrenceClick={onOccurrenceClick}
                 onOccurrenceDragStart={handleOccurrenceDragStart}
                 draggingKey={
-                  activeDrag ? occurrenceKey(activeDrag.occurrence) : null
+                  eventDrag.active ? occurrenceKey(eventDrag.active.occurrence) : null
                 }
                 eventDragPreview={
                   dragPreview && isSameDay(dragPreview.day, day)
@@ -374,11 +293,11 @@ export function TimeGrid({
           </div>
         </div>
       </div>
-      {activeAllDayDrag && (
+      {allDayDrag.active && (
         <AllDayEventDragPreview
-          x={allDayDragPosition.x}
-          y={allDayDragPosition.y}
-          title={activeAllDayDrag.occurrence.event.title}
+          x={allDayDrag.position.x}
+          y={allDayDrag.position.y}
+          title={allDayDrag.active.event.title}
           colorClass={allDayDragColorClass}
         />
       )}
