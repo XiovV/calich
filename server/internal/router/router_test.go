@@ -32,7 +32,7 @@ func newTestRouter(t *testing.T) http.Handler {
 	authHandler := handlers.NewAuthHandler(authService)
 	calendarService := service.NewCalendarService(repository.NewCalendarRepository(sqlDB))
 	calendarHandler := handlers.NewCalendarHandler(calendarService)
-	eventService := service.NewEventService(repository.NewEventRepository(sqlDB), repository.NewEventExceptionRepository(sqlDB), calendarService)
+	eventService := service.NewEventService(sqlDB, repository.NewEventRepository(sqlDB), repository.NewEventExceptionRepository(sqlDB), calendarService)
 	eventHandler := handlers.NewEventHandler(eventService)
 
 	r, err := New(slog.New(slog.NewTextHandler(io.Discard, nil)), authHandler, calendarHandler, eventHandler, authService, authService)

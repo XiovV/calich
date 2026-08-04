@@ -32,7 +32,7 @@ func newTestEventService(t *testing.T) (svc *EventService, userID int64, calenda
 		t.Fatalf("create calendar: %v", err)
 	}
 
-	return NewEventService(repository.NewEventRepository(sqlDB), repository.NewEventExceptionRepository(sqlDB), NewCalendarService(calendarRepo)), user.ID, cal.ID
+	return NewEventService(sqlDB, repository.NewEventRepository(sqlDB), repository.NewEventExceptionRepository(sqlDB), NewCalendarService(calendarRepo)), user.ID, cal.ID
 }
 
 func TestEventService_Create(t *testing.T) {
@@ -544,6 +544,59 @@ func TestEventService_Update_KeepsChildrenWhenOnlyUntilChanges(t *testing.T) {
 	}
 }
 
+// TestEventService_Update_DiscardOnRuleChangeIsAtomic asserts that when the
+// discard half of a pattern-changing Update fails, the Master's rule update
+// is rolled back too — never new-rule-with-stale-children (ADR-0018). Unlike
+// TestEventService_ReparentFrom_Atomic, the discard writes are plain DELETEs
+// with no natural collision to trip through the public API, so the failure
+// here is forced with a poison trigger instead.
+func TestEventService_Update_DiscardOnRuleChangeIsAtomic(t *testing.T) {
+	svc, userID, calendarID := newTestEventService(t)
+	ctx := context.Background()
+	start := time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC)
+	end := time.Date(2026, 1, 1, 9, 30, 0, 0, time.UTC)
+
+	master, err := svc.Create(ctx, userID, "master", calendarID, "Standup", start, end, false, "FREQ=DAILY", nil, nil)
+	if err != nil {
+		t.Fatalf("create master: %v", err)
+	}
+
+	recurrenceID := time.Date(2026, 1, 2, 9, 0, 0, 0, time.UTC)
+	override, err := svc.Create(ctx, userID, "override", calendarID, "Standup (moved)",
+		time.Date(2026, 1, 2, 10, 0, 0, 0, time.UTC), time.Date(2026, 1, 2, 10, 30, 0, 0, time.UTC), false,
+		"", &master.ID, &recurrenceID)
+	if err != nil {
+		t.Fatalf("create override: %v", err)
+	}
+	if err := svc.AddException(ctx, userID, master.ID, time.Date(2026, 1, 3, 9, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatalf("add exception: %v", err)
+	}
+
+	if _, err := svc.db.ExecContext(ctx,
+		`CREATE TRIGGER poison_override_delete BEFORE DELETE ON events WHEN OLD.id = 'override' BEGIN SELECT RAISE(ABORT, 'boom'); END`,
+	); err != nil {
+		t.Fatalf("install poison trigger: %v", err)
+	}
+
+	if _, err := svc.Update(ctx, userID, master.ID, calendarID, "Standup", start, end, false, "FREQ=WEEKLY;BYDAY=TH"); err == nil {
+		t.Fatalf("expected update to fail once the override delete is poisoned")
+	}
+
+	fetchedMaster, err := svc.Get(ctx, userID, master.ID)
+	if err != nil {
+		t.Fatalf("get master: %v", err)
+	}
+	if fetchedMaster.Rrule != "FREQ=DAILY" {
+		t.Fatalf("expected master's rrule to be rolled back, got %q", fetchedMaster.Rrule)
+	}
+	if len(fetchedMaster.Exdates) != 1 {
+		t.Fatalf("expected the exception to survive the rollback, got %+v", fetchedMaster.Exdates)
+	}
+	if _, err := svc.Get(ctx, userID, override.ID); err != nil {
+		t.Fatalf("expected the override to survive the rollback, got %v", err)
+	}
+}
+
 func TestEventService_ReparentFrom(t *testing.T) {
 	svc, userID, calendarID := newTestEventService(t)
 	ctx := context.Background()
@@ -569,6 +622,11 @@ func TestEventService_ReparentFrom(t *testing.T) {
 		t.Fatalf("create override: %v", err)
 	}
 
+	exceptionStart := time.Date(2026, 1, 6, 9, 0, 0, 0, time.UTC)
+	if err := svc.AddException(ctx, userID, oldMaster.ID, exceptionStart); err != nil {
+		t.Fatalf("add exception: %v", err)
+	}
+
 	if err := svc.ReparentFrom(ctx, userID, oldMaster.ID, newMaster.ID, time.Date(2026, 1, 5, 0, 0, 0, 0, time.UTC)); err != nil {
 		t.Fatalf("reparent: %v", err)
 	}
@@ -579,6 +637,85 @@ func TestEventService_ReparentFrom(t *testing.T) {
 	}
 	if fetched.ParentID == nil || *fetched.ParentID != newMaster.ID {
 		t.Fatalf("expected override reparented to %q, got %+v", newMaster.ID, fetched)
+	}
+
+	fetchedOldMaster, err := svc.Get(ctx, userID, oldMaster.ID)
+	if err != nil {
+		t.Fatalf("get old master: %v", err)
+	}
+	if len(fetchedOldMaster.Exdates) != 0 {
+		t.Fatalf("expected old master to have no exceptions left, got %+v", fetchedOldMaster.Exdates)
+	}
+
+	fetchedNewMaster, err := svc.Get(ctx, userID, newMaster.ID)
+	if err != nil {
+		t.Fatalf("get new master: %v", err)
+	}
+	if len(fetchedNewMaster.Exdates) != 1 || !fetchedNewMaster.Exdates[0].Equal(exceptionStart) {
+		t.Fatalf("expected exception reparented to %q, got %+v", newMaster.ID, fetchedNewMaster.Exdates)
+	}
+}
+
+// TestEventService_ReparentFrom_Atomic asserts that when the Exceptions half
+// of the write fails, the Overrides half is not left half-reparented — the
+// two writes commit or roll back together (ADR-0018). The failure is forced
+// by giving the new master an Exception at the same occurrence the old
+// master's Exception would move to, tripping the (parent_id,
+// occurrence_start) primary key when the UPDATE runs.
+func TestEventService_ReparentFrom_Atomic(t *testing.T) {
+	svc, userID, calendarID := newTestEventService(t)
+	ctx := context.Background()
+
+	oldMaster, err := svc.Create(ctx, userID, "old-master", calendarID, "Standup",
+		time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC), time.Date(2026, 1, 1, 9, 30, 0, 0, time.UTC), false,
+		"FREQ=DAILY", nil, nil)
+	if err != nil {
+		t.Fatalf("create old master: %v", err)
+	}
+	newMaster, err := svc.Create(ctx, userID, "new-master", calendarID, "Standup",
+		time.Date(2026, 1, 5, 9, 0, 0, 0, time.UTC), time.Date(2026, 1, 5, 9, 30, 0, 0, time.UTC), false,
+		"FREQ=DAILY", nil, nil)
+	if err != nil {
+		t.Fatalf("create new master: %v", err)
+	}
+
+	recurrenceID := time.Date(2026, 1, 5, 9, 0, 0, 0, time.UTC)
+	override, err := svc.Create(ctx, userID, "override", calendarID, "Standup (moved)",
+		time.Date(2026, 1, 5, 10, 0, 0, 0, time.UTC), time.Date(2026, 1, 5, 10, 30, 0, 0, time.UTC), false,
+		"", &oldMaster.ID, &recurrenceID)
+	if err != nil {
+		t.Fatalf("create override: %v", err)
+	}
+
+	exceptionStart := time.Date(2026, 1, 6, 9, 0, 0, 0, time.UTC)
+	if err := svc.AddException(ctx, userID, oldMaster.ID, exceptionStart); err != nil {
+		t.Fatalf("add exception to old master: %v", err)
+	}
+	// A colliding exception already on the new master: reparenting the old
+	// master's exception onto it violates the (parent_id, occurrence_start)
+	// primary key.
+	if err := svc.AddException(ctx, userID, newMaster.ID, exceptionStart); err != nil {
+		t.Fatalf("add exception to new master: %v", err)
+	}
+
+	if err := svc.ReparentFrom(ctx, userID, oldMaster.ID, newMaster.ID, time.Date(2026, 1, 5, 0, 0, 0, 0, time.UTC)); err == nil {
+		t.Fatalf("expected reparent to fail on the colliding exception")
+	}
+
+	fetchedOverride, err := svc.Get(ctx, userID, override.ID)
+	if err != nil {
+		t.Fatalf("get override: %v", err)
+	}
+	if fetchedOverride.ParentID == nil || *fetchedOverride.ParentID != oldMaster.ID {
+		t.Fatalf("expected override to remain on old master after rollback, got %+v", fetchedOverride)
+	}
+
+	fetchedOldMaster, err := svc.Get(ctx, userID, oldMaster.ID)
+	if err != nil {
+		t.Fatalf("get old master: %v", err)
+	}
+	if len(fetchedOldMaster.Exdates) != 1 || !fetchedOldMaster.Exdates[0].Equal(exceptionStart) {
+		t.Fatalf("expected old master to keep its exception after rollback, got %+v", fetchedOldMaster.Exdates)
 	}
 }
 
