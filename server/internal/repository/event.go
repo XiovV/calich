@@ -37,7 +37,11 @@ type Event struct {
 	// Exdates lists the cancelled Occurrence starts (Exceptions) for a Master.
 	// Not a column — populated by the service layer from event_exceptions when
 	// listing/reading a Master, so it is always empty on an Override.
-	Exdates   []time.Time
+	Exdates []time.Time
+	// Reminders are this Event's Reminders (ADR-0020). Not a column —
+	// populated by the service layer from event_reminders when
+	// listing/reading/writing an Event.
+	Reminders []Reminder
 	CreatedAt time.Time
 }
 
@@ -93,6 +97,37 @@ func (r *EventRepository) ListByUser(ctx context.Context, userID int64, from, to
 	rows, err := r.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list events: %w", err)
+	}
+	defer rows.Close()
+
+	events := []Event{}
+	for rows.Next() {
+		e, err := scanEvent(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan event: %w", err)
+		}
+		events = append(events, e)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate events: %w", err)
+	}
+
+	return events, nil
+}
+
+// ListAllWithReminders returns every Event across every user that carries at
+// least one Reminder — the firing engine's read path (ADR-0021), which runs
+// as a single background process serving every account, unlike ListByUser's
+// per-caller scoping.
+func (r *EventRepository) ListAllWithReminders(ctx context.Context) ([]Event, error) {
+	rows, err := r.db.QueryContext(ctx,
+		`SELECT id, user_id, calendar_id, title, "start", "end", all_day, rrule, parent_id, recurrence_id, tzid, created_at
+		 FROM events
+		 WHERE EXISTS (SELECT 1 FROM event_reminders WHERE event_reminders.event_id = events.id)
+		 ORDER BY id`,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list events with reminders: %w", err)
 	}
 	defer rows.Close()
 

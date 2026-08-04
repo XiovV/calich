@@ -9,7 +9,9 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"net/mail"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -30,6 +32,7 @@ var (
 	ErrInvalidCredentials = errors.New("invalid credentials")
 	ErrInvalidSession     = errors.New("invalid session")
 	ErrInvalidPassword    = errors.New("password must not be empty")
+	ErrInvalidEmail       = errors.New("email is not a valid address")
 )
 
 type AuthService struct {
@@ -239,6 +242,23 @@ func (s *AuthService) ChangePassword(ctx context.Context, userID int64, currentP
 	}
 
 	return nil
+}
+
+// UpdateEmail sets userID's account email — the Email-Channel Reminder
+// recipient (ADR-0021). An empty string clears it back to unset.
+func (s *AuthService) UpdateEmail(ctx context.Context, userID int64, email string) (repository.User, error) {
+	email = strings.TrimSpace(email)
+	if email != "" {
+		if _, err := mail.ParseAddress(email); err != nil {
+			return repository.User{}, ErrInvalidEmail
+		}
+	}
+
+	user, err := s.users.UpdateEmail(ctx, userID, email)
+	if err != nil {
+		return repository.User{}, fmt.Errorf("update email: %w", err)
+	}
+	return user, nil
 }
 
 // Refresh mints a new access token for the session identified by the given

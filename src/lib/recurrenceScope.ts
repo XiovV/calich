@@ -1,5 +1,5 @@
 import { RRule } from "rrule";
-import type { Event } from "./event";
+import type { Event, Reminder } from "./event";
 import { anchorZone, toFloating } from "./floatingTime";
 
 /**
@@ -22,6 +22,9 @@ export interface EventFieldChanges {
   // The Anchor zone: preserved from whatever Event this change derives from
   // — no picker exists to change it explicitly yet (ADR-0019).
   tzid?: string;
+  // Absent from a drag-only edit, like allDay above — the caller falls back
+  // to the reference Event's own Reminders in that case (ADR-0020).
+  reminders?: Reminder[];
 }
 
 /** `changes`' allDay, falling back to `master`'s own when the edit didn't
@@ -31,6 +34,17 @@ export function resolveAllDay(
   master: Event,
 ): boolean | undefined {
   return changes.allDay ?? master.allDay;
+}
+
+/** `changes`' Reminders, falling back to `reference`'s own when the edit
+ * didn't touch them (a drag-only edit) — `reference` is the Master for a
+ * fresh Override (so it starts as a copy of the Master's set, ADR-0020) or
+ * the Occurrence's own Event when refining an edit already scoped to it. */
+export function resolveReminders(
+  changes: Pick<EventFieldChanges, "reminders">,
+  reference: Pick<Event, "reminders">,
+): Reminder[] | undefined {
+  return changes.reminders ?? reference.reminders;
 }
 
 /**
@@ -57,6 +71,8 @@ export function makeOverride(
     // An Override inherits its master's Anchor zone — only an explicit zone
     // choice would change it, and no picker exists yet (ADR-0019).
     tzid: master.tzid,
+    // A fresh Override starts as a copy of the Master's Reminders (ADR-0020).
+    reminders: resolveReminders(changes, master),
   };
 }
 
@@ -146,6 +162,7 @@ export function splitFollowing(
       allDay: resolveAllDay(changes, master),
       rrule: master.rrule,
       tzid: master.tzid,
+      reminders: resolveReminders(changes, master),
     },
     reparentFromStart: splitStart,
   };

@@ -11,12 +11,21 @@ vi.mock("./authApi", async () => {
       logout: vi.fn(),
       me: vi.fn(),
       changePassword: vi.fn(),
+      updateEmail: vi.fn(),
     },
   };
 });
 
 const { authApi } = await import("./authApi");
 const { useAuthStore } = await import("./authStore");
+
+const adminUser = {
+  id: 1,
+  username: "admin",
+  mustChangePassword: false,
+  email: null,
+  emailReminderChannelAvailable: false,
+};
 
 function resetStore() {
   useAuthStore.setState({
@@ -44,13 +53,13 @@ describe("bootstrap", () => {
 
   it("goes to authenticated when refresh and me both succeed", async () => {
     vi.mocked(authApi.refresh).mockResolvedValue({ accessToken: "token-123" });
-    vi.mocked(authApi.me).mockResolvedValue({ id: 1, username: "admin", mustChangePassword: false });
+    vi.mocked(authApi.me).mockResolvedValue(adminUser);
 
     await useAuthStore.getState().bootstrap();
 
     const state = useAuthStore.getState();
     expect(state.status).toBe("authenticated");
-    expect(state.user).toEqual({ id: 1, username: "admin", mustChangePassword: false });
+    expect(state.user).toEqual(adminUser);
     expect(state.accessToken).toBe("token-123");
   });
 
@@ -72,7 +81,7 @@ describe("bootstrap", () => {
 describe("login", () => {
   it("fetches the full user and goes to authenticated when a password change isn't required", async () => {
     vi.mocked(authApi.login).mockResolvedValue({ accessToken: "token-123", mustChangePassword: false });
-    vi.mocked(authApi.me).mockResolvedValue({ id: 1, username: "admin", mustChangePassword: false });
+    vi.mocked(authApi.me).mockResolvedValue(adminUser);
 
     await useAuthStore.getState().login("admin", "admin");
 
@@ -106,7 +115,7 @@ describe("logout", () => {
   it("clears local state even if the backend call fails", async () => {
     useAuthStore.setState({
       status: "authenticated",
-      user: { id: 1, username: "admin", mustChangePassword: false },
+      user: adminUser,
       pendingUsername: null,
       accessToken: "token-123",
     });
@@ -136,7 +145,7 @@ describe("changePassword", () => {
       accessToken: "token-123",
     });
     vi.mocked(authApi.changePassword).mockResolvedValue(undefined);
-    vi.mocked(authApi.me).mockResolvedValue({ id: 1, username: "admin", mustChangePassword: false });
+    vi.mocked(authApi.me).mockResolvedValue(adminUser);
 
     await useAuthStore.getState().changePassword("old-pw", "new-pw");
 
@@ -144,5 +153,29 @@ describe("changePassword", () => {
     expect(state.status).toBe("authenticated");
     expect(state.user?.mustChangePassword).toBe(false);
     expect(state.pendingUsername).toBeNull();
+  });
+});
+
+describe("updateEmail", () => {
+  it("throws when there is no access token", async () => {
+    await expect(useAuthStore.getState().updateEmail("admin@example.com")).rejects.toThrow(
+      "Not authenticated.",
+    );
+  });
+
+  it("stores the fresh user returned by the API", async () => {
+    useAuthStore.setState({
+      status: "authenticated",
+      user: adminUser,
+      pendingUsername: null,
+      accessToken: "token-123",
+    });
+    const updatedUser = { ...adminUser, email: "admin@example.com", emailReminderChannelAvailable: true };
+    vi.mocked(authApi.updateEmail).mockResolvedValue(updatedUser);
+
+    await useAuthStore.getState().updateEmail("admin@example.com");
+
+    expect(useAuthStore.getState().user).toEqual(updatedUser);
+    expect(authApi.updateEmail).toHaveBeenCalledWith("token-123", "admin@example.com");
   });
 });

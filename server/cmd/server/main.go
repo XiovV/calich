@@ -13,10 +13,17 @@ import (
 	"github.com/XiovV/calendar/server/internal/config"
 	"github.com/XiovV/calendar/server/internal/db"
 	"github.com/XiovV/calendar/server/internal/handlers"
+	"github.com/XiovV/calendar/server/internal/mailer"
+	"github.com/XiovV/calendar/server/internal/reminder"
 	"github.com/XiovV/calendar/server/internal/repository"
 	"github.com/XiovV/calendar/server/internal/router"
 	"github.com/XiovV/calendar/server/internal/service"
 )
+
+// reminderTickInterval is how often the firing engine checks for due
+// Reminders (ADR-0021). Reminder offsets are minute-granular, so a
+// once-a-minute tick is fine-grained enough without being wasteful.
+const reminderTickInterval = time.Minute
 
 func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
@@ -39,7 +46,9 @@ func main() {
 	sessions := repository.NewSessionRepository(sqlDB)
 	authService := service.NewAuthService(users, sessions, jwtSecret, cfg.InitialUsername, cfg.InitialPassword)
 	calendarService := service.NewCalendarService(repository.NewCalendarRepository(sqlDB))
-	eventService := service.NewEventService(sqlDB, repository.NewEventRepository(sqlDB), repository.NewEventExceptionRepository(sqlDB), calendarService)
+	eventService := service.NewEventService(sqlDB, repository.NewEventRepository(sqlDB), repository.NewEventExceptionRepository(sqlDB), repository.NewEventReminderRepository(sqlDB), calendarService)
+	notificationRepo := repository.NewNotificationRepository(sqlDB)
+	notificationService := service.NewNotificationService(notificationRepo)
 
 	ctx := context.Background()
 	bootstrapUser, bootstrapCreatedUser, err := authService.Bootstrap(ctx)
@@ -55,11 +64,12 @@ func main() {
 		}
 	}
 
-	authHandler := handlers.NewAuthHandler(authService)
+	authHandler := handlers.NewAuthHandler(authService, cfg.SMTPConfigured())
 	calendarHandler := handlers.NewCalendarHandler(calendarService)
 	eventHandler := handlers.NewEventHandler(eventService)
+	notificationHandler := handlers.NewNotificationHandler(notificationService)
 
-	handler, err := router.New(logger, authHandler, calendarHandler, eventHandler, authService, authService)
+	handler, err := router.New(logger, authHandler, calendarHandler, eventHandler, notificationHandler, authService, authService)
 	if err != nil {
 		logger.Error("failed to build router", "error", err)
 		os.Exit(1)
@@ -69,6 +79,21 @@ func main() {
 		Addr:    ":" + cfg.Port,
 		Handler: handler,
 	}
+
+	// The firing engine's scheduler (ADR-0021): a Notification-Channel
+	// Reminder inserts a persistent Notification (#56); an Email-Channel
+	// Reminder sends over SMTP (#57) once the self-hoster has configured it,
+	// otherwise it falls back to the log sink.
+	var emailDispatcher reminder.Dispatcher = reminder.LogDispatcher{}
+	if cfg.SMTPConfigured() {
+		smtpMailer := mailer.NewSMTPMailer(cfg.SMTPHost, cfg.SMTPPort, cfg.SMTPUser, cfg.SMTPPass, cfg.SMTPFrom)
+		emailDispatcher = reminder.EmailDispatcher{Users: users, Mailer: smtpMailer, Fallback: reminder.LogDispatcher{}}
+	}
+	dispatcher := reminder.NotificationDispatcher{Notifications: notificationRepo, Fallback: emailDispatcher, Now: time.Now}
+	schedulerCtx, stopScheduler := context.WithCancel(context.Background())
+	defer stopScheduler()
+	scheduler := reminder.NewScheduler(eventService, repository.NewFiredReminderRepository(sqlDB), dispatcher, time.Now)
+	go scheduler.Run(schedulerCtx, reminderTickInterval)
 
 	go func() {
 		logger.Info("starting server", "port", cfg.Port, "data_dir", cfg.DataDir)
@@ -83,6 +108,7 @@ func main() {
 	<-stop
 
 	logger.Info("shutting down")
+	stopScheduler()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 

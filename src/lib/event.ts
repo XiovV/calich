@@ -1,3 +1,14 @@
+// A Reminder's delivery method — Notification (shown in-app) or Email (sent
+// to the User). See ADR-0020 and CONTEXT.md's Channel.
+export type ReminderChannel = "notification" | "email";
+
+// A cue attached to an Event that fires offsetMinutes before an Occurrence's
+// start, on channel. Maps to one iCalendar VALARM. See ADR-0020.
+export interface Reminder {
+  offsetMinutes: number;
+  channel: ReminderChannel;
+}
+
 export interface Event {
   id: string;
   calendarId: string;
@@ -26,4 +37,6 @@ export interface Event {
   // undefined for a Floating Event, which renders/expands in the Viewer
   // zone. See ADR-0019 and CONTEXT.md's Anchor zone/Floating Event.
   tzid?: string;
+  // This Event's Reminders. Undefined/empty means none. See ADR-0020.
+  reminders?: Reminder[];
 }

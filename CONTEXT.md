@@ -56,8 +56,16 @@ A proposed time window for a not-yet-saved Event, before it is confirmed via the
 _Avoid_: pending event, temp event
 
 **Reminder**:
-A minutes-before-start offset attached to an Event, chosen from a fixed preset list (not free-form).
-_Avoid_: notification, alert
+A single cue attached to an Event that fires a fixed offset before an Occurrence's start, on one Channel. An Event carries zero or more, each with its own offset and Channel. Maps to one iCalendar `VALARM` (`TRIGGER` for the offset, `ACTION` for the Channel) so it round-trips through CalDAV unchanged. See ADR-0020.
+_Avoid_: alert
+
+**Channel**:
+The delivery method of a Reminder — **Notification** (shown in-app) or **Email** (sent to the User). Corresponds to the iCalendar `VALARM` `ACTION` (`DISPLAY` / `EMAIL`).
+_Avoid_: type, kind, action (in prose)
+
+**Notification**:
+The persistent in-app record the server creates when a Reminder on the Notification Channel fires. Lives in the Notification feed and, if a tab is open, is mirrored as a browser notification. A Notification-Channel Reminder is the rule; a Notification is the delivered instance it produces. Distinct from a toast, which is a transient client-only UI message (e.g. an error). See ADR-0021.
+_Avoid_: alert, toast (for this), push
 
 **Day cell**:
 A single day's box in the Month view grid. Holds that day's Event chips and is the target of create-clicks and drag-to-move drops.

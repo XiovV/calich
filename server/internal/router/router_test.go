@@ -29,13 +29,14 @@ func newTestRouter(t *testing.T) http.Handler {
 	if _, _, err := authService.Bootstrap(context.Background()); err != nil {
 		t.Fatalf("bootstrap: %v", err)
 	}
-	authHandler := handlers.NewAuthHandler(authService)
+	authHandler := handlers.NewAuthHandler(authService, false)
 	calendarService := service.NewCalendarService(repository.NewCalendarRepository(sqlDB))
 	calendarHandler := handlers.NewCalendarHandler(calendarService)
-	eventService := service.NewEventService(sqlDB, repository.NewEventRepository(sqlDB), repository.NewEventExceptionRepository(sqlDB), calendarService)
+	eventService := service.NewEventService(sqlDB, repository.NewEventRepository(sqlDB), repository.NewEventExceptionRepository(sqlDB), repository.NewEventReminderRepository(sqlDB), calendarService)
 	eventHandler := handlers.NewEventHandler(eventService)
+	notificationHandler := handlers.NewNotificationHandler(service.NewNotificationService(repository.NewNotificationRepository(sqlDB)))
 
-	r, err := New(slog.New(slog.NewTextHandler(io.Discard, nil)), authHandler, calendarHandler, eventHandler, authService, authService)
+	r, err := New(slog.New(slog.NewTextHandler(io.Discard, nil)), authHandler, calendarHandler, eventHandler, notificationHandler, authService, authService)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

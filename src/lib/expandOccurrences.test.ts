@@ -220,6 +220,25 @@ describe("expandOccurrences", () => {
     expect(dates).toEqual([6, 20]);
   });
 
+  it("suppresses an excepted Occurrence's Reminders along with the Occurrence itself (ADR-0020)", () => {
+    // An Exception drops the Occurrence outright — there's no Occurrence for
+    // the firing engine to compute a due Reminder against, so a Master's
+    // Reminders never reach a cancelled Occurrence.
+    const event = makeEvent({
+      rrule: "FREQ=WEEKLY;BYDAY=TU",
+      exdates: [new Date(2026, 0, 13, 9, 0)],
+      reminders: [{ offsetMinutes: 10, channel: "notification" }],
+    });
+    const occurrences = expandOccurrences(
+      [event],
+      new Date(2026, 0, 1),
+      new Date(2026, 0, 27),
+    );
+    expect(occurrences.some((o) => o.start.getTime() === new Date(2026, 0, 13, 9, 0).getTime())).toBe(
+      false,
+    );
+  });
+
   it("substitutes an Override for the Occurrence it replaces", () => {
     const master = makeEvent({ rrule: "FREQ=WEEKLY;BYDAY=TU" });
     const override = makeEvent({

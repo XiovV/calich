@@ -326,6 +326,57 @@ func TestChangePassword_RejectsEmptyNewPassword(t *testing.T) {
 	}
 }
 
+func TestUpdateEmail_SetsAValidEmail(t *testing.T) {
+	svc := newTestAuthService(t, "", "")
+	ctx := context.Background()
+	user, _, err := svc.Bootstrap(ctx)
+	if err != nil {
+		t.Fatalf("bootstrap: %v", err)
+	}
+
+	updated, err := svc.UpdateEmail(ctx, user.ID, "admin@example.com")
+	if err != nil {
+		t.Fatalf("update email: %v", err)
+	}
+	if updated.Email == nil || *updated.Email != "admin@example.com" {
+		t.Fatalf("expected email to be set, got %+v", updated.Email)
+	}
+}
+
+func TestUpdateEmail_RejectsAnInvalidAddress(t *testing.T) {
+	svc := newTestAuthService(t, "", "")
+	ctx := context.Background()
+	user, _, err := svc.Bootstrap(ctx)
+	if err != nil {
+		t.Fatalf("bootstrap: %v", err)
+	}
+
+	_, err = svc.UpdateEmail(ctx, user.ID, "not-an-email")
+	if !errors.Is(err, ErrInvalidEmail) {
+		t.Fatalf("expected ErrInvalidEmail, got %v", err)
+	}
+}
+
+func TestUpdateEmail_EmptyStringClearsIt(t *testing.T) {
+	svc := newTestAuthService(t, "", "")
+	ctx := context.Background()
+	user, _, err := svc.Bootstrap(ctx)
+	if err != nil {
+		t.Fatalf("bootstrap: %v", err)
+	}
+	if _, err := svc.UpdateEmail(ctx, user.ID, "admin@example.com"); err != nil {
+		t.Fatalf("update email: %v", err)
+	}
+
+	cleared, err := svc.UpdateEmail(ctx, user.ID, "")
+	if err != nil {
+		t.Fatalf("clear email: %v", err)
+	}
+	if cleared.Email != nil {
+		t.Fatalf("expected email to be cleared, got %+v", cleared.Email)
+	}
+}
+
 func TestChangePassword_NewPasswordWorksForLogin(t *testing.T) {
 	svc := newTestAuthService(t, "", "")
 	ctx := context.Background()

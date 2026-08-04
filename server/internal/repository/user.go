@@ -15,7 +15,10 @@ type User struct {
 	Username           string
 	PasswordHash       string
 	MustChangePassword bool
-	CreatedAt          time.Time
+	// Email is the Email-Channel Reminder's recipient (ADR-0021, ADR-0010).
+	// Nil until the user sets it on the Settings page.
+	Email     *string
+	CreatedAt time.Time
 }
 
 type UserRepository struct {
@@ -45,14 +48,28 @@ func (r *UserRepository) Create(ctx context.Context, username, passwordHash stri
 
 func (r *UserRepository) GetByID(ctx context.Context, id int64) (User, error) {
 	return r.scanUser(r.db.QueryRowContext(ctx,
-		`SELECT id, username, password_hash, must_change_password, created_at FROM users WHERE id = ?`, id,
+		`SELECT id, username, password_hash, must_change_password, email, created_at FROM users WHERE id = ?`, id,
 	))
 }
 
 func (r *UserRepository) GetByUsername(ctx context.Context, username string) (User, error) {
 	return r.scanUser(r.db.QueryRowContext(ctx,
-		`SELECT id, username, password_hash, must_change_password, created_at FROM users WHERE username = ?`, username,
+		`SELECT id, username, password_hash, must_change_password, email, created_at FROM users WHERE username = ?`, username,
 	))
+}
+
+// UpdateEmail sets userID's account email — the Email-Channel Reminder
+// recipient (ADR-0021). An empty string clears it back to unset.
+func (r *UserRepository) UpdateEmail(ctx context.Context, userID int64, email string) (User, error) {
+	var value any
+	if email != "" {
+		value = email
+	}
+
+	if _, err := r.db.ExecContext(ctx, `UPDATE users SET email = ? WHERE id = ?`, value, userID); err != nil {
+		return User{}, fmt.Errorf("update email: %w", err)
+	}
+	return r.GetByID(ctx, userID)
 }
 
 // UpdatePassword sets a new password hash and clears must_change_password.
@@ -71,7 +88,7 @@ func (r *UserRepository) UpdatePassword(ctx context.Context, userID int64, passw
 // single-user instance (ADR-0010).
 func (r *UserRepository) First(ctx context.Context) (User, error) {
 	return r.scanUser(r.db.QueryRowContext(ctx,
-		`SELECT id, username, password_hash, must_change_password, created_at FROM users ORDER BY id LIMIT 1`,
+		`SELECT id, username, password_hash, must_change_password, email, created_at FROM users ORDER BY id LIMIT 1`,
 	))
 }
 
@@ -85,14 +102,18 @@ func (r *UserRepository) Count(ctx context.Context) (int, error) {
 
 func (r *UserRepository) scanUser(row *sql.Row) (User, error) {
 	var u User
+	var email sql.NullString
 	// modernc.org/sqlite converts the TIMESTAMP column straight into time.Time
 	// based on the declared column type — no manual parsing needed here.
-	err := row.Scan(&u.ID, &u.Username, &u.PasswordHash, &u.MustChangePassword, &u.CreatedAt)
+	err := row.Scan(&u.ID, &u.Username, &u.PasswordHash, &u.MustChangePassword, &email, &u.CreatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return User{}, ErrNotFound
 	}
 	if err != nil {
 		return User{}, fmt.Errorf("scan user: %w", err)
+	}
+	if email.Valid {
+		u.Email = &email.String
 	}
 	return u, nil
 }

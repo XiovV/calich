@@ -6,6 +6,7 @@ import {
   makeException,
   makeOverride,
   resolveAllDay,
+  resolveReminders,
   shouldDiscardChildren,
   splitFollowing,
   truncateSeriesBefore,
@@ -20,8 +21,10 @@ export type MasterFieldChanges = EventFieldChanges & { rrule?: string };
 /** A master's own identifying fields, kept unchanged while only its rule
  * moves — carried by ops that truncate a series without replacing it
  * (`reanchorSeries`, `truncateSeries`). Includes `tzid` so truncating never
- * silently clears the Anchor zone (ADR-0019). */
-type MasterCoreFields = Pick<Event, "calendarId" | "title" | "start" | "end" | "tzid">;
+ * silently clears the Anchor zone (ADR-0019), and `reminders` so it never
+ * silently clears the master's own Reminders either (ADR-0020) — the update
+ * API replaces Reminders wholesale, so an omitted field would wipe them. */
+type MasterCoreFields = Pick<Event, "calendarId" | "title" | "start" | "end" | "tzid" | "reminders">;
 
 /**
  * A scoped edit (This event/This and following/All events) compiles down to
@@ -157,6 +160,7 @@ export function planEditOccurrence(
           rrule,
           // Preserved unchanged — no picker exists to change it (ADR-0019).
           tzid: master.tzid,
+          reminders: resolveReminders(changes, master),
         },
         discardChildren: shouldDiscardChildren(master.rrule, rrule),
       },
@@ -183,6 +187,7 @@ export function planEditOccurrence(
           start: master.start,
           end: master.end,
           tzid: master.tzid,
+          reminders: master.reminders,
         },
         truncatedRrule: truncatedMaster.rrule,
         keptExdates,
@@ -213,6 +218,9 @@ export function planEditOccurrence(
           allDay: resolveAllDay(changes, master),
           // Preserved unchanged — no picker exists to change it (ADR-0019).
           tzid: occurrence.event.tzid,
+          // Editing an existing Override's Reminders only affects its own
+          // row, never the rest of the series (ADR-0020).
+          reminders: resolveReminders(changes, occurrence.event),
         },
       },
     ];
@@ -233,6 +241,7 @@ export function planEditOccurrence(
         end: override.end,
         allDay: override.allDay,
         tzid: override.tzid,
+        reminders: override.reminders,
       },
     },
   ];
@@ -288,6 +297,7 @@ export function planDeleteOccurrence({
           start: master.start,
           end: master.end,
           tzid: master.tzid,
+          reminders: master.reminders,
         },
         truncatedRrule,
         keptExdates,

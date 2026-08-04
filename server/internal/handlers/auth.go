@@ -8,6 +8,7 @@ import (
 
 	"github.com/XiovV/calendar/server/internal/httpauth"
 	"github.com/XiovV/calendar/server/internal/httpresponse"
+	"github.com/XiovV/calendar/server/internal/repository"
 	"github.com/XiovV/calendar/server/internal/service"
 )
 
@@ -15,10 +16,14 @@ const refreshCookieName = "refresh_token"
 
 type AuthHandler struct {
 	auth *service.AuthService
+	// smtpConfigured is whether the self-hoster has set up SMTP transport
+	// (ADR-0021) — combined with the user's own email to compute
+	// meResponse's emailReminderChannelAvailable.
+	smtpConfigured bool
 }
 
-func NewAuthHandler(auth *service.AuthService) *AuthHandler {
-	return &AuthHandler{auth: auth}
+func NewAuthHandler(auth *service.AuthService, smtpConfigured bool) *AuthHandler {
+	return &AuthHandler{auth: auth, smtpConfigured: smtpConfigured}
 }
 
 type loginRequest struct {
@@ -57,9 +62,24 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 }
 
 type meResponse struct {
-	ID                 int64  `json:"id"`
-	Username           string `json:"username"`
-	MustChangePassword bool   `json:"must_change_password"`
+	ID                 int64   `json:"id"`
+	Username           string  `json:"username"`
+	MustChangePassword bool    `json:"must_change_password"`
+	Email              *string `json:"email"`
+	// EmailReminderChannelAvailable is whether the Email Channel can
+	// actually be used for a new Reminder — the user has an email set *and*
+	// the self-hoster has SMTP configured (ADR-0021, ADR-0010).
+	EmailReminderChannelAvailable bool `json:"email_reminder_channel_available"`
+}
+
+func (h *AuthHandler) toMeResponse(user repository.User) meResponse {
+	return meResponse{
+		ID:                            user.ID,
+		Username:                      user.Username,
+		MustChangePassword:            user.MustChangePassword,
+		Email:                         user.Email,
+		EmailReminderChannelAvailable: h.smtpConfigured && user.Email != nil,
+	}
 }
 
 func (h *AuthHandler) Me(w http.ResponseWriter, r *http.Request) {
@@ -75,11 +95,37 @@ func (h *AuthHandler) Me(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	httpresponse.JSON(w, http.StatusOK, meResponse{
-		ID:                 user.ID,
-		Username:           user.Username,
-		MustChangePassword: user.MustChangePassword,
-	})
+	httpresponse.JSON(w, http.StatusOK, h.toMeResponse(user))
+}
+
+type updateEmailRequest struct {
+	Email string `json:"email"`
+}
+
+func (h *AuthHandler) UpdateEmail(w http.ResponseWriter, r *http.Request) {
+	userID, ok := httpauth.UserIDFromContext(r.Context())
+	if !ok {
+		httpresponse.Error(w, http.StatusUnauthorized, "unauthorized", "authentication required")
+		return
+	}
+
+	var req updateEmailRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httpresponse.Error(w, http.StatusBadRequest, "invalid_request", "request body must be valid JSON")
+		return
+	}
+
+	user, err := h.auth.UpdateEmail(r.Context(), userID, req.Email)
+	switch {
+	case errors.Is(err, service.ErrInvalidEmail):
+		httpresponse.Error(w, http.StatusBadRequest, "invalid_request", "email is not a valid address")
+		return
+	case err != nil:
+		httpresponse.Error(w, http.StatusInternalServerError, "internal_error", "failed to update email")
+		return
+	}
+
+	httpresponse.JSON(w, http.StatusOK, h.toMeResponse(user))
 }
 
 type refreshResponse struct {

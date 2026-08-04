@@ -51,7 +51,7 @@ func newEventTestServer(t *testing.T) (baseURL, accessToken, calendarID string) 
 		t.Fatalf("create calendar: %v", err)
 	}
 
-	events := service.NewEventService(sqlDB, repository.NewEventRepository(sqlDB), repository.NewEventExceptionRepository(sqlDB), calendars)
+	events := service.NewEventService(sqlDB, repository.NewEventRepository(sqlDB), repository.NewEventExceptionRepository(sqlDB), repository.NewEventReminderRepository(sqlDB), calendars)
 	eventHandler := NewEventHandler(events)
 
 	r := chi.NewRouter()
@@ -754,4 +754,121 @@ func mustParseRFC3339(t *testing.T, value string) time.Time {
 		t.Fatalf("parse time %q: %v", value, err)
 	}
 	return ts
+}
+
+// The event API nests a reminders array on create and list, round-tripping
+// the offset/channel pairs a client authored (ADR-0020).
+func TestEventHandler_Create_RoundTripsReminders(t *testing.T) {
+	baseURL, accessToken, calendarID := newEventTestServer(t)
+
+	createResp := postJSON(t, baseURL, accessToken, "/api/events/", createEventRequest{
+		ID:         "22222222-2222-2222-2222-222222222222",
+		CalendarID: calendarID,
+		Title:      "Standup",
+		Start:      mustParseRFC3339(t, "2026-01-01T09:00:00Z"),
+		End:        mustParseRFC3339(t, "2026-01-01T10:00:00Z"),
+		Reminders: []reminderWire{
+			{OffsetMinutes: 10, Channel: "notification"},
+			{OffsetMinutes: 1440, Channel: "email"},
+		},
+	})
+	if createResp.StatusCode != http.StatusCreated {
+		t.Fatalf("expected 201, got %d", createResp.StatusCode)
+	}
+
+	var created eventResponse
+	if err := json.NewDecoder(createResp.Body).Decode(&created); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(created.Reminders) != 2 {
+		t.Fatalf("expected 2 reminders on create response, got %+v", created.Reminders)
+	}
+
+	listResp, err := authenticatedGet(baseURL+"/api/events/", accessToken)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	defer listResp.Body.Close()
+
+	var events []eventResponse
+	if err := json.NewDecoder(listResp.Body).Decode(&events); err != nil {
+		t.Fatalf("decode list: %v", err)
+	}
+	if len(events) != 1 || len(events[0].Reminders) != 2 {
+		t.Fatalf("expected 2 reminders on list, got %+v", events)
+	}
+}
+
+// Absent reminders means no Reminders, and the field is omitted from the
+// response — not an empty array.
+func TestEventHandler_Create_OmitsRemindersWhenAbsent(t *testing.T) {
+	baseURL, accessToken, calendarID := newEventTestServer(t)
+
+	resp := createEvent(t, baseURL, accessToken, "22222222-2222-2222-2222-222222222222", calendarID, "Standup", "2026-01-01T09:00:00Z", "2026-01-01T10:00:00Z")
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	if bytes.Contains(body, []byte("reminders")) {
+		t.Fatalf("expected reminders to be omitted, got %s", body)
+	}
+}
+
+func TestEventHandler_Create_RejectsInvalidReminderChannel(t *testing.T) {
+	baseURL, accessToken, calendarID := newEventTestServer(t)
+
+	resp := postJSON(t, baseURL, accessToken, "/api/events/", createEventRequest{
+		ID:         "22222222-2222-2222-2222-222222222222",
+		CalendarID: calendarID,
+		Title:      "Standup",
+		Start:      mustParseRFC3339(t, "2026-01-01T09:00:00Z"),
+		End:        mustParseRFC3339(t, "2026-01-01T10:00:00Z"),
+		Reminders:  []reminderWire{{OffsetMinutes: 10, Channel: "sms"}},
+	})
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", resp.StatusCode)
+	}
+}
+
+// PATCH replaces an Event's reminders array wholesale, on the same
+// request/response contract as create (ADR-0020).
+func TestEventHandler_Update_ReplacesRemindersWholesale(t *testing.T) {
+	baseURL, accessToken, calendarID := newEventTestServer(t)
+
+	createResp := postJSON(t, baseURL, accessToken, "/api/events/", createEventRequest{
+		ID:         "22222222-2222-2222-2222-222222222222",
+		CalendarID: calendarID,
+		Title:      "Standup",
+		Start:      mustParseRFC3339(t, "2026-01-01T09:00:00Z"),
+		End:        mustParseRFC3339(t, "2026-01-01T10:00:00Z"),
+		Reminders:  []reminderWire{{OffsetMinutes: 10, Channel: "notification"}},
+	})
+	var created eventResponse
+	json.NewDecoder(createResp.Body).Decode(&created)
+
+	body, _ := json.Marshal(updateEventRequest{
+		CalendarID: calendarID,
+		Title:      "Standup",
+		Start:      mustParseRFC3339(t, "2026-01-01T09:00:00Z"),
+		End:        mustParseRFC3339(t, "2026-01-01T10:00:00Z"),
+		Reminders:  []reminderWire{{OffsetMinutes: 30, Channel: "email"}},
+	})
+	req, _ := http.NewRequest(http.MethodPatch, baseURL+"/api/events/"+created.ID, bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	updateResp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("patch: %v", err)
+	}
+	if updateResp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", updateResp.StatusCode)
+	}
+
+	var updated eventResponse
+	if err := json.NewDecoder(updateResp.Body).Decode(&updated); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(updated.Reminders) != 1 || updated.Reminders[0].OffsetMinutes != 30 || updated.Reminders[0].Channel != "email" {
+		t.Fatalf("expected reminders replaced wholesale, got %+v", updated.Reminders)
+	}
 }

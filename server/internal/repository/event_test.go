@@ -405,6 +405,75 @@ func TestEventRepository_DeleteChildrenOf(t *testing.T) {
 	}
 }
 
+// ListAllWithReminders is the firing engine's read path (ADR-0021): it spans
+// every user, unlike ListByUser, and only returns events that actually carry
+// a Reminder.
+func TestEventRepository_ListAllWithReminders(t *testing.T) {
+	sqlDB, err := db.OpenInMemory()
+	if err != nil {
+		t.Fatalf("open in-memory db: %v", err)
+	}
+	t.Cleanup(func() { sqlDB.Close() })
+	ctx := context.Background()
+
+	users := NewUserRepository(sqlDB)
+	userA, err := users.Create(ctx, "user-a", "hash", false)
+	if err != nil {
+		t.Fatalf("create user a: %v", err)
+	}
+	userB, err := users.Create(ctx, "user-b", "hash", false)
+	if err != nil {
+		t.Fatalf("create user b: %v", err)
+	}
+
+	calendars := NewCalendarRepository(sqlDB)
+	calA, err := calendars.Create(ctx, userA.ID, "cal-a", "A", "peacock")
+	if err != nil {
+		t.Fatalf("create calendar a: %v", err)
+	}
+	calB, err := calendars.Create(ctx, userB.ID, "cal-b", "B", "tomato")
+	if err != nil {
+		t.Fatalf("create calendar b: %v", err)
+	}
+
+	repo := NewEventRepository(sqlDB)
+	reminders := NewEventReminderRepository(sqlDB)
+	mustCreateEvent(t, repo, "with-reminder", userA.ID, calA.ID, "2026-01-01T09:00:00Z", "2026-01-01T10:00:00Z")
+	mustCreateEvent(t, repo, "without-reminder", userA.ID, calA.ID, "2026-01-02T09:00:00Z", "2026-01-02T10:00:00Z")
+	mustCreateEvent(t, repo, "other-users-reminder", userB.ID, calB.ID, "2026-01-03T09:00:00Z", "2026-01-03T10:00:00Z")
+
+	if err := reminders.ReplaceByEventID(ctx, "with-reminder", []Reminder{{OffsetMinutes: 10, Channel: "notification"}}); err != nil {
+		t.Fatalf("replace by event id: %v", err)
+	}
+	if err := reminders.ReplaceByEventID(ctx, "other-users-reminder", []Reminder{{OffsetMinutes: 10, Channel: "notification"}}); err != nil {
+		t.Fatalf("replace by event id: %v", err)
+	}
+
+	events, err := repo.ListAllWithReminders(ctx)
+	if err != nil {
+		t.Fatalf("list all with reminders: %v", err)
+	}
+
+	ids := make([]string, len(events))
+	for i, e := range events {
+		ids[i] = e.ID
+	}
+	if len(ids) != 2 {
+		t.Fatalf("expected 2 events with reminders across both users, got %v", ids)
+	}
+	for _, want := range []string{"with-reminder", "other-users-reminder"} {
+		found := false
+		for _, id := range ids {
+			if id == want {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("expected %q in %v", want, ids)
+		}
+	}
+}
+
 func mustCreateEvent(t *testing.T, repo *EventRepository, id string, userID int64, calendarID, start, end string) {
 	t.Helper()
 	if _, err := repo.Create(context.Background(), id, userID, calendarID, id, mustParseTime(t, start), mustParseTime(t, end), false, "", nil, nil, nil); err != nil {
