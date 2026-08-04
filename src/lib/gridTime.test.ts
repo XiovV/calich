@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { durationToHeight, timeToY, yToTime } from "./gridTime";
+import { computeMoveToDate, durationToHeight, timeToY, yToTime } from "./gridTime";
 
 describe("timeToY", () => {
   it("returns 0 at midnight", () => {
@@ -43,5 +43,50 @@ describe("yToTime", () => {
     const referenceDay = new Date(2026, 7, 3);
     const result = yToTime(210, referenceDay, 60);
     expect(result).toEqual(new Date(2026, 7, 3, 3, 30));
+  });
+});
+
+describe("computeMoveToDate", () => {
+  it("changes the date to the target date", () => {
+    const start = new Date(2026, 7, 10, 9, 0);
+    const end = new Date(2026, 7, 10, 10, 0);
+    const target = new Date(2026, 7, 15);
+
+    const result = computeMoveToDate(start, end, target);
+
+    expect(result.start).toEqual(new Date(2026, 7, 15, 9, 0));
+  });
+
+  it("preserves the time-of-day", () => {
+    const start = new Date(2026, 7, 10, 14, 30);
+    const end = new Date(2026, 7, 10, 15, 0);
+    const target = new Date(2026, 8, 2);
+
+    const result = computeMoveToDate(start, end, target);
+
+    expect(result.start).toEqual(new Date(2026, 8, 2, 14, 30));
+  });
+
+  it("preserves the duration", () => {
+    const start = new Date(2026, 7, 10, 9, 0);
+    const end = new Date(2026, 7, 10, 11, 30);
+    const target = new Date(2026, 7, 20);
+
+    const result = computeMoveToDate(start, end, target);
+
+    expect(result.end.getTime() - result.start.getTime()).toBe(
+      end.getTime() - start.getTime(),
+    );
+  });
+
+  it("moves across a month boundary", () => {
+    const start = new Date(2026, 6, 31, 8, 0);
+    const end = new Date(2026, 6, 31, 9, 0);
+    const target = new Date(2026, 7, 1);
+
+    const result = computeMoveToDate(start, end, target);
+
+    expect(result.start).toEqual(new Date(2026, 7, 1, 8, 0));
+    expect(result.end).toEqual(new Date(2026, 7, 1, 9, 0));
   });
 });

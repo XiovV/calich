@@ -4,11 +4,8 @@ import { useShellStore } from "../lib/shellStore";
 import { useCalendarsStore } from "../lib/calendarsStore";
 import { getCalendarById } from "../lib/calendar";
 import { getCalendarColorClass } from "../lib/calendarColors";
-import {
-  buildMonthGrid,
-  computeMoveToDate,
-  getOccurrencesForDay,
-} from "../lib/monthGrid";
+import { buildMonthGrid, getOccurrencesForDay } from "../lib/monthGrid";
+import { computeMoveToDate } from "../lib/gridTime";
 import { useVisibleOccurrences } from "../hooks/useVisibleOccurrences";
 import { occurrenceKey, type Occurrence } from "../lib/occurrence";
 import { WEEKDAY_SHORT_NAMES } from "../lib/rruleParts";

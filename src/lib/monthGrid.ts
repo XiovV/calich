@@ -70,20 +70,3 @@ export function computeCellDraft(
   const end = new Date(start.getTime() + durationMinutes * 60 * 1000);
   return { start, end };
 }
-
-export function computeMoveToDate(
-  start: Date,
-  end: Date,
-  targetDate: Date,
-): DraftBlock {
-  const duration = end.getTime() - start.getTime();
-  const newStart = new Date(targetDate);
-  newStart.setHours(
-    start.getHours(),
-    start.getMinutes(),
-    start.getSeconds(),
-    start.getMilliseconds(),
-  );
-  const newEnd = new Date(newStart.getTime() + duration);
-  return { start: newStart, end: newEnd };
-}

@@ -96,6 +96,28 @@ export function computeMovedEventTimes(
   return { start, end };
 }
 
+/**
+ * `[start, end)` moved to `targetDate`, keeping the original time-of-day and
+ * duration. Used by any date-cell drag (Month Day cells, the Week all-day
+ * lane) where the drop target is a whole day rather than a pixel offset.
+ */
+export function computeMoveToDate(
+  start: Date,
+  end: Date,
+  targetDate: Date,
+): DraftBlock {
+  const duration = end.getTime() - start.getTime();
+  const newStart = new Date(targetDate);
+  newStart.setHours(
+    start.getHours(),
+    start.getMinutes(),
+    start.getSeconds(),
+    start.getMilliseconds(),
+  );
+  const newEnd = new Date(newStart.getTime() + duration);
+  return { start: newStart, end: newEnd };
+}
+
 export function computeResizedEventTimes(
   originalStart: Date,
   originalEnd: Date,

@@ -9,6 +9,7 @@ import { useVisibleOccurrences } from "../hooks/useVisibleOccurrences";
 import { occurrenceKey, type Occurrence } from "../lib/occurrence";
 import {
   PIXELS_PER_HOUR,
+  computeMoveToDate,
   computeMovedEventTimes,
   computeResizedEventTimes,
   durationToHeight,
@@ -17,6 +18,7 @@ import {
 } from "../lib/gridTime";
 import { TimeAxis } from "./TimeAxis";
 import { AllDayLane } from "./AllDayLane";
+import { AllDayEventDragPreview } from "./AllDayEventDragPreview";
 import { DayColumn, type EventDragPreviewData } from "./DayColumn";
 import type { EventDragKind } from "./EventBlock";
 import { ScopePicker } from "./ScopePicker";
@@ -37,6 +39,27 @@ interface EventDragOrigin {
   startClientX: number;
   startClientY: number;
   columnWidth: number;
+}
+
+interface AllDayDragOrigin {
+  occurrence: Occurrence;
+  startClientX: number;
+  startClientY: number;
+}
+
+const ALL_DAY_CLICK_DISTANCE_THRESHOLD_PX = 4;
+
+function getAllDayDateAtPoint(
+  days: Date[],
+  clientX: number,
+  clientY: number,
+): Date | null {
+  const target = document.elementFromPoint(clientX, clientY);
+  const columnElement = target?.closest<HTMLElement>("[data-allday-date]");
+  const dateKey = columnElement?.dataset.alldayDate;
+  if (!dateKey) return null;
+
+  return days.find((day) => day.toDateString() === dateKey) ?? null;
 }
 
 function computeDragTimes(
@@ -130,6 +153,11 @@ export function TimeGrid({
   const dragOriginRef = useRef<EventDragOrigin | null>(null);
   const [activeDrag, setActiveDrag] = useState<EventDragOrigin | null>(null);
   const [dragDelta, setDragDelta] = useState({ x: 0, y: 0 });
+
+  const allDayDragOriginRef = useRef<AllDayDragOrigin | null>(null);
+  const [activeAllDayDrag, setActiveAllDayDrag] = useState<AllDayDragOrigin | null>(null);
+  const [allDayDragPosition, setAllDayDragPosition] = useState({ x: 0, y: 0 });
+  const [allDayHoverDateKey, setAllDayHoverDateKey] = useState<string | null>(null);
 
   // The grid renders Occurrences, not raw Events: each master is expanded over
   // the visible window (first day 00:00 to the day after the last). A
@@ -226,6 +254,70 @@ export function TimeGrid({
       )
     : null;
 
+  function handleAllDayDragStart(
+    occurrence: Occurrence,
+    clientX: number,
+    clientY: number,
+  ) {
+    const origin: AllDayDragOrigin = {
+      occurrence,
+      startClientX: clientX,
+      startClientY: clientY,
+    };
+    allDayDragOriginRef.current = origin;
+    setAllDayDragPosition({ x: clientX, y: clientY });
+    setActiveAllDayDrag(origin);
+  }
+
+  useEffect(() => {
+    if (!allDayDragOriginRef.current) return;
+    const origin = allDayDragOriginRef.current;
+
+    function handleMouseMove(domEvent: MouseEvent) {
+      setAllDayDragPosition({ x: domEvent.clientX, y: domEvent.clientY });
+      const hoveredDay = getAllDayDateAtPoint(daysToShow, domEvent.clientX, domEvent.clientY);
+      setAllDayHoverDateKey(hoveredDay ? hoveredDay.toDateString() : null);
+    }
+
+    function handleMouseUp(domEvent: MouseEvent) {
+      const deltaX = domEvent.clientX - origin.startClientX;
+      const deltaY = domEvent.clientY - origin.startClientY;
+      const distance = Math.max(Math.abs(deltaX), Math.abs(deltaY));
+
+      if (distance < ALL_DAY_CLICK_DISTANCE_THRESHOLD_PX) {
+        onOccurrenceClick(origin.occurrence);
+      } else {
+        const targetDate = getAllDayDateAtPoint(daysToShow, domEvent.clientX, domEvent.clientY);
+        if (targetDate) {
+          const { start, end } = computeMoveToDate(
+            origin.occurrence.start,
+            origin.occurrence.end,
+            targetDate,
+          );
+          dragCommit.commit(origin.occurrence, start, end);
+        }
+      }
+
+      allDayDragOriginRef.current = null;
+      setActiveAllDayDrag(null);
+      setAllDayHoverDateKey(null);
+    }
+
+    window.addEventListener("mousemove", handleMouseMove);
+    window.addEventListener("mouseup", handleMouseUp);
+    return () => {
+      window.removeEventListener("mousemove", handleMouseMove);
+      window.removeEventListener("mouseup", handleMouseUp);
+    };
+  }, [activeAllDayDrag, daysToShow, onOccurrenceClick, dragCommit]);
+
+  const allDayDragCalendar = activeAllDayDrag
+    ? getCalendarById(calendars, activeAllDayDrag.occurrence.event.calendarId)
+    : undefined;
+  const allDayDragColorClass = allDayDragCalendar
+    ? getCalendarColorClass(allDayDragCalendar.color)
+    : "bg-calendar-graphite";
+
   return (
     <div className="flex h-full flex-col">
       <div ref={scrollRef} className="flex-1 overflow-y-auto">
@@ -249,6 +341,11 @@ export function TimeGrid({
             daysToShow={daysToShow}
             occurrences={allDayOccurrences}
             onOccurrenceClick={onOccurrenceClick}
+            onOccurrenceDragStart={handleAllDayDragStart}
+            draggingKey={
+              activeAllDayDrag ? occurrenceKey(activeAllDayDrag.occurrence) : null
+            }
+            dragHoverDateKey={allDayHoverDateKey}
           />
         </div>
         <div className="flex">
@@ -277,6 +374,14 @@ export function TimeGrid({
           </div>
         </div>
       </div>
+      {activeAllDayDrag && (
+        <AllDayEventDragPreview
+          x={allDayDragPosition.x}
+          y={allDayDragPosition.y}
+          title={activeAllDayDrag.occurrence.event.title}
+          colorClass={allDayDragColorClass}
+        />
+      )}
       {dragCommit.isScopePickerOpen && (
         <ScopePicker
           action="Edit"
