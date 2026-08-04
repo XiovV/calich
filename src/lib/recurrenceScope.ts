@@ -1,6 +1,6 @@
 import { RRule } from "rrule";
 import type { Event } from "./event";
-import { toFloating } from "./floatingTime";
+import { anchorZone, toFloating } from "./floatingTime";
 
 /**
  * Pure transforms for the Tier-3 scope picker (This event / This and
@@ -19,6 +19,9 @@ export interface EventFieldChanges {
   // Absent from a drag-only edit (allDay isn't draggable yet); the caller
   // falls back to the master's own allDay in that case.
   allDay?: boolean;
+  // The Anchor zone: preserved from whatever Event this change derives from
+  // — no picker exists to change it explicitly yet (ADR-0019).
+  tzid?: string;
 }
 
 /** `changes`' allDay, falling back to `master`'s own when the edit didn't
@@ -51,6 +54,9 @@ export function makeOverride(
     start: changes.start,
     end: changes.end,
     allDay: resolveAllDay(changes, master),
+    // An Override inherits its master's Anchor zone — only an explicit zone
+    // choice would change it, and no picker exists yet (ADR-0019).
+    tzid: master.tzid,
   };
 }
 
@@ -93,16 +99,17 @@ function withUntil(rrule: string, untilFloating: Date): string {
  * a series from a point on (ADR-0016).
  */
 export function truncateSeriesBefore(master: Event, splitStart: Date): string {
+  const zone = anchorZone(master.tzid);
+  const floatingStart = toFloating(master.start, zone);
   const rule = new RRule({
     ...RRule.parseString(master.rrule ?? ""),
-    dtstart: toFloating(master.start),
+    dtstart: floatingStart,
   });
 
-  const lastBeforeSplit = rule.before(toFloating(splitStart), false);
+  const lastBeforeSplit = rule.before(toFloating(splitStart, zone), false);
   // No earlier Occurrence (the split lands on the very first one) — truncate
   // to just before the master's own start so it produces nothing.
-  const untilFloating =
-    lastBeforeSplit ?? new Date(toFloating(master.start).getTime() - 1000);
+  const untilFloating = lastBeforeSplit ?? new Date(floatingStart.getTime() - 1000);
 
   return withUntil(master.rrule ?? "", untilFloating);
 }
@@ -131,7 +138,15 @@ export function splitFollowing(
 ): SplitResult {
   return {
     truncatedMaster: { rrule: truncateSeriesBefore(master, splitStart) },
-    newMaster: { ...changes, allDay: resolveAllDay(changes, master), rrule: master.rrule },
+    // The new master carries the same Anchor zone as the old one — an
+    // explicit zone choice would change it, and no picker exists yet
+    // (ADR-0019).
+    newMaster: {
+      ...changes,
+      allDay: resolveAllDay(changes, master),
+      rrule: master.rrule,
+      tzid: master.tzid,
+    },
     reparentFromStart: splitStart,
   };
 }

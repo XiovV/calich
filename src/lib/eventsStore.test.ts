@@ -110,6 +110,21 @@ describe("updateEvent", () => {
     expect(toast.error).toHaveBeenCalledWith("Failed to update event.");
   });
 
+  it("preserves the event's own tzid when changes don't touch it (ADR-0019)", () => {
+    const zonedStandup = { ...standup, tzid: "Europe/Berlin" };
+    useEventsStore.setState({ events: [zonedStandup] });
+    vi.mocked(eventsApi.update).mockResolvedValue({ ...zonedStandup, title: "Renamed" });
+
+    const promise = useEventsStore.getState().updateEvent("evt-1", { title: "Renamed" });
+
+    expect(eventsApi.update).toHaveBeenCalledWith(
+      "token-123",
+      "evt-1",
+      expect.objectContaining({ tzid: "Europe/Berlin" }),
+    );
+    return promise;
+  });
+
   it("is a no-op for an id that isn't in the store", async () => {
     await useEventsStore.getState().updateEvent("does-not-exist", { title: "Renamed" });
 

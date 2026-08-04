@@ -79,6 +79,18 @@ _Avoid_: month thumbnail, small calendar
 The marker on a Mini-month day indicating it has at least one visible Event. A density hint only — it carries no Calendar color and no count.
 _Avoid_: event indicator, badge
 
+**Anchor zone**:
+The IANA timezone an Event's wall-clock is defined in, stored as the `tzid` on the Event (the `TZID` a CalDAV client sends). Drives Recurrence rule expansion and DST — "every Mon 10:00 Europe/Berlin" fires at 10:00 Berlin wall-clock across a DST change. Belongs to the Event and is preserved when the Event is edited; only an explicit zone choice changes it. `Etc/UTC` means an absolute instant; absent means a Floating Event. See ADR-0019.
+_Avoid_: event timezone, source zone, origin zone
+
+**Viewer zone**:
+The IANA timezone the current viewer sees times in — detected from the browser and applied only at render, shifting each Event's instant to local wall-clock (a 15:00 Berlin meeting shows as 09:00 to a New York viewer). Belongs to the session, not the Event, and follows the viewer as they travel. Distinct from the Anchor zone. See ADR-0019.
+_Avoid_: local zone, display timezone, user zone
+
+**Floating Event**:
+A timed Event with no Anchor zone (`tzid` absent), whose wall-clock is interpreted in the Viewer zone rather than any fixed zone — it has no single absolute instant and expands recurrence in the viewer's wall-clock (iCalendar floating time, e.g. "take meds at 09:00 wherever I am"). The default for Events predating the timezone model. Distinct from an all-day Event, which is date-only. See ADR-0019.
+_Avoid_: local event, zoneless event, naive event
+
 **Theme preference**:
 The user's chosen appearance — Light, Dark, or System — persisted locally and applied by toggling a `.dark` class on the document root. System defers to the OS setting; Light and Dark pin the appearance regardless of the OS. See ADR-0014.
 _Avoid_: color scheme, mode, dark-mode toggle

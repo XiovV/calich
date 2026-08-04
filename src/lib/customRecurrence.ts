@@ -1,5 +1,5 @@
 import { RRule } from "rrule";
-import { toFloating } from "./floatingTime";
+import { toFloating, viewerZone } from "./floatingTime";
 import {
   ORDINALS,
   RRULE_WEEKDAYS,
@@ -95,7 +95,11 @@ function untilFromYMD(year: number, month0: number, day: number): string {
   return `${year}${mm}${dd}T235959Z`;
 }
 
-/** The floating-frame start of the `count`-th Occurrence, or null if none. */
+/** The floating-frame start of the `count`-th Occurrence, or null if none.
+ * `start` is a wall-clock the dialog picked, not yet a stored Event's UTC
+ * instant, so it has no real Anchor zone to convert from — it's read
+ * directly as the Viewer zone's wall-clock, same as every other field this
+ * not-yet-saved dialog works with (ADR-0019). */
 function nthOccurrence(
   fields: CustomRecurrence,
   start: Date,
@@ -103,7 +107,7 @@ function nthOccurrence(
 ): Date | null {
   const rule = new RRule({
     ...RRule.parseString(baseRuleParts(fields, start).join(";")),
-    dtstart: toFloating(start),
+    dtstart: toFloating(start, viewerZone()),
     count: Math.max(1, count),
   });
   const all = rule.all();

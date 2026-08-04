@@ -323,6 +323,61 @@ describe("eventsApi.create override", () => {
   });
 });
 
+describe("eventsApi tzid", () => {
+  it("list maps a wire tzid onto the Event, and omits it when absent (Floating)", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(200, [
+        { ...wireEvent, tzid: "Europe/Berlin" },
+        wireEvent,
+      ]),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const events = await eventsApi.list("token-123");
+
+    expect(events[0].tzid).toBe("Europe/Berlin");
+    expect(events[1].tzid).toBeUndefined();
+  });
+
+  it("create sends tzid and maps it back", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(201, { ...wireEvent, tzid: "Europe/Berlin" }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const created = await eventsApi.create("token-123", {
+      id: "evt-1",
+      calendarId: "cal-1",
+      title: "Standup",
+      start: new Date("2026-01-01T09:00:00Z"),
+      end: new Date("2026-01-01T10:00:00Z"),
+      tzid: "Europe/Berlin",
+    });
+
+    expect(created.tzid).toBe("Europe/Berlin");
+    const body = JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string);
+    expect(body.tzid).toBe("Europe/Berlin");
+  });
+
+  it("update sends tzid", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(200, { ...wireEvent, tzid: "Europe/Berlin" }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await eventsApi.update("token-123", "evt-1", {
+      calendarId: "cal-1",
+      title: "Standup",
+      start: new Date("2026-01-01T09:00:00Z"),
+      end: new Date("2026-01-01T10:00:00Z"),
+      tzid: "Europe/Berlin",
+    });
+
+    const body = JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string);
+    expect(body.tzid).toBe("Europe/Berlin");
+  });
+});
+
 describe("eventsApi.addException", () => {
   it("posts the occurrence start", async () => {
     const fetchMock = vi.fn().mockResolvedValue(emptyResponse(204));

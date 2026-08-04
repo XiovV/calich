@@ -2,7 +2,7 @@ import { RRule } from "rrule";
 import { addDays, differenceInCalendarDays } from "date-fns";
 import type { Event } from "./event";
 import type { Occurrence } from "./occurrence";
-import { fromFloating, toFloating } from "./floatingTime";
+import { anchorZone, fromFloating, toFloating } from "./floatingTime";
 
 /** Whether `[start, end)` overlaps the half-open window `[windowStart, windowEnd)`. */
 function overlapsWindow(
@@ -48,8 +48,9 @@ function indexOverrides(events: Event[]): Map<string, Map<number, Event>> {
  * (`occurrence.event` becomes the override). Exceptions (`exdates` on the
  * master) drop their Occurrence entirely. See ADR-0016.
  *
- * Pure: depends only on its arguments (and the ambient timezone, for wall-clock
- * conversion). Occurrences are returned unsorted.
+ * Pure: depends only on its arguments — each Event's own Anchor zone drives
+ * its wall-clock conversion, falling back to the ambient/Viewer zone only for
+ * a Floating Event (no `tzid`, ADR-0019). Occurrences are returned unsorted.
  */
 export function expandOccurrences(
   events: Event[],
@@ -80,9 +81,18 @@ export function expandOccurrences(
       continue;
     }
 
+    // Recurrence expands in the Event's Anchor zone — a named zone drives
+    // DST-correct wall-clock recurrence, "Etc/UTC" expands with no DST, and
+    // a Floating Event (no tzid) falls back to the Viewer zone, matching
+    // pre-ADR-0019 behavior exactly. A nonexistent wall-clock (spring-forward
+    // gap) shifts forward; an ambiguous one (fall-back overlap) resolves to
+    // the earlier offset — date-fns-tz's defaults, applied in floatingTime's
+    // fromFloating (ADR-0019).
+    const zone = anchorZone(event.tzid);
+
     const rule = new RRule({
       ...RRule.parseString(event.rrule),
-      dtstart: toFloating(event.start),
+      dtstart: toFloating(event.start, zone),
     });
 
     // Look back by one duration so an Occurrence that starts just before the
@@ -90,13 +100,13 @@ export function expandOccurrences(
     // overlap test above.
     const searchStart = new Date(windowStart.getTime() - durationMs);
     const floatingStarts = rule.between(
-      toFloating(searchStart),
-      toFloating(windowEnd),
+      toFloating(searchStart, zone),
+      toFloating(windowEnd, zone),
       true,
     );
 
     for (const floatingStart of floatingStarts) {
-      const start = fromFloating(floatingStart);
+      const start = fromFloating(floatingStart, zone);
       if (exdateKeys.has(instantKey(start))) continue;
 
       const override = overridesByRecurrenceId?.get(instantKey(start));

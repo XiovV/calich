@@ -19,8 +19,9 @@ export type MasterFieldChanges = EventFieldChanges & { rrule?: string };
 
 /** A master's own identifying fields, kept unchanged while only its rule
  * moves — carried by ops that truncate a series without replacing it
- * (`reanchorSeries`, `truncateSeries`). */
-type MasterCoreFields = Pick<Event, "calendarId" | "title" | "start" | "end">;
+ * (`reanchorSeries`, `truncateSeries`). Includes `tzid` so truncating never
+ * silently clears the Anchor zone (ADR-0019). */
+type MasterCoreFields = Pick<Event, "calendarId" | "title" | "start" | "end" | "tzid">;
 
 /**
  * A scoped edit (This event/This and following/All events) compiles down to
@@ -154,6 +155,8 @@ export function planEditOccurrence(
           end: seriesChanges.end,
           allDay: resolveAllDay(changes, master),
           rrule,
+          // Preserved unchanged — no picker exists to change it (ADR-0019).
+          tzid: master.tzid,
         },
         discardChildren: shouldDiscardChildren(master.rrule, rrule),
       },
@@ -179,6 +182,7 @@ export function planEditOccurrence(
           title: master.title,
           start: master.start,
           end: master.end,
+          tzid: master.tzid,
         },
         truncatedRrule: truncatedMaster.rrule,
         keptExdates,
@@ -207,6 +211,8 @@ export function planEditOccurrence(
           start: changes.start,
           end: changes.end,
           allDay: resolveAllDay(changes, master),
+          // Preserved unchanged — no picker exists to change it (ADR-0019).
+          tzid: occurrence.event.tzid,
         },
       },
     ];
@@ -226,6 +232,7 @@ export function planEditOccurrence(
         start: override.start,
         end: override.end,
         allDay: override.allDay,
+        tzid: override.tzid,
       },
     },
   ];
@@ -280,6 +287,7 @@ export function planDeleteOccurrence({
           title: master.title,
           start: master.start,
           end: master.end,
+          tzid: master.tzid,
         },
         truncatedRrule,
         keptExdates,

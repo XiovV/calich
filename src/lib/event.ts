@@ -22,4 +22,8 @@ export interface Event {
   // Exdates lists a Master's cancelled Occurrence starts (Exceptions).
   // Undefined/empty on an Override.
   exdates?: Date[];
+  // The Anchor zone: a named IANA zone, "Etc/UTC" for an absolute instant, or
+  // undefined for a Floating Event, which renders/expands in the Viewer
+  // zone. See ADR-0019 and CONTEXT.md's Anchor zone/Floating Event.
+  tzid?: string;
 }

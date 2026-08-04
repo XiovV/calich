@@ -17,7 +17,7 @@ func TestWithTx_CommitsOnSuccess(t *testing.T) {
 	end := time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC)
 
 	err := WithTx(ctx, sqlDB, func(tx *sql.Tx) error {
-		_, err := repo.WithTx(tx).Create(ctx, "evt-1", userID, calendarID, "Standup", start, end, false, "", nil, nil)
+		_, err := repo.WithTx(tx).Create(ctx, "evt-1", userID, calendarID, "Standup", start, end, false, "", nil, nil, nil)
 		return err
 	})
 	if err != nil {
@@ -39,7 +39,7 @@ func TestWithTx_RollsBackOnError(t *testing.T) {
 	sentinel := errors.New("boom")
 
 	err := WithTx(ctx, sqlDB, func(tx *sql.Tx) error {
-		if _, err := repo.WithTx(tx).Create(ctx, "evt-1", userID, calendarID, "Standup", start, end, false, "", nil, nil); err != nil {
+		if _, err := repo.WithTx(tx).Create(ctx, "evt-1", userID, calendarID, "Standup", start, end, false, "", nil, nil, nil); err != nil {
 			return err
 		}
 		return sentinel

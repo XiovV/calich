@@ -1,6 +1,19 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { fromZonedTime } from "date-fns-tz";
 import { expandOccurrences } from "./expandOccurrences";
 import type { Event } from "./event";
+
+/** The wall-clock hour `instant` reads as in `zone`, for zone-aware assertions
+ * that don't depend on the test runner's ambient timezone. */
+function hourIn(instant: Date, zone: string): number {
+  return Number(
+    new Intl.DateTimeFormat("en-US", {
+      hour: "numeric",
+      hour12: false,
+      timeZone: zone,
+    }).format(instant),
+  );
+}
 
 // Pin the timezone to one that observes DST so the wall-clock hold test is
 // meaningful; Node applies TZ to subsequently-created Dates. Scoped to this file
@@ -110,6 +123,87 @@ describe("expandOccurrences", () => {
     // The transition really happened between the first two occurrences.
     expect(occurrences[0].start.getDate()).toBe(3);
     expect(occurrences[1].start.getDate()).toBe(10);
+  });
+
+  it("holds the Anchor zone's wall-clock across DST regardless of the viewer's zone (ADR-0019)", () => {
+    // Europe/Berlin, not the ambient America/New_York the test file pins —
+    // proves expansion follows the Event's tzid, not the viewer's zone.
+    // EU spring-forward 2026-03-29: Mondays Mar 2/9/16/23 are CET (10:00
+    // local = 09:00 UTC); Mar 30 is CEST (10:00 local = 08:00 UTC).
+    const event = makeEvent({
+      start: fromZonedTime(new Date(2026, 2, 2, 10, 0), "Europe/Berlin"),
+      end: fromZonedTime(new Date(2026, 2, 2, 10, 30), "Europe/Berlin"),
+      rrule: "FREQ=WEEKLY;BYDAY=MO",
+      tzid: "Europe/Berlin",
+    });
+
+    const occurrences = expandOccurrences(
+      [event],
+      new Date(2026, 2, 1),
+      new Date(2026, 2, 31),
+    ).sort((a, b) => a.start.getTime() - b.start.getTime());
+
+    expect(occurrences).toHaveLength(5);
+    for (const o of occurrences) {
+      expect(hourIn(o.start, "Europe/Berlin")).toBe(10);
+    }
+    // The UTC hour actually shifts once the offset changes, proving DST was
+    // applied rather than the wall-clock silently drifting.
+    const utcHours = new Set(occurrences.map((o) => o.start.getUTCHours()));
+    expect(utcHours.size).toBe(2);
+  });
+
+  it("expands an Etc/UTC event with no DST drift, even while the viewer's zone observes DST", () => {
+    // Weekly Tuesday 09:00 UTC across the same America/New_York
+    // spring-forward window the wall-clock-hold test above uses.
+    const event = makeEvent({
+      start: new Date(Date.UTC(2026, 2, 3, 9, 0)),
+      end: new Date(Date.UTC(2026, 2, 3, 9, 30)),
+      rrule: "FREQ=WEEKLY;BYDAY=TU",
+      tzid: "Etc/UTC",
+    });
+
+    const occurrences = expandOccurrences(
+      [event],
+      new Date(2026, 2, 1),
+      new Date(2026, 2, 25),
+    );
+
+    expect(occurrences).toHaveLength(4);
+    for (const o of occurrences) {
+      expect(o.start.getUTCHours()).toBe(9);
+      expect(o.start.getUTCMinutes()).toBe(0);
+    }
+  });
+
+  it("resolves a nonexistent wall-clock (spring-forward gap) and an ambiguous one (fall-back overlap) without skipping or duplicating a day", () => {
+    // America/New_York: 2026-03-08 has no 02:30 (clocks skip 02:00->03:00);
+    // 2026-11-01 has two (clocks repeat 01:00-02:00). date-fns-tz's defaults
+    // — forward-shift the nonexistent instant, take the earlier offset for
+    // the ambiguous one — resolve both to a single instant per day, so a
+    // daily series never skips or duplicates an Occurrence (ADR-0019).
+    const event = makeEvent({
+      start: fromZonedTime(new Date(2026, 2, 6, 2, 30), "America/New_York"),
+      end: fromZonedTime(new Date(2026, 2, 6, 3, 0), "America/New_York"),
+      rrule: "FREQ=DAILY",
+      tzid: "America/New_York",
+    });
+
+    const springGap = expandOccurrences(
+      [event],
+      new Date(2026, 2, 7),
+      new Date(2026, 2, 10),
+    );
+    expect(springGap).toHaveLength(3);
+    expect(new Set(springGap.map((o) => o.start.getTime())).size).toBe(3);
+
+    const fallOverlap = expandOccurrences(
+      [event],
+      new Date(2026, 9, 30),
+      new Date(2026, 10, 3),
+    );
+    expect(fallOverlap).toHaveLength(4);
+    expect(new Set(fallOverlap.map((o) => o.start.getTime())).size).toBe(4);
   });
 
   it("drops an Occurrence whose start matches an Exception (exdate)", () => {

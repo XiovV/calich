@@ -60,7 +60,7 @@ func (s *EventService) withTx(ctx context.Context, fn func(events *repository.Ev
 	})
 }
 
-func (s *EventService) Create(ctx context.Context, userID int64, id, calendarID, title string, start, end time.Time, allDay bool, rrule string, parentID *string, recurrenceID *time.Time) (repository.Event, error) {
+func (s *EventService) Create(ctx context.Context, userID int64, id, calendarID, title string, start, end time.Time, allDay bool, rrule string, parentID *string, recurrenceID *time.Time, tzid *string) (repository.Event, error) {
 	title = strings.TrimSpace(title)
 	if title == "" {
 		return repository.Event{}, ErrInvalidTitle
@@ -94,7 +94,7 @@ func (s *EventService) Create(ctx context.Context, userID int64, id, calendarID,
 		return repository.Event{}, err
 	}
 
-	event, err := s.events.Create(ctx, id, userID, calendarID, title, start, end, allDay, rrule, parentID, recurrenceID)
+	event, err := s.events.Create(ctx, id, userID, calendarID, title, start, end, allDay, rrule, parentID, recurrenceID, tzid)
 	if err != nil {
 		return repository.Event{}, fmt.Errorf("create event: %w", err)
 	}
@@ -176,7 +176,7 @@ func (s *EventService) Get(ctx context.Context, userID int64, id string) (reposi
 	return events[0], nil
 }
 
-func (s *EventService) Update(ctx context.Context, userID int64, id, calendarID, title string, start, end time.Time, allDay bool, rrule string) (repository.Event, error) {
+func (s *EventService) Update(ctx context.Context, userID int64, id, calendarID, title string, start, end time.Time, allDay bool, rrule string, tzid *string) (repository.Event, error) {
 	title = strings.TrimSpace(title)
 	if title == "" {
 		return repository.Event{}, ErrInvalidTitle
@@ -208,7 +208,7 @@ func (s *EventService) Update(ctx context.Context, userID int64, id, calendarID,
 
 	var updated repository.Event
 	err = s.withTx(ctx, func(events *repository.EventRepository, exceptions *repository.EventExceptionRepository) error {
-		u, err := events.Update(ctx, userID, id, calendarID, title, start, end, allDay, rrule)
+		u, err := events.Update(ctx, userID, id, calendarID, title, start, end, allDay, rrule, tzid)
 		if err != nil {
 			return err
 		}

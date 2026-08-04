@@ -272,6 +272,104 @@ describe("planEditOccurrence", () => {
   });
 });
 
+describe("planEditOccurrence preserves the Anchor zone (ADR-0019)", () => {
+  const zonedMaster = { ...recurringMaster, tzid: "Europe/Berlin" };
+
+  it('scope "this" (new override): carries the master\'s tzid unchanged', () => {
+    const occurrenceStart = new Date("2026-01-03T09:00:00Z");
+    const ops = planEditOccurrence(
+      {
+        master: zonedMaster,
+        occurrence: occurrenceOf(zonedMaster, occurrenceStart),
+        isOverride: false,
+        originalStart: occurrenceStart,
+        scope: "this",
+        changes: {
+          calendarId: "cal-1",
+          title: "Standup (moved)",
+          start: new Date("2026-01-03T10:00:00Z"),
+          end: new Date("2026-01-03T10:30:00Z"),
+        },
+      },
+      nextId,
+    );
+
+    expect(ops[0]).toMatchObject({ fields: { tzid: "Europe/Berlin" } });
+  });
+
+  it('scope "this" (in-place Override update): keeps the Override\'s own tzid unchanged', () => {
+    const override = {
+      id: "override-1",
+      calendarId: "cal-1",
+      title: "Standup (moved)",
+      start: new Date("2026-01-03T10:00:00Z"),
+      end: new Date("2026-01-03T10:30:00Z"),
+      parentId: "master-1",
+      recurrenceId: new Date("2026-01-03T09:00:00Z"),
+      tzid: "Europe/Berlin",
+    };
+
+    const ops = planEditOccurrence({
+      master: zonedMaster,
+      occurrence: occurrenceOf(override as never, override.start),
+      isOverride: true,
+      originalStart: override.recurrenceId,
+      scope: "this",
+      changes: {
+        calendarId: "cal-1",
+        title: "Renamed again",
+        start: override.start,
+        end: override.end,
+      },
+    });
+
+    expect(ops[0]).toMatchObject({ fields: { tzid: "Europe/Berlin" } });
+  });
+
+  it('scope "all": keeps the master\'s tzid unchanged', () => {
+    const ops = planEditOccurrence({
+      master: zonedMaster,
+      occurrence: occurrenceOf(zonedMaster, zonedMaster.start),
+      isOverride: false,
+      originalStart: zonedMaster.start,
+      scope: "all",
+      changes: {
+        calendarId: "cal-1",
+        title: "Renamed",
+        start: zonedMaster.start,
+        end: zonedMaster.end,
+      },
+    });
+
+    expect(ops[0]).toMatchObject({ fields: { tzid: "Europe/Berlin" } });
+  });
+
+  it('scope "following": both the truncated old master and the new master keep the tzid unchanged', () => {
+    const splitStart = new Date("2026-01-03T09:00:00Z");
+    const ops = planEditOccurrence(
+      {
+        master: zonedMaster,
+        occurrence: occurrenceOf(zonedMaster, splitStart),
+        isOverride: false,
+        originalStart: splitStart,
+        scope: "following",
+        changes: {
+          calendarId: "cal-1",
+          title: "Standup (renamed)",
+          start: new Date("2026-01-03T10:00:00Z"),
+          end: new Date("2026-01-03T10:30:00Z"),
+        },
+      },
+      nextId,
+    );
+
+    expect(ops[0]).toMatchObject({
+      oldMasterFields: { tzid: "Europe/Berlin" },
+      newMaster: { tzid: "Europe/Berlin" },
+    });
+  });
+});
+
 describe("applySeriesOps", () => {
   it("appends a new Override for an overrideOccurrence create op", () => {
     const events = applySeriesOps([recurringMaster], [
@@ -662,6 +760,24 @@ describe("planDeleteOccurrence", () => {
         orphanedIds: ["override-after"],
       },
     ]);
+  });
+});
+
+describe("planDeleteOccurrence preserves the Anchor zone (ADR-0019)", () => {
+  it('scope "following": the truncated master keeps its tzid unchanged', () => {
+    const zonedMaster = { ...recurringMaster, tzid: "Europe/Berlin" };
+    const splitStart = new Date("2026-01-03T09:00:00Z");
+
+    const ops = planDeleteOccurrence({
+      events: [zonedMaster],
+      master: zonedMaster,
+      occurrence: occurrenceOf(zonedMaster, splitStart),
+      isOverride: false,
+      originalStart: splitStart,
+      scope: "following",
+    });
+
+    expect(ops[0]).toMatchObject({ masterFields: { tzid: "Europe/Berlin" } });
   });
 });
 

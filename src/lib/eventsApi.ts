@@ -16,6 +16,8 @@ interface EventWire {
   recurrenceId?: string;
   // A Master's cancelled Occurrence starts (Exceptions). Absent on an Override.
   exdates?: string[];
+  // Absent/null for a Floating Event (ADR-0019).
+  tzid?: string | null;
 }
 
 /**
@@ -55,6 +57,7 @@ function fromWire(wire: EventWire): Event {
     parentId: wire.parentId,
     recurrenceId: wire.recurrenceId ? new Date(wire.recurrenceId) : undefined,
     exdates: wire.exdates?.map((exdate) => new Date(exdate)),
+    tzid: wire.tzid ?? undefined,
   };
 }
 
@@ -82,6 +85,7 @@ export const eventsApi = {
       rrule?: string;
       parentId?: string;
       recurrenceId?: Date;
+      tzid?: string;
     },
   ): Promise<Event> {
     const response = await fetch("/api/events/", {
@@ -98,6 +102,7 @@ export const eventsApi = {
         rrule: event.rrule ?? "",
         parentId: event.parentId,
         recurrenceId: event.recurrenceId?.toISOString(),
+        tzid: event.tzid,
       }),
     });
     if (!response.ok) throw await errorFromResponse(response);
@@ -115,6 +120,7 @@ export const eventsApi = {
       end: Date;
       allDay?: boolean;
       rrule?: string;
+      tzid?: string;
     },
   ): Promise<Event> {
     const response = await fetch(`/api/events/${id}`, {
@@ -128,6 +134,7 @@ export const eventsApi = {
         end: serializeEventTime(changes.end, changes.allDay),
         allDay: changes.allDay ?? false,
         rrule: changes.rrule ?? "",
+        tzid: changes.tzid,
       }),
     });
     if (!response.ok) throw await errorFromResponse(response);

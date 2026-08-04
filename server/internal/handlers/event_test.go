@@ -152,6 +152,90 @@ func TestEventHandler_Create_RoundTripsAllDayAsDateOnly(t *testing.T) {
 	}
 }
 
+// A created Event with no tzid is a Floating Event (ADR-0019): the field is
+// absent on the wire, and start/end are always emitted as a canonical UTC
+// "…Z" instant regardless of the offset the client sent.
+func TestEventHandler_Create_DefaultsToFloatingAndCanonicalUTC(t *testing.T) {
+	baseURL, accessToken, calendarID := newEventTestServer(t)
+
+	rawBody := `{"id":"22222222-2222-2222-2222-222222222222","calendarId":"` + calendarID + `","title":"Standup","start":"2026-01-01T10:00:00+01:00","end":"2026-01-01T11:00:00+01:00"}`
+	req, _ := http.NewRequest(http.MethodPost, baseURL+"/api/events/", bytes.NewReader([]byte(rawBody)))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("expected 201, got %d", resp.StatusCode)
+	}
+
+	var wire map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&wire); err != nil {
+		t.Fatalf("decode raw: %v", err)
+	}
+	if _, present := wire["tzid"]; present {
+		t.Fatalf("expected tzid to be absent for a Floating Event, got %+v", wire)
+	}
+	if wire["start"] != "2026-01-01T09:00:00Z" || wire["end"] != "2026-01-01T10:00:00Z" {
+		t.Fatalf("expected canonical UTC start/end, got %+v", wire)
+	}
+}
+
+// tzid must persist through create/update and round-trip on list/get
+// (ADR-0019).
+func TestEventHandler_RoundTripsTzid(t *testing.T) {
+	baseURL, accessToken, calendarID := newEventTestServer(t)
+
+	zone := "Europe/Berlin"
+	createResp := postJSON(t, baseURL, accessToken, "/api/events/", createEventRequest{
+		ID:         "22222222-2222-2222-2222-222222222222",
+		CalendarID: calendarID,
+		Title:      "Standup",
+		Start:      mustParseRFC3339(t, "2026-01-01T09:00:00Z"),
+		End:        mustParseRFC3339(t, "2026-01-01T10:00:00Z"),
+		Tzid:       &zone,
+	})
+	var created eventResponse
+	json.NewDecoder(createResp.Body).Decode(&created)
+	if created.Tzid == nil || *created.Tzid != zone {
+		t.Fatalf("expected created tzid %q, got %+v", zone, created)
+	}
+
+	getResp, err := authenticatedGet(baseURL+"/api/events/"+created.ID, accessToken)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	defer getResp.Body.Close()
+	var fetched eventResponse
+	json.NewDecoder(getResp.Body).Decode(&fetched)
+	if fetched.Tzid == nil || *fetched.Tzid != zone {
+		t.Fatalf("expected fetched tzid %q, got %+v", zone, fetched)
+	}
+
+	updateBody, _ := json.Marshal(updateEventRequest{
+		CalendarID: calendarID,
+		Title:      "Standup",
+		Start:      mustParseRFC3339(t, "2026-01-01T09:00:00Z"),
+		End:        mustParseRFC3339(t, "2026-01-01T10:00:00Z"),
+		Tzid:       nil,
+	})
+	updateReq, _ := http.NewRequest(http.MethodPatch, baseURL+"/api/events/"+created.ID, bytes.NewReader(updateBody))
+	updateReq.Header.Set("Content-Type", "application/json")
+	updateReq.Header.Set("Authorization", "Bearer "+accessToken)
+	updateResp, err := http.DefaultClient.Do(updateReq)
+	if err != nil {
+		t.Fatalf("patch: %v", err)
+	}
+	defer updateResp.Body.Close()
+	var updated eventResponse
+	json.NewDecoder(updateResp.Body).Decode(&updated)
+	if updated.Tzid != nil {
+		t.Fatalf("expected update to clear tzid back to Floating, got %+v", updated)
+	}
+}
+
 func TestEventHandler_Create_RoundTripsRrule(t *testing.T) {
 	baseURL, accessToken, calendarID := newEventTestServer(t)
 

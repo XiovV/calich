@@ -4,6 +4,7 @@ import { Dialog } from "@base-ui/react/dialog";
 import type { DraftBlock } from "../lib/gridTime";
 import type { Event } from "../lib/event";
 import { isRecurringOccurrence, resolveMaster, type Occurrence } from "../lib/occurrence";
+import { viewerZone } from "../lib/floatingTime";
 import {
   shouldDiscardChildren,
   type EditScope,
@@ -202,7 +203,10 @@ export function EventModal(props: EventModalProps) {
     const changes = { calendarId, title: title.trim(), start, end, allDay, rrule };
 
     if (mode !== "edit") {
-      addEvent({ id: crypto.randomUUID(), ...changes });
+      // A newly created Event is stamped with the creator's Viewer zone; an
+      // all-day Event stays timezone-free (ADR-0017, ADR-0019).
+      const tzid = allDay ? undefined : viewerZone();
+      addEvent({ id: crypto.randomUUID(), ...changes, tzid });
       onClose();
       return;
     }

@@ -92,6 +92,7 @@ export const useEventsStore = create<EventsState>((set, get) => ({
         end: updated.end,
         allDay: updated.allDay,
         rrule: updated.rrule,
+        tzid: updated.tzid,
       });
     } catch {
       set({ events: previousEvents });

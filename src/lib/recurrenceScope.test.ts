@@ -1,7 +1,8 @@
 import { RRule } from "rrule";
+import { fromZonedTime } from "date-fns-tz";
 import { describe, expect, it } from "vitest";
 import type { Event } from "./event";
-import { toFloating } from "./floatingTime";
+import { toFloating, viewerZone } from "./floatingTime";
 import {
   makeException,
   makeOverride,
@@ -19,6 +20,21 @@ const master: Event = {
 };
 
 describe("makeOverride", () => {
+  it("inherits the master's Anchor zone unchanged (ADR-0019)", () => {
+    const zonedMaster: Event = { ...master, tzid: "Europe/Berlin" };
+    const occurrenceStart = new Date(2026, 0, 3, 9, 0);
+    const changes = {
+      calendarId: "cal-2",
+      title: "Standup (moved)",
+      start: new Date(2026, 0, 3, 10, 0),
+      end: new Date(2026, 0, 3, 10, 30),
+    };
+
+    expect(makeOverride(zonedMaster, occurrenceStart, changes).tzid).toBe(
+      "Europe/Berlin",
+    );
+  });
+
   it("keys the override to the parent and the replaced Occurrence's start", () => {
     const occurrenceStart = new Date(2026, 0, 3, 9, 0);
     const changes = {
@@ -83,6 +99,33 @@ describe("splitFollowing", () => {
     expect(result.truncatedMaster.rrule).not.toContain("UNTIL=20260103");
   });
 
+  it("truncates a zoned master at its own Anchor-zone wall-clock, across a DST transition, regardless of the ambient zone (ADR-0019)", () => {
+    // Daily 10:00 Europe/Berlin, split after EU spring-forward (2026-03-29).
+    const zonedMaster: Event = {
+      ...master,
+      start: fromZonedTime(new Date(2026, 2, 2, 10, 0), "Europe/Berlin"),
+      end: fromZonedTime(new Date(2026, 2, 2, 10, 30), "Europe/Berlin"),
+      rrule: "FREQ=DAILY",
+      tzid: "Europe/Berlin",
+    };
+    const splitStart = fromZonedTime(new Date(2026, 2, 31, 10, 0), "Europe/Berlin");
+    const changes = {
+      calendarId: "cal-1",
+      title: "Standup",
+      start: splitStart,
+      end: fromZonedTime(new Date(2026, 2, 31, 10, 30), "Europe/Berlin"),
+    };
+
+    const result = splitFollowing(zonedMaster, splitStart, changes);
+
+    // The last Occurrence before the split is Mar 30 10:00 Berlin wall-clock
+    // (CEST, post-transition) — the floating-frame UNTIL literal carries
+    // that wall-clock verbatim, not a UTC instant.
+    expect(result.truncatedMaster.rrule).toContain("UNTIL=20260330T100000Z");
+    // The new master carries the old master's Anchor zone unchanged.
+    expect(result.newMaster.tzid).toBe("Europe/Berlin");
+  });
+
   it("carries the same recurrence pattern into the new master, anchored at the split", () => {
     const splitStart = new Date(2026, 0, 3, 9, 0);
     const changes = {
@@ -131,7 +174,7 @@ describe("splitFollowing", () => {
     // UNTIL must land before the master's own start, so it generates nothing.
     const rule = new RRule({
       ...RRule.parseString(result.truncatedMaster.rrule),
-      dtstart: toFloating(master.start),
+      dtstart: toFloating(master.start, viewerZone()),
     });
     expect(rule.all()).toEqual([]);
   });
