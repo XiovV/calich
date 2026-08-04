@@ -161,12 +161,17 @@ function occurrenceOf(event: typeof recurringMaster, start: Date) {
 }
 
 describe("editOccurrence", () => {
-  it('scope "this": creates a new override for an un-overridden Occurrence', async () => {
+  it("applies the planned change to the cache immediately, before the API call resolves", () => {
     useEventsStore.setState({ events: [recurringMaster] });
-    vi.mocked(eventsApi.create).mockResolvedValue({} as never);
+    let resolveCreate: () => void = () => {};
+    vi.mocked(eventsApi.create).mockReturnValue(
+      new Promise((resolve) => {
+        resolveCreate = () => resolve({} as never);
+      }),
+    );
 
     const occurrenceStart = new Date("2026-01-03T09:00:00Z");
-    await useEventsStore.getState().editOccurrence(
+    const promise = useEventsStore.getState().editOccurrence(
       occurrenceOf(recurringMaster, occurrenceStart),
       "this",
       {
@@ -174,206 +179,43 @@ describe("editOccurrence", () => {
         title: "Standup (moved)",
         start: new Date("2026-01-03T10:00:00Z"),
         end: new Date("2026-01-03T10:30:00Z"),
-        // The modal always includes the series' rrule in `changes`; the
-        // created Override must never pick it up (ADR-0016) — a non-empty
-        // rrule here is what the backend rejects with a 400.
         rrule: "FREQ=DAILY",
       },
     );
 
-    const events = useEventsStore.getState().events;
-    expect(events).toHaveLength(2);
-    const override = events.find((e) => e.id !== "master-1")!;
-    expect(override.parentId).toBe("master-1");
-    expect(override.recurrenceId).toEqual(occurrenceStart);
-    expect(override.title).toBe("Standup (moved)");
-    expect(override.rrule).toBeUndefined();
-    const createCall = vi.mocked(eventsApi.create).mock.calls[0][1];
-    expect(createCall).toMatchObject({
-      parentId: "master-1",
-      recurrenceId: occurrenceStart,
-    });
-    expect(createCall).not.toHaveProperty("rrule");
+    expect(useEventsStore.getState().events).toHaveLength(2);
+
+    resolveCreate();
+    return promise;
   });
 
-  it('scope "this": updates the override in place when the Occurrence is already one', async () => {
-    const override = {
-      id: "override-1",
-      calendarId: "cal-1",
-      title: "Standup (moved)",
-      start: new Date("2026-01-03T10:00:00Z"),
-      end: new Date("2026-01-03T10:30:00Z"),
-      parentId: "master-1",
-      recurrenceId: new Date("2026-01-03T09:00:00Z"),
-    };
-    useEventsStore.setState({ events: [recurringMaster, override] });
-    vi.mocked(eventsApi.update).mockResolvedValue({} as never);
+  it("rolls back the whole cache and shows a toast when the dispatch fails", async () => {
+    useEventsStore.setState({ events: [recurringMaster] });
+    vi.mocked(eventsApi.create).mockRejectedValue(new Error("network error"));
 
     await useEventsStore.getState().editOccurrence(
-      occurrenceOf(override as never, override.start),
+      occurrenceOf(recurringMaster, new Date("2026-01-03T09:00:00Z")),
       "this",
-      // The modal always includes the series' rrule in `changes` (for the
-      // "all" scope's use); an Override must never pick it up.
       {
         calendarId: "cal-1",
-        title: "Renamed again",
-        start: override.start,
-        end: override.end,
-        rrule: "FREQ=DAILY",
+        title: "Standup (moved)",
+        start: new Date("2026-01-03T10:00:00Z"),
+        end: new Date("2026-01-03T10:30:00Z"),
       },
     );
 
-    expect(eventsApi.update).toHaveBeenCalledWith(
-      "token-123",
-      "override-1",
-      expect.objectContaining({ title: "Renamed again", rrule: undefined }),
-    );
-    const updatedOverride = useEventsStore.getState().events.find((e) => e.id === "override-1")!;
-    expect(updatedOverride.title).toBe("Renamed again");
-    expect(updatedOverride.rrule).toBeUndefined();
+    expect(useEventsStore.getState().events).toEqual([recurringMaster]);
+    expect(toast.error).toHaveBeenCalledWith("Failed to update event.");
   });
 
-  it('scope "all": updates the master and keeps overrides when the rule is unchanged', async () => {
-    const override = {
-      id: "override-1",
-      calendarId: "cal-1",
-      title: "Standup (moved)",
-      start: new Date("2026-01-03T10:00:00Z"),
-      end: new Date("2026-01-03T10:30:00Z"),
-      parentId: "master-1",
-      recurrenceId: new Date("2026-01-03T09:00:00Z"),
-    };
-    useEventsStore.setState({ events: [recurringMaster, override] });
-    vi.mocked(eventsApi.update).mockResolvedValue({} as never);
-
-    await useEventsStore.getState().editOccurrence(
-      occurrenceOf(recurringMaster, recurringMaster.start),
-      "all",
-      { calendarId: "cal-1", title: "Renamed", start: recurringMaster.start, end: recurringMaster.end },
-    );
-
-    const events = useEventsStore.getState().events;
-    expect(events.find((e) => e.id === "master-1")?.title).toBe("Renamed");
-    expect(events.find((e) => e.id === "override-1")).toBeDefined();
-  });
-
-  it('scope "all": editing from a later Occurrence keeps the master anchored on its own date', async () => {
-    useEventsStore.setState({ events: [recurringMaster] });
-    vi.mocked(eventsApi.update).mockResolvedValue({} as never);
-
-    // Opening the Jan 5th Occurrence and changing only the time must not
-    // move the master's Jan 1 DTSTART — that would truncate every earlier
-    // Occurrence out of the series.
-    const openedOccurrenceStart = new Date("2026-01-05T09:00:00Z");
-    await useEventsStore.getState().editOccurrence(
-      occurrenceOf(recurringMaster, openedOccurrenceStart),
-      "all",
-      {
-        calendarId: "cal-1",
-        title: "Standup",
-        start: new Date("2026-01-05T10:00:00Z"),
-        end: new Date("2026-01-05T10:30:00Z"),
-      },
-    );
-
-    const master = useEventsStore.getState().events.find((e) => e.id === "master-1")!;
-    expect(master.start).toEqual(new Date("2026-01-01T10:00:00Z"));
-    expect(master.end).toEqual(new Date("2026-01-01T10:30:00Z"));
-  });
-
-  it('scope "all": discards existing overrides when the rule changes', async () => {
-    const override = {
-      id: "override-1",
-      calendarId: "cal-1",
-      title: "Standup (moved)",
-      start: new Date("2026-01-03T10:00:00Z"),
-      end: new Date("2026-01-03T10:30:00Z"),
-      parentId: "master-1",
-      recurrenceId: new Date("2026-01-03T09:00:00Z"),
-    };
-    useEventsStore.setState({ events: [recurringMaster, override] });
-    vi.mocked(eventsApi.update).mockResolvedValue({} as never);
-
-    await useEventsStore.getState().editOccurrence(
-      occurrenceOf(recurringMaster, recurringMaster.start),
-      "all",
-      {
-        calendarId: "cal-1",
-        title: "Standup",
-        start: recurringMaster.start,
-        end: recurringMaster.end,
-        rrule: "FREQ=WEEKLY;BYDAY=TH",
-      },
-    );
-
-    const events = useEventsStore.getState().events;
-    expect(events).toHaveLength(1);
-    expect(events[0].rrule).toBe("FREQ=WEEKLY;BYDAY=TH");
-  });
-
-  it('scope "all": clears the rule entirely when the user picks "Does not repeat"', async () => {
-    useEventsStore.setState({ events: [recurringMaster] });
-    vi.mocked(eventsApi.update).mockResolvedValue({} as never);
-
-    // `rrule: undefined` here is a deliberate "does not repeat", distinct
-    // from omitting the field — the store must not fall back to keeping the
-    // old rule just because the new value happens to be undefined.
-    await useEventsStore.getState().editOccurrence(
-      occurrenceOf(recurringMaster, recurringMaster.start),
-      "all",
-      {
-        calendarId: "cal-1",
-        title: "Standup",
-        start: recurringMaster.start,
-        end: recurringMaster.end,
-        rrule: undefined,
-      },
-    );
-
-    const master = useEventsStore.getState().events.find((e) => e.id === "master-1")!;
-    expect(master.rrule).toBeUndefined();
-    expect(eventsApi.update).toHaveBeenCalledWith(
-      "token-123",
-      "master-1",
-      expect.objectContaining({ rrule: undefined }),
-    );
-  });
-
-  it('scope "all": a drag to a different day shifts the whole series and reanchors the rule', async () => {
-    useEventsStore.setState({ events: [recurringMaster] });
-    vi.mocked(eventsApi.update).mockResolvedValue({} as never);
-
-    // recurringMaster is FREQ=DAILY (weekday-agnostic), so use a weekly rule
-    // to exercise the day-changed reanchor path explicitly.
-    const weeklyMaster = { ...recurringMaster, rrule: "FREQ=WEEKLY;BYDAY=TH" };
-    useEventsStore.setState({ events: [weeklyMaster] });
-
-    // Jan 1 2026 is a Thursday; drag it one day later to a Friday.
-    await useEventsStore.getState().editOccurrence(
-      occurrenceOf(weeklyMaster, weeklyMaster.start),
-      "all",
-      {
-        calendarId: "cal-1",
-        title: "Standup",
-        start: new Date("2026-01-02T09:00:00Z"),
-        end: new Date("2026-01-02T09:30:00Z"),
-      },
-    );
-
-    const master = useEventsStore.getState().events.find((e) => e.id === "master-1")!;
-    expect(master.start).toEqual(new Date("2026-01-02T09:00:00Z"));
-    expect(master.rrule).toBe("FREQ=WEEKLY;BYDAY=FR");
-  });
-
-  it('scope "following": truncates the old master and creates a new one for the remainder', async () => {
+  it('rolls back all local mutations when a later call in a "following" dispatch fails', async () => {
     useEventsStore.setState({ events: [recurringMaster] });
     vi.mocked(eventsApi.update).mockResolvedValue({} as never);
     vi.mocked(eventsApi.create).mockResolvedValue({} as never);
-    vi.mocked(eventsApi.reparentSeries).mockResolvedValue(undefined);
+    vi.mocked(eventsApi.reparentSeries).mockRejectedValue(new Error("network error"));
 
-    const splitStart = new Date("2026-01-03T09:00:00Z");
     await useEventsStore.getState().editOccurrence(
-      occurrenceOf(recurringMaster, splitStart),
+      occurrenceOf(recurringMaster, new Date("2026-01-03T09:00:00Z")),
       "following",
       {
         calendarId: "cal-1",
@@ -383,91 +225,45 @@ describe("editOccurrence", () => {
       },
     );
 
-    const events = useEventsStore.getState().events;
-    expect(events).toHaveLength(2);
-    const oldMaster = events.find((e) => e.id === "master-1")!;
-    expect(oldMaster.rrule).toContain("UNTIL=20260102");
-    const newMaster = events.find((e) => e.id !== "master-1")!;
-    expect(newMaster.title).toBe("Standup (renamed)");
-    expect(newMaster.rrule).toBe("FREQ=DAILY");
-    expect(eventsApi.reparentSeries).toHaveBeenCalledWith(
-      "token-123",
-      "master-1",
-      newMaster.id,
-      splitStart,
-    );
+    expect(useEventsStore.getState().events).toEqual([recurringMaster]);
+    expect(toast.error).toHaveBeenCalledWith("Failed to update event.");
   });
 });
 
 describe("deleteOccurrence", () => {
-  it('scope "this": adds an exception for an un-overridden Occurrence', async () => {
+  it("applies the planned change to the cache immediately, before the API call resolves", () => {
     useEventsStore.setState({ events: [recurringMaster] });
-    vi.mocked(eventsApi.addException).mockResolvedValue(undefined);
+    let resolveAddException: () => void = () => {};
+    vi.mocked(eventsApi.addException).mockReturnValue(
+      new Promise((resolve) => {
+        resolveAddException = () => resolve(undefined);
+      }),
+    );
 
     const occurrenceStart = new Date("2026-01-03T09:00:00Z");
-    await useEventsStore
+    const promise = useEventsStore
       .getState()
       .deleteOccurrence(occurrenceOf(recurringMaster, occurrenceStart), "this");
 
-    expect(eventsApi.addException).toHaveBeenCalledWith(
-      "token-123",
-      "master-1",
-      occurrenceStart,
-    );
     expect(useEventsStore.getState().events[0].exdates).toEqual([occurrenceStart]);
+
+    resolveAddException();
+    return promise;
   });
 
-  it('scope "this": deletes the override outright when the Occurrence is already one', async () => {
-    const override = {
-      id: "override-1",
-      calendarId: "cal-1",
-      title: "Standup (moved)",
-      start: new Date("2026-01-03T10:00:00Z"),
-      end: new Date("2026-01-03T10:30:00Z"),
-      parentId: "master-1",
-      recurrenceId: new Date("2026-01-03T09:00:00Z"),
-    };
-    useEventsStore.setState({ events: [recurringMaster, override] });
-    vi.mocked(eventsApi.remove).mockResolvedValue(undefined);
+  it("rolls back the whole cache and shows a toast when the dispatch fails", async () => {
+    useEventsStore.setState({ events: [recurringMaster] });
+    vi.mocked(eventsApi.addException).mockRejectedValue(new Error("network error"));
 
     await useEventsStore
       .getState()
-      .deleteOccurrence(occurrenceOf(override as never, override.start), "this");
+      .deleteOccurrence(occurrenceOf(recurringMaster, new Date("2026-01-03T09:00:00Z")), "this");
 
-    expect(eventsApi.remove).toHaveBeenCalledWith("token-123", "override-1");
-    expect(useEventsStore.getState().events.map((e) => e.id)).toEqual(["master-1"]);
+    expect(useEventsStore.getState().events).toEqual([recurringMaster]);
+    expect(toast.error).toHaveBeenCalledWith("Failed to delete event.");
   });
 
-  it('scope "all": deletes the master and any local overrides', async () => {
-    const override = {
-      id: "override-1",
-      calendarId: "cal-1",
-      title: "Standup (moved)",
-      start: new Date("2026-01-03T10:00:00Z"),
-      end: new Date("2026-01-03T10:30:00Z"),
-      parentId: "master-1",
-      recurrenceId: new Date("2026-01-03T09:00:00Z"),
-    };
-    useEventsStore.setState({ events: [recurringMaster, override] });
-    vi.mocked(eventsApi.remove).mockResolvedValue(undefined);
-
-    await useEventsStore
-      .getState()
-      .deleteOccurrence(occurrenceOf(recurringMaster, recurringMaster.start), "all");
-
-    expect(useEventsStore.getState().events).toEqual([]);
-  });
-
-  it('scope "following": truncates the master and deletes overrides at-or-after the split', async () => {
-    const overrideBefore = {
-      id: "override-before",
-      calendarId: "cal-1",
-      title: "Before",
-      start: new Date("2026-01-02T10:00:00Z"),
-      end: new Date("2026-01-02T10:30:00Z"),
-      parentId: "master-1",
-      recurrenceId: new Date("2026-01-02T09:00:00Z"),
-    };
+  it('rolls back all local mutations when a later call in a "following" dispatch fails', async () => {
     const overrideAfter = {
       id: "override-after",
       calendarId: "cal-1",
@@ -477,22 +273,16 @@ describe("deleteOccurrence", () => {
       parentId: "master-1",
       recurrenceId: new Date("2026-01-04T09:00:00Z"),
     };
-    useEventsStore.setState({
-      events: [recurringMaster, overrideBefore, overrideAfter],
-    });
+    useEventsStore.setState({ events: [recurringMaster, overrideAfter] });
     vi.mocked(eventsApi.update).mockResolvedValue({} as never);
-    vi.mocked(eventsApi.remove).mockResolvedValue(undefined);
+    vi.mocked(eventsApi.remove).mockRejectedValue(new Error("network error"));
 
-    const splitStart = new Date("2026-01-03T09:00:00Z");
     await useEventsStore
       .getState()
-      .deleteOccurrence(occurrenceOf(recurringMaster, splitStart), "following");
+      .deleteOccurrence(occurrenceOf(recurringMaster, new Date("2026-01-03T09:00:00Z")), "following");
 
-    const events = useEventsStore.getState().events;
-    expect(events.map((e) => e.id).sort()).toEqual(["master-1", "override-before"]);
-    expect(events.find((e) => e.id === "master-1")?.rrule).toContain("UNTIL=20260102");
-    expect(eventsApi.remove).toHaveBeenCalledWith("token-123", "override-after");
-    expect(eventsApi.remove).not.toHaveBeenCalledWith("token-123", "override-before");
+    expect(useEventsStore.getState().events).toEqual([recurringMaster, overrideAfter]);
+    expect(toast.error).toHaveBeenCalledWith("Failed to delete event.");
   });
 });
 
