@@ -11,11 +11,17 @@ import (
 // EXDATE) — the rule still generates that slot, but it is suppressed from
 // expansion (ADR-0016).
 type EventExceptionRepository struct {
-	db *sql.DB
+	db DBTX
 }
 
 func NewEventExceptionRepository(db *sql.DB) *EventExceptionRepository {
 	return &EventExceptionRepository{db: db}
+}
+
+// WithTx returns a copy of the repository bound to tx, for use inside
+// repository.WithTx to make a multi-table write atomic (ADR-0018).
+func (r *EventExceptionRepository) WithTx(tx *sql.Tx) *EventExceptionRepository {
+	return &EventExceptionRepository{db: tx}
 }
 
 func (r *EventExceptionRepository) Add(ctx context.Context, parentID string, occurrenceStart time.Time) error {

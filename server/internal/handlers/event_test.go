@@ -51,7 +51,7 @@ func newEventTestServer(t *testing.T) (baseURL, accessToken, calendarID string) 
 		t.Fatalf("create calendar: %v", err)
 	}
 
-	events := service.NewEventService(repository.NewEventRepository(sqlDB), repository.NewEventExceptionRepository(sqlDB), calendars)
+	events := service.NewEventService(sqlDB, repository.NewEventRepository(sqlDB), repository.NewEventExceptionRepository(sqlDB), calendars)
 	eventHandler := NewEventHandler(events)
 
 	r := chi.NewRouter()

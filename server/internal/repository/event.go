@@ -36,11 +36,17 @@ type Event struct {
 }
 
 type EventRepository struct {
-	db *sql.DB
+	db DBTX
 }
 
 func NewEventRepository(db *sql.DB) *EventRepository {
 	return &EventRepository{db: db}
+}
+
+// WithTx returns a copy of the repository bound to tx, for use inside
+// repository.WithTx to make a multi-table write atomic (ADR-0018).
+func (r *EventRepository) WithTx(tx *sql.Tx) *EventRepository {
+	return &EventRepository{db: tx}
 }
 
 func (r *EventRepository) Create(ctx context.Context, id string, userID int64, calendarID, title string, start, end time.Time, allDay bool, rrule string, parentID *string, recurrenceID *time.Time) (Event, error) {
