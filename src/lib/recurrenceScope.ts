@@ -25,6 +25,8 @@ export interface EventFieldChanges {
   // Absent from a drag-only edit, like allDay above — the caller falls back
   // to the reference Event's own Reminders in that case (ADR-0020).
   reminders?: Reminder[];
+  description?: string;
+  location?: string;
 }
 
 /** `changes`' allDay, falling back to `master`'s own when the edit didn't
@@ -45,6 +47,24 @@ export function resolveReminders(
   reference: Pick<Event, "reminders">,
 ): Reminder[] | undefined {
   return changes.reminders ?? reference.reminders;
+}
+
+/** `changes`' description, falling back to `reference`'s own when the edit
+ * didn't touch it (a drag/resize-only edit), so a scoped drag on a recurring
+ * Occurrence can't silently wipe it. */
+export function resolveDescription(
+  changes: Pick<EventFieldChanges, "description">,
+  reference: Pick<Event, "description">,
+): string | undefined {
+  return changes.description ?? reference.description;
+}
+
+/** `resolveDescription`'s counterpart for location. */
+export function resolveLocation(
+  changes: Pick<EventFieldChanges, "location">,
+  reference: Pick<Event, "location">,
+): string | undefined {
+  return changes.location ?? reference.location;
 }
 
 /**
@@ -73,6 +93,8 @@ export function makeOverride(
     tzid: master.tzid,
     // A fresh Override starts as a copy of the Master's Reminders (ADR-0020).
     reminders: resolveReminders(changes, master),
+    description: resolveDescription(changes, master),
+    location: resolveLocation(changes, master),
   };
 }
 
@@ -163,6 +185,8 @@ export function splitFollowing(
       rrule: master.rrule,
       tzid: master.tzid,
       reminders: resolveReminders(changes, master),
+      description: resolveDescription(changes, master),
+      location: resolveLocation(changes, master),
     },
     reparentFromStart: splitStart,
   };

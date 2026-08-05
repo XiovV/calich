@@ -32,12 +32,25 @@ func TestCalendarService_Create(t *testing.T) {
 	svc, userID := newTestCalendarService(t)
 	ctx := context.Background()
 
-	calendar, err := svc.Create(ctx, userID, "cal-1", "Personal", "peacock")
+	calendar, err := svc.Create(ctx, userID, "cal-1", "Personal", "#12809CFF")
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	if calendar.Name != "Personal" || calendar.Color != "peacock" {
+	if calendar.Name != "Personal" || calendar.Color != "#12809CFF" {
 		t.Fatalf("unexpected calendar: %+v", calendar)
+	}
+}
+
+func TestCalendarService_Create_NormalizesColor(t *testing.T) {
+	svc, userID := newTestCalendarService(t)
+	ctx := context.Background()
+
+	calendar, err := svc.Create(ctx, userID, "cal-1", "Personal", "#12809c")
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if calendar.Color != "#12809CFF" {
+		t.Fatalf("expected the color to widen and canonicalize to #12809CFF, got %q", calendar.Color)
 	}
 }
 
@@ -53,7 +66,7 @@ func TestCalendarService_Create_RejectsInvalidColor(t *testing.T) {
 func TestCalendarService_Create_RejectsEmptyName(t *testing.T) {
 	svc, userID := newTestCalendarService(t)
 
-	_, err := svc.Create(context.Background(), userID, "cal-1", "  ", "peacock")
+	_, err := svc.Create(context.Background(), userID, "cal-1", "  ", "#12809CFF")
 	if !errors.Is(err, ErrInvalidName) {
 		t.Fatalf("expected ErrInvalidName, got %v", err)
 	}
@@ -63,7 +76,7 @@ func TestCalendarService_List(t *testing.T) {
 	svc, userID := newTestCalendarService(t)
 	ctx := context.Background()
 
-	if _, err := svc.Create(ctx, userID, "cal-1", "Personal", "peacock"); err != nil {
+	if _, err := svc.Create(ctx, userID, "cal-1", "Personal", "#12809CFF"); err != nil {
 		t.Fatalf("create: %v", err)
 	}
 
@@ -80,15 +93,15 @@ func TestCalendarService_Update(t *testing.T) {
 	svc, userID := newTestCalendarService(t)
 	ctx := context.Background()
 
-	if _, err := svc.Create(ctx, userID, "cal-1", "Personal", "peacock"); err != nil {
+	if _, err := svc.Create(ctx, userID, "cal-1", "Personal", "#12809CFF"); err != nil {
 		t.Fatalf("create: %v", err)
 	}
 
-	updated, err := svc.Update(ctx, userID, "cal-1", "Renamed", "tomato")
+	updated, err := svc.Update(ctx, userID, "cal-1", "Renamed", "#E2483DFF")
 	if err != nil {
 		t.Fatalf("update: %v", err)
 	}
-	if updated.Name != "Renamed" || updated.Color != "tomato" {
+	if updated.Name != "Renamed" || updated.Color != "#E2483DFF" {
 		t.Fatalf("unexpected calendar: %+v", updated)
 	}
 }
@@ -97,7 +110,7 @@ func TestCalendarService_Update_RejectsInvalidColor(t *testing.T) {
 	svc, userID := newTestCalendarService(t)
 	ctx := context.Background()
 
-	if _, err := svc.Create(ctx, userID, "cal-1", "Personal", "peacock"); err != nil {
+	if _, err := svc.Create(ctx, userID, "cal-1", "Personal", "#12809CFF"); err != nil {
 		t.Fatalf("create: %v", err)
 	}
 
@@ -110,7 +123,7 @@ func TestCalendarService_Update_RejectsInvalidColor(t *testing.T) {
 func TestCalendarService_Update_NotFound(t *testing.T) {
 	svc, userID := newTestCalendarService(t)
 
-	_, err := svc.Update(context.Background(), userID, "nope", "Renamed", "tomato")
+	_, err := svc.Update(context.Background(), userID, "nope", "Renamed", "#E2483DFF")
 	if !errors.Is(err, repository.ErrNotFound) {
 		t.Fatalf("expected ErrNotFound, got %v", err)
 	}
@@ -120,7 +133,7 @@ func TestCalendarService_Delete(t *testing.T) {
 	svc, userID := newTestCalendarService(t)
 	ctx := context.Background()
 
-	if _, err := svc.Create(ctx, userID, "cal-1", "Personal", "peacock"); err != nil {
+	if _, err := svc.Create(ctx, userID, "cal-1", "Personal", "#12809CFF"); err != nil {
 		t.Fatalf("create: %v", err)
 	}
 
@@ -143,16 +156,5 @@ func TestCalendarService_Delete_NotFound(t *testing.T) {
 	err := svc.Delete(context.Background(), userID, "nope")
 	if !errors.Is(err, repository.ErrNotFound) {
 		t.Fatalf("expected ErrNotFound, got %v", err)
-	}
-}
-
-func TestCalendarService_IsValidColor(t *testing.T) {
-	svc, _ := newTestCalendarService(t)
-
-	if !svc.IsValidColor("graphite") {
-		t.Fatalf("expected graphite to be a valid color")
-	}
-	if svc.IsValidColor("not-a-real-color") {
-		t.Fatalf("expected not-a-real-color to be invalid")
 	}
 }

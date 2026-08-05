@@ -70,6 +70,9 @@ type meResponse struct {
 	// actually be used for a new Reminder — the user has an email set *and*
 	// the self-hoster has SMTP configured (ADR-0021, ADR-0010).
 	EmailReminderChannelAvailable bool `json:"email_reminder_channel_available"`
+	// SyncedDeviceRemindersEnabled is "let my synced devices show reminder
+	// pop-ups (disable in-app reminder notifications)" (ADR-0027).
+	SyncedDeviceRemindersEnabled bool `json:"synced_device_reminders_enabled"`
 }
 
 func (h *AuthHandler) toMeResponse(user repository.User) meResponse {
@@ -79,6 +82,7 @@ func (h *AuthHandler) toMeResponse(user repository.User) meResponse {
 		MustChangePassword:            user.MustChangePassword,
 		Email:                         user.Email,
 		EmailReminderChannelAvailable: h.smtpConfigured && user.Email != nil,
+		SyncedDeviceRemindersEnabled:  user.SyncedDeviceRemindersEnabled,
 	}
 }
 
@@ -122,6 +126,34 @@ func (h *AuthHandler) UpdateEmail(w http.ResponseWriter, r *http.Request) {
 		return
 	case err != nil:
 		httpresponse.Error(w, http.StatusInternalServerError, "internal_error", "failed to update email")
+		return
+	}
+
+	httpresponse.JSON(w, http.StatusOK, h.toMeResponse(user))
+}
+
+type updateSyncedDeviceRemindersRequest struct {
+	SyncedDeviceRemindersEnabled bool `json:"synced_device_reminders_enabled"`
+}
+
+// UpdateSyncedDeviceReminders sets "let my synced devices show reminder
+// pop-ups (disable in-app reminder notifications)" (ADR-0027).
+func (h *AuthHandler) UpdateSyncedDeviceReminders(w http.ResponseWriter, r *http.Request) {
+	userID, ok := httpauth.UserIDFromContext(r.Context())
+	if !ok {
+		httpresponse.Error(w, http.StatusUnauthorized, "unauthorized", "authentication required")
+		return
+	}
+
+	var req updateSyncedDeviceRemindersRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httpresponse.Error(w, http.StatusBadRequest, "invalid_request", "request body must be valid JSON")
+		return
+	}
+
+	user, err := h.auth.UpdateSyncedDeviceReminders(r.Context(), userID, req.SyncedDeviceRemindersEnabled)
+	if err != nil {
+		httpresponse.Error(w, http.StatusInternalServerError, "internal_error", "failed to update reminder preference")
 		return
 	}
 

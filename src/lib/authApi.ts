@@ -11,6 +11,9 @@ export interface User {
   // user has an email set *and* the self-hoster has SMTP configured
   // (ADR-0021, ADR-0010).
   emailReminderChannelAvailable: boolean;
+  // "Let my synced devices show reminder pop-ups (disable in-app reminder
+  // notifications)" (ADR-0027). Defaults false.
+  syncedDeviceRemindersEnabled: boolean;
 }
 
 export interface LoginResult {
@@ -24,6 +27,7 @@ interface MeWire {
   must_change_password: boolean;
   email: string | null;
   email_reminder_channel_available: boolean;
+  synced_device_reminders_enabled: boolean;
 }
 
 function fromMeWire(wire: MeWire): User {
@@ -33,6 +37,7 @@ function fromMeWire(wire: MeWire): User {
     mustChangePassword: wire.must_change_password,
     email: wire.email,
     emailReminderChannelAvailable: wire.email_reminder_channel_available,
+    syncedDeviceRemindersEnabled: wire.synced_device_reminders_enabled,
   };
 }
 
@@ -97,6 +102,18 @@ export const authApi = {
       credentials: "include",
       headers: { "Content-Type": "application/json", ...authHeader(accessToken) },
       body: JSON.stringify({ email }),
+    });
+    if (!response.ok) throw await errorFromResponse(response);
+
+    return fromMeWire(await response.json());
+  },
+
+  async updateSyncedDeviceReminders(accessToken: string, enabled: boolean): Promise<User> {
+    const response = await fetch("/api/auth/synced-device-reminders", {
+      method: "PUT",
+      credentials: "include",
+      headers: { "Content-Type": "application/json", ...authHeader(accessToken) },
+      body: JSON.stringify({ synced_device_reminders_enabled: enabled }),
     });
     if (!response.ok) throw await errorFromResponse(response);
 

@@ -13,8 +13,16 @@ The single date the shell is currently focused on, shown in the mini calendar an
 _Avoid_: current date, active date
 
 **Calendar**:
-A named, colored, independently-toggleable collection that groups events (e.g. "Work", "Personal"). Not the app itself, and not the view/grid.
+A named, independently-toggleable collection that groups events (e.g. "Work", "Personal"), carrying one Calendar color. Not the app itself, and not the view/grid.
 _Avoid_: calendar list item, source
+
+**Calendar color**:
+The single color a Calendar is displayed in, inherited by every Occurrence it contains — an arbitrary sRGB value with an alpha channel, not a choice from a fixed set. Shared by every client connected to the instance rather than being each client's private preference: whoever writes last wins, there is no conflict detection, and no bound on how long two clients may disagree. See ADR-0029.
+_Avoid_: calendar colour (in prose), event color (Events have none of their own), color enum
+
+**Swatch**:
+One of the eight curated colors the web app offers as one-click quick picks when choosing a Calendar color. A convenience for the person picking, never a constraint on what a Calendar color may be — a Calendar whose color matches no Swatch is ordinary, not invalid, and is what a native client setting its own color normally produces.
+_Avoid_: palette color, preset, theme color
 
 **Event**:
 The stored, saved unit — a titled time block belonging to a single Calendar, with a start, an end, zero or more Reminders, and an optional Recurrence rule. Its start/end define the first occurrence and the duration every Occurrence inherits. A non-recurring Event is a series of one. Distinct from the Occurrences it produces on the grid.

@@ -3,7 +3,7 @@ import { format } from "date-fns";
 import { occurrenceKey, type Occurrence } from "../lib/occurrence";
 import type { DraftBlock } from "../lib/gridTime";
 import { getCalendarById } from "../lib/calendar";
-import { getCalendarColorClass } from "../lib/calendarColors";
+import { getCalendarBlockStyle } from "../lib/calendarColors";
 import { useCalendarsStore } from "../lib/calendarsStore";
 import { useShellStore } from "../lib/shellStore";
 import { computeCellDraft, computeChipCapacity } from "../lib/monthGrid";
@@ -100,9 +100,7 @@ export function MonthDayCell({
             calendars,
             occurrence.event.calendarId,
           );
-          const colorClass = calendar
-            ? getCalendarColorClass(calendar.color)
-            : "bg-calendar-graphite";
+          const blockStyle = getCalendarBlockStyle(calendar);
           return (
             <button
               key={occurrenceKey(occurrence)}
@@ -124,7 +122,8 @@ export function MonthDayCell({
                   onOccurrenceClick(occurrence);
                 }
               }}
-              className={`cursor-pointer truncate rounded-shell-sm px-1 text-left text-label-sm text-ink-inverse ${colorClass}`}
+              style={blockStyle}
+              className="cursor-pointer truncate rounded-shell-sm px-1 text-left text-label-sm"
             >
               {occurrence.event.allDay
                 ? occurrence.event.title

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { addDays, format, isSameDay, startOfDay } from "date-fns";
 import { useCalendarsStore } from "../lib/calendarsStore";
 import { getCalendarById, type Calendar } from "../lib/calendar";
-import { getCalendarColorClass } from "../lib/calendarColors";
+import { getCalendarBlockStyle } from "../lib/calendarColors";
 import { layoutOverlappingEvents } from "../lib/layoutOverlappingEvents";
 import { columnLayoutToBox } from "../lib/eventBlockGeometry";
 import { useVisibleOccurrences } from "../hooks/useVisibleOccurrences";
@@ -109,9 +109,7 @@ function computeEventDragPreview(
     calendars,
     activeDrag.occurrence.event.calendarId,
   );
-  const colorClass = calendar
-    ? getCalendarColorClass(calendar.color)
-    : "bg-calendar-graphite";
+  const blockStyle = getCalendarBlockStyle(calendar);
 
   return {
     day,
@@ -123,7 +121,7 @@ function computeEventDragPreview(
       title: activeDrag.occurrence.event.title,
       start,
       end,
-      colorClass,
+      blockStyle,
     },
   };
 }
@@ -233,9 +231,7 @@ export function TimeGrid({
   const allDayDragCalendar = allDayDrag.active
     ? getCalendarById(calendars, allDayDrag.active.event.calendarId)
     : undefined;
-  const allDayDragColorClass = allDayDragCalendar
-    ? getCalendarColorClass(allDayDragCalendar.color)
-    : "bg-calendar-graphite";
+  const allDayDragBlockStyle = getCalendarBlockStyle(allDayDragCalendar);
 
   return (
     <div className="flex h-full flex-col">
@@ -298,7 +294,7 @@ export function TimeGrid({
           x={allDayDrag.position.x}
           y={allDayDrag.position.y}
           title={allDayDrag.active.event.title}
-          colorClass={allDayDragColorClass}
+          blockStyle={allDayDragBlockStyle}
         />
       )}
       {dragCommit.isScopePickerOpen && (

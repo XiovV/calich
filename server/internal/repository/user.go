@@ -17,8 +17,14 @@ type User struct {
 	MustChangePassword bool
 	// Email is the Email-Channel Reminder's recipient (ADR-0021, ADR-0010).
 	// Nil until the user sets it on the Settings page.
-	Email     *string
-	CreatedAt time.Time
+	Email *string
+	// SyncedDeviceRemindersEnabled is "let my synced devices show reminder
+	// pop-ups (disable in-app reminder notifications)" (ADR-0027): when true,
+	// the scheduler skips the Notification channel for this user, since a
+	// synced device already fires its own alarm from the VALARM. The Email
+	// channel is never gated by this. Defaults off.
+	SyncedDeviceRemindersEnabled bool
+	CreatedAt                    time.Time
 }
 
 type UserRepository struct {
@@ -48,13 +54,13 @@ func (r *UserRepository) Create(ctx context.Context, username, passwordHash stri
 
 func (r *UserRepository) GetByID(ctx context.Context, id int64) (User, error) {
 	return r.scanUser(r.db.QueryRowContext(ctx,
-		`SELECT id, username, password_hash, must_change_password, email, created_at FROM users WHERE id = ?`, id,
+		`SELECT id, username, password_hash, must_change_password, email, synced_device_reminders_enabled, created_at FROM users WHERE id = ?`, id,
 	))
 }
 
 func (r *UserRepository) GetByUsername(ctx context.Context, username string) (User, error) {
 	return r.scanUser(r.db.QueryRowContext(ctx,
-		`SELECT id, username, password_hash, must_change_password, email, created_at FROM users WHERE username = ?`, username,
+		`SELECT id, username, password_hash, must_change_password, email, synced_device_reminders_enabled, created_at FROM users WHERE username = ?`, username,
 	))
 }
 
@@ -68,6 +74,15 @@ func (r *UserRepository) UpdateEmail(ctx context.Context, userID int64, email st
 
 	if _, err := r.db.ExecContext(ctx, `UPDATE users SET email = ? WHERE id = ?`, value, userID); err != nil {
 		return User{}, fmt.Errorf("update email: %w", err)
+	}
+	return r.GetByID(ctx, userID)
+}
+
+// UpdateSyncedDeviceReminders sets userID's "let my synced devices show
+// reminder pop-ups" preference (ADR-0027).
+func (r *UserRepository) UpdateSyncedDeviceReminders(ctx context.Context, userID int64, enabled bool) (User, error) {
+	if _, err := r.db.ExecContext(ctx, `UPDATE users SET synced_device_reminders_enabled = ? WHERE id = ?`, enabled, userID); err != nil {
+		return User{}, fmt.Errorf("update synced device reminders preference: %w", err)
 	}
 	return r.GetByID(ctx, userID)
 }
@@ -88,7 +103,7 @@ func (r *UserRepository) UpdatePassword(ctx context.Context, userID int64, passw
 // single-user instance (ADR-0010).
 func (r *UserRepository) First(ctx context.Context) (User, error) {
 	return r.scanUser(r.db.QueryRowContext(ctx,
-		`SELECT id, username, password_hash, must_change_password, email, created_at FROM users ORDER BY id LIMIT 1`,
+		`SELECT id, username, password_hash, must_change_password, email, synced_device_reminders_enabled, created_at FROM users ORDER BY id LIMIT 1`,
 	))
 }
 
@@ -105,7 +120,7 @@ func (r *UserRepository) scanUser(row *sql.Row) (User, error) {
 	var email sql.NullString
 	// modernc.org/sqlite converts the TIMESTAMP column straight into time.Time
 	// based on the declared column type — no manual parsing needed here.
-	err := row.Scan(&u.ID, &u.Username, &u.PasswordHash, &u.MustChangePassword, &email, &u.CreatedAt)
+	err := row.Scan(&u.ID, &u.Username, &u.PasswordHash, &u.MustChangePassword, &email, &u.SyncedDeviceRemindersEnabled, &u.CreatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return User{}, ErrNotFound
 	}

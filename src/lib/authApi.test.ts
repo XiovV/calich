@@ -93,6 +93,7 @@ describe("authApi.me", () => {
         must_change_password: false,
         email: "admin@example.com",
         email_reminder_channel_available: true,
+        synced_device_reminders_enabled: false,
       }),
     );
     vi.stubGlobal("fetch", fetchMock);
@@ -105,6 +106,7 @@ describe("authApi.me", () => {
       mustChangePassword: false,
       email: "admin@example.com",
       emailReminderChannelAvailable: true,
+      syncedDeviceRemindersEnabled: false,
     });
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/auth/me",
@@ -208,6 +210,53 @@ describe("authApi.updateEmail", () => {
 
     await expect(authApi.updateEmail("token-123", "not-an-email")).rejects.toMatchObject({
       code: "invalid_request",
+    });
+  });
+});
+
+describe("authApi.updateSyncedDeviceReminders", () => {
+  it("sends the preference and bearer token, and maps the response", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(200, {
+        id: 1,
+        username: "admin",
+        must_change_password: false,
+        email: null,
+        email_reminder_channel_available: false,
+        synced_device_reminders_enabled: true,
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const user = await authApi.updateSyncedDeviceReminders("token-123", true);
+
+    expect(user).toEqual({
+      id: 1,
+      username: "admin",
+      mustChangePassword: false,
+      email: null,
+      emailReminderChannelAvailable: false,
+      syncedDeviceRemindersEnabled: true,
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/auth/synced-device-reminders",
+      expect.objectContaining({
+        method: "PUT",
+        credentials: "include",
+        headers: expect.objectContaining({ Authorization: "Bearer token-123" }),
+        body: JSON.stringify({ synced_device_reminders_enabled: true }),
+      }),
+    );
+  });
+
+  it("throws on failure", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(500, { error: { code: "internal_error", message: "failed to update reminder preference" } }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(authApi.updateSyncedDeviceReminders("token-123", true)).rejects.toMatchObject({
+      code: "internal_error",
     });
   });
 });

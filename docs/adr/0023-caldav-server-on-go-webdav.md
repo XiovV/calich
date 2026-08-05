@@ -11,9 +11,11 @@ The hard, interop-sensitive part of CalDAV is the protocol plumbing (XML, multis
 ## URL layout and discovery
 
 - Mounted under a **`/dav/` prefix**, registered in the chi router **ahead of the SPA catch-all** (`r.Handle("/*", …)`) and **outside** the JWT `RequireAuth` middleware — it uses the CalDAV Basic-auth middleware instead (ADR-0024). This is the placement ADR-0012 had already reserved for the feed endpoint.
-- URLs are **keyed by user id, not singleton** — principal `/dav/principals/{userId}/`, calendar-home `/dav/calendars/{userId}/`, collections `…/{calendarId}/`, objects `…/{masterId}.ics`. One principal exists today (ADR-0010), but the id in the path costs nothing now and avoids a migration if multi-user ever lands, matching ADR-0010's philosophy.
+- URLs are **keyed by user id, not singleton** — principal `/dav/{userId}/`, calendar-home `/dav/{userId}/calendars/`, collections `…/{calendarId}/`, objects `…/{masterId}.ics`. One principal exists today (ADR-0010), but the id in the path costs nothing now and avoids a migration if multi-user ever lands, matching ADR-0010's philosophy.
+  - **Corrected during #63's implementation:** the original draft used `/dav/principals/{userId}/` and `/dav/calendars/{userId}/` (both 2 segments after the prefix). go-webdav's PROPFIND dispatch (`resourceTypeAtPath` in its `caldav/server.go`) classifies a request purely by how many path segments follow `Handler.Prefix` — 1 segment = principal, 2 = calendar-home-set, 3 = calendar, 4 = calendar object — with no semantic parsing of the path. Principal and home-set can't both sit at depth 2, so the scheme above drops the redundant `principals`/`calendars` literal ahead of the id, landing each resource at the depth the library actually expects.
 - A tiny **`/.well-known/caldav`** handler (also ahead of the catch-all) redirects to `/dav/`, so email-style auto-discovery works; `current-user-principal` resolves from the Basic-auth'd user.
 - Adds `description` and `location` columns to `events` — modeled by every native client, additive migration, no design tension.
+- **Calendar color is not exposed over CalDAV yet.** go-webdav's `Calendar` type carries only name/description; there's no hook to inject the Apple/DAVx⁵ `calendar-color` extension property into its PROPFIND response. Discovery (#63) ships name-only; emitting color would need a small XML-patching layer (or a library fork/PR) — deferred until a client actually needs it.
 
 ## Read-first phasing
 

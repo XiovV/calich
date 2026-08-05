@@ -174,3 +174,41 @@ func TestUserRepository_First_NotFound(t *testing.T) {
 		t.Fatalf("expected ErrNotFound, got %v", err)
 	}
 }
+
+func TestUserRepository_SyncedDeviceRemindersEnabled_DefaultsOff(t *testing.T) {
+	repo := newTestUserRepository(t)
+
+	created, err := repo.Create(context.Background(), "admin", "hash", true)
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	if created.SyncedDeviceRemindersEnabled {
+		t.Fatalf("expected synced device reminders to default off")
+	}
+}
+
+func TestUserRepository_UpdateSyncedDeviceReminders(t *testing.T) {
+	repo := newTestUserRepository(t)
+	ctx := context.Background()
+
+	created, err := repo.Create(ctx, "admin", "hash", true)
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+
+	updated, err := repo.UpdateSyncedDeviceReminders(ctx, created.ID, true)
+	if err != nil {
+		t.Fatalf("update synced device reminders: %v", err)
+	}
+	if !updated.SyncedDeviceRemindersEnabled {
+		t.Fatalf("expected synced device reminders to be enabled")
+	}
+
+	reverted, err := repo.UpdateSyncedDeviceReminders(ctx, created.ID, false)
+	if err != nil {
+		t.Fatalf("update synced device reminders: %v", err)
+	}
+	if reverted.SyncedDeviceRemindersEnabled {
+		t.Fatalf("expected synced device reminders to be disabled again")
+	}
+}

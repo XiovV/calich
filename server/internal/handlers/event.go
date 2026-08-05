@@ -89,6 +89,9 @@ type eventResponse struct {
 	// range — see ADR-0017 and CONTEXT.md's All-day Event.
 	AllDay bool   `json:"allDay,omitempty"`
 	Rrule  string `json:"rrule,omitempty"`
+	// Description and Location are free-text fields on an Event (#61).
+	Description string `json:"description,omitempty"`
+	Location    string `json:"location,omitempty"`
 	// ParentID and RecurrenceID are present only on an Override — a standalone
 	// Event that replaces one Occurrence of its parent's series (ADR-0016).
 	ParentID     *string    `json:"parentId,omitempty"`
@@ -119,6 +122,8 @@ type eventResponseWire struct {
 	Exdates      []time.Time    `json:"exdates,omitempty"`
 	Tzid         *string        `json:"tzid,omitempty"`
 	Reminders    []reminderWire `json:"reminders,omitempty"`
+	Description  string         `json:"description,omitempty"`
+	Location     string         `json:"location,omitempty"`
 }
 
 func (r eventResponse) MarshalJSON() ([]byte, error) {
@@ -135,6 +140,8 @@ func (r eventResponse) MarshalJSON() ([]byte, error) {
 		Exdates:      r.Exdates,
 		Tzid:         r.Tzid,
 		Reminders:    r.Reminders,
+		Description:  r.Description,
+		Location:     r.Location,
 	})
 }
 
@@ -164,6 +171,8 @@ func (r *eventResponse) UnmarshalJSON(data []byte) error {
 		Exdates:      wire.Exdates,
 		Tzid:         wire.Tzid,
 		Reminders:    wire.Reminders,
+		Description:  wire.Description,
+		Location:     wire.Location,
 	}
 	return nil
 }
@@ -182,6 +191,8 @@ func toEventResponse(e repository.Event) eventResponse {
 		Exdates:      e.Exdates,
 		Tzid:         e.Tzid,
 		Reminders:    toReminderWire(e.Reminders),
+		Description:  e.Description,
+		Location:     e.Location,
 	}
 }
 
@@ -241,6 +252,8 @@ type createEventRequest struct {
 	RecurrenceID *time.Time     `json:"-"`
 	Tzid         *string        `json:"-"`
 	Reminders    []reminderWire `json:"-"`
+	Description  string         `json:"-"`
+	Location     string         `json:"-"`
 }
 
 // createEventRequestWire is createEventRequest's actual JSON shape: start/end
@@ -257,6 +270,8 @@ type createEventRequestWire struct {
 	RecurrenceID *time.Time     `json:"recurrenceId,omitempty"`
 	Tzid         *string        `json:"tzid,omitempty"`
 	Reminders    []reminderWire `json:"reminders,omitempty"`
+	Description  string         `json:"description,omitempty"`
+	Location     string         `json:"location,omitempty"`
 }
 
 func (r createEventRequest) MarshalJSON() ([]byte, error) {
@@ -272,6 +287,8 @@ func (r createEventRequest) MarshalJSON() ([]byte, error) {
 		RecurrenceID: r.RecurrenceID,
 		Tzid:         r.Tzid,
 		Reminders:    r.Reminders,
+		Description:  r.Description,
+		Location:     r.Location,
 	})
 }
 
@@ -300,6 +317,8 @@ func (r *createEventRequest) UnmarshalJSON(data []byte) error {
 		RecurrenceID: wire.RecurrenceID,
 		Tzid:         wire.Tzid,
 		Reminders:    wire.Reminders,
+		Description:  wire.Description,
+		Location:     wire.Location,
 	}
 	return nil
 }
@@ -322,7 +341,7 @@ func (h *EventHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	event, err := h.events.Create(r.Context(), userID, req.ID, req.CalendarID, req.Title, req.Start, req.End, req.AllDay, req.Rrule, req.ParentID, req.RecurrenceID, req.Tzid, fromReminderWire(req.Reminders))
+	event, err := h.events.Create(r.Context(), userID, req.ID, req.CalendarID, req.Title, req.Start, req.End, req.AllDay, req.Rrule, req.ParentID, req.RecurrenceID, req.Tzid, fromReminderWire(req.Reminders), req.Description, req.Location)
 	switch {
 	case errors.Is(err, service.ErrInvalidTitle):
 		httpresponse.Error(w, http.StatusBadRequest, "invalid_request", "title must not be empty")
@@ -379,39 +398,45 @@ func (h *EventHandler) Get(w http.ResponseWriter, r *http.Request) {
 }
 
 type updateEventRequest struct {
-	CalendarID string         `json:"-"`
-	Title      string         `json:"-"`
-	Start      time.Time      `json:"-"`
-	End        time.Time      `json:"-"`
-	AllDay     bool           `json:"-"`
-	Rrule      string         `json:"-"`
-	Tzid       *string        `json:"-"`
-	Reminders  []reminderWire `json:"-"`
+	CalendarID  string         `json:"-"`
+	Title       string         `json:"-"`
+	Start       time.Time      `json:"-"`
+	End         time.Time      `json:"-"`
+	AllDay      bool           `json:"-"`
+	Rrule       string         `json:"-"`
+	Tzid        *string        `json:"-"`
+	Reminders   []reminderWire `json:"-"`
+	Description string         `json:"-"`
+	Location    string         `json:"-"`
 }
 
 // updateEventRequestWire is updateEventRequest's actual JSON shape: start/end
 // are strings so their format can branch on AllDay (ADR-0017).
 type updateEventRequestWire struct {
-	CalendarID string         `json:"calendarId"`
-	Title      string         `json:"title"`
-	Start      string         `json:"start"`
-	End        string         `json:"end"`
-	AllDay     bool           `json:"allDay,omitempty"`
-	Rrule      string         `json:"rrule"`
-	Tzid       *string        `json:"tzid,omitempty"`
-	Reminders  []reminderWire `json:"reminders,omitempty"`
+	CalendarID  string         `json:"calendarId"`
+	Title       string         `json:"title"`
+	Start       string         `json:"start"`
+	End         string         `json:"end"`
+	AllDay      bool           `json:"allDay,omitempty"`
+	Rrule       string         `json:"rrule"`
+	Tzid        *string        `json:"tzid,omitempty"`
+	Reminders   []reminderWire `json:"reminders,omitempty"`
+	Description string         `json:"description,omitempty"`
+	Location    string         `json:"location,omitempty"`
 }
 
 func (r updateEventRequest) MarshalJSON() ([]byte, error) {
 	return json.Marshal(updateEventRequestWire{
-		CalendarID: r.CalendarID,
-		Title:      r.Title,
-		Start:      formatEventTime(r.Start, r.AllDay),
-		End:        formatEventTime(r.End, r.AllDay),
-		AllDay:     r.AllDay,
-		Rrule:      r.Rrule,
-		Tzid:       r.Tzid,
-		Reminders:  r.Reminders,
+		CalendarID:  r.CalendarID,
+		Title:       r.Title,
+		Start:       formatEventTime(r.Start, r.AllDay),
+		End:         formatEventTime(r.End, r.AllDay),
+		AllDay:      r.AllDay,
+		Rrule:       r.Rrule,
+		Tzid:        r.Tzid,
+		Reminders:   r.Reminders,
+		Description: r.Description,
+		Location:    r.Location,
 	})
 }
 
@@ -429,14 +454,16 @@ func (r *updateEventRequest) UnmarshalJSON(data []byte) error {
 		return fmt.Errorf("invalid end: %w", err)
 	}
 	*r = updateEventRequest{
-		CalendarID: wire.CalendarID,
-		Title:      wire.Title,
-		Start:      start,
-		End:        end,
-		AllDay:     wire.AllDay,
-		Rrule:      wire.Rrule,
-		Tzid:       wire.Tzid,
-		Reminders:  wire.Reminders,
+		CalendarID:  wire.CalendarID,
+		Title:       wire.Title,
+		Start:       start,
+		End:         end,
+		AllDay:      wire.AllDay,
+		Rrule:       wire.Rrule,
+		Tzid:        wire.Tzid,
+		Reminders:   wire.Reminders,
+		Description: wire.Description,
+		Location:    wire.Location,
 	}
 	return nil
 }
@@ -456,7 +483,7 @@ func (h *EventHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	event, err := h.events.Update(r.Context(), userID, id, req.CalendarID, req.Title, req.Start, req.End, req.AllDay, req.Rrule, req.Tzid, fromReminderWire(req.Reminders))
+	event, err := h.events.Update(r.Context(), userID, id, req.CalendarID, req.Title, req.Start, req.End, req.AllDay, req.Rrule, req.Tzid, fromReminderWire(req.Reminders), req.Description, req.Location)
 	switch {
 	case errors.Is(err, service.ErrInvalidTitle):
 		httpresponse.Error(w, http.StatusBadRequest, "invalid_request", "title must not be empty")

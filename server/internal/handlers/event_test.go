@@ -46,12 +46,12 @@ func newEventTestServer(t *testing.T) (baseURL, accessToken, calendarID string) 
 
 	calendarRepo := repository.NewCalendarRepository(sqlDB)
 	calendars := service.NewCalendarService(calendarRepo)
-	cal, err := calendars.Create(context.Background(), userID, "11111111-1111-1111-1111-111111111111", "Personal", "peacock")
+	cal, err := calendars.Create(context.Background(), userID, "11111111-1111-1111-1111-111111111111", "Personal", "#12809CFF")
 	if err != nil {
 		t.Fatalf("create calendar: %v", err)
 	}
 
-	events := service.NewEventService(sqlDB, repository.NewEventRepository(sqlDB), repository.NewEventExceptionRepository(sqlDB), repository.NewEventReminderRepository(sqlDB), calendars)
+	events := service.NewEventService(sqlDB, repository.NewEventRepository(sqlDB), repository.NewEventExceptionRepository(sqlDB), repository.NewEventReminderRepository(sqlDB), repository.NewSyncRepository(sqlDB), calendars)
 	eventHandler := NewEventHandler(events)
 
 	r := chi.NewRouter()
@@ -233,6 +233,60 @@ func TestEventHandler_RoundTripsTzid(t *testing.T) {
 	json.NewDecoder(updateResp.Body).Decode(&updated)
 	if updated.Tzid != nil {
 		t.Fatalf("expected update to clear tzid back to Floating, got %+v", updated)
+	}
+}
+
+// description and location must persist through create/update and round-trip
+// on get (#61).
+func TestEventHandler_RoundTripsDescriptionAndLocation(t *testing.T) {
+	baseURL, accessToken, calendarID := newEventTestServer(t)
+
+	createResp := postJSON(t, baseURL, accessToken, "/api/events/", createEventRequest{
+		ID:          "22222222-2222-2222-2222-222222222222",
+		CalendarID:  calendarID,
+		Title:       "Standup",
+		Start:       mustParseRFC3339(t, "2026-01-01T09:00:00Z"),
+		End:         mustParseRFC3339(t, "2026-01-01T10:00:00Z"),
+		Description: "Daily sync",
+		Location:    "Room 4",
+	})
+	var created eventResponse
+	json.NewDecoder(createResp.Body).Decode(&created)
+	if created.Description != "Daily sync" || created.Location != "Room 4" {
+		t.Fatalf("expected created description/location to round-trip, got %+v", created)
+	}
+
+	getResp, err := authenticatedGet(baseURL+"/api/events/"+created.ID, accessToken)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	defer getResp.Body.Close()
+	var fetched eventResponse
+	json.NewDecoder(getResp.Body).Decode(&fetched)
+	if fetched.Description != "Daily sync" || fetched.Location != "Room 4" {
+		t.Fatalf("expected fetched description/location to round-trip, got %+v", fetched)
+	}
+
+	updateBody, _ := json.Marshal(updateEventRequest{
+		CalendarID:  calendarID,
+		Title:       "Standup",
+		Start:       mustParseRFC3339(t, "2026-01-01T09:00:00Z"),
+		End:         mustParseRFC3339(t, "2026-01-01T10:00:00Z"),
+		Description: "Updated sync notes",
+		Location:    "Room 5",
+	})
+	updateReq, _ := http.NewRequest(http.MethodPatch, baseURL+"/api/events/"+created.ID, bytes.NewReader(updateBody))
+	updateReq.Header.Set("Content-Type", "application/json")
+	updateReq.Header.Set("Authorization", "Bearer "+accessToken)
+	updateResp, err := http.DefaultClient.Do(updateReq)
+	if err != nil {
+		t.Fatalf("patch: %v", err)
+	}
+	defer updateResp.Body.Close()
+	var updated eventResponse
+	json.NewDecoder(updateResp.Body).Decode(&updated)
+	if updated.Description != "Updated sync notes" || updated.Location != "Room 5" {
+		t.Fatalf("expected updated description/location to round-trip, got %+v", updated)
 	}
 }
 

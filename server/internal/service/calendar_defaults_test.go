@@ -43,7 +43,7 @@ func TestEnsureDefaultCalendars_SeedsPersonalWorkFamily(t *testing.T) {
 		t.Fatalf("expected 3 default calendars, got %d", len(got))
 	}
 
-	want := map[string]string{"Personal": "peacock", "Work": "tomato", "Family": "sage"}
+	want := map[string]string{"Personal": "#12809CFF", "Work": "#E2483DFF", "Family": "#6B9071FF"}
 	for _, c := range got {
 		color, ok := want[c.Name]
 		if !ok {
@@ -63,7 +63,7 @@ func TestEnsureDefaultCalendars_NoOpWhenUserAlreadyHasCalendars(t *testing.T) {
 	calendars, userID := newTestCalendarServiceForUser(t)
 	ctx := context.Background()
 
-	if _, err := calendars.Create(ctx, userID, "existing-cal", "Existing", "graphite"); err != nil {
+	if _, err := calendars.Create(ctx, userID, "existing-cal", "Existing", "#6B7280FF"); err != nil {
 		t.Fatalf("create existing calendar: %v", err)
 	}
 

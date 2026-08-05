@@ -40,8 +40,16 @@ type NotificationInserter interface {
 // inserting a persistent Notification record (ADR-0021, #56); any other
 // Channel (Email) isn't this dispatcher's concern and goes to Fallback —
 // LogDispatcher until the Email delivery ticket (#57) lands its own seam.
+//
+// A user who has opted a synced device into showing its own reminder
+// pop-ups (SyncedDeviceRemindersEnabled, ADR-0027) also goes to Fallback for
+// the Notification channel: the device already fires its own alarm from the
+// synced VALARM, so inserting a second, server-side Notification would
+// double-fire. The Email channel is never gated by this — no device
+// competes for it.
 type NotificationDispatcher struct {
 	Notifications NotificationInserter
+	Users         UserLookup
 	Fallback      Dispatcher
 	Now           func() time.Time
 }
@@ -50,13 +58,24 @@ func (d NotificationDispatcher) Dispatch(ctx context.Context, due DueReminder) e
 	if due.Channel != "notification" {
 		return d.Fallback.Dispatch(ctx, due)
 	}
-	_, err := d.Notifications.Insert(ctx, due.UserID, due.EventID, due.OccurrenceStart, due.Title, d.Now())
+
+	user, err := d.Users.GetByID(ctx, due.UserID)
+	if err != nil {
+		return fmt.Errorf("get user: %w", err)
+	}
+	if user.SyncedDeviceRemindersEnabled {
+		return d.Fallback.Dispatch(ctx, due)
+	}
+
+	_, err = d.Notifications.Insert(ctx, due.UserID, due.EventID, due.OccurrenceStart, due.Title, d.Now())
 	return err
 }
 
-// EmailUserLookup resolves a Reminder's owning user, for the Email-channel
-// dispatch seam. Satisfied by *repository.UserRepository.
-type EmailUserLookup interface {
+// UserLookup resolves a Reminder's owning user — the Email-channel
+// dispatch seam needs it to find the recipient address (ADR-0021), and the
+// Notification-channel seam needs it to check the synced-device-reminders
+// toggle (ADR-0027). Satisfied by *repository.UserRepository.
+type UserLookup interface {
 	GetByID(ctx context.Context, id int64) (repository.User, error)
 }
 
@@ -71,7 +90,7 @@ type Mailer interface {
 // (ADR-0021, #57); any other Channel (Notification) isn't this dispatcher's
 // concern and goes to Fallback.
 type EmailDispatcher struct {
-	Users    EmailUserLookup
+	Users    UserLookup
 	Mailer   Mailer
 	Fallback Dispatcher
 }

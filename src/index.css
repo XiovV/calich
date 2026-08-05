@@ -1,7 +1,8 @@
 @import "tailwindcss";
 
-/* Static design tokens: type scale, radii, shadows, fonts, and the per-Calendar
-   event swatch colors (domain data — deliberately not part of the Immich reskin). */
+/* Static design tokens: type scale, radii, shadows, fonts. Per-Calendar
+   color is an arbitrary hex (ADR-0029), applied as an inline style rather
+   than a utility class, so it has no tokens here. */
 @theme {
   --font-sans: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
 
@@ -20,15 +21,6 @@
   --shadow-elevation-1: 0 1px 2px rgba(23, 23, 23, 0.08);
   --shadow-elevation-2: 0 4px 12px rgba(23, 23, 23, 0.12);
   --shadow-elevation-3: 0 12px 32px rgba(23, 23, 23, 0.16);
-
-  --color-calendar-tomato: #e2483d;
-  --color-calendar-flamingo: #e67c9a;
-  --color-calendar-banana: #e4c441;
-  --color-calendar-sage: #6b9071;
-  --color-calendar-peacock: #12809c;
-  --color-calendar-blueberry: #3f51b5;
-  --color-calendar-grape: #8e44ad;
-  --color-calendar-graphite: #6b7280;
 }
 
 /* Immich's colour scales, imported verbatim from @immich/ui default.css.

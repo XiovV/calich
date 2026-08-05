@@ -87,6 +87,41 @@ func RequireActiveUser(checker ActiveUserChecker) func(http.Handler) http.Handle
 	}
 }
 
+// CalDAVAuthenticator validates HTTP Basic credentials against a per-user
+// hashed App password (ADR-0024) and returns the user id they resolve to.
+type CalDAVAuthenticator interface {
+	Authenticate(ctx context.Context, username, password string) (int64, error)
+}
+
+// RequireCalDAVAuth is the CalDAV counterpart to RequireAuth (ADR-0023,
+// ADR-0024): it validates "Authorization: Basic" credentials against a
+// hashed App password rather than a bearer access token, and otherwise makes
+// the authenticated user id available via the same UserIDFromContext.
+func RequireCalDAVAuth(auth CalDAVAuthenticator) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			username, password, ok := r.BasicAuth()
+			if !ok {
+				requireBasicAuth(w)
+				return
+			}
+
+			userID, err := auth.Authenticate(r.Context(), username, password)
+			if err != nil {
+				requireBasicAuth(w)
+				return
+			}
+
+			next.ServeHTTP(w, r.WithContext(withUserID(r.Context(), userID)))
+		})
+	}
+}
+
+func requireBasicAuth(w http.ResponseWriter) {
+	w.Header().Set("WWW-Authenticate", `Basic realm="CalDAV"`)
+	http.Error(w, "unauthorized", http.StatusUnauthorized)
+}
+
 func bearerToken(r *http.Request) (string, bool) {
 	const prefix = "Bearer "
 

@@ -1,9 +1,7 @@
-import type { CalendarColor } from "./calendarColors";
-
 export interface Calendar {
   id: string;
   name: string;
-  color: CalendarColor;
+  color: string;
 }
 
 export function getCalendarById(
