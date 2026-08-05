@@ -121,6 +121,16 @@ _Avoid_: auth token, bearer token
 The credential used to obtain a new Access token without re-entering credentials, via `refreshAccessToken`. Issued by the backend as an `httpOnly`, `Secure` cookie — see ADR-0009.
 _Avoid_: renewal token
 
+**App password**:
+A per-User, revocable credential a native calendar client uses to authenticate over CalDAV (HTTP Basic), distinct from the login password and shown to the User only once when generated. Stored hashed, one row per generated credential, so a single device can be revoked without touching the account password. The successor to the abandoned feed token. See ADR-0024.
+_Avoid_: app-specific password (in prose), device password, API key
+
+## Sync
+
+**Calendar object**:
+The unit CalDAV addresses — one `.ics` resource per Event *series*, sharing a single iCalendar `UID` (the Master's id) and bundling the Master, all its Overrides, and its Exceptions in one file. The CalDAV-visible counterpart to the many rows a series occupies and to the Occurrences it expands to: one Calendar object, one series, many rows. Exposed at `{masterId}.ics`. See ADR-0025.
+_Avoid_: calendar resource, ics file, vevent
+
 ## Deployment
 
 **Data directory**:

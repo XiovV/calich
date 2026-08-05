@@ -351,7 +351,7 @@ export function EventModal(props: EventModalProps) {
           <Dialog.Backdrop className="fixed inset-0 z-40 bg-ink/20" />
           <Dialog.Popup
             onKeyDown={handleEnterToSave}
-            className="fixed top-1/2 left-1/2 z-50 w-96 -translate-x-1/2 -translate-y-1/2 rounded-shell-lg bg-surface p-5 shadow-elevation-3"
+            className="fixed top-1/2 left-1/2 z-50 w-[28rem] -translate-x-1/2 -translate-y-1/2 rounded-shell-lg bg-surface p-5 shadow-elevation-3"
           >
             <Dialog.Title className="text-heading font-medium text-ink">
               {mode === "edit" ? "Edit event" : "New event"}
@@ -445,7 +445,6 @@ export function EventModal(props: EventModalProps) {
                   <ReminderRow
                     key={reminder.draftId}
                     reminder={reminder}
-                    allDay={allDay}
                     emailAvailable={emailAvailable}
                     onChange={(next) => handleReminderChange(reminder.draftId, next)}
                     onRemove={() => handleRemoveReminder(reminder.draftId)}

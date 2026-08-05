@@ -12,7 +12,7 @@ CalDAV is the next major workstream, and ADR-0013 explicitly named alarms as the
 - **Offset** is stored normalized as signed minutes before the Occurrence start. For all-day Events the offset is measured from **09:00 on the start date**, not midnight, so reminders never fire in the middle of the night.
 - **Many per Event, unconstrained** — no cap, no dedupe. Reminders live on the Event row in a child table (`event_reminders`), not a JSON blob, so the phase-2 scheduler can query them.
 - **Recurrence**: a Master's Reminders apply to every Occurrence; creating an Override copies the Master's set, then edits it independently. Reminder edits ride the existing scope machinery (This / This-and-following / All).
-- **UI** offers a fixed preset list plus a custom offset entry, mirroring the Custom recurrence dialog.
+- **UI** offers a fixed preset list plus a custom offset entry, mirroring the Custom recurrence dialog. Superseded by ADR-0022 — the preset list was dropped in favor of a direct amount+unit entry, matching Google/Proton Calendar.
 - **Exotic client-authored triggers** (end-relative, absolute datetime, non-before-start) are deferred to the CalDAV-ingest grilling; phase 1 authors only before-start offsets.
 
 ## Consequences
