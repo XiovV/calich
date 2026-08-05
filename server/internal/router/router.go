@@ -15,7 +15,7 @@ import (
 	"github.com/XiovV/calendar/server/internal/static"
 )
 
-func New(logger *slog.Logger, authHandler *handlers.AuthHandler, calendarHandler *handlers.CalendarHandler, eventHandler *handlers.EventHandler, authenticator httpauth.Authenticator, activeUserChecker httpauth.ActiveUserChecker) (http.Handler, error) {
+func New(logger *slog.Logger, authHandler *handlers.AuthHandler, calendarHandler *handlers.CalendarHandler, eventHandler *handlers.EventHandler, notificationHandler *handlers.NotificationHandler, authenticator httpauth.Authenticator, activeUserChecker httpauth.ActiveUserChecker) (http.Handler, error) {
 	r := chi.NewRouter()
 	r.Use(requestLogger(logger))
 	r.Use(middleware.Recoverer)
@@ -34,6 +34,7 @@ func New(logger *slog.Logger, authHandler *handlers.AuthHandler, calendarHandler
 				r.Use(httpauth.RequireAuth(authenticator))
 				r.Use(httpauth.RequireActiveUser(activeUserChecker))
 				r.Get("/me", authHandler.Me)
+				r.Put("/email", authHandler.UpdateEmail)
 			})
 		})
 
@@ -59,6 +60,14 @@ func New(logger *slog.Logger, authHandler *handlers.AuthHandler, calendarHandler
 			r.Delete("/{id}", eventHandler.Delete)
 			r.Post("/{id}/exceptions", eventHandler.AddException)
 			r.Post("/{id}/reparent", eventHandler.Reparent)
+		})
+
+		r.Route("/notifications", func(r chi.Router) {
+			r.Use(httpauth.RequireAuth(authenticator))
+			r.Use(httpauth.RequireActiveUser(activeUserChecker))
+
+			r.Get("/", notificationHandler.List)
+			r.Post("/seen", notificationHandler.MarkSeen)
 		})
 	})
 

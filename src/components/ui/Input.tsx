@@ -35,7 +35,7 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
   const descriptionId = description ? `${inputId}-description` : undefined;
 
   return (
-    <div className={["flex w-full flex-col gap-1.5", className].filter(Boolean).join(" ")}>
+    <div className={["flex flex-col gap-1.5", className].filter(Boolean).join(" ")}>
       {label && (
         <label htmlFor={inputId} className={fieldLabelClass}>
           {label}

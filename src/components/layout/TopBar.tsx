@@ -1,14 +1,17 @@
 import { ChevronLeft, ChevronRight, Settings } from "lucide-react";
+import { useNavigate } from "react-router";
 import { useShellStore } from "../../lib/shellStore";
 import { navigateDate } from "../../lib/navigateDate";
 import { formatDateLabel } from "../../lib/formatDateLabel";
 import { UserMenu } from "../../auth/UserMenu";
 import { ViewSwitcher } from "./ViewSwitcher";
 import { ThemeToggle } from "./ThemeToggle";
+import { NotificationBell } from "./NotificationBell";
 import { Button } from "../ui/Button";
 import { IconButton } from "../ui/IconButton";
 
 export function TopBar() {
+  const navigate = useNavigate();
   const selectedDate = useShellStore((state) => state.selectedDate);
   const activeView = useShellStore((state) => state.activeView);
   const setSelectedDate = useShellStore((state) => state.setSelectedDate);
@@ -48,7 +51,11 @@ export function TopBar() {
       <div className="ml-auto flex items-center gap-2">
         <ViewSwitcher />
         <ThemeToggle />
-        <IconButton aria-label="Settings">
+        <NotificationBell />
+        <IconButton
+          onClick={() => navigate("/settings")}
+          aria-label="Settings"
+        >
           <Settings className="size-5" />
         </IconButton>
         <UserMenu />

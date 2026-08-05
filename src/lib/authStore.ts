@@ -16,6 +16,7 @@ interface AuthState {
   login: (username: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
   changePassword: (currentPassword: string, newPassword: string) => Promise<void>;
+  updateEmail: (email: string) => Promise<void>;
 }
 
 type AuthFields = Pick<AuthState, "status" | "user" | "pendingUsername" | "accessToken">;
@@ -84,6 +85,14 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     await authApi.changePassword(accessToken, currentPassword, newPassword);
 
     const user = await authApi.me(accessToken);
+    set(authenticated(user, accessToken));
+  },
+
+  updateEmail: async (email) => {
+    const { accessToken } = get();
+    if (!accessToken) throw new Error("Not authenticated.");
+
+    const user = await authApi.updateEmail(accessToken, email);
     set(authenticated(user, accessToken));
   },
 }));

@@ -32,7 +32,7 @@ func newTestEventService(t *testing.T) (svc *EventService, userID int64, calenda
 		t.Fatalf("create calendar: %v", err)
 	}
 
-	return NewEventService(sqlDB, repository.NewEventRepository(sqlDB), repository.NewEventExceptionRepository(sqlDB), NewCalendarService(calendarRepo)), user.ID, cal.ID
+	return NewEventService(sqlDB, repository.NewEventRepository(sqlDB), repository.NewEventExceptionRepository(sqlDB), repository.NewEventReminderRepository(sqlDB), NewCalendarService(calendarRepo)), user.ID, cal.ID
 }
 
 func TestEventService_Create(t *testing.T) {
@@ -41,7 +41,7 @@ func TestEventService_Create(t *testing.T) {
 	start := time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC)
 	end := time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC)
 
-	event, err := svc.Create(ctx, userID, "evt-1", calendarID, "Standup", start, end, false, "", nil, nil, nil)
+	event, err := svc.Create(ctx, userID, "evt-1", calendarID, "Standup", start, end, false, "", nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
@@ -57,7 +57,7 @@ func TestEventService_Create_RoundTripsRrule(t *testing.T) {
 	end := time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC)
 
 	rrule := "FREQ=WEEKLY;BYDAY=TH"
-	created, err := svc.Create(ctx, userID, "evt-1", calendarID, "Standup", start, end, false, rrule, nil, nil, nil)
+	created, err := svc.Create(ctx, userID, "evt-1", calendarID, "Standup", start, end, false, rrule, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
@@ -80,7 +80,7 @@ func TestEventService_Create_RoundTripsAllDay(t *testing.T) {
 	start := time.Date(2026, 8, 4, 0, 0, 0, 0, time.UTC)
 	end := time.Date(2026, 8, 5, 0, 0, 0, 0, time.UTC)
 
-	created, err := svc.Create(ctx, userID, "evt-1", calendarID, "Holiday", start, end, true, "", nil, nil, nil)
+	created, err := svc.Create(ctx, userID, "evt-1", calendarID, "Holiday", start, end, true, "", nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
@@ -88,7 +88,7 @@ func TestEventService_Create_RoundTripsAllDay(t *testing.T) {
 		t.Fatalf("expected created event to be all-day, got %+v", created)
 	}
 
-	updated, err := svc.Update(ctx, userID, "evt-1", calendarID, "Holiday", start, end, false, "", nil)
+	updated, err := svc.Update(ctx, userID, "evt-1", calendarID, "Holiday", start, end, false, "", nil, nil)
 	if err != nil {
 		t.Fatalf("update: %v", err)
 	}
@@ -105,7 +105,7 @@ func TestEventService_RoundTripsTzid(t *testing.T) {
 	start := time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC)
 	end := time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC)
 
-	created, err := svc.Create(ctx, userID, "evt-1", calendarID, "Standup", start, end, false, "", nil, nil, nil)
+	created, err := svc.Create(ctx, userID, "evt-1", calendarID, "Standup", start, end, false, "", nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
@@ -114,7 +114,7 @@ func TestEventService_RoundTripsTzid(t *testing.T) {
 	}
 
 	zone := "Europe/Berlin"
-	updated, err := svc.Update(ctx, userID, "evt-1", calendarID, "Standup", start, end, false, "", &zone)
+	updated, err := svc.Update(ctx, userID, "evt-1", calendarID, "Standup", start, end, false, "", &zone, nil)
 	if err != nil {
 		t.Fatalf("update: %v", err)
 	}
@@ -128,7 +128,7 @@ func TestEventService_Create_RejectsMalformedRrule(t *testing.T) {
 	start := time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC)
 	end := time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC)
 
-	_, err := svc.Create(context.Background(), userID, "evt-1", calendarID, "Standup", start, end, false, "not a rule", nil, nil, nil)
+	_, err := svc.Create(context.Background(), userID, "evt-1", calendarID, "Standup", start, end, false, "not a rule", nil, nil, nil, nil)
 	if !errors.Is(err, ErrInvalidRecurrenceRule) {
 		t.Fatalf("expected ErrInvalidRecurrenceRule, got %v", err)
 	}
@@ -140,12 +140,12 @@ func TestEventService_Update_RoundTripsRrule(t *testing.T) {
 	start := time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC)
 	end := time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC)
 
-	if _, err := svc.Create(ctx, userID, "evt-1", calendarID, "Standup", start, end, false, "", nil, nil, nil); err != nil {
+	if _, err := svc.Create(ctx, userID, "evt-1", calendarID, "Standup", start, end, false, "", nil, nil, nil, nil); err != nil {
 		t.Fatalf("create: %v", err)
 	}
 
 	rrule := "FREQ=DAILY"
-	updated, err := svc.Update(ctx, userID, "evt-1", calendarID, "Standup", start, end, false, rrule, nil)
+	updated, err := svc.Update(ctx, userID, "evt-1", calendarID, "Standup", start, end, false, rrule, nil, nil)
 	if err != nil {
 		t.Fatalf("update: %v", err)
 	}
@@ -159,7 +159,7 @@ func TestEventService_Create_RejectsEmptyTitle(t *testing.T) {
 	start := time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC)
 	end := time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC)
 
-	_, err := svc.Create(context.Background(), userID, "evt-1", calendarID, "   ", start, end, false, "", nil, nil, nil)
+	_, err := svc.Create(context.Background(), userID, "evt-1", calendarID, "   ", start, end, false, "", nil, nil, nil, nil)
 	if !errors.Is(err, ErrInvalidTitle) {
 		t.Fatalf("expected ErrInvalidTitle, got %v", err)
 	}
@@ -170,7 +170,7 @@ func TestEventService_Create_RejectsEndNotAfterStart(t *testing.T) {
 	start := time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC)
 	end := time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC)
 
-	_, err := svc.Create(context.Background(), userID, "evt-1", calendarID, "Standup", start, end, false, "", nil, nil, nil)
+	_, err := svc.Create(context.Background(), userID, "evt-1", calendarID, "Standup", start, end, false, "", nil, nil, nil, nil)
 	if !errors.Is(err, ErrInvalidTimeRange) {
 		t.Fatalf("expected ErrInvalidTimeRange, got %v", err)
 	}
@@ -180,7 +180,7 @@ func TestEventService_Create_RejectsEqualStartAndEnd(t *testing.T) {
 	svc, userID, calendarID := newTestEventService(t)
 	at := time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC)
 
-	_, err := svc.Create(context.Background(), userID, "evt-1", calendarID, "Standup", at, at, false, "", nil, nil, nil)
+	_, err := svc.Create(context.Background(), userID, "evt-1", calendarID, "Standup", at, at, false, "", nil, nil, nil, nil)
 	if !errors.Is(err, ErrInvalidTimeRange) {
 		t.Fatalf("expected ErrInvalidTimeRange, got %v", err)
 	}
@@ -191,7 +191,7 @@ func TestEventService_Create_RejectsUnknownCalendar(t *testing.T) {
 	start := time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC)
 	end := time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC)
 
-	_, err := svc.Create(context.Background(), userID, "evt-1", "does-not-exist", "Standup", start, end, false, "", nil, nil, nil)
+	_, err := svc.Create(context.Background(), userID, "evt-1", "does-not-exist", "Standup", start, end, false, "", nil, nil, nil, nil)
 	if !errors.Is(err, ErrCalendarNotFound) {
 		t.Fatalf("expected ErrCalendarNotFound, got %v", err)
 	}
@@ -202,7 +202,7 @@ func TestEventService_Create_RejectsAnotherUsersCalendar(t *testing.T) {
 	start := time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC)
 	end := time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC)
 
-	_, err := svc.Create(context.Background(), 99999, "evt-1", calendarID, "Standup", start, end, false, "", nil, nil, nil)
+	_, err := svc.Create(context.Background(), 99999, "evt-1", calendarID, "Standup", start, end, false, "", nil, nil, nil, nil)
 	if !errors.Is(err, ErrCalendarNotFound) {
 		t.Fatalf("expected ErrCalendarNotFound for another user's calendar, got %v", err)
 	}
@@ -214,7 +214,7 @@ func TestEventService_List(t *testing.T) {
 	start := time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC)
 	end := time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC)
 
-	if _, err := svc.Create(ctx, userID, "evt-1", calendarID, "Standup", start, end, false, "", nil, nil, nil); err != nil {
+	if _, err := svc.Create(ctx, userID, "evt-1", calendarID, "Standup", start, end, false, "", nil, nil, nil, nil); err != nil {
 		t.Fatalf("create: %v", err)
 	}
 
@@ -233,13 +233,13 @@ func TestEventService_Update(t *testing.T) {
 	start := time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC)
 	end := time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC)
 
-	if _, err := svc.Create(ctx, userID, "evt-1", calendarID, "Standup", start, end, false, "", nil, nil, nil); err != nil {
+	if _, err := svc.Create(ctx, userID, "evt-1", calendarID, "Standup", start, end, false, "", nil, nil, nil, nil); err != nil {
 		t.Fatalf("create: %v", err)
 	}
 
 	newStart := time.Date(2026, 1, 1, 11, 0, 0, 0, time.UTC)
 	newEnd := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
-	updated, err := svc.Update(ctx, userID, "evt-1", calendarID, "Renamed", newStart, newEnd, false, "", nil)
+	updated, err := svc.Update(ctx, userID, "evt-1", calendarID, "Renamed", newStart, newEnd, false, "", nil, nil)
 	if err != nil {
 		t.Fatalf("update: %v", err)
 	}
@@ -254,11 +254,11 @@ func TestEventService_Update_RejectsEndNotAfterStart(t *testing.T) {
 	start := time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC)
 	end := time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC)
 
-	if _, err := svc.Create(ctx, userID, "evt-1", calendarID, "Standup", start, end, false, "", nil, nil, nil); err != nil {
+	if _, err := svc.Create(ctx, userID, "evt-1", calendarID, "Standup", start, end, false, "", nil, nil, nil, nil); err != nil {
 		t.Fatalf("create: %v", err)
 	}
 
-	_, err := svc.Update(ctx, userID, "evt-1", calendarID, "Standup", end, start, false, "", nil)
+	_, err := svc.Update(ctx, userID, "evt-1", calendarID, "Standup", end, start, false, "", nil, nil)
 	if !errors.Is(err, ErrInvalidTimeRange) {
 		t.Fatalf("expected ErrInvalidTimeRange, got %v", err)
 	}
@@ -269,7 +269,7 @@ func TestEventService_Update_NotFound(t *testing.T) {
 	start := time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC)
 	end := time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC)
 
-	_, err := svc.Update(context.Background(), userID, "nope", calendarID, "Standup", start, end, false, "", nil)
+	_, err := svc.Update(context.Background(), userID, "nope", calendarID, "Standup", start, end, false, "", nil, nil)
 	if !errors.Is(err, repository.ErrNotFound) {
 		t.Fatalf("expected ErrNotFound, got %v", err)
 	}
@@ -281,11 +281,11 @@ func TestEventService_Update_RejectsUnknownCalendar(t *testing.T) {
 	start := time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC)
 	end := time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC)
 
-	if _, err := svc.Create(ctx, userID, "evt-1", calendarID, "Standup", start, end, false, "", nil, nil, nil); err != nil {
+	if _, err := svc.Create(ctx, userID, "evt-1", calendarID, "Standup", start, end, false, "", nil, nil, nil, nil); err != nil {
 		t.Fatalf("create: %v", err)
 	}
 
-	_, err := svc.Update(ctx, userID, "evt-1", "does-not-exist", "Standup", start, end, false, "", nil)
+	_, err := svc.Update(ctx, userID, "evt-1", "does-not-exist", "Standup", start, end, false, "", nil, nil)
 	if !errors.Is(err, ErrCalendarNotFound) {
 		t.Fatalf("expected ErrCalendarNotFound, got %v", err)
 	}
@@ -297,11 +297,11 @@ func TestEventService_Update_RejectsAnotherUsersCalendar(t *testing.T) {
 	start := time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC)
 	end := time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC)
 
-	if _, err := svc.Create(ctx, userID, "evt-1", calendarID, "Standup", start, end, false, "", nil, nil, nil); err != nil {
+	if _, err := svc.Create(ctx, userID, "evt-1", calendarID, "Standup", start, end, false, "", nil, nil, nil, nil); err != nil {
 		t.Fatalf("create: %v", err)
 	}
 
-	_, err := svc.Update(ctx, 99999, "evt-1", calendarID, "Standup", start, end, false, "", nil)
+	_, err := svc.Update(ctx, 99999, "evt-1", calendarID, "Standup", start, end, false, "", nil, nil)
 	if !errors.Is(err, ErrCalendarNotFound) {
 		t.Fatalf("expected ErrCalendarNotFound, since the calendar ownership check runs before the event lookup, got %v", err)
 	}
@@ -313,7 +313,7 @@ func TestEventService_Delete(t *testing.T) {
 	start := time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC)
 	end := time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC)
 
-	if _, err := svc.Create(ctx, userID, "evt-1", calendarID, "Standup", start, end, false, "", nil, nil, nil); err != nil {
+	if _, err := svc.Create(ctx, userID, "evt-1", calendarID, "Standup", start, end, false, "", nil, nil, nil, nil); err != nil {
 		t.Fatalf("create: %v", err)
 	}
 
@@ -345,7 +345,7 @@ func TestEventService_CreateOverride(t *testing.T) {
 	start := time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC)
 	end := time.Date(2026, 1, 1, 9, 30, 0, 0, time.UTC)
 
-	master, err := svc.Create(ctx, userID, "master", calendarID, "Standup", start, end, false, "FREQ=DAILY", nil, nil, nil)
+	master, err := svc.Create(ctx, userID, "master", calendarID, "Standup", start, end, false, "FREQ=DAILY", nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("create master: %v", err)
 	}
@@ -353,7 +353,7 @@ func TestEventService_CreateOverride(t *testing.T) {
 	recurrenceID := time.Date(2026, 1, 2, 9, 0, 0, 0, time.UTC)
 	override, err := svc.Create(ctx, userID, "override", calendarID, "Standup (moved)",
 		time.Date(2026, 1, 2, 10, 0, 0, 0, time.UTC), time.Date(2026, 1, 2, 10, 30, 0, 0, time.UTC), false,
-		"", &master.ID, &recurrenceID, nil)
+		"", &master.ID, &recurrenceID, nil, nil)
 	if err != nil {
 		t.Fatalf("create override: %v", err)
 	}
@@ -371,13 +371,13 @@ func TestEventService_CreateOverride_RejectsOwnRrule(t *testing.T) {
 	start := time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC)
 	end := time.Date(2026, 1, 1, 9, 30, 0, 0, time.UTC)
 
-	master, err := svc.Create(ctx, userID, "master", calendarID, "Standup", start, end, false, "FREQ=DAILY", nil, nil, nil)
+	master, err := svc.Create(ctx, userID, "master", calendarID, "Standup", start, end, false, "FREQ=DAILY", nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("create master: %v", err)
 	}
 
 	recurrenceID := time.Date(2026, 1, 2, 9, 0, 0, 0, time.UTC)
-	_, err = svc.Create(ctx, userID, "override", calendarID, "Standup (moved)", start, end, false, "FREQ=DAILY", &master.ID, &recurrenceID, nil)
+	_, err = svc.Create(ctx, userID, "override", calendarID, "Standup (moved)", start, end, false, "FREQ=DAILY", &master.ID, &recurrenceID, nil, nil)
 	if !errors.Is(err, ErrInvalidOverride) {
 		t.Fatalf("expected ErrInvalidOverride, got %v", err)
 	}
@@ -389,7 +389,7 @@ func TestEventService_CreateOverride_RejectsOverridingAnOverride(t *testing.T) {
 	start := time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC)
 	end := time.Date(2026, 1, 1, 9, 30, 0, 0, time.UTC)
 
-	master, err := svc.Create(ctx, userID, "master", calendarID, "Standup", start, end, false, "FREQ=DAILY", nil, nil, nil)
+	master, err := svc.Create(ctx, userID, "master", calendarID, "Standup", start, end, false, "FREQ=DAILY", nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("create master: %v", err)
 	}
@@ -397,13 +397,13 @@ func TestEventService_CreateOverride_RejectsOverridingAnOverride(t *testing.T) {
 	recurrenceID := time.Date(2026, 1, 2, 9, 0, 0, 0, time.UTC)
 	override, err := svc.Create(ctx, userID, "override", calendarID, "Standup (moved)",
 		time.Date(2026, 1, 2, 10, 0, 0, 0, time.UTC), time.Date(2026, 1, 2, 10, 30, 0, 0, time.UTC), false,
-		"", &master.ID, &recurrenceID, nil)
+		"", &master.ID, &recurrenceID, nil, nil)
 	if err != nil {
 		t.Fatalf("create override: %v", err)
 	}
 
 	anotherRecurrenceID := time.Date(2026, 1, 3, 9, 0, 0, 0, time.UTC)
-	_, err = svc.Create(ctx, userID, "double-override", calendarID, "Nope", start, end, false, "", &override.ID, &anotherRecurrenceID, nil)
+	_, err = svc.Create(ctx, userID, "double-override", calendarID, "Nope", start, end, false, "", &override.ID, &anotherRecurrenceID, nil, nil)
 	if !errors.Is(err, ErrParentIsOverride) {
 		t.Fatalf("expected ErrParentIsOverride, got %v", err)
 	}
@@ -415,7 +415,7 @@ func TestEventService_AddException(t *testing.T) {
 	start := time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC)
 	end := time.Date(2026, 1, 1, 9, 30, 0, 0, time.UTC)
 
-	master, err := svc.Create(ctx, userID, "master", calendarID, "Standup", start, end, false, "FREQ=DAILY", nil, nil, nil)
+	master, err := svc.Create(ctx, userID, "master", calendarID, "Standup", start, end, false, "FREQ=DAILY", nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("create master: %v", err)
 	}
@@ -440,7 +440,7 @@ func TestEventService_AddException_RejectsNonRecurringParent(t *testing.T) {
 	start := time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC)
 	end := time.Date(2026, 1, 1, 9, 30, 0, 0, time.UTC)
 
-	master, err := svc.Create(ctx, userID, "master", calendarID, "Standup", start, end, false, "", nil, nil, nil)
+	master, err := svc.Create(ctx, userID, "master", calendarID, "Standup", start, end, false, "", nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("create master: %v", err)
 	}
@@ -466,7 +466,7 @@ func TestEventService_Update_DiscardsChildrenOnRuleChange(t *testing.T) {
 	start := time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC)
 	end := time.Date(2026, 1, 1, 9, 30, 0, 0, time.UTC)
 
-	master, err := svc.Create(ctx, userID, "master", calendarID, "Standup", start, end, false, "FREQ=DAILY", nil, nil, nil)
+	master, err := svc.Create(ctx, userID, "master", calendarID, "Standup", start, end, false, "FREQ=DAILY", nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("create master: %v", err)
 	}
@@ -474,7 +474,7 @@ func TestEventService_Update_DiscardsChildrenOnRuleChange(t *testing.T) {
 	recurrenceID := time.Date(2026, 1, 2, 9, 0, 0, 0, time.UTC)
 	override, err := svc.Create(ctx, userID, "override", calendarID, "Standup (moved)",
 		time.Date(2026, 1, 2, 10, 0, 0, 0, time.UTC), time.Date(2026, 1, 2, 10, 30, 0, 0, time.UTC), false,
-		"", &master.ID, &recurrenceID, nil)
+		"", &master.ID, &recurrenceID, nil, nil)
 	if err != nil {
 		t.Fatalf("create override: %v", err)
 	}
@@ -482,7 +482,7 @@ func TestEventService_Update_DiscardsChildrenOnRuleChange(t *testing.T) {
 		t.Fatalf("add exception: %v", err)
 	}
 
-	if _, err := svc.Update(ctx, userID, master.ID, calendarID, "Standup", start, end, false, "FREQ=WEEKLY;BYDAY=TH", nil); err != nil {
+	if _, err := svc.Update(ctx, userID, master.ID, calendarID, "Standup", start, end, false, "FREQ=WEEKLY;BYDAY=TH", nil, nil); err != nil {
 		t.Fatalf("update: %v", err)
 	}
 
@@ -505,7 +505,7 @@ func TestEventService_Update_KeepsChildrenWhenRuleUnchanged(t *testing.T) {
 	start := time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC)
 	end := time.Date(2026, 1, 1, 9, 30, 0, 0, time.UTC)
 
-	master, err := svc.Create(ctx, userID, "master", calendarID, "Standup", start, end, false, "FREQ=DAILY", nil, nil, nil)
+	master, err := svc.Create(ctx, userID, "master", calendarID, "Standup", start, end, false, "FREQ=DAILY", nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("create master: %v", err)
 	}
@@ -513,12 +513,12 @@ func TestEventService_Update_KeepsChildrenWhenRuleUnchanged(t *testing.T) {
 	recurrenceID := time.Date(2026, 1, 2, 9, 0, 0, 0, time.UTC)
 	override, err := svc.Create(ctx, userID, "override", calendarID, "Standup (moved)",
 		time.Date(2026, 1, 2, 10, 0, 0, 0, time.UTC), time.Date(2026, 1, 2, 10, 30, 0, 0, time.UTC), false,
-		"", &master.ID, &recurrenceID, nil)
+		"", &master.ID, &recurrenceID, nil, nil)
 	if err != nil {
 		t.Fatalf("create override: %v", err)
 	}
 
-	if _, err := svc.Update(ctx, userID, master.ID, calendarID, "Renamed", start, end, false, "FREQ=DAILY", nil); err != nil {
+	if _, err := svc.Update(ctx, userID, master.ID, calendarID, "Renamed", start, end, false, "FREQ=DAILY", nil, nil); err != nil {
 		t.Fatalf("update: %v", err)
 	}
 
@@ -538,7 +538,7 @@ func TestEventService_Update_KeepsChildrenWhenOnlyUntilChanges(t *testing.T) {
 	start := time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC)
 	end := time.Date(2026, 1, 1, 9, 30, 0, 0, time.UTC)
 
-	master, err := svc.Create(ctx, userID, "master", calendarID, "Standup", start, end, false, "FREQ=DAILY", nil, nil, nil)
+	master, err := svc.Create(ctx, userID, "master", calendarID, "Standup", start, end, false, "FREQ=DAILY", nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("create master: %v", err)
 	}
@@ -546,7 +546,7 @@ func TestEventService_Update_KeepsChildrenWhenOnlyUntilChanges(t *testing.T) {
 	recurrenceID := time.Date(2026, 1, 2, 9, 0, 0, 0, time.UTC)
 	override, err := svc.Create(ctx, userID, "override", calendarID, "Standup (moved)",
 		time.Date(2026, 1, 2, 10, 0, 0, 0, time.UTC), time.Date(2026, 1, 2, 10, 30, 0, 0, time.UTC), false,
-		"", &master.ID, &recurrenceID, nil)
+		"", &master.ID, &recurrenceID, nil, nil)
 	if err != nil {
 		t.Fatalf("create override: %v", err)
 	}
@@ -554,7 +554,7 @@ func TestEventService_Update_KeepsChildrenWhenOnlyUntilChanges(t *testing.T) {
 		t.Fatalf("add exception: %v", err)
 	}
 
-	if _, err := svc.Update(ctx, userID, master.ID, calendarID, "Standup", start, end, false, "FREQ=DAILY;UNTIL=20260101T085959Z", nil); err != nil {
+	if _, err := svc.Update(ctx, userID, master.ID, calendarID, "Standup", start, end, false, "FREQ=DAILY;UNTIL=20260101T085959Z", nil, nil); err != nil {
 		t.Fatalf("update: %v", err)
 	}
 
@@ -582,7 +582,7 @@ func TestEventService_Update_DiscardOnRuleChangeIsAtomic(t *testing.T) {
 	start := time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC)
 	end := time.Date(2026, 1, 1, 9, 30, 0, 0, time.UTC)
 
-	master, err := svc.Create(ctx, userID, "master", calendarID, "Standup", start, end, false, "FREQ=DAILY", nil, nil, nil)
+	master, err := svc.Create(ctx, userID, "master", calendarID, "Standup", start, end, false, "FREQ=DAILY", nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("create master: %v", err)
 	}
@@ -590,7 +590,7 @@ func TestEventService_Update_DiscardOnRuleChangeIsAtomic(t *testing.T) {
 	recurrenceID := time.Date(2026, 1, 2, 9, 0, 0, 0, time.UTC)
 	override, err := svc.Create(ctx, userID, "override", calendarID, "Standup (moved)",
 		time.Date(2026, 1, 2, 10, 0, 0, 0, time.UTC), time.Date(2026, 1, 2, 10, 30, 0, 0, time.UTC), false,
-		"", &master.ID, &recurrenceID, nil)
+		"", &master.ID, &recurrenceID, nil, nil)
 	if err != nil {
 		t.Fatalf("create override: %v", err)
 	}
@@ -604,7 +604,7 @@ func TestEventService_Update_DiscardOnRuleChangeIsAtomic(t *testing.T) {
 		t.Fatalf("install poison trigger: %v", err)
 	}
 
-	if _, err := svc.Update(ctx, userID, master.ID, calendarID, "Standup", start, end, false, "FREQ=WEEKLY;BYDAY=TH", nil); err == nil {
+	if _, err := svc.Update(ctx, userID, master.ID, calendarID, "Standup", start, end, false, "FREQ=WEEKLY;BYDAY=TH", nil, nil); err == nil {
 		t.Fatalf("expected update to fail once the override delete is poisoned")
 	}
 
@@ -629,13 +629,13 @@ func TestEventService_ReparentFrom(t *testing.T) {
 
 	oldMaster, err := svc.Create(ctx, userID, "old-master", calendarID, "Standup",
 		time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC), time.Date(2026, 1, 1, 9, 30, 0, 0, time.UTC), false,
-		"FREQ=DAILY", nil, nil, nil)
+		"FREQ=DAILY", nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("create old master: %v", err)
 	}
 	newMaster, err := svc.Create(ctx, userID, "new-master", calendarID, "Standup",
 		time.Date(2026, 1, 5, 9, 0, 0, 0, time.UTC), time.Date(2026, 1, 5, 9, 30, 0, 0, time.UTC), false,
-		"FREQ=DAILY", nil, nil, nil)
+		"FREQ=DAILY", nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("create new master: %v", err)
 	}
@@ -643,7 +643,7 @@ func TestEventService_ReparentFrom(t *testing.T) {
 	recurrenceID := time.Date(2026, 1, 5, 9, 0, 0, 0, time.UTC)
 	override, err := svc.Create(ctx, userID, "override", calendarID, "Standup (moved)",
 		time.Date(2026, 1, 5, 10, 0, 0, 0, time.UTC), time.Date(2026, 1, 5, 10, 30, 0, 0, time.UTC), false,
-		"", &oldMaster.ID, &recurrenceID, nil)
+		"", &oldMaster.ID, &recurrenceID, nil, nil)
 	if err != nil {
 		t.Fatalf("create override: %v", err)
 	}
@@ -694,13 +694,13 @@ func TestEventService_ReparentFrom_Atomic(t *testing.T) {
 
 	oldMaster, err := svc.Create(ctx, userID, "old-master", calendarID, "Standup",
 		time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC), time.Date(2026, 1, 1, 9, 30, 0, 0, time.UTC), false,
-		"FREQ=DAILY", nil, nil, nil)
+		"FREQ=DAILY", nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("create old master: %v", err)
 	}
 	newMaster, err := svc.Create(ctx, userID, "new-master", calendarID, "Standup",
 		time.Date(2026, 1, 5, 9, 0, 0, 0, time.UTC), time.Date(2026, 1, 5, 9, 30, 0, 0, time.UTC), false,
-		"FREQ=DAILY", nil, nil, nil)
+		"FREQ=DAILY", nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("create new master: %v", err)
 	}
@@ -708,7 +708,7 @@ func TestEventService_ReparentFrom_Atomic(t *testing.T) {
 	recurrenceID := time.Date(2026, 1, 5, 9, 0, 0, 0, time.UTC)
 	override, err := svc.Create(ctx, userID, "override", calendarID, "Standup (moved)",
 		time.Date(2026, 1, 5, 10, 0, 0, 0, time.UTC), time.Date(2026, 1, 5, 10, 30, 0, 0, time.UTC), false,
-		"", &oldMaster.ID, &recurrenceID, nil)
+		"", &oldMaster.ID, &recurrenceID, nil, nil)
 	if err != nil {
 		t.Fatalf("create override: %v", err)
 	}
@@ -751,5 +751,189 @@ func TestEventService_ReparentFrom_NotFound(t *testing.T) {
 	err := svc.ReparentFrom(context.Background(), userID, "nope", "also-nope", time.Now())
 	if !errors.Is(err, ErrParentNotFound) {
 		t.Fatalf("expected ErrParentNotFound, got %v", err)
+	}
+}
+
+func TestEventService_Create_PersistsAndRoundTripsReminders(t *testing.T) {
+	svc, userID, calendarID := newTestEventService(t)
+	ctx := context.Background()
+	start := time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC)
+	end := time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC)
+
+	reminders := []repository.Reminder{
+		{OffsetMinutes: 10, Channel: "notification"},
+		{OffsetMinutes: 1440, Channel: "email"},
+	}
+	created, err := svc.Create(ctx, userID, "evt-1", calendarID, "Standup", start, end, false, "", nil, nil, nil, reminders)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if len(created.Reminders) != 2 {
+		t.Fatalf("expected 2 reminders on create response, got %+v", created.Reminders)
+	}
+
+	fetched, err := svc.Get(ctx, userID, "evt-1")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if len(fetched.Reminders) != 2 {
+		t.Fatalf("expected 2 reminders on get, got %+v", fetched.Reminders)
+	}
+
+	listed, err := svc.List(ctx, userID, nil, nil)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(listed) != 1 || len(listed[0].Reminders) != 2 {
+		t.Fatalf("expected 2 reminders on list, got %+v", listed)
+	}
+}
+
+func TestEventService_Create_NoReminders(t *testing.T) {
+	svc, userID, calendarID := newTestEventService(t)
+	ctx := context.Background()
+	start := time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC)
+	end := time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC)
+
+	created, err := svc.Create(ctx, userID, "evt-1", calendarID, "Standup", start, end, false, "", nil, nil, nil, nil)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if len(created.Reminders) != 0 {
+		t.Fatalf("expected no reminders, got %+v", created.Reminders)
+	}
+}
+
+func TestEventService_Create_RejectsInvalidReminderChannel(t *testing.T) {
+	svc, userID, calendarID := newTestEventService(t)
+	start := time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC)
+	end := time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC)
+
+	_, err := svc.Create(context.Background(), userID, "evt-1", calendarID, "Standup", start, end, false, "", nil, nil, nil,
+		[]repository.Reminder{{OffsetMinutes: 10, Channel: "sms"}})
+	if !errors.Is(err, ErrInvalidReminderChannel) {
+		t.Fatalf("expected ErrInvalidReminderChannel, got %v", err)
+	}
+}
+
+// Update replaces an Event's Reminders set wholesale — it doesn't merge into
+// the existing set (ADR-0020).
+func TestEventService_Update_ReplacesRemindersWholesale(t *testing.T) {
+	svc, userID, calendarID := newTestEventService(t)
+	ctx := context.Background()
+	start := time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC)
+	end := time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC)
+
+	_, err := svc.Create(ctx, userID, "evt-1", calendarID, "Standup", start, end, false, "", nil, nil, nil,
+		[]repository.Reminder{{OffsetMinutes: 10, Channel: "notification"}})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	updated, err := svc.Update(ctx, userID, "evt-1", calendarID, "Standup", start, end, false, "", nil,
+		[]repository.Reminder{{OffsetMinutes: 30, Channel: "email"}})
+	if err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	if len(updated.Reminders) != 1 || updated.Reminders[0].OffsetMinutes != 30 || updated.Reminders[0].Channel != "email" {
+		t.Fatalf("expected reminders replaced wholesale, got %+v", updated.Reminders)
+	}
+}
+
+// Update with an empty Reminders slice clears an Event's Reminders.
+func TestEventService_Update_EmptyRemindersClears(t *testing.T) {
+	svc, userID, calendarID := newTestEventService(t)
+	ctx := context.Background()
+	start := time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC)
+	end := time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC)
+
+	_, err := svc.Create(ctx, userID, "evt-1", calendarID, "Standup", start, end, false, "", nil, nil, nil,
+		[]repository.Reminder{{OffsetMinutes: 10, Channel: "notification"}})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	updated, err := svc.Update(ctx, userID, "evt-1", calendarID, "Standup", start, end, false, "", nil, nil)
+	if err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	if len(updated.Reminders) != 0 {
+		t.Fatalf("expected reminders cleared, got %+v", updated.Reminders)
+	}
+}
+
+func TestEventService_Update_RejectsInvalidReminderChannel(t *testing.T) {
+	svc, userID, calendarID := newTestEventService(t)
+	ctx := context.Background()
+	start := time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC)
+	end := time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC)
+
+	if _, err := svc.Create(ctx, userID, "evt-1", calendarID, "Standup", start, end, false, "", nil, nil, nil, nil); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	_, err := svc.Update(ctx, userID, "evt-1", calendarID, "Standup", start, end, false, "", nil,
+		[]repository.Reminder{{OffsetMinutes: 10, Channel: "sms"}})
+	if !errors.Is(err, ErrInvalidReminderChannel) {
+		t.Fatalf("expected ErrInvalidReminderChannel, got %v", err)
+	}
+}
+
+// Deleting an Event removes its Reminders (ON DELETE CASCADE, ADR-0020).
+func TestEventService_Delete_CascadesReminders(t *testing.T) {
+	svc, userID, calendarID := newTestEventService(t)
+	ctx := context.Background()
+	start := time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC)
+	end := time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC)
+
+	_, err := svc.Create(ctx, userID, "evt-1", calendarID, "Standup", start, end, false, "", nil, nil, nil,
+		[]repository.Reminder{{OffsetMinutes: 10, Channel: "notification"}})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	if err := svc.Delete(ctx, userID, "evt-1"); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+
+	byEvent, err := svc.reminders.ListByEventIDs(ctx, []string{"evt-1"})
+	if err != nil {
+		t.Fatalf("list by event ids: %v", err)
+	}
+	if len(byEvent["evt-1"]) != 0 {
+		t.Fatalf("expected reminders to be cascade-deleted with their event, got %+v", byEvent["evt-1"])
+	}
+}
+
+// TestEventService_Update_ReminderReplaceIsAtomic asserts that when the
+// Reminders replace fails mid-transaction, the rest of the Update (the
+// Event's own field changes) is rolled back too (ADR-0018).
+func TestEventService_Update_ReminderReplaceIsAtomic(t *testing.T) {
+	svc, userID, calendarID := newTestEventService(t)
+	ctx := context.Background()
+	start := time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC)
+	end := time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC)
+
+	if _, err := svc.Create(ctx, userID, "evt-1", calendarID, "Standup", start, end, false, "", nil, nil, nil, nil); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	if _, err := svc.db.ExecContext(ctx,
+		`CREATE TRIGGER poison_reminder_insert BEFORE INSERT ON event_reminders WHEN NEW.event_id = 'evt-1' BEGIN SELECT RAISE(ABORT, 'boom'); END`,
+	); err != nil {
+		t.Fatalf("install poison trigger: %v", err)
+	}
+
+	if _, err := svc.Update(ctx, userID, "evt-1", calendarID, "Renamed", start, end, false, "",
+		nil, []repository.Reminder{{OffsetMinutes: 10, Channel: "notification"}}); err == nil {
+		t.Fatalf("expected update to fail once the reminder insert is poisoned")
+	}
+
+	fetched, err := svc.Get(ctx, userID, "evt-1")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if fetched.Title != "Standup" {
+		t.Fatalf("expected title to be rolled back, got %q", fetched.Title)
 	}
 }

@@ -1,6 +1,6 @@
 import { format } from "date-fns";
 import { authHeader, errorFromResponse } from "./apiClient";
-import type { Event } from "./event";
+import type { Event, Reminder } from "./event";
 
 interface EventWire {
   id: string;
@@ -18,6 +18,8 @@ interface EventWire {
   exdates?: string[];
   // Absent/null for a Floating Event (ADR-0019).
   tzid?: string | null;
+  // Absent/empty means no Reminders (ADR-0020).
+  reminders?: Reminder[];
 }
 
 /**
@@ -58,6 +60,7 @@ function fromWire(wire: EventWire): Event {
     recurrenceId: wire.recurrenceId ? new Date(wire.recurrenceId) : undefined,
     exdates: wire.exdates?.map((exdate) => new Date(exdate)),
     tzid: wire.tzid ?? undefined,
+    reminders: wire.reminders,
   };
 }
 
@@ -86,6 +89,7 @@ export const eventsApi = {
       parentId?: string;
       recurrenceId?: Date;
       tzid?: string;
+      reminders?: Reminder[];
     },
   ): Promise<Event> {
     const response = await fetch("/api/events/", {
@@ -103,6 +107,7 @@ export const eventsApi = {
         parentId: event.parentId,
         recurrenceId: event.recurrenceId?.toISOString(),
         tzid: event.tzid,
+        reminders: event.reminders,
       }),
     });
     if (!response.ok) throw await errorFromResponse(response);
@@ -121,6 +126,7 @@ export const eventsApi = {
       allDay?: boolean;
       rrule?: string;
       tzid?: string;
+      reminders?: Reminder[];
     },
   ): Promise<Event> {
     const response = await fetch(`/api/events/${id}`, {
@@ -135,6 +141,7 @@ export const eventsApi = {
         allDay: changes.allDay ?? false,
         rrule: changes.rrule ?? "",
         tzid: changes.tzid,
+        reminders: changes.reminders,
       }),
     });
     if (!response.ok) throw await errorFromResponse(response);

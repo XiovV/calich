@@ -2,7 +2,7 @@ import { useState, type KeyboardEvent } from "react";
 import { addDays, format, setHours, setMinutes, startOfDay } from "date-fns";
 import { Dialog } from "@base-ui/react/dialog";
 import type { DraftBlock } from "../lib/gridTime";
-import type { Event } from "../lib/event";
+import type { Event, Reminder } from "../lib/event";
 import { isRecurringOccurrence, resolveMaster, type Occurrence } from "../lib/occurrence";
 import { viewerZone } from "../lib/floatingTime";
 import {
@@ -26,6 +26,7 @@ import { getCheckedCalendars } from "../lib/calendar";
 import { useShellStore } from "../lib/shellStore";
 import { useEventsStore } from "../lib/eventsStore";
 import { useCalendarsStore } from "../lib/calendarsStore";
+import { useAuthStore } from "../lib/authStore";
 import { Select } from "../components/ui/Select";
 import { Input } from "../components/ui/Input";
 import { Checkbox } from "../components/ui/Checkbox";
@@ -35,6 +36,12 @@ import { DeleteEventConfirmation } from "./DeleteEventConfirmation";
 import { CustomRecurrenceDialog } from "./CustomRecurrenceDialog";
 import { ScopePicker } from "./ScopePicker";
 import { DiscardRecurrenceWarning } from "./DiscardRecurrenceWarning";
+import { ReminderRow } from "./ReminderRow";
+
+/** A Reminder plus a local id, so its row keeps stable identity across
+ * add/remove/reorder in the Reminders section (Reminder itself has no id —
+ * it's just an offset + channel pair, ADR-0020). */
+type ReminderDraft = Reminder & { draftId: string };
 
 // The Repeat dropdown offers the fixed presets plus a "Custom…" entry that opens
 // the Custom recurrence dialog (issue #35).
@@ -54,6 +61,7 @@ interface InitialFormState {
   /** The stored rule when `repeat` is "custom"; undefined otherwise. */
   customRule: string | undefined;
   allDay: boolean;
+  reminders: Reminder[];
 }
 
 function timeStringToDate(day: Date, time: string): Date {
@@ -83,6 +91,7 @@ function deriveInitialFormState(
       repeat,
       customRule: repeat === "custom" ? rrule : undefined,
       allDay: Boolean(event.allDay),
+      reminders: event.reminders ?? [],
     };
   }
 
@@ -95,6 +104,7 @@ function deriveInitialFormState(
     repeat: "none",
     customRule: undefined,
     allDay: false,
+    reminders: [],
   };
 }
 
@@ -109,6 +119,9 @@ export function EventModal(props: EventModalProps) {
   const editOccurrence = useEventsStore((state) => state.editOccurrence);
   const deleteOccurrence = useEventsStore((state) => state.deleteOccurrence);
   const calendars = useCalendarsStore((state) => state.calendars);
+  const emailAvailable = useAuthStore(
+    (state) => state.user?.emailReminderChannelAvailable ?? false,
+  );
 
   const isRecurring = mode === "edit" && isRecurringOccurrence(props.occurrence);
   const master =
@@ -145,6 +158,9 @@ export function EventModal(props: EventModalProps) {
   const [repeat, setRepeat] = useState<RepeatChoice>(initial.repeat);
   const [customRule, setCustomRule] = useState<string | undefined>(
     initial.customRule,
+  );
+  const [reminders, setReminders] = useState<ReminderDraft[]>(() =>
+    initial.reminders.map((reminder) => ({ ...reminder, draftId: crypto.randomUUID() })),
   );
   const [isCustomDialogOpen, setIsCustomDialogOpen] = useState(false);
   const [isDeleteConfirmOpen, setIsDeleteConfirmOpen] = useState(false);
@@ -186,6 +202,27 @@ export function EventModal(props: EventModalProps) {
     setIsCustomDialogOpen(false);
   }
 
+  function handleAddReminder() {
+    setReminders((current) => [
+      ...current,
+      {
+        draftId: crypto.randomUUID(),
+        offsetMinutes: allDay ? 1440 : 10,
+        channel: "notification",
+      },
+    ]);
+  }
+
+  function handleReminderChange(draftId: string, reminder: Reminder) {
+    setReminders((current) =>
+      current.map((r) => (r.draftId === draftId ? { ...reminder, draftId } : r)),
+    );
+  }
+
+  function handleRemoveReminder(draftId: string) {
+    setReminders((current) => current.filter((r) => r.draftId !== draftId));
+  }
+
   // All-day skips the time-range check entirely — there's no time inputs to
   // validate (ADR-0017).
   const isTimeRangeValid =
@@ -200,7 +237,19 @@ export function EventModal(props: EventModalProps) {
     const start = allDay ? startOfDay(day) : timeStringToDate(day, startTime);
     const end = allDay ? addDays(startOfDay(day), 1) : timeStringToDate(day, endTime);
     const rrule = repeat === "custom" ? customRule : buildRule(repeat, start);
-    const changes = { calendarId, title: title.trim(), start, end, allDay, rrule };
+    const reminderChanges: Reminder[] = reminders.map((r) => ({
+      offsetMinutes: r.offsetMinutes,
+      channel: r.channel,
+    }));
+    const changes = {
+      calendarId,
+      title: title.trim(),
+      start,
+      end,
+      allDay,
+      rrule,
+      reminders: reminderChanges,
+    };
 
     if (mode !== "edit") {
       // A newly created Event is stamped with the creator's Viewer zone; an
@@ -302,7 +351,7 @@ export function EventModal(props: EventModalProps) {
           <Dialog.Backdrop className="fixed inset-0 z-40 bg-ink/20" />
           <Dialog.Popup
             onKeyDown={handleEnterToSave}
-            className="fixed top-1/2 left-1/2 z-50 w-96 -translate-x-1/2 -translate-y-1/2 rounded-shell-lg bg-surface p-5 shadow-elevation-3"
+            className="fixed top-1/2 left-1/2 z-50 w-[28rem] -translate-x-1/2 -translate-y-1/2 rounded-shell-lg bg-surface p-5 shadow-elevation-3"
           >
             <Dialog.Title className="text-heading font-medium text-ink">
               {mode === "edit" ? "Edit event" : "New event"}
@@ -387,6 +436,28 @@ export function EventModal(props: EventModalProps) {
                   Edit custom recurrence
                 </button>
               )}
+            </div>
+
+            <div className="mt-4">
+              <p className="mb-1.5 text-label-sm text-ink-muted">Reminders</p>
+              <div className="flex flex-col gap-2">
+                {reminders.map((reminder) => (
+                  <ReminderRow
+                    key={reminder.draftId}
+                    reminder={reminder}
+                    emailAvailable={emailAvailable}
+                    onChange={(next) => handleReminderChange(reminder.draftId, next)}
+                    onRemove={() => handleRemoveReminder(reminder.draftId)}
+                  />
+                ))}
+              </div>
+              <button
+                type="button"
+                onClick={handleAddReminder}
+                className="mt-1.5 text-label-sm text-accent hover:underline"
+              >
+                Add reminder
+              </button>
             </div>
 
             <div className="mt-5 flex items-center justify-between gap-2">

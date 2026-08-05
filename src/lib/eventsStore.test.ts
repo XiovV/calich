@@ -74,6 +74,17 @@ describe("addEvent", () => {
     expect(useEventsStore.getState().events).toEqual([]);
     expect(toast.error).toHaveBeenCalledWith('Failed to create event "Standup".');
   });
+
+  it("persists Reminders authored on a new event (ADR-0020)", async () => {
+    const reminders = [{ offsetMinutes: 10, channel: "notification" as const }];
+    const remindedStandup = { ...standup, reminders };
+    vi.mocked(eventsApi.create).mockResolvedValue(remindedStandup);
+
+    await useEventsStore.getState().addEvent(remindedStandup);
+
+    expect(useEventsStore.getState().events[0].reminders).toEqual(reminders);
+    expect(eventsApi.create).toHaveBeenCalledWith("token-123", remindedStandup);
+  });
 });
 
 describe("updateEvent", () => {
@@ -129,6 +140,41 @@ describe("updateEvent", () => {
     await useEventsStore.getState().updateEvent("does-not-exist", { title: "Renamed" });
 
     expect(eventsApi.update).not.toHaveBeenCalled();
+  });
+
+  it("round-trips reminders through a local update (ADR-0020)", () => {
+    const reminders = [{ offsetMinutes: 10, channel: "notification" as const }];
+    const remindedStandup = { ...standup, reminders };
+    useEventsStore.setState({ events: [remindedStandup] });
+    vi.mocked(eventsApi.update).mockResolvedValue(remindedStandup);
+
+    const promise = useEventsStore.getState().updateEvent("evt-1", { title: "Renamed" });
+
+    expect(eventsApi.update).toHaveBeenCalledWith(
+      "token-123",
+      "evt-1",
+      expect.objectContaining({ reminders }),
+    );
+    return promise;
+  });
+
+  it("persists Reminders newly authored on an existing event", () => {
+    const reminders = [
+      { offsetMinutes: 5, channel: "notification" as const },
+      { offsetMinutes: 1440, channel: "email" as const },
+    ];
+    useEventsStore.setState({ events: [standup] });
+    vi.mocked(eventsApi.update).mockResolvedValue({ ...standup, reminders });
+
+    const promise = useEventsStore.getState().updateEvent("evt-1", { reminders });
+
+    expect(useEventsStore.getState().events[0].reminders).toEqual(reminders);
+    expect(eventsApi.update).toHaveBeenCalledWith(
+      "token-123",
+      "evt-1",
+      expect.objectContaining({ reminders }),
+    );
+    return promise;
   });
 });
 
@@ -242,6 +288,128 @@ describe("editOccurrence", () => {
 
     expect(useEventsStore.getState().events).toEqual([recurringMaster]);
     expect(toast.error).toHaveBeenCalledWith("Failed to update event.");
+  });
+
+  it('scope "this": a new Override starts with a copy of the Master\'s Reminders (ADR-0020)', async () => {
+    const reminders = [{ offsetMinutes: 10, channel: "notification" as const }];
+    const remindedMaster = { ...recurringMaster, reminders };
+    useEventsStore.setState({ events: [remindedMaster] });
+    vi.mocked(eventsApi.create).mockResolvedValue({} as never);
+
+    const occurrenceStart = new Date("2026-01-03T09:00:00Z");
+    await useEventsStore.getState().editOccurrence(
+      occurrenceOf(remindedMaster, occurrenceStart),
+      "this",
+      {
+        calendarId: "cal-1",
+        title: "Standup (moved)",
+        start: new Date("2026-01-03T10:00:00Z"),
+        end: new Date("2026-01-03T10:30:00Z"),
+      },
+    );
+
+    const override = useEventsStore.getState().events.find((e) => e.parentId === "master-1");
+    expect(override?.reminders).toEqual(reminders);
+    expect(eventsApi.create).toHaveBeenCalledWith(
+      "token-123",
+      expect.objectContaining({ reminders }),
+    );
+  });
+
+  it('scope "all": authored Reminders replace the Master\'s wholesale', async () => {
+    const remindedMaster = {
+      ...recurringMaster,
+      reminders: [{ offsetMinutes: 10, channel: "notification" as const }],
+    };
+    useEventsStore.setState({ events: [remindedMaster] });
+    vi.mocked(eventsApi.update).mockResolvedValue({} as never);
+    const authoredReminders = [{ offsetMinutes: 30, channel: "email" as const }];
+
+    await useEventsStore.getState().editOccurrence(
+      occurrenceOf(remindedMaster, remindedMaster.start),
+      "all",
+      {
+        calendarId: "cal-1",
+        title: "Standup",
+        start: remindedMaster.start,
+        end: remindedMaster.end,
+        reminders: authoredReminders,
+      },
+    );
+
+    expect(useEventsStore.getState().events[0].reminders).toEqual(authoredReminders);
+    expect(eventsApi.update).toHaveBeenCalledWith(
+      "token-123",
+      "master-1",
+      expect.objectContaining({ reminders: authoredReminders }),
+    );
+  });
+
+  it('scope "this" on an existing Override: authored Reminders touch only that row, not the Master (ADR-0020)', async () => {
+    const masterReminders = [{ offsetMinutes: 10, channel: "notification" as const }];
+    const remindedMaster = { ...recurringMaster, reminders: masterReminders };
+    const override = {
+      id: "override-1",
+      calendarId: "cal-1",
+      title: "Standup (moved)",
+      start: new Date("2026-01-03T10:00:00Z"),
+      end: new Date("2026-01-03T10:30:00Z"),
+      parentId: "master-1",
+      recurrenceId: new Date("2026-01-03T09:00:00Z"),
+      reminders: masterReminders,
+    };
+    useEventsStore.setState({ events: [remindedMaster, override] });
+    vi.mocked(eventsApi.update).mockResolvedValue({} as never);
+    const authoredReminders = [{ offsetMinutes: 30, channel: "email" as const }];
+
+    await useEventsStore.getState().editOccurrence(
+      occurrenceOf(override as never, override.start),
+      "this",
+      {
+        calendarId: "cal-1",
+        title: "Renamed again",
+        start: override.start,
+        end: override.end,
+        reminders: authoredReminders,
+      },
+    );
+
+    const events = useEventsStore.getState().events;
+    expect(events.find((e) => e.id === "override-1")?.reminders).toEqual(authoredReminders);
+    expect(events.find((e) => e.id === "master-1")?.reminders).toEqual(masterReminders);
+  });
+
+  it('scope "following": the new master carries the old master\'s Reminders forward', async () => {
+    const reminders = [{ offsetMinutes: 10, channel: "notification" as const }];
+    const remindedMaster = { ...recurringMaster, reminders };
+    useEventsStore.setState({ events: [remindedMaster] });
+    vi.mocked(eventsApi.update).mockResolvedValue({} as never);
+    vi.mocked(eventsApi.create).mockResolvedValue({} as never);
+    vi.mocked(eventsApi.reparentSeries).mockResolvedValue(undefined);
+
+    const splitStart = new Date("2026-01-03T09:00:00Z");
+    await useEventsStore.getState().editOccurrence(
+      occurrenceOf(remindedMaster, splitStart),
+      "following",
+      {
+        calendarId: "cal-1",
+        title: "Standup (renamed)",
+        start: new Date("2026-01-03T10:00:00Z"),
+        end: new Date("2026-01-03T10:30:00Z"),
+      },
+    );
+
+    const newMaster = useEventsStore
+      .getState()
+      .events.find((e) => e.id !== "master-1" && e.rrule);
+    expect(newMaster?.reminders).toEqual(reminders);
+    // The old (truncated) master's own Reminders are preserved on the wire too
+    // — the update API replaces Reminders wholesale on any omitted field.
+    expect(eventsApi.update).toHaveBeenCalledWith(
+      "token-123",
+      "master-1",
+      expect.objectContaining({ reminders }),
+    );
   });
 });
 

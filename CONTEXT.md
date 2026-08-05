@@ -56,8 +56,16 @@ A proposed time window for a not-yet-saved Event, before it is confirmed via the
 _Avoid_: pending event, temp event
 
 **Reminder**:
-A minutes-before-start offset attached to an Event, chosen from a fixed preset list (not free-form).
-_Avoid_: notification, alert
+A single cue attached to an Event that fires a fixed offset before an Occurrence's start, on one Channel. An Event carries zero or more, each with its own offset and Channel. Maps to one iCalendar `VALARM` (`TRIGGER` for the offset, `ACTION` for the Channel) so it round-trips through CalDAV unchanged. See ADR-0020.
+_Avoid_: alert
+
+**Channel**:
+The delivery method of a Reminder — **Notification** (shown in-app) or **Email** (sent to the User). Corresponds to the iCalendar `VALARM` `ACTION` (`DISPLAY` / `EMAIL`).
+_Avoid_: type, kind, action (in prose)
+
+**Notification**:
+The persistent in-app record the server creates when a Reminder on the Notification Channel fires. Lives in the Notification feed and, if a tab is open, is mirrored as a browser notification. A Notification-Channel Reminder is the rule; a Notification is the delivered instance it produces. Distinct from a toast, which is a transient client-only UI message (e.g. an error). See ADR-0021.
+_Avoid_: alert, toast (for this), push
 
 **Day cell**:
 A single day's box in the Month view grid. Holds that day's Event chips and is the target of create-clicks and drag-to-move drops.
@@ -112,6 +120,16 @@ _Avoid_: auth token, bearer token
 **Refresh token**:
 The credential used to obtain a new Access token without re-entering credentials, via `refreshAccessToken`. Issued by the backend as an `httpOnly`, `Secure` cookie — see ADR-0009.
 _Avoid_: renewal token
+
+**App password**:
+A per-User, revocable credential a native calendar client uses to authenticate over CalDAV (HTTP Basic), distinct from the login password and shown to the User only once when generated. Stored hashed, one row per generated credential, so a single device can be revoked without touching the account password. The successor to the abandoned feed token. See ADR-0024.
+_Avoid_: app-specific password (in prose), device password, API key
+
+## Sync
+
+**Calendar object**:
+The unit CalDAV addresses — one `.ics` resource per Event *series*, sharing a single iCalendar `UID` (the Master's id) and bundling the Master, all its Overrides, and its Exceptions in one file. The CalDAV-visible counterpart to the many rows a series occupies and to the Occurrences it expands to: one Calendar object, one series, many rows. Exposed at `{masterId}.ics`. See ADR-0025.
+_Avoid_: calendar resource, ics file, vevent
 
 ## Deployment
 

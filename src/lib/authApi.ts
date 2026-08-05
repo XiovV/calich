@@ -6,11 +6,34 @@ export interface User {
   id: number;
   username: string;
   mustChangePassword: boolean;
+  email: string | null;
+  // Whether the Email Channel can actually be used for a new Reminder: the
+  // user has an email set *and* the self-hoster has SMTP configured
+  // (ADR-0021, ADR-0010).
+  emailReminderChannelAvailable: boolean;
 }
 
 export interface LoginResult {
   accessToken: string;
   mustChangePassword: boolean;
+}
+
+interface MeWire {
+  id: number;
+  username: string;
+  must_change_password: boolean;
+  email: string | null;
+  email_reminder_channel_available: boolean;
+}
+
+function fromMeWire(wire: MeWire): User {
+  return {
+    id: wire.id,
+    username: wire.username,
+    mustChangePassword: wire.must_change_password,
+    email: wire.email,
+    emailReminderChannelAvailable: wire.email_reminder_channel_available,
+  };
 }
 
 export const authApi = {
@@ -55,8 +78,7 @@ export const authApi = {
     });
     if (!response.ok) throw await errorFromResponse(response);
 
-    const body = (await response.json()) as { id: number; username: string; must_change_password: boolean };
-    return { id: body.id, username: body.username, mustChangePassword: body.must_change_password };
+    return fromMeWire(await response.json());
   },
 
   async changePassword(accessToken: string, currentPassword: string, newPassword: string): Promise<void> {
@@ -67,5 +89,17 @@ export const authApi = {
       body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }),
     });
     if (!response.ok) throw await errorFromResponse(response);
+  },
+
+  async updateEmail(accessToken: string, email: string): Promise<User> {
+    const response = await fetch("/api/auth/email", {
+      method: "PUT",
+      credentials: "include",
+      headers: { "Content-Type": "application/json", ...authHeader(accessToken) },
+      body: JSON.stringify({ email }),
+    });
+    if (!response.ok) throw await errorFromResponse(response);
+
+    return fromMeWire(await response.json());
   },
 };

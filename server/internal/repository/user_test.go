@@ -94,6 +94,35 @@ func TestUserRepository_UpdatePassword(t *testing.T) {
 	}
 }
 
+func TestUserRepository_UpdateEmail(t *testing.T) {
+	repo := newTestUserRepository(t)
+	ctx := context.Background()
+
+	created, err := repo.Create(ctx, "admin", "hash", false)
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	if created.Email != nil {
+		t.Fatalf("expected a freshly created user to have no email, got %+v", created.Email)
+	}
+
+	updated, err := repo.UpdateEmail(ctx, created.ID, "admin@example.com")
+	if err != nil {
+		t.Fatalf("update email: %v", err)
+	}
+	if updated.Email == nil || *updated.Email != "admin@example.com" {
+		t.Fatalf("expected email to be updated, got %+v", updated.Email)
+	}
+
+	cleared, err := repo.UpdateEmail(ctx, created.ID, "")
+	if err != nil {
+		t.Fatalf("clear email: %v", err)
+	}
+	if cleared.Email != nil {
+		t.Fatalf("expected email to be cleared, got %+v", cleared.Email)
+	}
+}
+
 func TestUserRepository_Count(t *testing.T) {
 	repo := newTestUserRepository(t)
 	ctx := context.Background()

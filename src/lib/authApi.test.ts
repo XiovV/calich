@@ -87,13 +87,25 @@ describe("authApi.refresh", () => {
 describe("authApi.me", () => {
   it("sends the access token as a bearer header and maps the response", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
-      jsonResponse(200, { id: 1, username: "admin", must_change_password: false }),
+      jsonResponse(200, {
+        id: 1,
+        username: "admin",
+        must_change_password: false,
+        email: "admin@example.com",
+        email_reminder_channel_available: true,
+      }),
     );
     vi.stubGlobal("fetch", fetchMock);
 
     const user = await authApi.me("token-123");
 
-    expect(user).toEqual({ id: 1, username: "admin", mustChangePassword: false });
+    expect(user).toEqual({
+      id: 1,
+      username: "admin",
+      mustChangePassword: false,
+      email: "admin@example.com",
+      emailReminderChannelAvailable: true,
+    });
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/auth/me",
       expect.objectContaining({
@@ -151,6 +163,51 @@ describe("authApi.changePassword", () => {
 
     await expect(authApi.changePassword("token-123", "wrong", "new-pw")).rejects.toMatchObject({
       code: "invalid_credentials",
+    });
+  });
+});
+
+describe("authApi.updateEmail", () => {
+  it("sends the email and bearer token, and maps the response", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(200, {
+        id: 1,
+        username: "admin",
+        must_change_password: false,
+        email: "admin@example.com",
+        email_reminder_channel_available: true,
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const user = await authApi.updateEmail("token-123", "admin@example.com");
+
+    expect(user).toEqual({
+      id: 1,
+      username: "admin",
+      mustChangePassword: false,
+      email: "admin@example.com",
+      emailReminderChannelAvailable: true,
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/auth/email",
+      expect.objectContaining({
+        method: "PUT",
+        credentials: "include",
+        headers: expect.objectContaining({ Authorization: "Bearer token-123" }),
+        body: JSON.stringify({ email: "admin@example.com" }),
+      }),
+    );
+  });
+
+  it("throws on an invalid email address", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(400, { error: { code: "invalid_request", message: "email is not a valid address" } }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(authApi.updateEmail("token-123", "not-an-email")).rejects.toMatchObject({
+      code: "invalid_request",
     });
   });
 });

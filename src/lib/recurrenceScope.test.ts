@@ -6,6 +6,7 @@ import { toFloating, viewerZone } from "./floatingTime";
 import {
   makeException,
   makeOverride,
+  resolveReminders,
   shouldDiscardChildren,
   splitFollowing,
 } from "./recurrenceScope";
@@ -66,6 +67,56 @@ describe("makeOverride", () => {
 
     const override = makeOverride(master, occurrenceStart, changesWithRrule);
     expect(override).not.toHaveProperty("rrule");
+  });
+
+  it("starts a fresh Override's Reminders as a copy of the master's (ADR-0020)", () => {
+    const remindedMaster: Event = {
+      ...master,
+      reminders: [{ offsetMinutes: 10, channel: "notification" }],
+    };
+    const occurrenceStart = new Date(2026, 0, 3, 9, 0);
+    const changes = {
+      calendarId: "cal-1",
+      title: "Standup (moved)",
+      start: new Date(2026, 0, 3, 10, 0),
+      end: new Date(2026, 0, 3, 10, 30),
+    };
+
+    expect(makeOverride(remindedMaster, occurrenceStart, changes).reminders).toEqual(
+      remindedMaster.reminders,
+    );
+  });
+
+  it("uses the caller's authored Reminders over the master's when both are present", () => {
+    const remindedMaster: Event = {
+      ...master,
+      reminders: [{ offsetMinutes: 10, channel: "notification" }],
+    };
+    const occurrenceStart = new Date(2026, 0, 3, 9, 0);
+    const authoredReminders = [{ offsetMinutes: 30, channel: "email" as const }];
+    const changes = {
+      calendarId: "cal-1",
+      title: "Standup (moved)",
+      start: new Date(2026, 0, 3, 10, 0),
+      end: new Date(2026, 0, 3, 10, 30),
+      reminders: authoredReminders,
+    };
+
+    expect(makeOverride(remindedMaster, occurrenceStart, changes).reminders).toEqual(
+      authoredReminders,
+    );
+  });
+});
+
+describe("resolveReminders", () => {
+  it("falls back to the reference's own Reminders when changes didn't touch them", () => {
+    const reference = { reminders: [{ offsetMinutes: 10, channel: "notification" as const }] };
+    expect(resolveReminders({}, reference)).toEqual(reference.reminders);
+  });
+
+  it("uses the changes' Reminders when present, even an empty array", () => {
+    const reference = { reminders: [{ offsetMinutes: 10, channel: "notification" as const }] };
+    expect(resolveReminders({ reminders: [] }, reference)).toEqual([]);
   });
 });
 
@@ -192,6 +243,44 @@ describe("splitFollowing", () => {
     const result = splitFollowing(weeklyMaster, splitStart, changes);
 
     expect(result.newMaster.rrule).toBe("FREQ=WEEKLY;BYDAY=TU,TH");
+  });
+
+  it("carries the master's Reminders into the new master when changes didn't touch them", () => {
+    const remindedMaster: Event = {
+      ...master,
+      reminders: [{ offsetMinutes: 10, channel: "notification" }],
+    };
+    const splitStart = new Date(2026, 0, 3, 9, 0);
+    const changes = {
+      calendarId: "cal-1",
+      title: "Standup",
+      start: splitStart,
+      end: new Date(2026, 0, 3, 9, 30),
+    };
+
+    const result = splitFollowing(remindedMaster, splitStart, changes);
+
+    expect(result.newMaster.reminders).toEqual(remindedMaster.reminders);
+  });
+
+  it("carries the caller's authored Reminders into the new master over the master's own", () => {
+    const remindedMaster: Event = {
+      ...master,
+      reminders: [{ offsetMinutes: 10, channel: "notification" }],
+    };
+    const splitStart = new Date(2026, 0, 3, 9, 0);
+    const authoredReminders = [{ offsetMinutes: 30, channel: "email" as const }];
+    const changes = {
+      calendarId: "cal-1",
+      title: "Standup",
+      start: splitStart,
+      end: new Date(2026, 0, 3, 9, 30),
+      reminders: authoredReminders,
+    };
+
+    const result = splitFollowing(remindedMaster, splitStart, changes);
+
+    expect(result.newMaster.reminders).toEqual(authoredReminders);
   });
 });
 

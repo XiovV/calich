@@ -14,6 +14,9 @@ interface SelectProps<T extends string> {
   options: SelectOption<T>[];
   label?: string;
   "aria-label"?: string;
+  // Merged onto the trigger; pass `min-w-0` + a flex-basis utility to let a
+  // row of Selects shrink and truncate instead of wrapping onto a new line.
+  className?: string;
 }
 
 // Styled after Immich's @immich/ui Select: a pill trigger with a ring that
@@ -25,6 +28,7 @@ export function Select<T extends string>({
   options,
   label,
   "aria-label": ariaLabel,
+  className,
 }: SelectProps<T>) {
   const labelId = useId();
   return (
@@ -37,9 +41,9 @@ export function Select<T extends string>({
       <BaseSelect.Trigger
         aria-label={ariaLabel}
         aria-labelledby={label ? labelId : undefined}
-        className="inline-flex items-center gap-1.5 rounded-shell-pill bg-surface-sunken px-4 py-1.5 text-body text-ink ring-1 ring-border transition-colors outline-none hover:bg-surface-hover data-[popup-open]:ring-2 data-[popup-open]:ring-accent"
+        className={`flex items-center gap-1.5 rounded-shell-pill bg-surface-sunken px-4 py-1.5 text-body text-ink ring-1 ring-border transition-colors outline-none hover:bg-surface-hover data-[popup-open]:ring-2 data-[popup-open]:ring-accent ${className ?? ""}`}
       >
-        <BaseSelect.Value>
+        <BaseSelect.Value className="min-w-0 truncate">
           {(selected: T) => options.find((option) => option.value === selected)?.label}
         </BaseSelect.Value>
         <BaseSelect.Icon>

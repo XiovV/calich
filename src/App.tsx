@@ -3,6 +3,7 @@ import { BrowserRouter, Route, Routes } from "react-router";
 import { AppShell } from "./components/layout/AppShell";
 import { LoginPage } from "./auth/LoginPage";
 import { ProtectedRoute } from "./auth/ProtectedRoute";
+import { SettingsPage } from "./settings/SettingsPage";
 import { useAuthStore } from "./lib/authStore";
 
 function App() {
@@ -21,6 +22,14 @@ function App() {
           element={
             <ProtectedRoute>
               <AppShell />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/settings"
+          element={
+            <ProtectedRoute>
+              <SettingsPage />
             </ProtectedRoute>
           }
         />

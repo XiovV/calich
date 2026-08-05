@@ -378,6 +378,64 @@ describe("eventsApi tzid", () => {
   });
 });
 
+describe("eventsApi reminders", () => {
+  it("list maps wire reminders onto the Event, and omits it when absent", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(200, [
+        { ...wireEvent, reminders: [{ offsetMinutes: 10, channel: "notification" }] },
+        wireEvent,
+      ]),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const events = await eventsApi.list("token-123");
+
+    expect(events[0].reminders).toEqual([{ offsetMinutes: 10, channel: "notification" }]);
+    expect(events[1].reminders).toBeUndefined();
+  });
+
+  it("create sends reminders and maps them back", async () => {
+    const reminders = [
+      { offsetMinutes: 10, channel: "notification" as const },
+      { offsetMinutes: 1440, channel: "email" as const },
+    ];
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(201, { ...wireEvent, reminders }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const created = await eventsApi.create("token-123", {
+      id: "evt-1",
+      calendarId: "cal-1",
+      title: "Standup",
+      start: new Date("2026-01-01T09:00:00Z"),
+      end: new Date("2026-01-01T10:00:00Z"),
+      reminders,
+    });
+
+    expect(created.reminders).toEqual(reminders);
+    const body = JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string);
+    expect(body.reminders).toEqual(reminders);
+  });
+
+  it("update sends reminders", async () => {
+    const reminders = [{ offsetMinutes: 30, channel: "email" as const }];
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, { ...wireEvent, reminders }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await eventsApi.update("token-123", "evt-1", {
+      calendarId: "cal-1",
+      title: "Standup",
+      start: new Date("2026-01-01T09:00:00Z"),
+      end: new Date("2026-01-01T10:00:00Z"),
+      reminders,
+    });
+
+    const body = JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string);
+    expect(body.reminders).toEqual(reminders);
+  });
+});
+
 describe("eventsApi.addException", () => {
   it("posts the occurrence start", async () => {
     const fetchMock = vi.fn().mockResolvedValue(emptyResponse(204));
