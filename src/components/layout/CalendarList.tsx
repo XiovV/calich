@@ -3,7 +3,7 @@ import { Pencil, Plus, Trash2 } from "lucide-react";
 import { Checkbox } from "../ui/Checkbox";
 import { IconButton } from "../ui/IconButton";
 import type { Calendar } from "../../lib/calendar";
-import { getCalendarColorClass } from "../../lib/calendarColors";
+import { resolveCalendarFill, toOpaqueHex } from "../../lib/calendarColors";
 import { useCalendarsStore } from "../../lib/calendarsStore";
 import { useEventsStore } from "../../lib/eventsStore";
 import { useShellStore } from "../../lib/shellStore";
@@ -56,7 +56,8 @@ export function CalendarList() {
           >
             <span
               aria-hidden="true"
-              className={`size-2.5 shrink-0 rounded-shell-pill ${getCalendarColorClass(calendar.color)}`}
+              style={{ backgroundColor: toOpaqueHex(resolveCalendarFill(calendar)) }}
+              className="size-2.5 shrink-0 rounded-shell-pill"
             />
             <span className="flex-1 truncate text-body text-ink">
               {calendar.name}

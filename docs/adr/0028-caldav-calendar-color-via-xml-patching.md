@@ -1,6 +1,8 @@
 # CalDAV calendar-color: XML-patched PROPFIND/PROPPATCH, mapped onto the fixed color enum
 
-Status: accepted
+Status: superseded by ADR-0029
+
+The XML-patching mechanism below (PROPFIND injection, the hand-rolled PROPPATCH path) stands. What ADR-0029 replaces is the color model layered on it: the fixed enum, the nearest-color snapping, and `color.go`.
 
 ADR-0023 already flagged this gap and deferred it: "Calendar color is not exposed over CalDAV yet... emitting color would need a small XML-patching layer... deferred until a client actually needs it." A client needs it now — macOS Calendar sends `PROPPATCH` to every synced calendar right after discovery (almost certainly trying to write back its own choice of `calendar-color`, since we don't expose one either), gets a bare `405`, and shows a persistent warning on every calendar as a result.
 

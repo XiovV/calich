@@ -3,7 +3,7 @@ import { addDays, isSameDay, startOfDay } from "date-fns";
 import { useShellStore } from "../lib/shellStore";
 import { useCalendarsStore } from "../lib/calendarsStore";
 import { getCalendarById } from "../lib/calendar";
-import { getCalendarColorClass } from "../lib/calendarColors";
+import { getCalendarBlockStyle } from "../lib/calendarColors";
 import { buildMonthGrid, getOccurrencesForDay } from "../lib/monthGrid";
 import { computeMoveToDate } from "../lib/gridTime";
 import { useVisibleOccurrences } from "../hooks/useVisibleOccurrences";
@@ -102,9 +102,7 @@ export function MonthGrid({ onDraftCreated, onOccurrenceClick }: MonthGridProps)
   const dragCalendar = eventDrag.active
     ? getCalendarById(calendars, eventDrag.active.event.calendarId)
     : undefined;
-  const dragColorClass = dragCalendar
-    ? getCalendarColorClass(dragCalendar.color)
-    : "bg-calendar-graphite";
+  const dragBlockStyle = getCalendarBlockStyle(dragCalendar);
   const draggingKey = eventDrag.active ? occurrenceKey(eventDrag.active) : null;
 
   return (
@@ -142,7 +140,7 @@ export function MonthGrid({ onDraftCreated, onOccurrenceClick }: MonthGridProps)
           y={eventDrag.position.y}
           title={eventDrag.active.event.title}
           start={eventDrag.active.start}
-          colorClass={dragColorClass}
+          blockStyle={dragBlockStyle}
         />
       )}
       {dragCommit.isScopePickerOpen && (

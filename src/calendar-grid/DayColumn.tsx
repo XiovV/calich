@@ -10,6 +10,7 @@ import {
   type DraftBlock,
 } from "../lib/gridTime";
 import { columnLayoutToBox } from "../lib/eventBlockGeometry";
+import type { CalendarBlockStyle } from "../lib/calendarColors";
 import { EventBlock, type EventDragKind } from "./EventBlock";
 import { CurrentTimeLine } from "./CurrentTimeLine";
 import { DraftBlockPreview } from "./DraftBlockPreview";
@@ -25,7 +26,7 @@ export interface EventDragPreviewData {
   title: string;
   start: Date;
   end: Date;
-  colorClass: string;
+  blockStyle: CalendarBlockStyle;
 }
 
 interface DayColumnProps {
@@ -191,7 +192,7 @@ export function DayColumn({
           title={eventDragPreview.title}
           start={eventDragPreview.start}
           end={eventDragPreview.end}
-          colorClass={eventDragPreview.colorClass}
+          blockStyle={eventDragPreview.blockStyle}
         />
       )}
     </div>

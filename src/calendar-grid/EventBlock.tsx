@@ -2,7 +2,7 @@ import type { OccurrenceLayout } from "../lib/layoutOverlappingEvents";
 import type { Occurrence } from "../lib/occurrence";
 import { durationToHeight, timeToY } from "../lib/gridTime";
 import { getCalendarById } from "../lib/calendar";
-import { getCalendarColorClass } from "../lib/calendarColors";
+import { getCalendarBlockStyle } from "../lib/calendarColors";
 import { useCalendarsStore } from "../lib/calendarsStore";
 import { columnLayoutToBox } from "../lib/eventBlockGeometry";
 import { EventVisual } from "./EventVisual";
@@ -34,9 +34,7 @@ export function EventBlock({
   const isPast = occurrence.end < now;
   const calendars = useCalendarsStore((state) => state.calendars);
   const calendar = getCalendarById(calendars, event.calendarId);
-  const colorClass = calendar
-    ? getCalendarColorClass(calendar.color)
-    : "bg-calendar-graphite";
+  const blockStyle = getCalendarBlockStyle(calendar);
 
   const top = timeToY(occurrence.start, pixelsPerHour);
   const height = durationToHeight(occurrence.start, occurrence.end, pixelsPerHour);
@@ -82,7 +80,7 @@ export function EventBlock({
         title={event.title}
         start={occurrence.start}
         end={occurrence.end}
-        colorClass={colorClass}
+        blockStyle={blockStyle}
         isPast={isPast}
       />
       <div

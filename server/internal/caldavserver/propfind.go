@@ -4,7 +4,7 @@
 // client (macOS Calendar, DAVx⁵) typically asks for getctag and
 // calendar-color in the same PROPFIND body, and each patch must not
 // independently re-run the request or write to the response (ADR-0025,
-// ADR-0028).
+// ADR-0028, ADR-0029).
 package caldavserver
 
 import (
@@ -28,6 +28,10 @@ var propfindPatches = []propfindPatch{
 	{trigger: "getctag", apply: applyGetCTagPatch},
 	{trigger: "calendar-color", apply: applyCalendarColorPatch},
 }
+
+// calendarColorNamespace is the Apple/DAVx⁵ calendar-color extension's
+// namespace (ADR-0028).
+const calendarColorNamespace = "http://apple.com/ns/ical/"
 
 // collectionValueFunc adapts a per-Calendar lookup into a propertyValueFunc:
 // only an href that is a Calendar collection directly under the user's
@@ -57,13 +61,16 @@ func applyGetCTagPatch(ctx context.Context, h *dispatchHandler, userID int64, bo
 	}))
 }
 
+// applyCalendarColorPatch serves a Calendar's color exactly as stored — the
+// Color column is already the canonical "#RRGGBBAA" hex (ADR-0029), so
+// there's no enum-to-hex lookup left to do here.
 func applyCalendarColorPatch(ctx context.Context, h *dispatchHandler, userID int64, body []byte) []byte {
-	return injectCalendarColor(ctx, body, collectionValueFunc(userID, func(ctx context.Context, calendarID string) (string, bool) {
+	return injectProperty(ctx, body, "calendar-color", calendarColorNamespace, collectionValueFunc(userID, func(ctx context.Context, calendarID string) (string, bool) {
 		cal, err := h.backend.calendars.Get(ctx, userID, calendarID)
 		if err != nil {
 			return "", false
 		}
-		return hexForColor(cal.Color)
+		return cal.Color, true
 	}))
 }
 

@@ -2,7 +2,6 @@ import { create } from "zustand";
 import { useAuthStore } from "./authStore";
 import { calendarsApi } from "./calendarsApi";
 import type { Calendar } from "./calendar";
-import type { CalendarColor } from "./calendarColors";
 import { toast } from "./toast";
 
 interface CalendarsState {
@@ -11,7 +10,7 @@ interface CalendarsState {
   addCalendar: (calendar: Calendar) => Promise<void>;
   updateCalendar: (
     id: string,
-    changes: { name: string; color: CalendarColor },
+    changes: { name: string; color: string },
   ) => Promise<void>;
   // Resolves to whether the delete actually succeeded, so callers that
   // cascade other local state off of it (e.g. deleteCalendarCascade) know

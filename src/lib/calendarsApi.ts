@@ -1,6 +1,5 @@
 import { authHeader, errorFromResponse } from "./apiClient";
 import type { Calendar } from "./calendar";
-import type { CalendarColor } from "./calendarColors";
 
 export const calendarsApi = {
   async list(accessToken: string): Promise<Calendar[]> {
@@ -15,7 +14,7 @@ export const calendarsApi = {
 
   async create(
     accessToken: string,
-    calendar: { id: string; name: string; color: CalendarColor },
+    calendar: { id: string; name: string; color: string },
   ): Promise<Calendar> {
     const response = await fetch("/api/calendars/", {
       method: "POST",
@@ -31,7 +30,7 @@ export const calendarsApi = {
   async update(
     accessToken: string,
     id: string,
-    changes: { name: string; color: CalendarColor },
+    changes: { name: string; color: string },
   ): Promise<Calendar> {
     const response = await fetch(`/api/calendars/${id}`, {
       method: "PATCH",

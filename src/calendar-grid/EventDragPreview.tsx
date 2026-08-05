@@ -1,3 +1,4 @@
+import type { CalendarBlockStyle } from "../lib/calendarColors";
 import { EventVisual } from "./EventVisual";
 
 interface EventDragPreviewProps {
@@ -8,7 +9,7 @@ interface EventDragPreviewProps {
   title: string;
   start: Date;
   end: Date;
-  colorClass: string;
+  blockStyle: CalendarBlockStyle;
 }
 
 export function EventDragPreview({
@@ -19,7 +20,7 @@ export function EventDragPreview({
   title,
   start,
   end,
-  colorClass,
+  blockStyle,
 }: EventDragPreviewProps) {
   return (
     <div
@@ -31,7 +32,7 @@ export function EventDragPreview({
         width: `calc(${width}% - 2px)`,
       }}
     >
-      <EventVisual title={title} start={start} end={end} colorClass={colorClass} />
+      <EventVisual title={title} start={start} end={end} blockStyle={blockStyle} />
     </div>
   );
 }

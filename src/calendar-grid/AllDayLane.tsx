@@ -1,6 +1,6 @@
 import { isSameDay } from "date-fns";
 import { getCalendarById } from "../lib/calendar";
-import { getCalendarColorClass } from "../lib/calendarColors";
+import { getCalendarBlockStyle } from "../lib/calendarColors";
 import { useCalendarsStore } from "../lib/calendarsStore";
 import { occurrenceKey, type Occurrence } from "../lib/occurrence";
 
@@ -53,9 +53,7 @@ export function AllDayLane({
           >
             {dayOccurrences.map((occurrence) => {
               const calendar = getCalendarById(calendars, occurrence.event.calendarId);
-              const colorClass = calendar
-                ? getCalendarColorClass(calendar.color)
-                : "bg-calendar-graphite";
+              const blockStyle = getCalendarBlockStyle(calendar);
               // Kept in the layout but hidden rather than removed: dropping
               // it from the DOM while dragging would shrink this day's
               // column (and the whole lane, which has no fixed height like
@@ -78,7 +76,8 @@ export function AllDayLane({
                       onOccurrenceClick(occurrence);
                     }
                   }}
-                  className={`cursor-pointer truncate rounded-shell-sm px-1 text-left text-label-sm text-ink-inverse ${colorClass} ${isDragging ? "invisible" : ""}`}
+                  style={blockStyle}
+                  className={`cursor-pointer truncate rounded-shell-sm px-1 text-left text-label-sm ${isDragging ? "invisible" : ""}`}
                 >
                   {occurrence.event.title}
                 </button>

@@ -59,7 +59,7 @@ func newCalendarTestServer(t *testing.T) (baseURL string, accessToken string) {
 func TestCalendarHandler_CreateAndList(t *testing.T) {
 	baseURL, accessToken := newCalendarTestServer(t)
 
-	resp := createCalendar(t, baseURL, accessToken, "11111111-1111-1111-1111-111111111111", "Personal", "peacock")
+	resp := createCalendar(t, baseURL, accessToken, "11111111-1111-1111-1111-111111111111", "Personal", "#12809CFF")
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("expected 201, got %d", resp.StatusCode)
 	}
@@ -68,7 +68,7 @@ func TestCalendarHandler_CreateAndList(t *testing.T) {
 	if err := json.NewDecoder(resp.Body).Decode(&created); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if created.ID != "11111111-1111-1111-1111-111111111111" || created.Name != "Personal" || created.Color != "peacock" {
+	if created.ID != "11111111-1111-1111-1111-111111111111" || created.Name != "Personal" || created.Color != "#12809CFF" {
 		t.Fatalf("unexpected response: %+v", created)
 	}
 
@@ -87,6 +87,25 @@ func TestCalendarHandler_CreateAndList(t *testing.T) {
 	}
 }
 
+func TestCalendarHandler_Create_NormalizesAnArbitraryColor(t *testing.T) {
+	baseURL, accessToken := newCalendarTestServer(t)
+
+	// A 3-digit hex with no swatch match anywhere in the enum this app used
+	// to have (ADR-0029: any hex is valid, not just the 8 curated Swatches).
+	resp := createCalendar(t, baseURL, accessToken, "11111111-1111-1111-1111-111111111111", "Personal", "#1af")
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("expected 201, got %d", resp.StatusCode)
+	}
+
+	var created calendarResponse
+	if err := json.NewDecoder(resp.Body).Decode(&created); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if created.Color != "#11AAFFFF" {
+		t.Fatalf("expected the color to widen and canonicalize to #11AAFFFF, got %q", created.Color)
+	}
+}
+
 func TestCalendarHandler_Create_RejectsInvalidColor(t *testing.T) {
 	baseURL, accessToken := newCalendarTestServer(t)
 
@@ -99,7 +118,7 @@ func TestCalendarHandler_Create_RejectsInvalidColor(t *testing.T) {
 func TestCalendarHandler_Create_RejectsNonUUIDID(t *testing.T) {
 	baseURL, accessToken := newCalendarTestServer(t)
 
-	resp := createCalendar(t, baseURL, accessToken, "not-a-uuid", "Personal", "peacock")
+	resp := createCalendar(t, baseURL, accessToken, "not-a-uuid", "Personal", "#12809CFF")
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d", resp.StatusCode)
 	}
@@ -108,7 +127,7 @@ func TestCalendarHandler_Create_RejectsNonUUIDID(t *testing.T) {
 func TestCalendarHandler_Create_RequiresAuth(t *testing.T) {
 	baseURL, _ := newCalendarTestServer(t)
 
-	body, _ := json.Marshal(createCalendarRequest{ID: "11111111-1111-1111-1111-111111111111", Name: "Personal", Color: "peacock"})
+	body, _ := json.Marshal(createCalendarRequest{ID: "11111111-1111-1111-1111-111111111111", Name: "Personal", Color: "#12809CFF"})
 	resp, err := http.Post(baseURL+"/api/calendars/", "application/json", bytes.NewReader(body))
 	if err != nil {
 		t.Fatalf("post: %v", err)
@@ -123,18 +142,18 @@ func TestCalendarHandler_Create_RequiresAuth(t *testing.T) {
 func TestCalendarHandler_UpdateAndGet(t *testing.T) {
 	baseURL, accessToken := newCalendarTestServer(t)
 
-	createResp := createCalendar(t, baseURL, accessToken, "11111111-1111-1111-1111-111111111111", "Personal", "peacock")
+	createResp := createCalendar(t, baseURL, accessToken, "11111111-1111-1111-1111-111111111111", "Personal", "#12809CFF")
 	var created calendarResponse
 	json.NewDecoder(createResp.Body).Decode(&created)
 
-	updateResp := patchCalendar(t, baseURL, accessToken, created.ID, "Renamed", "tomato")
+	updateResp := patchCalendar(t, baseURL, accessToken, created.ID, "Renamed", "#E2483DFF")
 	if updateResp.StatusCode != http.StatusOK {
 		t.Fatalf("expected 200, got %d", updateResp.StatusCode)
 	}
 
 	var updated calendarResponse
 	json.NewDecoder(updateResp.Body).Decode(&updated)
-	if updated.Name != "Renamed" || updated.Color != "tomato" {
+	if updated.Name != "Renamed" || updated.Color != "#E2483DFF" {
 		t.Fatalf("unexpected updated calendar: %+v", updated)
 	}
 
@@ -151,7 +170,7 @@ func TestCalendarHandler_UpdateAndGet(t *testing.T) {
 func TestCalendarHandler_Update_NotFound(t *testing.T) {
 	baseURL, accessToken := newCalendarTestServer(t)
 
-	resp := patchCalendar(t, baseURL, accessToken, "does-not-exist", "Renamed", "tomato")
+	resp := patchCalendar(t, baseURL, accessToken, "does-not-exist", "Renamed", "#E2483DFF")
 	if resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("expected 404, got %d", resp.StatusCode)
 	}
@@ -160,7 +179,7 @@ func TestCalendarHandler_Update_NotFound(t *testing.T) {
 func TestCalendarHandler_Delete(t *testing.T) {
 	baseURL, accessToken := newCalendarTestServer(t)
 
-	createResp := createCalendar(t, baseURL, accessToken, "11111111-1111-1111-1111-111111111111", "Personal", "peacock")
+	createResp := createCalendar(t, baseURL, accessToken, "11111111-1111-1111-1111-111111111111", "Personal", "#12809CFF")
 	var created calendarResponse
 	json.NewDecoder(createResp.Body).Decode(&created)
 

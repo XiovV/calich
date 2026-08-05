@@ -11,12 +11,6 @@ import (
 	"github.com/XiovV/calendar/server/internal/repository"
 )
 
-// CalendarColors are the only colors a calendar may be assigned, mirroring
-// the frontend's CalendarColor union in calendarColors.ts.
-var CalendarColors = []string{
-	"tomato", "flamingo", "banana", "sage", "peacock", "blueberry", "grape", "graphite",
-}
-
 var (
 	ErrInvalidColor = errors.New("invalid calendar color")
 	ErrInvalidName  = errors.New("calendar name must not be empty")
@@ -30,21 +24,13 @@ func NewCalendarService(calendars *repository.CalendarRepository) *CalendarServi
 	return &CalendarService{calendars: calendars}
 }
 
-func (s *CalendarService) IsValidColor(color string) bool {
-	for _, c := range CalendarColors {
-		if c == color {
-			return true
-		}
-	}
-	return false
-}
-
 func (s *CalendarService) Create(ctx context.Context, userID int64, id, name, color string) (repository.Calendar, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return repository.Calendar{}, ErrInvalidName
 	}
-	if !s.IsValidColor(color) {
+	color, ok := NormalizeColor(color)
+	if !ok {
 		return repository.Calendar{}, ErrInvalidColor
 	}
 
@@ -72,7 +58,8 @@ func (s *CalendarService) Update(ctx context.Context, userID int64, id, name, co
 	if name == "" {
 		return repository.Calendar{}, ErrInvalidName
 	}
-	if !s.IsValidColor(color) {
+	color, ok := NormalizeColor(color)
+	if !ok {
 		return repository.Calendar{}, ErrInvalidColor
 	}
 
@@ -88,10 +75,12 @@ type defaultCalendar struct {
 	color string
 }
 
+// These seed hexes are independent of the frontend's Swatch hexes
+// (calendarColors.ts) — the two lists are allowed to drift (ADR-0029).
 var defaultCalendars = []defaultCalendar{
-	{name: "Personal", color: "peacock"},
-	{name: "Work", color: "tomato"},
-	{name: "Family", color: "sage"},
+	{name: "Personal", color: "#12809CFF"}, // peacock
+	{name: "Work", color: "#E2483DFF"},     // tomato
+	{name: "Family", color: "#6B9071FF"},   // sage
 }
 
 // EnsureDefaults seeds a user with the default Personal/Work/Family

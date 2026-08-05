@@ -2,12 +2,14 @@
 // library's caldav.Backend interface has no PropPatch hook at all, and its
 // private wrapper hardcodes PropPatch to always return 501 regardless of
 // what any Backend supports (see handler.go's dispatch and backend.go's
-// package doc). The only settable property this backend recognizes is
-// Apple/DAVx⁵'s calendar-color (color.go, ADR-0028); every other named
-// property, and any <remove> of calendar-color (the Color column is NOT
-// NULL — there is no "unset"), is reported 403 Forbidden per property
-// rather than silently ignored, so a client can tell its update didn't
-// fully apply.
+// package doc). This backend recognizes two settable properties —
+// Apple/DAVx⁵'s calendar-color (validated by service.NormalizeColor,
+// ADR-0029) and DAV:displayname (the Calendar rename case) — staged
+// together per RFC 4918 §9.2's atomicity rule (see applyPropPatch). Any
+// other named property, and any <remove> of either settable property (both
+// backing columns are NOT NULL — there is no "unset"), is reported 403
+// Forbidden per property rather than silently ignored, so a client can tell
+// its update didn't fully apply.
 package caldavserver
 
 import (
@@ -20,16 +22,23 @@ import (
 	"strings"
 
 	"github.com/XiovV/calendar/server/internal/repository"
+	"github.com/XiovV/calendar/server/internal/service"
 )
 
 const (
-	proppatchStatusOK        = "HTTP/1.1 200 OK"
-	proppatchStatusForbidden = "HTTP/1.1 403 Forbidden"
-	proppatchStatusConflict  = "HTTP/1.1 409 Conflict"
-	calendarColorLocalName   = "calendar-color"
+	proppatchStatusOK               = "HTTP/1.1 200 OK"
+	proppatchStatusForbidden        = "HTTP/1.1 403 Forbidden"
+	proppatchStatusConflict         = "HTTP/1.1 409 Conflict"
+	proppatchStatusFailedDependency = "HTTP/1.1 424 Failed Dependency"
+	calendarColorLocalName          = "calendar-color"
+	displayNameLocalName            = "displayname"
+	davNamespace                    = "DAV:"
 )
 
-var calendarColorPropName = xml.Name{Space: calendarColorNamespace, Local: calendarColorLocalName}
+var (
+	calendarColorPropName = xml.Name{Space: calendarColorNamespace, Local: calendarColorLocalName}
+	displayNamePropName   = xml.Name{Space: davNamespace, Local: displayNameLocalName}
+)
 
 // proppatchPropElem captures one raw <prop> child generically — go-webdav's
 // own internal.Prop/RawXMLValue types live in an unexported package of a
@@ -123,73 +132,123 @@ func (h *dispatchHandler) handlePropPatch(w http.ResponseWriter, r *http.Request
 	w.Write(ms)
 }
 
-// applyPropPatch walks req's set/remove instructions. A <set> of
-// calendar-color with a parseable hex is staged (last one wins if repeated)
-// and, if any was staged, persisted via a single CalendarService.Update
-// call (preserving the calendar's current Name) before returning — so a
-// malformed later instruction can't leave a partial write. It reports, for
-// that property, 200 OK with the canonical hex of the nearest-matched enum
-// color — never the client's raw input (ADR-0026's read-back guard, applied
-// here to the Calendar-collection resource). A <set> with an unparseable
-// value reports 409 Conflict and is not applied. A <remove> of
-// calendar-color, and any <set>/<remove> of any other property name,
-// reports 403 Forbidden and is not applied.
-//
-// req.Set is processed in full before req.Remove regardless of how the two
-// were actually interleaved in the request body — a client naming
-// calendar-color in both a <set> and a <remove> in one request (which
-// doesn't correspond to any real client behavior) has the <remove> win
-// rather than strict document order.
-func (h *dispatchHandler) applyPropPatch(ctx context.Context, userID int64, calendarID string, existing repository.Calendar, req proppatchRequestBody) ([]proppatchPropResult, error) {
-	var results []proppatchPropResult
-	colorSeen := false
-	var colorResult proppatchPropResult
-	stagedColor := ""
-	haveStagedColor := false
+// stagedProp is one named property's outcome while applyPropPatch walks the
+// request. ok is true only for a <set> instruction whose value validated —
+// provisionally 200, carrying the value that would be written. Everything
+// else (an unparseable <set>, any <remove>, any unrecognized property name)
+// is already a final, non-2xx outcome and never becomes ok.
+type stagedProp struct {
+	name     xml.Name
+	status   string
+	ok       bool
+	newValue string
+}
 
-	rejectUnlessColor := func(prop proppatchPropElem) bool {
-		if prop.XMLName.Local == calendarColorLocalName {
-			return true
+// applyPropPatch walks req's set/remove instructions and stages one outcome
+// per named property (last instruction for a given name wins, so req.Set is
+// processed in full before req.Remove regardless of how the two were
+// actually interleaved in the request body — a client naming the same
+// property in both a <set> and a <remove> in one request, which doesn't
+// correspond to any real client behavior, has the <remove> win rather than
+// strict document order).
+//
+// Per RFC 4918 §9.2, PROPPATCH is atomic across the whole request: if any
+// staged outcome is not 2xx, nothing is written, and every would-be-200 is
+// downgraded to 424 Failed Dependency instead. This is what lets a client
+// rename a Calendar and set its color in one request and have a malformed
+// color leave the rename unapplied too, rather than silently renaming a
+// Calendar whose color update the client believes failed on its own.
+//
+// A <set> of calendar-color with a parseable hex stages
+// service.NormalizeColor's canonical form — uppercase, alpha widened to FF
+// for a 3- or 6-digit input — so an 8-digit client value still round-trips
+// byte-identical up to case (ADR-0029); an unparseable value stages 409
+// Conflict. A <set> of displayname with a non-empty value stages that
+// value; an empty value
+// stages 409 Conflict — the Name column is NOT NULL, the same constraint
+// the REST API enforces as ErrInvalidName (there, surfaced as 400, since
+// PROPPATCH and the REST API report property/field errors differently). A
+// <remove> of either, and any <set>/<remove> of any other property name,
+// stages 403 Forbidden.
+func (h *dispatchHandler) applyPropPatch(ctx context.Context, userID int64, calendarID string, existing repository.Calendar, req proppatchRequestBody) ([]proppatchPropResult, error) {
+	var order []xml.Name
+	staged := map[xml.Name]stagedProp{}
+
+	stage := func(name xml.Name, status string, ok bool, newValue string) {
+		if _, seen := staged[name]; !seen {
+			order = append(order, name)
 		}
-		results = append(results, proppatchPropResult{Name: prop.XMLName, Status: proppatchStatusForbidden})
-		return false
+		staged[name] = stagedProp{name: name, status: status, ok: ok, newValue: newValue}
 	}
 
 	for _, set := range req.Set {
 		for _, prop := range set.Prop.Props {
-			if !rejectUnlessColor(prop) {
-				continue
+			switch prop.XMLName.Local {
+			case calendarColorLocalName:
+				color, ok := service.NormalizeColor(strings.TrimSpace(prop.Content))
+				if !ok {
+					stage(calendarColorPropName, proppatchStatusConflict, false, "")
+					continue
+				}
+				stage(calendarColorPropName, proppatchStatusOK, true, color)
+			case displayNameLocalName:
+				name := strings.TrimSpace(prop.Content)
+				if name == "" {
+					stage(displayNamePropName, proppatchStatusConflict, false, "")
+					continue
+				}
+				stage(displayNamePropName, proppatchStatusOK, true, name)
+			default:
+				stage(prop.XMLName, proppatchStatusForbidden, false, "")
 			}
-			colorSeen = true
-			color, ok := nearestColor(strings.TrimSpace(prop.Content))
-			if !ok {
-				colorResult = proppatchPropResult{Name: calendarColorPropName, Status: proppatchStatusConflict}
-				haveStagedColor = false
-				continue
-			}
-			stagedColor = color
-			haveStagedColor = true
-			colorResult = proppatchPropResult{Name: calendarColorPropName, Status: proppatchStatusOK}
 		}
 	}
 
 	for _, remove := range req.Remove {
 		for _, prop := range remove.Prop.Props {
-			if !rejectUnlessColor(prop) {
-				continue
+			switch prop.XMLName.Local {
+			case calendarColorLocalName:
+				stage(calendarColorPropName, proppatchStatusForbidden, false, "")
+			case displayNameLocalName:
+				stage(displayNamePropName, proppatchStatusForbidden, false, "")
+			default:
+				stage(prop.XMLName, proppatchStatusForbidden, false, "")
 			}
-			colorSeen = true
-			colorResult = proppatchPropResult{Name: calendarColorPropName, Status: proppatchStatusForbidden}
-			haveStagedColor = false
 		}
 	}
 
-	if colorSeen {
-		results = append(results, colorResult)
+	anyFailed := false
+	for _, name := range order {
+		if staged[name].status != proppatchStatusOK {
+			anyFailed = true
+			break
+		}
 	}
 
-	if haveStagedColor {
-		if _, err := h.backend.calendars.Update(ctx, userID, calendarID, existing.Name, stagedColor); err != nil {
+	newName, newColor := existing.Name, existing.Color
+	changed := false
+	results := make([]proppatchPropResult, 0, len(order))
+	for _, name := range order {
+		p := staged[name]
+		status := p.status
+		if anyFailed && p.ok {
+			status = proppatchStatusFailedDependency
+		}
+		results = append(results, proppatchPropResult{Name: p.name, Status: status})
+
+		if !anyFailed && p.ok {
+			changed = true
+			switch name {
+			case calendarColorPropName:
+				newColor = p.newValue
+			case displayNamePropName:
+				newName = p.newValue
+			}
+		}
+	}
+
+	if changed {
+		if _, err := h.backend.calendars.Update(ctx, userID, calendarID, newName, newColor); err != nil {
 			return nil, err
 		}
 	}

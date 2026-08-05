@@ -46,7 +46,7 @@ func newEventTestServer(t *testing.T) (baseURL, accessToken, calendarID string) 
 
 	calendarRepo := repository.NewCalendarRepository(sqlDB)
 	calendars := service.NewCalendarService(calendarRepo)
-	cal, err := calendars.Create(context.Background(), userID, "11111111-1111-1111-1111-111111111111", "Personal", "peacock")
+	cal, err := calendars.Create(context.Background(), userID, "11111111-1111-1111-1111-111111111111", "Personal", "#12809CFF")
 	if err != nil {
 		t.Fatalf("create calendar: %v", err)
 	}

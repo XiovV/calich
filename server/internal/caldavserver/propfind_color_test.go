@@ -49,14 +49,14 @@ func TestPropfind_CalendarColor_ExposedAsA200Property(t *testing.T) {
 func TestPropfind_CalendarColor_ReflectsStoredColor(t *testing.T) {
 	env := newTestCalDAVEnv(t)
 
-	// newTestCalDAVEnv creates the test calendar with color "peacock".
+	// newTestCalDAVEnv creates the test calendar with color "#12809CFF".
 	path := calendarPath(env.userID, env.calendarID)
 	resp := propfind(t, env.srv, path, "admin", env.appPasswordSecret, "0", propfindCalendarColor)
 	defer resp.Body.Close()
 
 	got := extractCalendarColor(t, readBody(t, resp))
-	if got != "#12809c" {
-		t.Fatalf("expected the peacock hex #12809c, got %q", got)
+	if got != "#12809CFF" {
+		t.Fatalf("expected the stored hex #12809CFF, got %q", got)
 	}
 }
 
@@ -77,15 +77,15 @@ func TestPropfind_CalendarColor_StableAcrossRepeatedGETs_ChangesAfterUpdate(t *t
 		t.Fatalf("expected a stable color when nothing changed, got %q then %q", color1, color2)
 	}
 
-	if _, err := env.calendarService.Update(ctx, env.userID, env.calendarID, "Personal", "grape"); err != nil {
+	if _, err := env.calendarService.Update(ctx, env.userID, env.calendarID, "Personal", "#8E44ADFF"); err != nil {
 		t.Fatalf("update calendar color: %v", err)
 	}
 
 	resp3 := propfind(t, env.srv, path, "admin", env.appPasswordSecret, "0", propfindCalendarColor)
 	defer resp3.Body.Close()
 	color3 := extractCalendarColor(t, readBody(t, resp3))
-	if color3 != "#8e44ad" {
-		t.Fatalf("expected the updated grape hex #8e44ad, got %q", color3)
+	if color3 != "#8E44ADFF" {
+		t.Fatalf("expected the updated hex #8E44ADFF, got %q", color3)
 	}
 }
 
@@ -102,8 +102,8 @@ func TestPropfind_BothGetCTagAndCalendarColor_BothExposedInOnePass(t *testing.T)
 	}
 	extractGetCTag(t, body)
 	color := extractCalendarColor(t, body)
-	if color != "#12809c" {
-		t.Fatalf("expected the peacock hex #12809c, got %q", color)
+	if color != "#12809CFF" {
+		t.Fatalf("expected the stored hex #12809CFF, got %q", color)
 	}
 }
 

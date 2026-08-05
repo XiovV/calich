@@ -83,7 +83,7 @@ func (h *CalendarHandler) Create(w http.ResponseWriter, r *http.Request) {
 		httpresponse.Error(w, http.StatusBadRequest, "invalid_request", "name must not be empty")
 		return
 	case errors.Is(err, service.ErrInvalidColor):
-		httpresponse.Error(w, http.StatusBadRequest, "invalid_request", "color is not a recognized calendar color")
+		httpresponse.Error(w, http.StatusBadRequest, "invalid_request", "color must be a valid hex color (#RGB, #RRGGBB, or #RRGGBBAA)")
 		return
 	case err != nil:
 		httpresponse.Error(w, http.StatusInternalServerError, "internal_error", "failed to create calendar")
@@ -141,7 +141,7 @@ func (h *CalendarHandler) Update(w http.ResponseWriter, r *http.Request) {
 		httpresponse.Error(w, http.StatusBadRequest, "invalid_request", "name must not be empty")
 		return
 	case errors.Is(err, service.ErrInvalidColor):
-		httpresponse.Error(w, http.StatusBadRequest, "invalid_request", "color is not a recognized calendar color")
+		httpresponse.Error(w, http.StatusBadRequest, "invalid_request", "color must be a valid hex color (#RGB, #RRGGBB, or #RRGGBBAA)")
 		return
 	case errors.Is(err, repository.ErrNotFound):
 		httpresponse.Error(w, http.StatusNotFound, "not_found", "calendar not found")
