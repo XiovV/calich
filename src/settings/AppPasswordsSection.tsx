@@ -4,6 +4,8 @@ import { Button } from "../components/ui/Button";
 import { IconButton } from "../components/ui/IconButton";
 import { Input } from "../components/ui/Input";
 import { useAppPasswordsStore } from "../lib/appPasswordsStore";
+import { useAsyncAction } from "../hooks/useAsyncAction";
+import { errorMessage } from "../lib/errorMessage";
 
 // The Settings page's App passwords section (#62, ADR-0024): lets a user
 // generate a per-device credential for native CalDAV clients, shown once with
@@ -15,40 +17,35 @@ export function AppPasswordsSection() {
   const revokeAppPassword = useAppPasswordsStore((state) => state.revokeAppPassword);
 
   const [label, setLabel] = useState("");
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const [revealedSecret, setRevealedSecret] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [revokingId, setRevokingId] = useState<number | null>(null);
   const [nudgeReminderDelivery, setNudgeReminderDelivery] = useState(false);
+  const { isSubmitting, error, setError, run } = useAsyncAction();
 
   useEffect(() => {
     fetchAppPasswords().catch((err) => {
-      setError(err instanceof Error ? err.message : "Something went wrong.");
+      setError(errorMessage(err));
     });
-  }, [fetchAppPasswords]);
+  }, [fetchAppPasswords, setError]);
 
   async function handleCreate(domEvent: React.FormEvent) {
     domEvent.preventDefault();
-    if (isSubmitting || !label.trim()) return;
+    if (!label.trim()) return;
 
     const isFirstAppPassword = appPasswords.length === 0;
 
-    setIsSubmitting(true);
-    setError(null);
-    try {
+    await run(async () => {
       const secret = await createAppPassword(label.trim());
       setRevealedSecret(secret);
       setCopied(false);
       setLabel("");
       setNudgeReminderDelivery(isFirstAppPassword);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Something went wrong.");
-    } finally {
-      setIsSubmitting(false);
-    }
+    });
   }
 
+  // Not run through useAsyncAction: revoking tracks a per-row revokingId rather
+  // than the shared isSubmitting, which drives the Generate button's spinner.
   async function handleRevoke(id: number) {
     if (!window.confirm("Revoke this app password? Any device using it will stop syncing.")) return;
 
@@ -57,7 +54,7 @@ export function AppPasswordsSection() {
     try {
       await revokeAppPassword(id);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Something went wrong.");
+      setError(errorMessage(err));
     } finally {
       setRevokingId(null);
     }

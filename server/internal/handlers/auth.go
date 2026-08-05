@@ -2,7 +2,6 @@ package handlers
 
 import (
 	"encoding/json"
-	"errors"
 	"net/http"
 	"time"
 
@@ -36,6 +35,25 @@ type loginResponse struct {
 	MustChangePassword bool   `json:"must_change_password"`
 }
 
+var loginErrors = []errorCase{
+	{service.ErrInvalidCredentials, unauthorized("invalid_credentials", "invalid username or password")},
+}
+
+var updateEmailErrors = []errorCase{
+	{service.ErrInvalidEmail, badRequest("email is not a valid address")},
+}
+
+var refreshErrors = []errorCase{
+	{service.ErrInvalidSession, unauthorized("unauthorized", "invalid or expired refresh token")},
+}
+
+// ErrInvalidCredentials renders differently here than on login: it means the
+// *current* password was wrong, not the username/password pair.
+var changePasswordErrors = []errorCase{
+	{service.ErrInvalidCredentials, unauthorized("invalid_credentials", "current password is incorrect")},
+	{service.ErrInvalidPassword, badRequest("new password must not be empty")},
+}
+
 func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 	var req loginRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -44,12 +62,7 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 	}
 
 	result, err := h.auth.Login(r.Context(), req.Username, req.Password)
-	if errors.Is(err, service.ErrInvalidCredentials) {
-		httpresponse.Error(w, http.StatusUnauthorized, "invalid_credentials", "invalid username or password")
-		return
-	}
-	if err != nil {
-		httpresponse.Error(w, http.StatusInternalServerError, "internal_error", "failed to log in")
+	if respondError(w, err, loginErrors, "failed to log in") {
 		return
 	}
 
@@ -120,12 +133,7 @@ func (h *AuthHandler) UpdateEmail(w http.ResponseWriter, r *http.Request) {
 	}
 
 	user, err := h.auth.UpdateEmail(r.Context(), userID, req.Email)
-	switch {
-	case errors.Is(err, service.ErrInvalidEmail):
-		httpresponse.Error(w, http.StatusBadRequest, "invalid_request", "email is not a valid address")
-		return
-	case err != nil:
-		httpresponse.Error(w, http.StatusInternalServerError, "internal_error", "failed to update email")
+	if respondError(w, err, updateEmailErrors, "failed to update email") {
 		return
 	}
 
@@ -172,12 +180,7 @@ func (h *AuthHandler) Refresh(w http.ResponseWriter, r *http.Request) {
 	}
 
 	accessToken, err := h.auth.Refresh(r.Context(), cookie.Value)
-	if errors.Is(err, service.ErrInvalidSession) {
-		httpresponse.Error(w, http.StatusUnauthorized, "unauthorized", "invalid or expired refresh token")
-		return
-	}
-	if err != nil {
-		httpresponse.Error(w, http.StatusInternalServerError, "internal_error", "failed to refresh session")
+	if respondError(w, err, refreshErrors, "failed to refresh session") {
 		return
 	}
 
@@ -215,15 +218,7 @@ func (h *AuthHandler) ChangePassword(w http.ResponseWriter, r *http.Request) {
 	}
 
 	err := h.auth.ChangePassword(r.Context(), userID, req.CurrentPassword, req.NewPassword)
-	switch {
-	case errors.Is(err, service.ErrInvalidCredentials):
-		httpresponse.Error(w, http.StatusUnauthorized, "invalid_credentials", "current password is incorrect")
-		return
-	case errors.Is(err, service.ErrInvalidPassword):
-		httpresponse.Error(w, http.StatusBadRequest, "invalid_request", "new password must not be empty")
-		return
-	case err != nil:
-		httpresponse.Error(w, http.StatusInternalServerError, "internal_error", "failed to change password")
+	if respondError(w, err, changePasswordErrors, "failed to change password") {
 		return
 	}
 

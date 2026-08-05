@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Navigate, useNavigate } from "react-router";
 import { useAuthStore } from "../lib/authStore";
+import { useAsyncAction } from "../hooks/useAsyncAction";
 import { Button } from "../components/ui/Button";
 import { Input } from "../components/ui/Input";
 
@@ -11,8 +12,7 @@ export function LoginPage() {
 
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const { isSubmitting, error, run } = useAsyncAction();
 
   if (status === "loading") {
     return null;
@@ -26,18 +26,12 @@ export function LoginPage() {
 
   async function handleSubmit(domEvent: React.FormEvent) {
     domEvent.preventDefault();
-    if (!canSubmit || isSubmitting) return;
+    if (!canSubmit) return;
 
-    setIsSubmitting(true);
-    setError(null);
-    try {
+    await run(async () => {
       await login(username, password);
       navigate("/", { replace: true });
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Something went wrong.");
-    } finally {
-      setIsSubmitting(false);
-    }
+    });
   }
 
   return (

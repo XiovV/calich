@@ -61,9 +61,7 @@ func TestSyncRepository_CTag_ReflectsLatestWriteAcrossLiveAndTombstoned(t *testi
 	if err != nil {
 		t.Fatalf("next change seq: %v", err)
 	}
-	if _, err := events.Create(ctx, "evt-1", userID, calendarID, "Standup",
-		time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC), time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC),
-		false, "", nil, nil, nil, "", "", seq1); err != nil {
+	if _, err := events.Create(ctx, "evt-1", userID, EventFields{CalendarID: calendarID, Title: "Standup", Start: time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC), End: time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC)}, seq1); err != nil {
 		t.Fatalf("create event: %v", err)
 	}
 	if ctag, err := sync.CTag(ctx, calendarID); err != nil || ctag != seq1 {
@@ -109,10 +107,10 @@ func TestEventRepository_ListMastersChangedSince_OnlyReturnsMastersPastToken(t *
 	start := time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC)
 	end := time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC)
 
-	if _, err := events.Create(ctx, "evt-old", userID, calendarID, "Old", start, end, false, "", nil, nil, nil, "", "", 1); err != nil {
+	if _, err := events.Create(ctx, "evt-old", userID, EventFields{CalendarID: calendarID, Title: "Old", Start: start, End: end}, 1); err != nil {
 		t.Fatalf("create old event: %v", err)
 	}
-	if _, err := events.Create(ctx, "evt-new", userID, calendarID, "New", start, end, false, "", nil, nil, nil, "", "", 2); err != nil {
+	if _, err := events.Create(ctx, "evt-new", userID, EventFields{CalendarID: calendarID, Title: "New", Start: start, End: end}, 2); err != nil {
 		t.Fatalf("create new event: %v", err)
 	}
 
@@ -131,7 +129,7 @@ func TestEventRepository_SetChangeSeq(t *testing.T) {
 
 	start := time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC)
 	end := time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC)
-	if _, err := events.Create(ctx, "evt-1", userID, calendarID, "Standup", start, end, false, "", nil, nil, nil, "", "", 1); err != nil {
+	if _, err := events.Create(ctx, "evt-1", userID, EventFields{CalendarID: calendarID, Title: "Standup", Start: start, End: end}, 1); err != nil {
 		t.Fatalf("create event: %v", err)
 	}
 

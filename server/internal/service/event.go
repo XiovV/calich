@@ -74,34 +74,87 @@ func NewEventService(db *sql.DB, events *repository.EventRepository, exceptions 
 	return &EventService{db: db, events: events, exceptions: exceptions, reminders: reminders, sync: sync, calendars: calendars}
 }
 
+// txRepos is the set of transaction-bound repositories a withTx body writes
+// through. Grouped into one struct so a body names only what it needs — most
+// use two or three of the four.
+type txRepos struct {
+	events     *repository.EventRepository
+	exceptions *repository.EventExceptionRepository
+	reminders  *repository.EventReminderRepository
+	sync       *repository.SyncRepository
+}
+
 // withTx runs fn inside a transaction, passing it transaction-bound clones
 // of the Event, EventException, EventReminder, and Sync repositories so a
 // multi-table write — including its change_seq bump — commits or rolls back
 // atomically. Reads and validation belong outside fn, before withTx is
 // called (ADR-0018).
-func (s *EventService) withTx(ctx context.Context, fn func(events *repository.EventRepository, exceptions *repository.EventExceptionRepository, reminders *repository.EventReminderRepository, sync *repository.SyncRepository) error) error {
+func (s *EventService) withTx(ctx context.Context, fn func(repos txRepos) error) error {
 	return repository.WithTx(ctx, s.db, func(tx *sql.Tx) error {
-		return fn(s.events.WithTx(tx), s.exceptions.WithTx(tx), s.reminders.WithTx(tx), s.sync.WithTx(tx))
+		return fn(txRepos{
+			events:     s.events.WithTx(tx),
+			exceptions: s.exceptions.WithTx(tx),
+			reminders:  s.reminders.WithTx(tx),
+			sync:       s.sync.WithTx(tx),
+		})
 	})
 }
 
-func (s *EventService) Create(ctx context.Context, userID int64, id, calendarID, title string, start, end time.Time, allDay bool, rrule string, parentID *string, recurrenceID *time.Time, tzid *string, reminders []repository.Reminder, description, location string) (repository.Event, error) {
-	title = strings.TrimSpace(title)
-	if title == "" {
+// EventWrite is an Event's writable fields, gathered into one value the same
+// way SeriesWrite already gathers a whole series' — so Create and Update take
+// four arguments instead of thirteen.
+//
+// ParentID and RecurrenceID anchor an Override to the Occurrence it replaces
+// and are fixed when it is created: Create reads them, Update ignores them.
+type EventWrite struct {
+	CalendarID   string
+	Title        string
+	Start, End   time.Time
+	AllDay       bool
+	Rrule        string
+	ParentID     *string
+	RecurrenceID *time.Time
+	Tzid         *string
+	Reminders    []repository.Reminder
+	Description  string
+	Location     string
+}
+
+// fields projects the write onto the columns the repository stores, dropping
+// the Reminders that live in their own table.
+func (w EventWrite) fields() repository.EventFields {
+	return repository.EventFields{
+		CalendarID:   w.CalendarID,
+		Title:        w.Title,
+		Start:        w.Start,
+		End:          w.End,
+		AllDay:       w.AllDay,
+		Rrule:        w.Rrule,
+		ParentID:     w.ParentID,
+		RecurrenceID: w.RecurrenceID,
+		Tzid:         w.Tzid,
+		Description:  w.Description,
+		Location:     w.Location,
+	}
+}
+
+func (s *EventService) Create(ctx context.Context, userID int64, id string, write EventWrite) (repository.Event, error) {
+	write.Title = strings.TrimSpace(write.Title)
+	if write.Title == "" {
 		return repository.Event{}, ErrInvalidTitle
 	}
-	if !end.After(start) {
+	if !write.End.After(write.Start) {
 		return repository.Event{}, ErrInvalidTimeRange
 	}
-	if err := validateReminders(reminders); err != nil {
+	if err := validateReminders(write.Reminders); err != nil {
 		return repository.Event{}, err
 	}
 
-	if parentID != nil {
-		if rrule != "" || recurrenceID == nil {
+	if write.ParentID != nil {
+		if write.Rrule != "" || write.RecurrenceID == nil {
 			return repository.Event{}, ErrInvalidOverride
 		}
-		parent, err := s.events.GetByID(ctx, userID, *parentID)
+		parent, err := s.events.GetByID(ctx, userID, *write.ParentID)
 		if err != nil {
 			if errors.Is(err, repository.ErrNotFound) {
 				return repository.Event{}, ErrParentNotFound
@@ -111,11 +164,11 @@ func (s *EventService) Create(ctx context.Context, userID int64, id, calendarID,
 		if parent.ParentID != nil {
 			return repository.Event{}, ErrParentIsOverride
 		}
-	} else if !isValidRecurrenceRule(rrule) {
+	} else if !isValidRecurrenceRule(write.Rrule) {
 		return repository.Event{}, ErrInvalidRecurrenceRule
 	}
 
-	if _, err := s.calendars.Get(ctx, userID, calendarID); err != nil {
+	if _, err := s.calendars.Get(ctx, userID, write.CalendarID); err != nil {
 		if errors.Is(err, repository.ErrNotFound) {
 			return repository.Event{}, ErrCalendarNotFound
 		}
@@ -123,23 +176,23 @@ func (s *EventService) Create(ctx context.Context, userID int64, id, calendarID,
 	}
 
 	var event repository.Event
-	err := s.withTx(ctx, func(events *repository.EventRepository, exceptions *repository.EventExceptionRepository, remindersRepo *repository.EventReminderRepository, sync *repository.SyncRepository) error {
-		seq, err := sync.NextChangeSeq(ctx)
+	err := s.withTx(ctx, func(repos txRepos) error {
+		seq, err := repos.sync.NextChangeSeq(ctx)
 		if err != nil {
 			return err
 		}
-		e, err := events.Create(ctx, id, userID, calendarID, title, start, end, allDay, rrule, parentID, recurrenceID, tzid, description, location, seq)
+		e, err := repos.events.Create(ctx, id, userID, write.fields(), seq)
 		if err != nil {
 			return err
 		}
-		if err := remindersRepo.ReplaceByEventID(ctx, e.ID, reminders); err != nil {
+		if err := repos.reminders.ReplaceByEventID(ctx, e.ID, write.Reminders); err != nil {
 			return fmt.Errorf("persist reminders: %w", err)
 		}
 		// Creating an Override changes its Master's calendar object (a new
 		// VEVENT joins the series), so the Master's own change_seq must bump
 		// too — it, not the Override, is what CalDAV reports (ADR-0025).
-		if parentID != nil {
-			if err := events.SetChangeSeq(ctx, userID, *parentID, seq); err != nil {
+		if write.ParentID != nil {
+			if err := repos.events.SetChangeSeq(ctx, userID, *write.ParentID, seq); err != nil {
 				return fmt.Errorf("bump parent change_seq: %w", err)
 			}
 		}
@@ -149,7 +202,7 @@ func (s *EventService) Create(ctx context.Context, userID int64, id, calendarID,
 	if err != nil {
 		return repository.Event{}, fmt.Errorf("create event: %w", err)
 	}
-	event.Reminders = reminders
+	event.Reminders = write.Reminders
 	return event, nil
 }
 
@@ -221,13 +274,18 @@ func (s *EventService) ListAllWithReminders(ctx context.Context) ([]repository.E
 	return events, nil
 }
 
-func (s *EventService) attachExdates(ctx context.Context, events []repository.Event) error {
+// eventIDs collects the ids to hand a batched lookup, so a read of any size
+// costs one query rather than one per Event.
+func eventIDs(events []repository.Event) []string {
 	ids := make([]string, 0, len(events))
 	for _, e := range events {
 		ids = append(ids, e.ID)
 	}
+	return ids
+}
 
-	exceptionsByParent, err := s.exceptions.ListByParentIDs(ctx, ids)
+func (s *EventService) attachExdates(ctx context.Context, events []repository.Event) error {
+	exceptionsByParent, err := s.exceptions.ListByParentIDs(ctx, eventIDs(events))
 	if err != nil {
 		return fmt.Errorf("list exceptions: %w", err)
 	}
@@ -239,6 +297,17 @@ func (s *EventService) attachExdates(ctx context.Context, events []repository.Ev
 }
 
 func (s *EventService) attachReminders(ctx context.Context, events []repository.Event) error {
+	pointers := make([]*repository.Event, len(events))
+	for i := range events {
+		pointers[i] = &events[i]
+	}
+	return s.attachRemindersTo(ctx, pointers)
+}
+
+// attachRemindersTo fills in Reminders on rows that need not be contiguous in
+// memory — a series spans one slice for its Master and another for its
+// Overrides — while still batching a single lookup across all of them.
+func (s *EventService) attachRemindersTo(ctx context.Context, events []*repository.Event) error {
 	ids := make([]string, 0, len(events))
 	for _, e := range events {
 		ids = append(ids, e.ID)
@@ -249,8 +318,8 @@ func (s *EventService) attachReminders(ctx context.Context, events []repository.
 		return fmt.Errorf("list reminders: %w", err)
 	}
 
-	for i := range events {
-		events[i].Reminders = remindersByEvent[events[i].ID]
+	for _, e := range events {
+		e.Reminders = remindersByEvent[e.ID]
 	}
 	return nil
 }
@@ -270,21 +339,23 @@ func (s *EventService) Get(ctx context.Context, userID int64, id string) (reposi
 	return events[0], nil
 }
 
-func (s *EventService) Update(ctx context.Context, userID int64, id, calendarID, title string, start, end time.Time, allDay bool, rrule string, tzid *string, reminders []repository.Reminder, description, location string) (repository.Event, error) {
-	title = strings.TrimSpace(title)
-	if title == "" {
+// Update rewrites id's fields. write.ParentID and write.RecurrenceID are
+// ignored — see EventWrite.
+func (s *EventService) Update(ctx context.Context, userID int64, id string, write EventWrite) (repository.Event, error) {
+	write.Title = strings.TrimSpace(write.Title)
+	if write.Title == "" {
 		return repository.Event{}, ErrInvalidTitle
 	}
-	if !end.After(start) {
+	if !write.End.After(write.Start) {
 		return repository.Event{}, ErrInvalidTimeRange
 	}
-	if !isValidRecurrenceRule(rrule) {
+	if !isValidRecurrenceRule(write.Rrule) {
 		return repository.Event{}, ErrInvalidRecurrenceRule
 	}
-	if err := validateReminders(reminders); err != nil {
+	if err := validateReminders(write.Reminders); err != nil {
 		return repository.Event{}, err
 	}
-	if _, err := s.calendars.Get(ctx, userID, calendarID); err != nil {
+	if _, err := s.calendars.Get(ctx, userID, write.CalendarID); err != nil {
 		if errors.Is(err, repository.ErrNotFound) {
 			return repository.Event{}, ErrCalendarNotFound
 		}
@@ -301,37 +372,37 @@ func (s *EventService) Update(ctx context.Context, userID int64, id, calendarID,
 	// no longer be generated by the new rule (ADR-0016). The frontend warns
 	// before calling this; a non-recurring Master or an unchanged rule has
 	// nothing to discard.
-	discardChildren := existing.ParentID == nil && !samePattern(existing.Rrule, rrule)
+	discardChildren := existing.ParentID == nil && !samePattern(existing.Rrule, write.Rrule)
 
 	var updated repository.Event
-	err = s.withTx(ctx, func(events *repository.EventRepository, exceptions *repository.EventExceptionRepository, remindersRepo *repository.EventReminderRepository, sync *repository.SyncRepository) error {
-		seq, err := sync.NextChangeSeq(ctx)
+	err = s.withTx(ctx, func(repos txRepos) error {
+		seq, err := repos.sync.NextChangeSeq(ctx)
 		if err != nil {
 			return err
 		}
-		u, err := events.Update(ctx, userID, id, calendarID, title, start, end, allDay, rrule, tzid, description, location, seq)
+		u, err := repos.events.Update(ctx, userID, id, write.fields(), seq)
 		if err != nil {
 			return err
 		}
 		updated = u
 
 		if discardChildren {
-			if err := events.DeleteChildrenOf(ctx, userID, id); err != nil {
+			if err := repos.events.DeleteChildrenOf(ctx, userID, id); err != nil {
 				return fmt.Errorf("discard overrides: %w", err)
 			}
-			if err := exceptions.DeleteByParentID(ctx, id); err != nil {
+			if err := repos.exceptions.DeleteByParentID(ctx, id); err != nil {
 				return fmt.Errorf("discard exceptions: %w", err)
 			}
 		}
 
-		if err := remindersRepo.ReplaceByEventID(ctx, id, reminders); err != nil {
+		if err := repos.reminders.ReplaceByEventID(ctx, id, write.Reminders); err != nil {
 			return fmt.Errorf("persist reminders: %w", err)
 		}
 
 		// Updating an Override changes its Master's calendar object, so the
 		// Master's own change_seq must bump too (ADR-0025).
 		if existing.ParentID != nil {
-			if err := events.SetChangeSeq(ctx, userID, *existing.ParentID, seq); err != nil {
+			if err := repos.events.SetChangeSeq(ctx, userID, *existing.ParentID, seq); err != nil {
 				return fmt.Errorf("bump parent change_seq: %w", err)
 			}
 		}
@@ -408,39 +479,27 @@ func (s *EventService) ListSeriesByCalendar(ctx context.Context, userID int64, c
 // parentID-keyed map of the Overrides. Shared by every read path that
 // recomposes whole series — ListSeriesByCalendar and SyncSince (ADR-0025).
 func (s *EventService) attachOverridesAndReminders(ctx context.Context, userID int64, masters []repository.Event) (map[string][]repository.Event, error) {
-	masterIDs := make([]string, len(masters))
-	for i, m := range masters {
-		masterIDs[i] = m.ID
-	}
+	masterIDs := eventIDs(masters)
 	overridesByParent, err := s.events.ListChildrenByParentIDs(ctx, userID, masterIDs)
 	if err != nil {
 		return nil, fmt.Errorf("list overrides: %w", err)
 	}
 
-	// Masters and every Override are concatenated into one slice so
-	// attachReminders can batch its Reminder lookup in a single IN query
-	// instead of one per Master (matching the batching List/Get already use
-	// for Exdates/Reminders). The concatenation order is fixed (masters
-	// first, then each Master's Overrides in masterIDs order), so the
-	// result is split back into the same layout below rather than
-	// re-fetching.
-	all := append([]repository.Event{}, masters...)
-	for _, id := range masterIDs {
-		all = append(all, overridesByParent[id]...)
+	// One batched Reminder lookup covers the Masters and every Override, by
+	// pointing at each row where it already lives rather than copying them
+	// into a flat slice and splitting the result back out afterwards.
+	all := make([]*repository.Event, 0, len(masters))
+	for i := range masters {
+		all = append(all, &masters[i])
 	}
-	if err := s.attachReminders(ctx, all); err != nil {
-		return nil, err
-	}
-	copy(masters, all[:len(masters)])
-
-	idx := len(masters)
 	for _, id := range masterIDs {
-		n := len(overridesByParent[id])
-		if n == 0 {
-			continue
+		overrides := overridesByParent[id]
+		for i := range overrides {
+			all = append(all, &overrides[i])
 		}
-		overridesByParent[id] = all[idx : idx+n]
-		idx += n
+	}
+	if err := s.attachRemindersTo(ctx, all); err != nil {
+		return nil, err
 	}
 
 	return overridesByParent, nil
@@ -514,20 +573,20 @@ func (s *EventService) Delete(ctx context.Context, userID int64, id string) erro
 		return err
 	}
 
-	return s.withTx(ctx, func(events *repository.EventRepository, exceptions *repository.EventExceptionRepository, remindersRepo *repository.EventReminderRepository, sync *repository.SyncRepository) error {
-		if err := events.Delete(ctx, userID, id); err != nil {
+	return s.withTx(ctx, func(repos txRepos) error {
+		if err := repos.events.Delete(ctx, userID, id); err != nil {
 			return err
 		}
 
-		seq, err := sync.NextChangeSeq(ctx)
+		seq, err := repos.sync.NextChangeSeq(ctx)
 		if err != nil {
 			return err
 		}
 
 		if existing.ParentID == nil {
-			return sync.Tombstone(ctx, existing.CalendarID, id, seq)
+			return repos.sync.Tombstone(ctx, existing.CalendarID, id, seq)
 		}
-		if err := events.SetChangeSeq(ctx, userID, *existing.ParentID, seq); err != nil {
+		if err := repos.events.SetChangeSeq(ctx, userID, *existing.ParentID, seq); err != nil {
 			return fmt.Errorf("bump parent change_seq: %w", err)
 		}
 		return nil
@@ -552,15 +611,15 @@ func (s *EventService) AddException(ctx context.Context, userID int64, parentID 
 		return ErrParentNotRecurring
 	}
 
-	return s.withTx(ctx, func(events *repository.EventRepository, exceptions *repository.EventExceptionRepository, remindersRepo *repository.EventReminderRepository, sync *repository.SyncRepository) error {
-		if err := exceptions.Add(ctx, parentID, occurrenceStart); err != nil {
+	return s.withTx(ctx, func(repos txRepos) error {
+		if err := repos.exceptions.Add(ctx, parentID, occurrenceStart); err != nil {
 			return fmt.Errorf("add exception: %w", err)
 		}
-		seq, err := sync.NextChangeSeq(ctx)
+		seq, err := repos.sync.NextChangeSeq(ctx)
 		if err != nil {
 			return err
 		}
-		if err := events.SetChangeSeq(ctx, userID, parentID, seq); err != nil {
+		if err := repos.events.SetChangeSeq(ctx, userID, parentID, seq); err != nil {
 			return fmt.Errorf("bump parent change_seq: %w", err)
 		}
 		return nil
@@ -585,25 +644,25 @@ func (s *EventService) ReparentFrom(ctx context.Context, userID int64, oldParent
 		return err
 	}
 
-	return s.withTx(ctx, func(events *repository.EventRepository, exceptions *repository.EventExceptionRepository, reminders *repository.EventReminderRepository, sync *repository.SyncRepository) error {
-		if err := events.ReparentOverridesFrom(ctx, userID, oldParentID, newParentID, fromStart); err != nil {
+	return s.withTx(ctx, func(repos txRepos) error {
+		if err := repos.events.ReparentOverridesFrom(ctx, userID, oldParentID, newParentID, fromStart); err != nil {
 			return fmt.Errorf("reparent overrides: %w", err)
 		}
-		if err := exceptions.ReparentFrom(ctx, oldParentID, newParentID, fromStart); err != nil {
+		if err := repos.exceptions.ReparentFrom(ctx, oldParentID, newParentID, fromStart); err != nil {
 			return fmt.Errorf("reparent exceptions: %w", err)
 		}
 
 		// The split changes both series' calendar objects — occurrences move
 		// from one to the other — so both Masters' change_seq bump
 		// (ADR-0025).
-		seq, err := sync.NextChangeSeq(ctx)
+		seq, err := repos.sync.NextChangeSeq(ctx)
 		if err != nil {
 			return err
 		}
-		if err := events.SetChangeSeq(ctx, userID, oldParentID, seq); err != nil {
+		if err := repos.events.SetChangeSeq(ctx, userID, oldParentID, seq); err != nil {
 			return fmt.Errorf("bump old parent change_seq: %w", err)
 		}
-		if err := events.SetChangeSeq(ctx, userID, newParentID, seq); err != nil {
+		if err := repos.events.SetChangeSeq(ctx, userID, newParentID, seq); err != nil {
 			return fmt.Errorf("bump new parent change_seq: %w", err)
 		}
 		return nil
@@ -707,30 +766,41 @@ func (s *EventService) PutSeries(ctx context.Context, userID int64, calendarID, 
 		existingByRecurrenceID[o.RecurrenceID.UnixNano()] = o
 	}
 
-	err = s.withTx(ctx, func(events *repository.EventRepository, exceptions *repository.EventExceptionRepository, remindersRepo *repository.EventReminderRepository, sync *repository.SyncRepository) error {
-		seq, err := sync.NextChangeSeq(ctx)
+	err = s.withTx(ctx, func(repos txRepos) error {
+		seq, err := repos.sync.NextChangeSeq(ctx)
 		if err != nil {
 			return err
 		}
 
+		master := repository.EventFields{
+			CalendarID:  calendarID,
+			Title:       title,
+			Start:       write.Start,
+			End:         write.End,
+			AllDay:      write.AllDay,
+			Rrule:       write.Rrule,
+			Tzid:        write.Tzid,
+			Description: write.Description,
+			Location:    write.Location,
+		}
 		if masterExists {
-			if _, err := events.Update(ctx, userID, masterID, calendarID, title, write.Start, write.End, write.AllDay, write.Rrule, write.Tzid, write.Description, write.Location, seq); err != nil {
+			if _, err := repos.events.Update(ctx, userID, masterID, master, seq); err != nil {
 				return fmt.Errorf("update master: %w", err)
 			}
 		} else {
-			if _, err := events.Create(ctx, masterID, userID, calendarID, title, write.Start, write.End, write.AllDay, write.Rrule, nil, nil, write.Tzid, write.Description, write.Location, seq); err != nil {
+			if _, err := repos.events.Create(ctx, masterID, userID, master, seq); err != nil {
 				return fmt.Errorf("create master: %w", err)
 			}
 		}
-		if err := remindersRepo.ReplaceByEventID(ctx, masterID, write.Reminders); err != nil {
+		if err := repos.reminders.ReplaceByEventID(ctx, masterID, write.Reminders); err != nil {
 			return fmt.Errorf("persist master reminders: %w", err)
 		}
 
-		if err := exceptions.DeleteByParentID(ctx, masterID); err != nil {
+		if err := repos.exceptions.DeleteByParentID(ctx, masterID); err != nil {
 			return fmt.Errorf("clear exdates: %w", err)
 		}
 		for _, exdate := range write.Exdates {
-			if err := exceptions.Add(ctx, masterID, exdate); err != nil {
+			if err := repos.exceptions.Add(ctx, masterID, exdate); err != nil {
 				return fmt.Errorf("add exdate: %w", err)
 			}
 		}
@@ -741,21 +811,37 @@ func (s *EventService) PutSeries(ctx context.Context, userID int64, calendarID, 
 			key := o.RecurrenceID.UnixNano()
 			seen[key] = true
 
+			// An Override never carries a rule of its own (ADR-0016), hence the
+			// zero Rrule.
+			override := repository.EventFields{
+				CalendarID:  calendarID,
+				Title:       o.Title,
+				Start:       o.Start,
+				End:         o.End,
+				AllDay:      o.AllDay,
+				Tzid:        o.Tzid,
+				Description: o.Description,
+				Location:    o.Location,
+			}
+
 			if existing, ok := existingByRecurrenceID[key]; ok {
-				if _, err := events.Update(ctx, userID, existing.ID, calendarID, o.Title, o.Start, o.End, o.AllDay, "", o.Tzid, o.Description, o.Location, seq); err != nil {
+				if _, err := repos.events.Update(ctx, userID, existing.ID, override, seq); err != nil {
 					return fmt.Errorf("update override: %w", err)
 				}
-				if err := remindersRepo.ReplaceByEventID(ctx, existing.ID, o.Reminders); err != nil {
+				if err := repos.reminders.ReplaceByEventID(ctx, existing.ID, o.Reminders); err != nil {
 					return fmt.Errorf("persist override reminders: %w", err)
 				}
 				continue
 			}
 
+			override.ParentID = &masterID
+			override.RecurrenceID = &o.RecurrenceID
+
 			overrideID := uuid.NewString()
-			if _, err := events.Create(ctx, overrideID, userID, calendarID, o.Title, o.Start, o.End, o.AllDay, "", &masterID, &o.RecurrenceID, o.Tzid, o.Description, o.Location, seq); err != nil {
+			if _, err := repos.events.Create(ctx, overrideID, userID, override, seq); err != nil {
 				return fmt.Errorf("create override: %w", err)
 			}
-			if err := remindersRepo.ReplaceByEventID(ctx, overrideID, o.Reminders); err != nil {
+			if err := repos.reminders.ReplaceByEventID(ctx, overrideID, o.Reminders); err != nil {
 				return fmt.Errorf("persist override reminders: %w", err)
 			}
 		}
@@ -764,7 +850,7 @@ func (s *EventService) PutSeries(ctx context.Context, userID int64, calendarID, 
 			if seen[key] {
 				continue
 			}
-			if err := events.Delete(ctx, userID, existing.ID); err != nil {
+			if err := repos.events.Delete(ctx, userID, existing.ID); err != nil {
 				return fmt.Errorf("delete removed override: %w", err)
 			}
 		}

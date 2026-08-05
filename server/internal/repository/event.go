@@ -68,10 +68,30 @@ func (r *EventRepository) WithTx(tx *sql.Tx) *EventRepository {
 	return &EventRepository{db: tx}
 }
 
-func (r *EventRepository) Create(ctx context.Context, id string, userID int64, calendarID, title string, start, end time.Time, allDay bool, rrule string, parentID *string, recurrenceID *time.Time, tzid *string, description, location string, changeSeq int64) (Event, error) {
+// EventFields is an Event's column values for a write — everything except its
+// identity (id, user_id) and its change_seq stamp, which are passed separately
+// because they are not the caller's to vary freely.
+//
+// ParentID and RecurrenceID anchor an Override to the Occurrence it replaces.
+// They are set on insert only: Update leaves those columns alone, since an
+// Override's anchoring never moves (ADR-0016).
+type EventFields struct {
+	CalendarID   string
+	Title        string
+	Start, End   time.Time
+	AllDay       bool
+	Rrule        string
+	ParentID     *string
+	RecurrenceID *time.Time
+	Tzid         *string
+	Description  string
+	Location     string
+}
+
+func (r *EventRepository) Create(ctx context.Context, id string, userID int64, f EventFields, changeSeq int64) (Event, error) {
 	if _, err := r.db.ExecContext(ctx,
 		`INSERT INTO events (id, user_id, calendar_id, title, "start", "end", all_day, rrule, parent_id, recurrence_id, tzid, description, location, change_seq) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		id, userID, calendarID, title, start, end, allDay, rrule, parentID, recurrenceID, tzid, description, location, changeSeq,
+		id, userID, f.CalendarID, f.Title, f.Start, f.End, f.AllDay, f.Rrule, f.ParentID, f.RecurrenceID, f.Tzid, f.Description, f.Location, changeSeq,
 	); err != nil {
 		return Event{}, fmt.Errorf("insert event: %w", err)
 	}
@@ -155,21 +175,19 @@ func (r *EventRepository) ListAllWithReminders(ctx context.Context) ([]Event, er
 	return events, nil
 }
 
-func (r *EventRepository) Update(ctx context.Context, userID int64, id, calendarID, title string, start, end time.Time, allDay bool, rrule string, tzid *string, description, location string, changeSeq int64) (Event, error) {
+// Update rewrites id's columns from f. f.ParentID and f.RecurrenceID are
+// ignored — see EventFields.
+func (r *EventRepository) Update(ctx context.Context, userID int64, id string, f EventFields, changeSeq int64) (Event, error) {
 	res, err := r.db.ExecContext(ctx,
 		`UPDATE events SET calendar_id = ?, title = ?, "start" = ?, "end" = ?, all_day = ?, rrule = ?, tzid = ?, description = ?, location = ?, change_seq = ? WHERE user_id = ? AND id = ?`,
-		calendarID, title, start, end, allDay, rrule, tzid, description, location, changeSeq, userID, id,
+		f.CalendarID, f.Title, f.Start, f.End, f.AllDay, f.Rrule, f.Tzid, f.Description, f.Location, changeSeq, userID, id,
 	)
 	if err != nil {
 		return Event{}, fmt.Errorf("update event: %w", err)
 	}
 
-	affected, err := res.RowsAffected()
-	if err != nil {
-		return Event{}, fmt.Errorf("get rows affected: %w", err)
-	}
-	if affected == 0 {
-		return Event{}, ErrNotFound
+	if err := requireAffected(res); err != nil {
+		return Event{}, err
 	}
 
 	return r.GetByID(ctx, userID, id)
@@ -188,14 +206,7 @@ func (r *EventRepository) SetChangeSeq(ctx context.Context, userID int64, id str
 	if err != nil {
 		return fmt.Errorf("set change_seq: %w", err)
 	}
-	affected, err := res.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("get rows affected: %w", err)
-	}
-	if affected == 0 {
-		return ErrNotFound
-	}
-	return nil
+	return requireAffected(res)
 }
 
 func (r *EventRepository) Delete(ctx context.Context, userID int64, id string) error {
@@ -204,15 +215,7 @@ func (r *EventRepository) Delete(ctx context.Context, userID int64, id string) e
 		return fmt.Errorf("delete event: %w", err)
 	}
 
-	affected, err := res.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("get rows affected: %w", err)
-	}
-	if affected == 0 {
-		return ErrNotFound
-	}
-
-	return nil
+	return requireAffected(res)
 }
 
 // ReparentOverridesFrom moves every Override of oldParentID whose

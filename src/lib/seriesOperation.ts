@@ -106,7 +106,7 @@ export type SeriesOp =
     };
 
 /** Splits `dates` into [before boundary, at-or-after boundary]. */
-export function partitionByBoundary(dates: Date[], boundary: Date): [Date[], Date[]] {
+function partitionByBoundary(dates: Date[], boundary: Date): [Date[], Date[]] {
   const before: Date[] = [];
   const atOrAfter: Date[] = [];
   for (const date of dates) {

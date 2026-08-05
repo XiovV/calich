@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/XiovV/calendar/server/internal/service"
 )
 
 const propfindGetCTag = `<?xml version="1.0" encoding="UTF-8"?>
@@ -58,9 +60,7 @@ func TestPropfind_GetCTag_StableUntilCalendarMutates(t *testing.T) {
 		t.Fatalf("expected a stable ctag when nothing changed, got %q then %q", ctag1, ctag2)
 	}
 
-	if _, err := env.eventService.Create(ctx, env.userID, "evt-1", env.calendarID, "Standup",
-		time.Date(2026, 6, 1, 9, 0, 0, 0, time.UTC), time.Date(2026, 6, 1, 9, 30, 0, 0, time.UTC),
-		false, "", nil, nil, nil, nil, "", ""); err != nil {
+	if _, err := env.eventService.Create(ctx, env.userID, "evt-1", service.EventWrite{CalendarID: env.calendarID, Title: "Standup", Start: time.Date(2026, 6, 1, 9, 0, 0, 0, time.UTC), End: time.Date(2026, 6, 1, 9, 30, 0, 0, time.UTC)}); err != nil {
 		t.Fatalf("create event: %v", err)
 	}
 

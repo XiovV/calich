@@ -2,7 +2,6 @@ package handlers
 
 import (
 	"encoding/json"
-	"errors"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -31,6 +30,19 @@ type calendarResponse struct {
 func toCalendarResponse(c repository.Calendar) calendarResponse {
 	return calendarResponse{ID: c.ID, Name: c.Name, Color: c.Color}
 }
+
+// calendarWriteErrors is the rendering shared by the create and update paths,
+// which validate the same two fields.
+var calendarWriteErrors = []errorCase{
+	{service.ErrInvalidName, badRequest("name must not be empty")},
+	{service.ErrInvalidColor, badRequest("color must be a valid hex color (#RGB, #RRGGBB, or #RRGGBBAA)")},
+}
+
+var calendarNotFoundErrors = []errorCase{
+	{repository.ErrNotFound, notFound("calendar not found")},
+}
+
+var updateCalendarErrors = alsoHandling(calendarWriteErrors, calendarNotFoundErrors...)
 
 func (h *CalendarHandler) List(w http.ResponseWriter, r *http.Request) {
 	userID, ok := httpauth.UserIDFromContext(r.Context())
@@ -78,15 +90,7 @@ func (h *CalendarHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 
 	calendar, err := h.calendars.Create(r.Context(), userID, req.ID, req.Name, req.Color)
-	switch {
-	case errors.Is(err, service.ErrInvalidName):
-		httpresponse.Error(w, http.StatusBadRequest, "invalid_request", "name must not be empty")
-		return
-	case errors.Is(err, service.ErrInvalidColor):
-		httpresponse.Error(w, http.StatusBadRequest, "invalid_request", "color must be a valid hex color (#RGB, #RRGGBB, or #RRGGBBAA)")
-		return
-	case err != nil:
-		httpresponse.Error(w, http.StatusInternalServerError, "internal_error", "failed to create calendar")
+	if respondError(w, err, calendarWriteErrors, "failed to create calendar") {
 		return
 	}
 
@@ -103,12 +107,7 @@ func (h *CalendarHandler) Get(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 
 	calendar, err := h.calendars.Get(r.Context(), userID, id)
-	if errors.Is(err, repository.ErrNotFound) {
-		httpresponse.Error(w, http.StatusNotFound, "not_found", "calendar not found")
-		return
-	}
-	if err != nil {
-		httpresponse.Error(w, http.StatusInternalServerError, "internal_error", "failed to load calendar")
+	if respondError(w, err, calendarNotFoundErrors, "failed to load calendar") {
 		return
 	}
 
@@ -136,18 +135,7 @@ func (h *CalendarHandler) Update(w http.ResponseWriter, r *http.Request) {
 	}
 
 	calendar, err := h.calendars.Update(r.Context(), userID, id, req.Name, req.Color)
-	switch {
-	case errors.Is(err, service.ErrInvalidName):
-		httpresponse.Error(w, http.StatusBadRequest, "invalid_request", "name must not be empty")
-		return
-	case errors.Is(err, service.ErrInvalidColor):
-		httpresponse.Error(w, http.StatusBadRequest, "invalid_request", "color must be a valid hex color (#RGB, #RRGGBB, or #RRGGBBAA)")
-		return
-	case errors.Is(err, repository.ErrNotFound):
-		httpresponse.Error(w, http.StatusNotFound, "not_found", "calendar not found")
-		return
-	case err != nil:
-		httpresponse.Error(w, http.StatusInternalServerError, "internal_error", "failed to update calendar")
+	if respondError(w, err, updateCalendarErrors, "failed to update calendar") {
 		return
 	}
 
@@ -164,12 +152,7 @@ func (h *CalendarHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 
 	err := h.calendars.Delete(r.Context(), userID, id)
-	if errors.Is(err, repository.ErrNotFound) {
-		httpresponse.Error(w, http.StatusNotFound, "not_found", "calendar not found")
-		return
-	}
-	if err != nil {
-		httpresponse.Error(w, http.StatusInternalServerError, "internal_error", "failed to delete calendar")
+	if respondError(w, err, calendarNotFoundErrors, "failed to delete calendar") {
 		return
 	}
 

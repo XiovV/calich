@@ -13,6 +13,7 @@ import (
 	"github.com/emersion/go-webdav/caldav"
 
 	"github.com/XiovV/calendar/server/internal/repository"
+	"github.com/XiovV/calendar/server/internal/service"
 )
 
 // rawPut issues a PUT request directly (bypassing caldav.Client, which
@@ -92,9 +93,7 @@ func TestGetCalendarObject_NonRecurringEvent(t *testing.T) {
 	env := newTestCalDAVEnv(t)
 	ctx := context.Background()
 
-	created, err := env.eventService.Create(ctx, env.userID, "evt-1", env.calendarID, "Standup",
-		time.Date(2026, 6, 1, 9, 0, 0, 0, time.UTC), time.Date(2026, 6, 1, 9, 30, 0, 0, time.UTC),
-		false, "", nil, nil, nil, nil, "", "")
+	created, err := env.eventService.Create(ctx, env.userID, "evt-1", service.EventWrite{CalendarID: env.calendarID, Title: "Standup", Start: time.Date(2026, 6, 1, 9, 0, 0, 0, time.UTC), End: time.Date(2026, 6, 1, 9, 30, 0, 0, time.UTC)})
 	if err != nil {
 		t.Fatalf("create event: %v", err)
 	}
@@ -138,16 +137,12 @@ func TestGetCalendarObject_OverrideID_Returns404(t *testing.T) {
 	env := newTestCalDAVEnv(t)
 	ctx := context.Background()
 
-	master, err := env.eventService.Create(ctx, env.userID, "evt-1", env.calendarID, "Standup",
-		time.Date(2026, 6, 2, 9, 0, 0, 0, time.UTC), time.Date(2026, 6, 2, 9, 30, 0, 0, time.UTC),
-		false, "FREQ=WEEKLY;BYDAY=TU", nil, nil, nil, nil, "", "")
+	master, err := env.eventService.Create(ctx, env.userID, "evt-1", service.EventWrite{CalendarID: env.calendarID, Title: "Standup", Start: time.Date(2026, 6, 2, 9, 0, 0, 0, time.UTC), End: time.Date(2026, 6, 2, 9, 30, 0, 0, time.UTC), Rrule: "FREQ=WEEKLY;BYDAY=TU"})
 	if err != nil {
 		t.Fatalf("create master: %v", err)
 	}
 	recurrenceID := time.Date(2026, 6, 9, 9, 0, 0, 0, time.UTC)
-	override, err := env.eventService.Create(ctx, env.userID, "evt-1-override", env.calendarID, "Standup (moved)",
-		time.Date(2026, 6, 9, 11, 0, 0, 0, time.UTC), time.Date(2026, 6, 9, 11, 30, 0, 0, time.UTC),
-		false, "", &master.ID, &recurrenceID, nil, nil, "", "")
+	override, err := env.eventService.Create(ctx, env.userID, "evt-1-override", service.EventWrite{CalendarID: env.calendarID, Title: "Standup (moved)", Start: time.Date(2026, 6, 9, 11, 0, 0, 0, time.UTC), End: time.Date(2026, 6, 9, 11, 30, 0, 0, time.UTC), ParentID: &master.ID, RecurrenceID: &recurrenceID})
 	if err != nil {
 		t.Fatalf("create override: %v", err)
 	}
@@ -163,18 +158,13 @@ func TestGetCalendarObject_RecurringSeries_IncludesOverrideAndExdate(t *testing.
 	env := newTestCalDAVEnv(t)
 	ctx := context.Background()
 
-	master, err := env.eventService.Create(ctx, env.userID, "evt-1", env.calendarID, "Standup",
-		time.Date(2026, 6, 2, 9, 0, 0, 0, time.UTC), time.Date(2026, 6, 2, 9, 30, 0, 0, time.UTC),
-		false, "FREQ=WEEKLY;BYDAY=TU", nil, nil, nil, nil, "", "")
+	master, err := env.eventService.Create(ctx, env.userID, "evt-1", service.EventWrite{CalendarID: env.calendarID, Title: "Standup", Start: time.Date(2026, 6, 2, 9, 0, 0, 0, time.UTC), End: time.Date(2026, 6, 2, 9, 30, 0, 0, time.UTC), Rrule: "FREQ=WEEKLY;BYDAY=TU"})
 	if err != nil {
 		t.Fatalf("create master: %v", err)
 	}
 
 	recurrenceID := time.Date(2026, 6, 9, 9, 0, 0, 0, time.UTC)
-	if _, err := env.eventService.Create(ctx, env.userID, "evt-1-override", env.calendarID, "Standup (moved)",
-		time.Date(2026, 6, 9, 11, 0, 0, 0, time.UTC), time.Date(2026, 6, 9, 11, 30, 0, 0, time.UTC),
-		false, "", &master.ID, &recurrenceID, nil, nil, "", "",
-	); err != nil {
+	if _, err := env.eventService.Create(ctx, env.userID, "evt-1-override", service.EventWrite{CalendarID: env.calendarID, Title: "Standup (moved)", Start: time.Date(2026, 6, 9, 11, 0, 0, 0, time.UTC), End: time.Date(2026, 6, 9, 11, 30, 0, 0, time.UTC), ParentID: &master.ID, RecurrenceID: &recurrenceID}); err != nil {
 		t.Fatalf("create override: %v", err)
 	}
 
@@ -209,16 +199,11 @@ func TestCalendarQuery_TimeRange_ReturnsOnlySeriesWithOccurrenceInRange(t *testi
 	env := newTestCalDAVEnv(t)
 	ctx := context.Background()
 
-	inRange, err := env.eventService.Create(ctx, env.userID, "evt-in-range", env.calendarID, "In range",
-		time.Date(2026, 6, 10, 9, 0, 0, 0, time.UTC), time.Date(2026, 6, 10, 9, 30, 0, 0, time.UTC),
-		false, "", nil, nil, nil, nil, "", "")
+	inRange, err := env.eventService.Create(ctx, env.userID, "evt-in-range", service.EventWrite{CalendarID: env.calendarID, Title: "In range", Start: time.Date(2026, 6, 10, 9, 0, 0, 0, time.UTC), End: time.Date(2026, 6, 10, 9, 30, 0, 0, time.UTC)})
 	if err != nil {
 		t.Fatalf("create in-range event: %v", err)
 	}
-	if _, err := env.eventService.Create(ctx, env.userID, "evt-out-of-range", env.calendarID, "Out of range",
-		time.Date(2026, 7, 10, 9, 0, 0, 0, time.UTC), time.Date(2026, 7, 10, 9, 30, 0, 0, time.UTC),
-		false, "", nil, nil, nil, nil, "", "",
-	); err != nil {
+	if _, err := env.eventService.Create(ctx, env.userID, "evt-out-of-range", service.EventWrite{CalendarID: env.calendarID, Title: "Out of range", Start: time.Date(2026, 7, 10, 9, 0, 0, 0, time.UTC), End: time.Date(2026, 7, 10, 9, 30, 0, 0, time.UTC)}); err != nil {
 		t.Fatalf("create out-of-range event: %v", err)
 	}
 
@@ -251,15 +236,11 @@ func TestCalendarMultiget_ReturnsRequestedObjects(t *testing.T) {
 	env := newTestCalDAVEnv(t)
 	ctx := context.Background()
 
-	first, err := env.eventService.Create(ctx, env.userID, "evt-1", env.calendarID, "First",
-		time.Date(2026, 6, 1, 9, 0, 0, 0, time.UTC), time.Date(2026, 6, 1, 9, 30, 0, 0, time.UTC),
-		false, "", nil, nil, nil, nil, "", "")
+	first, err := env.eventService.Create(ctx, env.userID, "evt-1", service.EventWrite{CalendarID: env.calendarID, Title: "First", Start: time.Date(2026, 6, 1, 9, 0, 0, 0, time.UTC), End: time.Date(2026, 6, 1, 9, 30, 0, 0, time.UTC)})
 	if err != nil {
 		t.Fatalf("create first event: %v", err)
 	}
-	second, err := env.eventService.Create(ctx, env.userID, "evt-2", env.calendarID, "Second",
-		time.Date(2026, 6, 2, 9, 0, 0, 0, time.UTC), time.Date(2026, 6, 2, 9, 30, 0, 0, time.UTC),
-		false, "", nil, nil, nil, nil, "", "")
+	second, err := env.eventService.Create(ctx, env.userID, "evt-2", service.EventWrite{CalendarID: env.calendarID, Title: "Second", Start: time.Date(2026, 6, 2, 9, 0, 0, 0, time.UTC), End: time.Date(2026, 6, 2, 9, 30, 0, 0, time.UTC)})
 	if err != nil {
 		t.Fatalf("create second event: %v", err)
 	}
@@ -338,9 +319,7 @@ func TestPutCalendarObject_UpdatesExistingEvent(t *testing.T) {
 	env := newTestCalDAVEnv(t)
 	ctx := context.Background()
 
-	created, err := env.eventService.Create(ctx, env.userID, "evt-1", env.calendarID, "Standup",
-		time.Date(2026, 6, 1, 9, 0, 0, 0, time.UTC), time.Date(2026, 6, 1, 9, 30, 0, 0, time.UTC),
-		false, "", nil, nil, nil, nil, "", "")
+	created, err := env.eventService.Create(ctx, env.userID, "evt-1", service.EventWrite{CalendarID: env.calendarID, Title: "Standup", Start: time.Date(2026, 6, 1, 9, 0, 0, 0, time.UTC), End: time.Date(2026, 6, 1, 9, 30, 0, 0, time.UTC)})
 	if err != nil {
 		t.Fatalf("create event: %v", err)
 	}
@@ -372,8 +351,7 @@ func TestPutCalendarObject_EditingOneOccurrence_CreatesOverride_OthersUnchanged(
 	ctx := context.Background()
 
 	masterStart := time.Date(2026, 6, 2, 9, 0, 0, 0, time.UTC)
-	master, err := env.eventService.Create(ctx, env.userID, "evt-master", env.calendarID, "Standup",
-		masterStart, masterStart.Add(30*time.Minute), false, "FREQ=WEEKLY;BYDAY=TU", nil, nil, nil, nil, "", "")
+	master, err := env.eventService.Create(ctx, env.userID, "evt-master", service.EventWrite{CalendarID: env.calendarID, Title: "Standup", Start: masterStart, End: masterStart.Add(30 * time.Minute), Rrule: "FREQ=WEEKLY;BYDAY=TU"})
 	if err != nil {
 		t.Fatalf("create master: %v", err)
 	}
@@ -415,9 +393,7 @@ func TestPutCalendarObject_IfMatch_StaleETag_Returns412(t *testing.T) {
 	env := newTestCalDAVEnv(t)
 	ctx := context.Background()
 
-	created, err := env.eventService.Create(ctx, env.userID, "evt-1", env.calendarID, "Standup",
-		time.Date(2026, 6, 1, 9, 0, 0, 0, time.UTC), time.Date(2026, 6, 1, 9, 30, 0, 0, time.UTC),
-		false, "", nil, nil, nil, nil, "", "")
+	created, err := env.eventService.Create(ctx, env.userID, "evt-1", service.EventWrite{CalendarID: env.calendarID, Title: "Standup", Start: time.Date(2026, 6, 1, 9, 0, 0, 0, time.UTC), End: time.Date(2026, 6, 1, 9, 30, 0, 0, time.UTC)})
 	if err != nil {
 		t.Fatalf("create event: %v", err)
 	}
@@ -450,9 +426,7 @@ func TestPutCalendarObject_IfMatch_MatchingETag_Succeeds(t *testing.T) {
 	env := newTestCalDAVEnv(t)
 	ctx := context.Background()
 
-	created, err := env.eventService.Create(ctx, env.userID, "evt-1", env.calendarID, "Standup",
-		time.Date(2026, 6, 1, 9, 0, 0, 0, time.UTC), time.Date(2026, 6, 1, 9, 30, 0, 0, time.UTC),
-		false, "", nil, nil, nil, nil, "", "")
+	created, err := env.eventService.Create(ctx, env.userID, "evt-1", service.EventWrite{CalendarID: env.calendarID, Title: "Standup", Start: time.Date(2026, 6, 1, 9, 0, 0, 0, time.UTC), End: time.Date(2026, 6, 1, 9, 30, 0, 0, time.UTC)})
 	if err != nil {
 		t.Fatalf("create event: %v", err)
 	}
@@ -529,14 +503,12 @@ func TestDeleteCalendarObject_DeletesSeriesIncludingOverridesAndExceptions(t *te
 	ctx := context.Background()
 
 	masterStart := time.Date(2026, 6, 2, 9, 0, 0, 0, time.UTC)
-	master, err := env.eventService.Create(ctx, env.userID, "evt-master", env.calendarID, "Standup",
-		masterStart, masterStart.Add(30*time.Minute), false, "FREQ=WEEKLY;BYDAY=TU", nil, nil, nil, nil, "", "")
+	master, err := env.eventService.Create(ctx, env.userID, "evt-master", service.EventWrite{CalendarID: env.calendarID, Title: "Standup", Start: masterStart, End: masterStart.Add(30 * time.Minute), Rrule: "FREQ=WEEKLY;BYDAY=TU"})
 	if err != nil {
 		t.Fatalf("create master: %v", err)
 	}
 	recurrenceID := masterStart.AddDate(0, 0, 7)
-	if _, err := env.eventService.Create(ctx, env.userID, "evt-override", env.calendarID, "Standup (moved)",
-		recurrenceID.Add(2*time.Hour), recurrenceID.Add(2*time.Hour+30*time.Minute), false, "", &master.ID, &recurrenceID, nil, nil, "", ""); err != nil {
+	if _, err := env.eventService.Create(ctx, env.userID, "evt-override", service.EventWrite{CalendarID: env.calendarID, Title: "Standup (moved)", Start: recurrenceID.Add(2 * time.Hour), End: recurrenceID.Add(2*time.Hour + 30*time.Minute), ParentID: &master.ID, RecurrenceID: &recurrenceID}); err != nil {
 		t.Fatalf("create override: %v", err)
 	}
 	if err := env.eventService.AddException(ctx, env.userID, master.ID, masterStart.AddDate(0, 0, 14)); err != nil {
@@ -572,16 +544,12 @@ func TestDeleteCalendarObject_OverrideID_Returns404(t *testing.T) {
 	env := newTestCalDAVEnv(t)
 	ctx := context.Background()
 
-	master, err := env.eventService.Create(ctx, env.userID, "evt-1", env.calendarID, "Standup",
-		time.Date(2026, 6, 2, 9, 0, 0, 0, time.UTC), time.Date(2026, 6, 2, 9, 30, 0, 0, time.UTC),
-		false, "FREQ=WEEKLY;BYDAY=TU", nil, nil, nil, nil, "", "")
+	master, err := env.eventService.Create(ctx, env.userID, "evt-1", service.EventWrite{CalendarID: env.calendarID, Title: "Standup", Start: time.Date(2026, 6, 2, 9, 0, 0, 0, time.UTC), End: time.Date(2026, 6, 2, 9, 30, 0, 0, time.UTC), Rrule: "FREQ=WEEKLY;BYDAY=TU"})
 	if err != nil {
 		t.Fatalf("create master: %v", err)
 	}
 	recurrenceID := time.Date(2026, 6, 9, 9, 0, 0, 0, time.UTC)
-	override, err := env.eventService.Create(ctx, env.userID, "evt-1-override", env.calendarID, "Standup (moved)",
-		time.Date(2026, 6, 9, 11, 0, 0, 0, time.UTC), time.Date(2026, 6, 9, 11, 30, 0, 0, time.UTC),
-		false, "", &master.ID, &recurrenceID, nil, nil, "", "")
+	override, err := env.eventService.Create(ctx, env.userID, "evt-1-override", service.EventWrite{CalendarID: env.calendarID, Title: "Standup (moved)", Start: time.Date(2026, 6, 9, 11, 0, 0, 0, time.UTC), End: time.Date(2026, 6, 9, 11, 30, 0, 0, time.UTC), ParentID: &master.ID, RecurrenceID: &recurrenceID})
 	if err != nil {
 		t.Fatalf("create override: %v", err)
 	}
@@ -601,9 +569,7 @@ func TestDeleteCalendarObject_IfMatch_StaleETag_Returns412(t *testing.T) {
 	env := newTestCalDAVEnv(t)
 	ctx := context.Background()
 
-	created, err := env.eventService.Create(ctx, env.userID, "evt-1", env.calendarID, "Standup",
-		time.Date(2026, 6, 1, 9, 0, 0, 0, time.UTC), time.Date(2026, 6, 1, 9, 30, 0, 0, time.UTC),
-		false, "", nil, nil, nil, nil, "", "")
+	created, err := env.eventService.Create(ctx, env.userID, "evt-1", service.EventWrite{CalendarID: env.calendarID, Title: "Standup", Start: time.Date(2026, 6, 1, 9, 0, 0, 0, time.UTC), End: time.Date(2026, 6, 1, 9, 30, 0, 0, time.UTC)})
 	if err != nil {
 		t.Fatalf("create event: %v", err)
 	}
@@ -625,9 +591,7 @@ func TestDeleteCalendarObject_IfMatch_MatchingETag_Succeeds(t *testing.T) {
 	env := newTestCalDAVEnv(t)
 	ctx := context.Background()
 
-	if _, err := env.eventService.Create(ctx, env.userID, "evt-1", env.calendarID, "Standup",
-		time.Date(2026, 6, 1, 9, 0, 0, 0, time.UTC), time.Date(2026, 6, 1, 9, 30, 0, 0, time.UTC),
-		false, "", nil, nil, nil, nil, "", ""); err != nil {
+	if _, err := env.eventService.Create(ctx, env.userID, "evt-1", service.EventWrite{CalendarID: env.calendarID, Title: "Standup", Start: time.Date(2026, 6, 1, 9, 0, 0, 0, time.UTC), End: time.Date(2026, 6, 1, 9, 30, 0, 0, time.UTC)}); err != nil {
 		t.Fatalf("create event: %v", err)
 	}
 
@@ -654,9 +618,7 @@ func TestDeleteCalendarObject_IfMatch_Wildcard_Succeeds(t *testing.T) {
 	env := newTestCalDAVEnv(t)
 	ctx := context.Background()
 
-	if _, err := env.eventService.Create(ctx, env.userID, "evt-1", env.calendarID, "Standup",
-		time.Date(2026, 6, 1, 9, 0, 0, 0, time.UTC), time.Date(2026, 6, 1, 9, 30, 0, 0, time.UTC),
-		false, "", nil, nil, nil, nil, "", ""); err != nil {
+	if _, err := env.eventService.Create(ctx, env.userID, "evt-1", service.EventWrite{CalendarID: env.calendarID, Title: "Standup", Start: time.Date(2026, 6, 1, 9, 0, 0, 0, time.UTC), End: time.Date(2026, 6, 1, 9, 30, 0, 0, time.UTC)}); err != nil {
 		t.Fatalf("create event: %v", err)
 	}
 

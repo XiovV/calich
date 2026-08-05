@@ -1,5 +1,5 @@
-import { useState } from "react";
 import { useAuthStore } from "../lib/authStore";
+import { useAsyncAction } from "../hooks/useAsyncAction";
 import { Checkbox } from "../components/ui/Checkbox";
 
 // The Settings page's reminder-delivery section (#68, ADR-0027): resolves
@@ -11,21 +11,10 @@ export function ReminderDeliverySection() {
   const user = useAuthStore((state) => state.user);
   const updateSyncedDeviceReminders = useAuthStore((state) => state.updateSyncedDeviceReminders);
 
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const { error, run } = useAsyncAction();
 
   async function handleChange(checked: boolean) {
-    if (isSubmitting) return;
-
-    setIsSubmitting(true);
-    setError(null);
-    try {
-      await updateSyncedDeviceReminders(checked);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Something went wrong.");
-    } finally {
-      setIsSubmitting(false);
-    }
+    await run(() => updateSyncedDeviceReminders(checked));
   }
 
   return (

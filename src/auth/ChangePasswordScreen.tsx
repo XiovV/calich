@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useAuthStore } from "../lib/authStore";
+import { useAsyncAction } from "../hooks/useAsyncAction";
 import { Button } from "../components/ui/Button";
 import { Input } from "../components/ui/Input";
 
@@ -9,28 +10,19 @@ export function ChangePasswordScreen() {
 
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const { isSubmitting, error, run } = useAsyncAction();
 
   const passwordsMatch = newPassword !== "" && newPassword === confirmPassword;
   const canSubmit = newPassword.trim() !== "" && passwordsMatch;
 
   async function handleSubmit(domEvent: React.FormEvent) {
     domEvent.preventDefault();
-    if (!canSubmit || isSubmitting) return;
+    if (!canSubmit) return;
 
-    setIsSubmitting(true);
-    setError(null);
-    try {
-      // The current password isn't asked for: a forced change only ever
-      // happens on the fixed, publicly documented bootstrap default, so the
-      // backend doesn't require it back (see ADR-0010).
-      await changePassword("", newPassword);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Something went wrong.");
-    } finally {
-      setIsSubmitting(false);
-    }
+    // The current password isn't asked for: a forced change only ever happens
+    // on the fixed, publicly documented bootstrap default, so the backend
+    // doesn't require it back (see ADR-0010).
+    await run(() => changePassword("", newPassword));
   }
 
   return (

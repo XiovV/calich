@@ -75,12 +75,8 @@ func (r *CalendarRepository) Update(ctx context.Context, userID int64, id, name,
 		return Calendar{}, fmt.Errorf("update calendar: %w", err)
 	}
 
-	affected, err := res.RowsAffected()
-	if err != nil {
-		return Calendar{}, fmt.Errorf("get rows affected: %w", err)
-	}
-	if affected == 0 {
-		return Calendar{}, ErrNotFound
+	if err := requireAffected(res); err != nil {
+		return Calendar{}, err
 	}
 
 	return r.GetByID(ctx, userID, id)
@@ -92,15 +88,7 @@ func (r *CalendarRepository) Delete(ctx context.Context, userID int64, id string
 		return fmt.Errorf("delete calendar: %w", err)
 	}
 
-	affected, err := res.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("get rows affected: %w", err)
-	}
-	if affected == 0 {
-		return ErrNotFound
-	}
-
-	return nil
+	return requireAffected(res)
 }
 
 func (r *CalendarRepository) scanCalendar(row *sql.Row) (Calendar, error) {

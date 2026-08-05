@@ -2,7 +2,6 @@ package handlers
 
 import (
 	"encoding/json"
-	"errors"
 	"net/http"
 	"strconv"
 	"time"
@@ -50,6 +49,14 @@ type createAppPasswordResponse struct {
 	Secret string `json:"secret"`
 }
 
+var createAppPasswordErrors = []errorCase{
+	{service.ErrInvalidAppPasswordLabel, badRequest("label must not be empty")},
+}
+
+var revokeAppPasswordErrors = []errorCase{
+	{service.ErrAppPasswordNotFound, notFound("app password not found")},
+}
+
 func (h *AppPasswordHandler) Create(w http.ResponseWriter, r *http.Request) {
 	userID, ok := httpauth.UserIDFromContext(r.Context())
 	if !ok {
@@ -64,12 +71,7 @@ func (h *AppPasswordHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 
 	result, err := h.appPasswords.Create(r.Context(), userID, req.Label)
-	switch {
-	case errors.Is(err, service.ErrInvalidAppPasswordLabel):
-		httpresponse.Error(w, http.StatusBadRequest, "invalid_request", "label must not be empty")
-		return
-	case err != nil:
-		httpresponse.Error(w, http.StatusInternalServerError, "internal_error", "failed to create app password")
+	if respondError(w, err, createAppPasswordErrors, "failed to create app password") {
 		return
 	}
 
@@ -114,12 +116,7 @@ func (h *AppPasswordHandler) Revoke(w http.ResponseWriter, r *http.Request) {
 	}
 
 	err = h.appPasswords.Revoke(r.Context(), userID, id)
-	switch {
-	case errors.Is(err, service.ErrAppPasswordNotFound):
-		httpresponse.Error(w, http.StatusNotFound, "not_found", "app password not found")
-		return
-	case err != nil:
-		httpresponse.Error(w, http.StatusInternalServerError, "internal_error", "failed to revoke app password")
+	if respondError(w, err, revokeAppPasswordErrors, "failed to revoke app password") {
 		return
 	}
 

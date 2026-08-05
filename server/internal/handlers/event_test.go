@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -17,6 +18,61 @@ import (
 	"github.com/XiovV/calendar/server/internal/repository"
 	"github.com/XiovV/calendar/server/internal/service"
 )
+
+// decodedEvent is an eventResponse read back with its start/end parsed into
+// instants, so assertions can compare them as times rather than strings.
+//
+// This lives in the test file because only tests ever decode an event
+// response — the server exclusively writes them. Keeping it here stops
+// handlers/event.go carrying a code path production never executes.
+type decodedEvent struct {
+	ID           string
+	CalendarID   string
+	Title        string
+	Start        time.Time
+	End          time.Time
+	AllDay       bool
+	Rrule        string
+	ParentID     *string
+	RecurrenceID *time.Time
+	Exdates      []time.Time
+	Tzid         *string
+	Reminders    []reminderWire
+	Description  string
+	Location     string
+}
+
+func (d *decodedEvent) UnmarshalJSON(data []byte) error {
+	var wire eventResponse
+	if err := json.Unmarshal(data, &wire); err != nil {
+		return err
+	}
+	start, err := parseEventTime(wire.Start, wire.AllDay)
+	if err != nil {
+		return fmt.Errorf("invalid start: %w", err)
+	}
+	end, err := parseEventTime(wire.End, wire.AllDay)
+	if err != nil {
+		return fmt.Errorf("invalid end: %w", err)
+	}
+	*d = decodedEvent{
+		ID:           wire.ID,
+		CalendarID:   wire.CalendarID,
+		Title:        wire.Title,
+		Start:        start,
+		End:          end,
+		AllDay:       wire.AllDay,
+		Rrule:        wire.Rrule,
+		ParentID:     wire.ParentID,
+		RecurrenceID: wire.RecurrenceID,
+		Exdates:      wire.Exdates,
+		Tzid:         wire.Tzid,
+		Reminders:    wire.Reminders,
+		Description:  wire.Description,
+		Location:     wire.Location,
+	}
+	return nil
+}
 
 func newEventTestServer(t *testing.T) (baseURL, accessToken, calendarID string) {
 	t.Helper()
@@ -79,7 +135,7 @@ func TestEventHandler_CreateAndList(t *testing.T) {
 		t.Fatalf("expected 201, got %d", resp.StatusCode)
 	}
 
-	var created eventResponse
+	var created decodedEvent
 	if err := json.NewDecoder(resp.Body).Decode(&created); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
@@ -93,7 +149,7 @@ func TestEventHandler_CreateAndList(t *testing.T) {
 	}
 	defer listResp.Body.Close()
 
-	var events []eventResponse
+	var events []decodedEvent
 	if err := json.NewDecoder(listResp.Body).Decode(&events); err != nil {
 		t.Fatalf("decode list: %v", err)
 	}
@@ -137,7 +193,7 @@ func TestEventHandler_Create_RoundTripsAllDayAsDateOnly(t *testing.T) {
 		t.Fatalf("expected allDay to round-trip true, got %+v", wire)
 	}
 
-	var created eventResponse
+	var created decodedEvent
 	if err := json.Unmarshal(rawResponse, &created); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
@@ -193,11 +249,11 @@ func TestEventHandler_RoundTripsTzid(t *testing.T) {
 		ID:         "22222222-2222-2222-2222-222222222222",
 		CalendarID: calendarID,
 		Title:      "Standup",
-		Start:      mustParseRFC3339(t, "2026-01-01T09:00:00Z"),
-		End:        mustParseRFC3339(t, "2026-01-01T10:00:00Z"),
+		Start:      "2026-01-01T09:00:00Z",
+		End:        "2026-01-01T10:00:00Z",
 		Tzid:       &zone,
 	})
-	var created eventResponse
+	var created decodedEvent
 	json.NewDecoder(createResp.Body).Decode(&created)
 	if created.Tzid == nil || *created.Tzid != zone {
 		t.Fatalf("expected created tzid %q, got %+v", zone, created)
@@ -208,7 +264,7 @@ func TestEventHandler_RoundTripsTzid(t *testing.T) {
 		t.Fatalf("get: %v", err)
 	}
 	defer getResp.Body.Close()
-	var fetched eventResponse
+	var fetched decodedEvent
 	json.NewDecoder(getResp.Body).Decode(&fetched)
 	if fetched.Tzid == nil || *fetched.Tzid != zone {
 		t.Fatalf("expected fetched tzid %q, got %+v", zone, fetched)
@@ -217,8 +273,8 @@ func TestEventHandler_RoundTripsTzid(t *testing.T) {
 	updateBody, _ := json.Marshal(updateEventRequest{
 		CalendarID: calendarID,
 		Title:      "Standup",
-		Start:      mustParseRFC3339(t, "2026-01-01T09:00:00Z"),
-		End:        mustParseRFC3339(t, "2026-01-01T10:00:00Z"),
+		Start:      "2026-01-01T09:00:00Z",
+		End:        "2026-01-01T10:00:00Z",
 		Tzid:       nil,
 	})
 	updateReq, _ := http.NewRequest(http.MethodPatch, baseURL+"/api/events/"+created.ID, bytes.NewReader(updateBody))
@@ -229,7 +285,7 @@ func TestEventHandler_RoundTripsTzid(t *testing.T) {
 		t.Fatalf("patch: %v", err)
 	}
 	defer updateResp.Body.Close()
-	var updated eventResponse
+	var updated decodedEvent
 	json.NewDecoder(updateResp.Body).Decode(&updated)
 	if updated.Tzid != nil {
 		t.Fatalf("expected update to clear tzid back to Floating, got %+v", updated)
@@ -245,12 +301,12 @@ func TestEventHandler_RoundTripsDescriptionAndLocation(t *testing.T) {
 		ID:          "22222222-2222-2222-2222-222222222222",
 		CalendarID:  calendarID,
 		Title:       "Standup",
-		Start:       mustParseRFC3339(t, "2026-01-01T09:00:00Z"),
-		End:         mustParseRFC3339(t, "2026-01-01T10:00:00Z"),
+		Start:       "2026-01-01T09:00:00Z",
+		End:         "2026-01-01T10:00:00Z",
 		Description: "Daily sync",
 		Location:    "Room 4",
 	})
-	var created eventResponse
+	var created decodedEvent
 	json.NewDecoder(createResp.Body).Decode(&created)
 	if created.Description != "Daily sync" || created.Location != "Room 4" {
 		t.Fatalf("expected created description/location to round-trip, got %+v", created)
@@ -261,7 +317,7 @@ func TestEventHandler_RoundTripsDescriptionAndLocation(t *testing.T) {
 		t.Fatalf("get: %v", err)
 	}
 	defer getResp.Body.Close()
-	var fetched eventResponse
+	var fetched decodedEvent
 	json.NewDecoder(getResp.Body).Decode(&fetched)
 	if fetched.Description != "Daily sync" || fetched.Location != "Room 4" {
 		t.Fatalf("expected fetched description/location to round-trip, got %+v", fetched)
@@ -270,8 +326,8 @@ func TestEventHandler_RoundTripsDescriptionAndLocation(t *testing.T) {
 	updateBody, _ := json.Marshal(updateEventRequest{
 		CalendarID:  calendarID,
 		Title:       "Standup",
-		Start:       mustParseRFC3339(t, "2026-01-01T09:00:00Z"),
-		End:         mustParseRFC3339(t, "2026-01-01T10:00:00Z"),
+		Start:       "2026-01-01T09:00:00Z",
+		End:         "2026-01-01T10:00:00Z",
 		Description: "Updated sync notes",
 		Location:    "Room 5",
 	})
@@ -283,7 +339,7 @@ func TestEventHandler_RoundTripsDescriptionAndLocation(t *testing.T) {
 		t.Fatalf("patch: %v", err)
 	}
 	defer updateResp.Body.Close()
-	var updated eventResponse
+	var updated decodedEvent
 	json.NewDecoder(updateResp.Body).Decode(&updated)
 	if updated.Description != "Updated sync notes" || updated.Location != "Room 5" {
 		t.Fatalf("expected updated description/location to round-trip, got %+v", updated)
@@ -293,14 +349,12 @@ func TestEventHandler_RoundTripsDescriptionAndLocation(t *testing.T) {
 func TestEventHandler_Create_RoundTripsRrule(t *testing.T) {
 	baseURL, accessToken, calendarID := newEventTestServer(t)
 
-	start, _ := time.Parse(time.RFC3339, "2026-01-01T09:00:00Z")
-	end, _ := time.Parse(time.RFC3339, "2026-01-01T10:00:00Z")
 	body, _ := json.Marshal(createEventRequest{
 		ID:         "22222222-2222-2222-2222-222222222222",
 		CalendarID: calendarID,
 		Title:      "Standup",
-		Start:      start,
-		End:        end,
+		Start:      "2026-01-01T09:00:00Z",
+		End:        "2026-01-01T10:00:00Z",
 		Rrule:      "FREQ=WEEKLY;BYDAY=TH",
 	})
 
@@ -313,7 +367,7 @@ func TestEventHandler_Create_RoundTripsRrule(t *testing.T) {
 	}
 	defer resp.Body.Close()
 
-	var created eventResponse
+	var created decodedEvent
 	if err := json.NewDecoder(resp.Body).Decode(&created); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
@@ -335,7 +389,7 @@ func TestEventHandler_List_FiltersByFromTo(t *testing.T) {
 	}
 	defer resp.Body.Close()
 
-	var events []eventResponse
+	var events []decodedEvent
 	if err := json.NewDecoder(resp.Body).Decode(&events); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
@@ -402,7 +456,7 @@ func TestEventHandler_UpdateAndGet(t *testing.T) {
 	baseURL, accessToken, calendarID := newEventTestServer(t)
 
 	createResp := createEvent(t, baseURL, accessToken, "22222222-2222-2222-2222-222222222222", calendarID, "Standup", "2026-01-01T09:00:00Z", "2026-01-01T10:00:00Z")
-	var created eventResponse
+	var created decodedEvent
 	json.NewDecoder(createResp.Body).Decode(&created)
 
 	updateResp := patchEvent(t, baseURL, accessToken, created.ID, calendarID, "Renamed", "2026-01-01T11:00:00Z", "2026-01-01T12:00:00Z")
@@ -410,7 +464,7 @@ func TestEventHandler_UpdateAndGet(t *testing.T) {
 		t.Fatalf("expected 200, got %d", updateResp.StatusCode)
 	}
 
-	var updated eventResponse
+	var updated decodedEvent
 	json.NewDecoder(updateResp.Body).Decode(&updated)
 	if updated.Title != "Renamed" {
 		t.Fatalf("unexpected updated event: %+v", updated)
@@ -442,7 +496,7 @@ func TestEventHandler_Update_RejectsUnknownCalendarWith400(t *testing.T) {
 	baseURL, accessToken, calendarID := newEventTestServer(t)
 
 	createResp := createEvent(t, baseURL, accessToken, "22222222-2222-2222-2222-222222222222", calendarID, "Standup", "2026-01-01T09:00:00Z", "2026-01-01T10:00:00Z")
-	var created eventResponse
+	var created decodedEvent
 	json.NewDecoder(createResp.Body).Decode(&created)
 
 	resp := patchEvent(t, baseURL, accessToken, created.ID, "does-not-exist", "Renamed", "2026-01-01T09:00:00Z", "2026-01-01T10:00:00Z")
@@ -455,7 +509,7 @@ func TestEventHandler_Delete(t *testing.T) {
 	baseURL, accessToken, calendarID := newEventTestServer(t)
 
 	createResp := createEvent(t, baseURL, accessToken, "22222222-2222-2222-2222-222222222222", calendarID, "Standup", "2026-01-01T09:00:00Z", "2026-01-01T10:00:00Z")
-	var created eventResponse
+	var created decodedEvent
 	json.NewDecoder(createResp.Body).Decode(&created)
 
 	req, _ := http.NewRequest(http.MethodDelete, baseURL+"/api/events/"+created.ID, nil)
@@ -497,16 +551,7 @@ func TestEventHandler_Delete_NotFound(t *testing.T) {
 func createEvent(t *testing.T, baseURL, accessToken, id, calendarID, title, start, end string) *http.Response {
 	t.Helper()
 
-	startTime, err := time.Parse(time.RFC3339, start)
-	if err != nil {
-		t.Fatalf("parse start: %v", err)
-	}
-	endTime, err := time.Parse(time.RFC3339, end)
-	if err != nil {
-		t.Fatalf("parse end: %v", err)
-	}
-
-	body, err := json.Marshal(createEventRequest{ID: id, CalendarID: calendarID, Title: title, Start: startTime, End: endTime})
+	body, err := json.Marshal(createEventRequest{ID: id, CalendarID: calendarID, Title: title, Start: start, End: end})
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
@@ -528,16 +573,7 @@ func createEvent(t *testing.T, baseURL, accessToken, id, calendarID, title, star
 func patchEvent(t *testing.T, baseURL, accessToken, id, calendarID, title, start, end string) *http.Response {
 	t.Helper()
 
-	startTime, err := time.Parse(time.RFC3339, start)
-	if err != nil {
-		t.Fatalf("parse start: %v", err)
-	}
-	endTime, err := time.Parse(time.RFC3339, end)
-	if err != nil {
-		t.Fatalf("parse end: %v", err)
-	}
-
-	body, err := json.Marshal(updateEventRequest{CalendarID: calendarID, Title: title, Start: startTime, End: endTime})
+	body, err := json.Marshal(updateEventRequest{CalendarID: calendarID, Title: title, Start: start, End: end})
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
@@ -585,11 +621,11 @@ func TestEventHandler_CreateOverride(t *testing.T) {
 		ID:         "22222222-2222-2222-2222-222222222222",
 		CalendarID: calendarID,
 		Title:      "Standup",
-		Start:      mustParseRFC3339(t, "2026-01-01T09:00:00Z"),
-		End:        mustParseRFC3339(t, "2026-01-01T09:30:00Z"),
+		Start:      "2026-01-01T09:00:00Z",
+		End:        "2026-01-01T09:30:00Z",
 		Rrule:      "FREQ=DAILY",
 	})
-	var master eventResponse
+	var master decodedEvent
 	json.NewDecoder(masterResp.Body).Decode(&master)
 
 	recurrenceID := mustParseRFC3339(t, "2026-01-02T09:00:00Z")
@@ -597,8 +633,8 @@ func TestEventHandler_CreateOverride(t *testing.T) {
 		ID:           "33333333-3333-3333-3333-333333333333",
 		CalendarID:   calendarID,
 		Title:        "Standup (moved)",
-		Start:        mustParseRFC3339(t, "2026-01-02T10:00:00Z"),
-		End:          mustParseRFC3339(t, "2026-01-02T10:30:00Z"),
+		Start:        "2026-01-02T10:00:00Z",
+		End:          "2026-01-02T10:30:00Z",
 		ParentID:     &master.ID,
 		RecurrenceID: &recurrenceID,
 	})
@@ -606,7 +642,7 @@ func TestEventHandler_CreateOverride(t *testing.T) {
 		t.Fatalf("expected 201, got %d", overrideResp.StatusCode)
 	}
 
-	var override eventResponse
+	var override decodedEvent
 	json.NewDecoder(overrideResp.Body).Decode(&override)
 	if override.ParentID == nil || *override.ParentID != master.ID {
 		t.Fatalf("expected override parentId %q, got %+v", master.ID, override)
@@ -623,11 +659,11 @@ func TestEventHandler_CreateOverride_RejectsOwnRrule(t *testing.T) {
 		ID:         "22222222-2222-2222-2222-222222222222",
 		CalendarID: calendarID,
 		Title:      "Standup",
-		Start:      mustParseRFC3339(t, "2026-01-01T09:00:00Z"),
-		End:        mustParseRFC3339(t, "2026-01-01T09:30:00Z"),
+		Start:      "2026-01-01T09:00:00Z",
+		End:        "2026-01-01T09:30:00Z",
 		Rrule:      "FREQ=DAILY",
 	})
-	var master eventResponse
+	var master decodedEvent
 	json.NewDecoder(masterResp.Body).Decode(&master)
 
 	recurrenceID := mustParseRFC3339(t, "2026-01-02T09:00:00Z")
@@ -635,8 +671,8 @@ func TestEventHandler_CreateOverride_RejectsOwnRrule(t *testing.T) {
 		ID:           "33333333-3333-3333-3333-333333333333",
 		CalendarID:   calendarID,
 		Title:        "Standup (moved)",
-		Start:        mustParseRFC3339(t, "2026-01-02T10:00:00Z"),
-		End:          mustParseRFC3339(t, "2026-01-02T10:30:00Z"),
+		Start:        "2026-01-02T10:00:00Z",
+		End:          "2026-01-02T10:30:00Z",
 		Rrule:        "FREQ=DAILY",
 		ParentID:     &master.ID,
 		RecurrenceID: &recurrenceID,
@@ -653,11 +689,11 @@ func TestEventHandler_AddException_ShowsUpAsExdateOnList(t *testing.T) {
 		ID:         "22222222-2222-2222-2222-222222222222",
 		CalendarID: calendarID,
 		Title:      "Standup",
-		Start:      mustParseRFC3339(t, "2026-01-01T09:00:00Z"),
-		End:        mustParseRFC3339(t, "2026-01-01T09:30:00Z"),
+		Start:      "2026-01-01T09:00:00Z",
+		End:        "2026-01-01T09:30:00Z",
 		Rrule:      "FREQ=DAILY",
 	})
-	var master eventResponse
+	var master decodedEvent
 	json.NewDecoder(masterResp.Body).Decode(&master)
 
 	occurrenceStart := mustParseRFC3339(t, "2026-01-02T09:00:00Z")
@@ -674,7 +710,7 @@ func TestEventHandler_AddException_ShowsUpAsExdateOnList(t *testing.T) {
 	}
 	defer listResp.Body.Close()
 
-	var events []eventResponse
+	var events []decodedEvent
 	json.NewDecoder(listResp.Body).Decode(&events)
 	if len(events) != 1 || len(events[0].Exdates) != 1 || !events[0].Exdates[0].Equal(occurrenceStart) {
 		t.Fatalf("expected the master to carry the exdate, got %+v", events)
@@ -685,7 +721,7 @@ func TestEventHandler_AddException_RejectsNonRecurringParent(t *testing.T) {
 	baseURL, accessToken, calendarID := newEventTestServer(t)
 
 	createResp := createEvent(t, baseURL, accessToken, "22222222-2222-2222-2222-222222222222", calendarID, "Standup", "2026-01-01T09:00:00Z", "2026-01-01T09:30:00Z")
-	var created eventResponse
+	var created decodedEvent
 	json.NewDecoder(createResp.Body).Decode(&created)
 
 	resp := postJSON(t, baseURL, accessToken, "/api/events/"+created.ID+"/exceptions", createExceptionRequest{
@@ -703,22 +739,22 @@ func TestEventHandler_Reparent_MovesOverridesAndExceptions(t *testing.T) {
 		ID:         "22222222-2222-2222-2222-222222222222",
 		CalendarID: calendarID,
 		Title:      "Standup",
-		Start:      mustParseRFC3339(t, "2026-01-01T09:00:00Z"),
-		End:        mustParseRFC3339(t, "2026-01-01T09:30:00Z"),
+		Start:      "2026-01-01T09:00:00Z",
+		End:        "2026-01-01T09:30:00Z",
 		Rrule:      "FREQ=DAILY",
 	})
-	var oldMaster eventResponse
+	var oldMaster decodedEvent
 	json.NewDecoder(oldMasterResp.Body).Decode(&oldMaster)
 
 	newMasterResp := postJSON(t, baseURL, accessToken, "/api/events/", createEventRequest{
 		ID:         "44444444-4444-4444-4444-444444444444",
 		CalendarID: calendarID,
 		Title:      "Standup",
-		Start:      mustParseRFC3339(t, "2026-01-03T09:00:00Z"),
-		End:        mustParseRFC3339(t, "2026-01-03T09:30:00Z"),
+		Start:      "2026-01-03T09:00:00Z",
+		End:        "2026-01-03T09:30:00Z",
 		Rrule:      "FREQ=DAILY",
 	})
-	var newMaster eventResponse
+	var newMaster decodedEvent
 	json.NewDecoder(newMasterResp.Body).Decode(&newMaster)
 
 	recurrenceID := mustParseRFC3339(t, "2026-01-03T09:00:00Z")
@@ -726,12 +762,12 @@ func TestEventHandler_Reparent_MovesOverridesAndExceptions(t *testing.T) {
 		ID:           "33333333-3333-3333-3333-333333333333",
 		CalendarID:   calendarID,
 		Title:        "Standup (moved)",
-		Start:        mustParseRFC3339(t, "2026-01-03T10:00:00Z"),
-		End:          mustParseRFC3339(t, "2026-01-03T10:30:00Z"),
+		Start:        "2026-01-03T10:00:00Z",
+		End:          "2026-01-03T10:30:00Z",
 		ParentID:     &oldMaster.ID,
 		RecurrenceID: &recurrenceID,
 	})
-	var override eventResponse
+	var override decodedEvent
 	json.NewDecoder(overrideResp.Body).Decode(&override)
 
 	reparentResp := postJSON(t, baseURL, accessToken, "/api/events/"+oldMaster.ID+"/reparent", reparentRequest{
@@ -748,7 +784,7 @@ func TestEventHandler_Reparent_MovesOverridesAndExceptions(t *testing.T) {
 	}
 	defer getResp.Body.Close()
 
-	var reparented eventResponse
+	var reparented decodedEvent
 	json.NewDecoder(getResp.Body).Decode(&reparented)
 	if reparented.ParentID == nil || *reparented.ParentID != newMaster.ID {
 		t.Fatalf("expected override reparented to %q, got %+v", newMaster.ID, reparented)
@@ -762,11 +798,11 @@ func TestEventHandler_Update_DiscardsOverridesOnRuleChange(t *testing.T) {
 		ID:         "22222222-2222-2222-2222-222222222222",
 		CalendarID: calendarID,
 		Title:      "Standup",
-		Start:      mustParseRFC3339(t, "2026-01-01T09:00:00Z"),
-		End:        mustParseRFC3339(t, "2026-01-01T09:30:00Z"),
+		Start:      "2026-01-01T09:00:00Z",
+		End:        "2026-01-01T09:30:00Z",
 		Rrule:      "FREQ=DAILY",
 	})
-	var master eventResponse
+	var master decodedEvent
 	json.NewDecoder(masterResp.Body).Decode(&master)
 
 	recurrenceID := mustParseRFC3339(t, "2026-01-02T09:00:00Z")
@@ -774,16 +810,16 @@ func TestEventHandler_Update_DiscardsOverridesOnRuleChange(t *testing.T) {
 		ID:           "33333333-3333-3333-3333-333333333333",
 		CalendarID:   calendarID,
 		Title:        "Standup (moved)",
-		Start:        mustParseRFC3339(t, "2026-01-02T10:00:00Z"),
-		End:          mustParseRFC3339(t, "2026-01-02T10:30:00Z"),
+		Start:        "2026-01-02T10:00:00Z",
+		End:          "2026-01-02T10:30:00Z",
 		ParentID:     &master.ID,
 		RecurrenceID: &recurrenceID,
 	})
-	var override eventResponse
+	var override decodedEvent
 	json.NewDecoder(overrideResp.Body).Decode(&override)
 
 	// patchEvent doesn't carry rrule, so issue a raw PATCH with the new rule.
-	body, _ := json.Marshal(updateEventRequest{CalendarID: calendarID, Title: "Standup", Start: mustParseRFC3339(t, "2026-01-01T09:00:00Z"), End: mustParseRFC3339(t, "2026-01-01T09:30:00Z"), Rrule: "FREQ=WEEKLY;BYDAY=TH"})
+	body, _ := json.Marshal(updateEventRequest{CalendarID: calendarID, Title: "Standup", Start: "2026-01-01T09:00:00Z", End: "2026-01-01T09:30:00Z", Rrule: "FREQ=WEEKLY;BYDAY=TH"})
 	req, _ := http.NewRequest(http.MethodPatch, baseURL+"/api/events/"+master.ID, bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+accessToken)
@@ -819,8 +855,8 @@ func TestEventHandler_Create_RoundTripsReminders(t *testing.T) {
 		ID:         "22222222-2222-2222-2222-222222222222",
 		CalendarID: calendarID,
 		Title:      "Standup",
-		Start:      mustParseRFC3339(t, "2026-01-01T09:00:00Z"),
-		End:        mustParseRFC3339(t, "2026-01-01T10:00:00Z"),
+		Start:      "2026-01-01T09:00:00Z",
+		End:        "2026-01-01T10:00:00Z",
 		Reminders: []reminderWire{
 			{OffsetMinutes: 10, Channel: "notification"},
 			{OffsetMinutes: 1440, Channel: "email"},
@@ -830,7 +866,7 @@ func TestEventHandler_Create_RoundTripsReminders(t *testing.T) {
 		t.Fatalf("expected 201, got %d", createResp.StatusCode)
 	}
 
-	var created eventResponse
+	var created decodedEvent
 	if err := json.NewDecoder(createResp.Body).Decode(&created); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
@@ -844,7 +880,7 @@ func TestEventHandler_Create_RoundTripsReminders(t *testing.T) {
 	}
 	defer listResp.Body.Close()
 
-	var events []eventResponse
+	var events []decodedEvent
 	if err := json.NewDecoder(listResp.Body).Decode(&events); err != nil {
 		t.Fatalf("decode list: %v", err)
 	}
@@ -875,8 +911,8 @@ func TestEventHandler_Create_RejectsInvalidReminderChannel(t *testing.T) {
 		ID:         "22222222-2222-2222-2222-222222222222",
 		CalendarID: calendarID,
 		Title:      "Standup",
-		Start:      mustParseRFC3339(t, "2026-01-01T09:00:00Z"),
-		End:        mustParseRFC3339(t, "2026-01-01T10:00:00Z"),
+		Start:      "2026-01-01T09:00:00Z",
+		End:        "2026-01-01T10:00:00Z",
 		Reminders:  []reminderWire{{OffsetMinutes: 10, Channel: "sms"}},
 	})
 	if resp.StatusCode != http.StatusBadRequest {
@@ -893,18 +929,18 @@ func TestEventHandler_Update_ReplacesRemindersWholesale(t *testing.T) {
 		ID:         "22222222-2222-2222-2222-222222222222",
 		CalendarID: calendarID,
 		Title:      "Standup",
-		Start:      mustParseRFC3339(t, "2026-01-01T09:00:00Z"),
-		End:        mustParseRFC3339(t, "2026-01-01T10:00:00Z"),
+		Start:      "2026-01-01T09:00:00Z",
+		End:        "2026-01-01T10:00:00Z",
 		Reminders:  []reminderWire{{OffsetMinutes: 10, Channel: "notification"}},
 	})
-	var created eventResponse
+	var created decodedEvent
 	json.NewDecoder(createResp.Body).Decode(&created)
 
 	body, _ := json.Marshal(updateEventRequest{
 		CalendarID: calendarID,
 		Title:      "Standup",
-		Start:      mustParseRFC3339(t, "2026-01-01T09:00:00Z"),
-		End:        mustParseRFC3339(t, "2026-01-01T10:00:00Z"),
+		Start:      "2026-01-01T09:00:00Z",
+		End:        "2026-01-01T10:00:00Z",
 		Reminders:  []reminderWire{{OffsetMinutes: 30, Channel: "email"}},
 	})
 	req, _ := http.NewRequest(http.MethodPatch, baseURL+"/api/events/"+created.ID, bytes.NewReader(body))
@@ -918,7 +954,7 @@ func TestEventHandler_Update_ReplacesRemindersWholesale(t *testing.T) {
 		t.Fatalf("expected 200, got %d", updateResp.StatusCode)
 	}
 
-	var updated eventResponse
+	var updated decodedEvent
 	if err := json.NewDecoder(updateResp.Body).Decode(&updated); err != nil {
 		t.Fatalf("decode: %v", err)
 	}

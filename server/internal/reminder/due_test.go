@@ -41,9 +41,9 @@ func TestDue_NonRecurringEvent_FiresWhenItsTriggerFallsInTheWindow(t *testing.T)
 
 func TestDue_NonRecurringEvent_DoesNotFireOutsideTheWindow(t *testing.T) {
 	event := repository.Event{
-		ID:     "evt-1",
-		Start:  at(2026, 1, 1, 9, 0),
-		End:    at(2026, 1, 1, 9, 30),
+		ID:    "evt-1",
+		Start: at(2026, 1, 1, 9, 0),
+		End:   at(2026, 1, 1, 9, 30),
 		Reminders: []repository.Reminder{
 			{ID: 100, OffsetMinutes: 10, Channel: "notification"},
 		},

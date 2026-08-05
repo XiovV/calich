@@ -77,15 +77,7 @@ func (r *AppPasswordRepository) Delete(ctx context.Context, userID, id int64) er
 		return fmt.Errorf("delete app password: %w", err)
 	}
 
-	affected, err := res.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("get affected rows: %w", err)
-	}
-	if affected == 0 {
-		return ErrNotFound
-	}
-
-	return nil
+	return requireAffected(res)
 }
 
 // UpdateLastUsedAt stamps userID's app password id's last_used_at with the

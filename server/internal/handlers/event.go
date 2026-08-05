@@ -2,7 +2,6 @@ package handlers
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http"
 	"time"
@@ -79,19 +78,20 @@ func fromReminderWire(wire []reminderWire) []repository.Reminder {
 	return reminders
 }
 
+// eventResponse is an Event's wire shape. Start and End are strings so their
+// format can branch on AllDay (ADR-0017); toEventResponse is the only thing
+// that builds one, and does that formatting. Field order here is the emitted
+// JSON's field order.
 type eventResponse struct {
-	ID         string    `json:"id"`
-	CalendarID string    `json:"calendarId"`
-	Title      string    `json:"title"`
-	Start      time.Time `json:"-"`
-	End        time.Time `json:"-"`
+	ID         string `json:"id"`
+	CalendarID string `json:"calendarId"`
+	Title      string `json:"title"`
+	Start      string `json:"start"`
+	End        string `json:"end"`
 	// AllDay flags this Event as occupying whole dates rather than a time
 	// range — see ADR-0017 and CONTEXT.md's All-day Event.
 	AllDay bool   `json:"allDay,omitempty"`
 	Rrule  string `json:"rrule,omitempty"`
-	// Description and Location are free-text fields on an Event (#61).
-	Description string `json:"description,omitempty"`
-	Location    string `json:"location,omitempty"`
 	// ParentID and RecurrenceID are present only on an Override — a standalone
 	// Event that replaces one Occurrence of its parent's series (ADR-0016).
 	ParentID     *string    `json:"parentId,omitempty"`
@@ -105,76 +105,9 @@ type eventResponse struct {
 	// Reminders is this Event's Reminders (ADR-0020). Absent/empty means no
 	// Reminders.
 	Reminders []reminderWire `json:"reminders,omitempty"`
-}
-
-// eventResponseWire is eventResponse's actual JSON shape: start/end are
-// strings so their format can branch on AllDay (ADR-0017).
-type eventResponseWire struct {
-	ID           string         `json:"id"`
-	CalendarID   string         `json:"calendarId"`
-	Title        string         `json:"title"`
-	Start        string         `json:"start"`
-	End          string         `json:"end"`
-	AllDay       bool           `json:"allDay,omitempty"`
-	Rrule        string         `json:"rrule,omitempty"`
-	ParentID     *string        `json:"parentId,omitempty"`
-	RecurrenceID *time.Time     `json:"recurrenceId,omitempty"`
-	Exdates      []time.Time    `json:"exdates,omitempty"`
-	Tzid         *string        `json:"tzid,omitempty"`
-	Reminders    []reminderWire `json:"reminders,omitempty"`
-	Description  string         `json:"description,omitempty"`
-	Location     string         `json:"location,omitempty"`
-}
-
-func (r eventResponse) MarshalJSON() ([]byte, error) {
-	return json.Marshal(eventResponseWire{
-		ID:           r.ID,
-		CalendarID:   r.CalendarID,
-		Title:        r.Title,
-		Start:        formatEventTime(r.Start, r.AllDay),
-		End:          formatEventTime(r.End, r.AllDay),
-		AllDay:       r.AllDay,
-		Rrule:        r.Rrule,
-		ParentID:     r.ParentID,
-		RecurrenceID: r.RecurrenceID,
-		Exdates:      r.Exdates,
-		Tzid:         r.Tzid,
-		Reminders:    r.Reminders,
-		Description:  r.Description,
-		Location:     r.Location,
-	})
-}
-
-func (r *eventResponse) UnmarshalJSON(data []byte) error {
-	var wire eventResponseWire
-	if err := json.Unmarshal(data, &wire); err != nil {
-		return err
-	}
-	start, err := parseEventTime(wire.Start, wire.AllDay)
-	if err != nil {
-		return fmt.Errorf("invalid start: %w", err)
-	}
-	end, err := parseEventTime(wire.End, wire.AllDay)
-	if err != nil {
-		return fmt.Errorf("invalid end: %w", err)
-	}
-	*r = eventResponse{
-		ID:           wire.ID,
-		CalendarID:   wire.CalendarID,
-		Title:        wire.Title,
-		Start:        start,
-		End:          end,
-		AllDay:       wire.AllDay,
-		Rrule:        wire.Rrule,
-		ParentID:     wire.ParentID,
-		RecurrenceID: wire.RecurrenceID,
-		Exdates:      wire.Exdates,
-		Tzid:         wire.Tzid,
-		Reminders:    wire.Reminders,
-		Description:  wire.Description,
-		Location:     wire.Location,
-	}
-	return nil
+	// Description and Location are free-text fields on an Event (#61).
+	Description string `json:"description,omitempty"`
+	Location    string `json:"location,omitempty"`
 }
 
 func toEventResponse(e repository.Event) eventResponse {
@@ -182,8 +115,8 @@ func toEventResponse(e repository.Event) eventResponse {
 		ID:           e.ID,
 		CalendarID:   e.CalendarID,
 		Title:        e.Title,
-		Start:        e.Start,
-		End:          e.End,
+		Start:        formatEventTime(e.Start, e.AllDay),
+		End:          formatEventTime(e.End, e.AllDay),
 		AllDay:       e.AllDay,
 		Rrule:        e.Rrule,
 		ParentID:     e.ParentID,
@@ -194,6 +127,43 @@ func toEventResponse(e repository.Event) eventResponse {
 		Description:  e.Description,
 		Location:     e.Location,
 	}
+}
+
+// eventWriteErrors is the rendering shared by the create and update paths,
+// which validate the same fields the same way.
+var eventWriteErrors = []errorCase{
+	{service.ErrInvalidTitle, badRequest("title must not be empty")},
+	{service.ErrInvalidTimeRange, badRequest("end must be after start")},
+	{service.ErrInvalidRecurrenceRule, badRequest("recurrence rule is invalid")},
+	{service.ErrInvalidReminderChannel, badRequest("reminder channel must be \"notification\" or \"email\"")},
+	{service.ErrCalendarNotFound, badRequest("calendar not found")},
+}
+
+// On create, a missing parent is named as such — parentId is a body field the
+// client chose. On the exception and reparent paths it is the URL's event, so
+// those render it as a plain "event not found" 404 instead.
+var createEventErrors = alsoHandling(eventWriteErrors,
+	errorCase{service.ErrInvalidOverride, badRequest("an override must not have its own recurrence rule, and requires a recurrence id")},
+	errorCase{service.ErrParentIsOverride, badRequest("parent event must be a master, not an override")},
+	errorCase{service.ErrParentNotFound, badRequest("parent event not found")},
+)
+
+var updateEventErrors = alsoHandling(eventWriteErrors,
+	errorCase{repository.ErrNotFound, notFound("event not found")},
+)
+
+var addExceptionErrors = []errorCase{
+	{service.ErrParentNotFound, notFound("event not found")},
+	{service.ErrParentIsOverride, badRequest("parent event must be a master, not an override")},
+	{service.ErrParentNotRecurring, badRequest("parent event does not recur")},
+}
+
+var reparentErrors = []errorCase{
+	{service.ErrParentNotFound, notFound("event not found")},
+}
+
+var eventNotFoundErrors = []errorCase{
+	{repository.ErrNotFound, notFound("event not found")},
 }
 
 func (h *EventHandler) List(w http.ResponseWriter, r *http.Request) {
@@ -240,25 +210,10 @@ func parseOptionalTimeParam(w http.ResponseWriter, r *http.Request, name string)
 	return &parsed, true
 }
 
+// createEventRequest is the POST /api/events body. Start and End are strings
+// so their format can branch on AllDay (ADR-0017) — parseEventTimes turns them
+// into instants once the body has decoded.
 type createEventRequest struct {
-	ID           string         `json:"-"`
-	CalendarID   string         `json:"-"`
-	Title        string         `json:"-"`
-	Start        time.Time      `json:"-"`
-	End          time.Time      `json:"-"`
-	AllDay       bool           `json:"-"`
-	Rrule        string         `json:"-"`
-	ParentID     *string        `json:"-"`
-	RecurrenceID *time.Time     `json:"-"`
-	Tzid         *string        `json:"-"`
-	Reminders    []reminderWire `json:"-"`
-	Description  string         `json:"-"`
-	Location     string         `json:"-"`
-}
-
-// createEventRequestWire is createEventRequest's actual JSON shape: start/end
-// are strings so their format can branch on AllDay (ADR-0017).
-type createEventRequestWire struct {
 	ID           string         `json:"id"`
 	CalendarID   string         `json:"calendarId"`
 	Title        string         `json:"title"`
@@ -274,53 +229,19 @@ type createEventRequestWire struct {
 	Location     string         `json:"location,omitempty"`
 }
 
-func (r createEventRequest) MarshalJSON() ([]byte, error) {
-	return json.Marshal(createEventRequestWire{
-		ID:           r.ID,
-		CalendarID:   r.CalendarID,
-		Title:        r.Title,
-		Start:        formatEventTime(r.Start, r.AllDay),
-		End:          formatEventTime(r.End, r.AllDay),
-		AllDay:       r.AllDay,
-		Rrule:        r.Rrule,
-		ParentID:     r.ParentID,
-		RecurrenceID: r.RecurrenceID,
-		Tzid:         r.Tzid,
-		Reminders:    r.Reminders,
-		Description:  r.Description,
-		Location:     r.Location,
-	})
-}
-
-func (r *createEventRequest) UnmarshalJSON(data []byte) error {
-	var wire createEventRequestWire
-	if err := json.Unmarshal(data, &wire); err != nil {
-		return err
-	}
-	start, err := parseEventTime(wire.Start, wire.AllDay)
+// parseEventTimes converts a decoded body's start/end strings into instants,
+// branching on allDay (ADR-0017). Shared by create and update, which carry the
+// same three fields.
+func parseEventTimes(rawStart, rawEnd string, allDay bool) (start, end time.Time, err error) {
+	start, err = parseEventTime(rawStart, allDay)
 	if err != nil {
-		return fmt.Errorf("invalid start: %w", err)
+		return time.Time{}, time.Time{}, fmt.Errorf("invalid start: %w", err)
 	}
-	end, err := parseEventTime(wire.End, wire.AllDay)
+	end, err = parseEventTime(rawEnd, allDay)
 	if err != nil {
-		return fmt.Errorf("invalid end: %w", err)
+		return time.Time{}, time.Time{}, fmt.Errorf("invalid end: %w", err)
 	}
-	*r = createEventRequest{
-		ID:           wire.ID,
-		CalendarID:   wire.CalendarID,
-		Title:        wire.Title,
-		Start:        start,
-		End:          end,
-		AllDay:       wire.AllDay,
-		Rrule:        wire.Rrule,
-		ParentID:     wire.ParentID,
-		RecurrenceID: wire.RecurrenceID,
-		Tzid:         wire.Tzid,
-		Reminders:    wire.Reminders,
-		Description:  wire.Description,
-		Location:     wire.Location,
-	}
-	return nil
+	return start, end, nil
 }
 
 func (h *EventHandler) Create(w http.ResponseWriter, r *http.Request) {
@@ -336,39 +257,34 @@ func (h *EventHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Checked before the id, matching the order when start/end were parsed
+	// inside UnmarshalJSON — i.e. during Decode, above.
+	start, end, err := parseEventTimes(req.Start, req.End, req.AllDay)
+	if err != nil {
+		httpresponse.Error(w, http.StatusBadRequest, "invalid_request", "request body must be valid JSON")
+		return
+	}
+
 	if _, err := uuid.Parse(req.ID); err != nil {
 		httpresponse.Error(w, http.StatusBadRequest, "invalid_request", "id must be a valid UUID")
 		return
 	}
 
-	event, err := h.events.Create(r.Context(), userID, req.ID, req.CalendarID, req.Title, req.Start, req.End, req.AllDay, req.Rrule, req.ParentID, req.RecurrenceID, req.Tzid, fromReminderWire(req.Reminders), req.Description, req.Location)
-	switch {
-	case errors.Is(err, service.ErrInvalidTitle):
-		httpresponse.Error(w, http.StatusBadRequest, "invalid_request", "title must not be empty")
-		return
-	case errors.Is(err, service.ErrInvalidTimeRange):
-		httpresponse.Error(w, http.StatusBadRequest, "invalid_request", "end must be after start")
-		return
-	case errors.Is(err, service.ErrInvalidRecurrenceRule):
-		httpresponse.Error(w, http.StatusBadRequest, "invalid_request", "recurrence rule is invalid")
-		return
-	case errors.Is(err, service.ErrInvalidReminderChannel):
-		httpresponse.Error(w, http.StatusBadRequest, "invalid_request", "reminder channel must be \"notification\" or \"email\"")
-		return
-	case errors.Is(err, service.ErrInvalidOverride):
-		httpresponse.Error(w, http.StatusBadRequest, "invalid_request", "an override must not have its own recurrence rule, and requires a recurrence id")
-		return
-	case errors.Is(err, service.ErrParentIsOverride):
-		httpresponse.Error(w, http.StatusBadRequest, "invalid_request", "parent event must be a master, not an override")
-		return
-	case errors.Is(err, service.ErrParentNotFound):
-		httpresponse.Error(w, http.StatusBadRequest, "invalid_request", "parent event not found")
-		return
-	case errors.Is(err, service.ErrCalendarNotFound):
-		httpresponse.Error(w, http.StatusBadRequest, "invalid_request", "calendar not found")
-		return
-	case err != nil:
-		httpresponse.Error(w, http.StatusInternalServerError, "internal_error", "failed to create event")
+	event, err := h.events.Create(r.Context(), userID, req.ID, service.EventWrite{
+		CalendarID:   req.CalendarID,
+		Title:        req.Title,
+		Start:        start,
+		End:          end,
+		AllDay:       req.AllDay,
+		Rrule:        req.Rrule,
+		ParentID:     req.ParentID,
+		RecurrenceID: req.RecurrenceID,
+		Tzid:         req.Tzid,
+		Reminders:    fromReminderWire(req.Reminders),
+		Description:  req.Description,
+		Location:     req.Location,
+	})
+	if respondError(w, err, createEventErrors, "failed to create event") {
 		return
 	}
 
@@ -385,34 +301,16 @@ func (h *EventHandler) Get(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 
 	event, err := h.events.Get(r.Context(), userID, id)
-	if errors.Is(err, repository.ErrNotFound) {
-		httpresponse.Error(w, http.StatusNotFound, "not_found", "event not found")
-		return
-	}
-	if err != nil {
-		httpresponse.Error(w, http.StatusInternalServerError, "internal_error", "failed to load event")
+	if respondError(w, err, eventNotFoundErrors, "failed to load event") {
 		return
 	}
 
 	httpresponse.JSON(w, http.StatusOK, toEventResponse(event))
 }
 
+// updateEventRequest is the PATCH /api/events/{id} body. Start and End are
+// strings for the same reason as createEventRequest's (ADR-0017).
 type updateEventRequest struct {
-	CalendarID  string         `json:"-"`
-	Title       string         `json:"-"`
-	Start       time.Time      `json:"-"`
-	End         time.Time      `json:"-"`
-	AllDay      bool           `json:"-"`
-	Rrule       string         `json:"-"`
-	Tzid        *string        `json:"-"`
-	Reminders   []reminderWire `json:"-"`
-	Description string         `json:"-"`
-	Location    string         `json:"-"`
-}
-
-// updateEventRequestWire is updateEventRequest's actual JSON shape: start/end
-// are strings so their format can branch on AllDay (ADR-0017).
-type updateEventRequestWire struct {
 	CalendarID  string         `json:"calendarId"`
 	Title       string         `json:"title"`
 	Start       string         `json:"start"`
@@ -423,49 +321,6 @@ type updateEventRequestWire struct {
 	Reminders   []reminderWire `json:"reminders,omitempty"`
 	Description string         `json:"description,omitempty"`
 	Location    string         `json:"location,omitempty"`
-}
-
-func (r updateEventRequest) MarshalJSON() ([]byte, error) {
-	return json.Marshal(updateEventRequestWire{
-		CalendarID:  r.CalendarID,
-		Title:       r.Title,
-		Start:       formatEventTime(r.Start, r.AllDay),
-		End:         formatEventTime(r.End, r.AllDay),
-		AllDay:      r.AllDay,
-		Rrule:       r.Rrule,
-		Tzid:        r.Tzid,
-		Reminders:   r.Reminders,
-		Description: r.Description,
-		Location:    r.Location,
-	})
-}
-
-func (r *updateEventRequest) UnmarshalJSON(data []byte) error {
-	var wire updateEventRequestWire
-	if err := json.Unmarshal(data, &wire); err != nil {
-		return err
-	}
-	start, err := parseEventTime(wire.Start, wire.AllDay)
-	if err != nil {
-		return fmt.Errorf("invalid start: %w", err)
-	}
-	end, err := parseEventTime(wire.End, wire.AllDay)
-	if err != nil {
-		return fmt.Errorf("invalid end: %w", err)
-	}
-	*r = updateEventRequest{
-		CalendarID:  wire.CalendarID,
-		Title:       wire.Title,
-		Start:       start,
-		End:         end,
-		AllDay:      wire.AllDay,
-		Rrule:       wire.Rrule,
-		Tzid:        wire.Tzid,
-		Reminders:   wire.Reminders,
-		Description: wire.Description,
-		Location:    wire.Location,
-	}
-	return nil
 }
 
 func (h *EventHandler) Update(w http.ResponseWriter, r *http.Request) {
@@ -483,28 +338,25 @@ func (h *EventHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	event, err := h.events.Update(r.Context(), userID, id, req.CalendarID, req.Title, req.Start, req.End, req.AllDay, req.Rrule, req.Tzid, fromReminderWire(req.Reminders), req.Description, req.Location)
-	switch {
-	case errors.Is(err, service.ErrInvalidTitle):
-		httpresponse.Error(w, http.StatusBadRequest, "invalid_request", "title must not be empty")
+	start, end, err := parseEventTimes(req.Start, req.End, req.AllDay)
+	if err != nil {
+		httpresponse.Error(w, http.StatusBadRequest, "invalid_request", "request body must be valid JSON")
 		return
-	case errors.Is(err, service.ErrInvalidTimeRange):
-		httpresponse.Error(w, http.StatusBadRequest, "invalid_request", "end must be after start")
-		return
-	case errors.Is(err, service.ErrInvalidRecurrenceRule):
-		httpresponse.Error(w, http.StatusBadRequest, "invalid_request", "recurrence rule is invalid")
-		return
-	case errors.Is(err, service.ErrInvalidReminderChannel):
-		httpresponse.Error(w, http.StatusBadRequest, "invalid_request", "reminder channel must be \"notification\" or \"email\"")
-		return
-	case errors.Is(err, service.ErrCalendarNotFound):
-		httpresponse.Error(w, http.StatusBadRequest, "invalid_request", "calendar not found")
-		return
-	case errors.Is(err, repository.ErrNotFound):
-		httpresponse.Error(w, http.StatusNotFound, "not_found", "event not found")
-		return
-	case err != nil:
-		httpresponse.Error(w, http.StatusInternalServerError, "internal_error", "failed to update event")
+	}
+
+	event, err := h.events.Update(r.Context(), userID, id, service.EventWrite{
+		CalendarID:  req.CalendarID,
+		Title:       req.Title,
+		Start:       start,
+		End:         end,
+		AllDay:      req.AllDay,
+		Rrule:       req.Rrule,
+		Tzid:        req.Tzid,
+		Reminders:   fromReminderWire(req.Reminders),
+		Description: req.Description,
+		Location:    req.Location,
+	})
+	if respondError(w, err, updateEventErrors, "failed to update event") {
 		return
 	}
 
@@ -521,12 +373,7 @@ func (h *EventHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 
 	err := h.events.Delete(r.Context(), userID, id)
-	if errors.Is(err, repository.ErrNotFound) {
-		httpresponse.Error(w, http.StatusNotFound, "not_found", "event not found")
-		return
-	}
-	if err != nil {
-		httpresponse.Error(w, http.StatusInternalServerError, "internal_error", "failed to delete event")
+	if respondError(w, err, eventNotFoundErrors, "failed to delete event") {
 		return
 	}
 
@@ -556,18 +403,7 @@ func (h *EventHandler) AddException(w http.ResponseWriter, r *http.Request) {
 	}
 
 	err := h.events.AddException(r.Context(), userID, id, req.OccurrenceStart)
-	switch {
-	case errors.Is(err, service.ErrParentNotFound):
-		httpresponse.Error(w, http.StatusNotFound, "not_found", "event not found")
-		return
-	case errors.Is(err, service.ErrParentIsOverride):
-		httpresponse.Error(w, http.StatusBadRequest, "invalid_request", "parent event must be a master, not an override")
-		return
-	case errors.Is(err, service.ErrParentNotRecurring):
-		httpresponse.Error(w, http.StatusBadRequest, "invalid_request", "parent event does not recur")
-		return
-	case err != nil:
-		httpresponse.Error(w, http.StatusInternalServerError, "internal_error", "failed to add exception")
+	if respondError(w, err, addExceptionErrors, "failed to add exception") {
 		return
 	}
 
@@ -598,12 +434,7 @@ func (h *EventHandler) Reparent(w http.ResponseWriter, r *http.Request) {
 	}
 
 	err := h.events.ReparentFrom(r.Context(), userID, id, req.NewParentID, req.FromStart)
-	switch {
-	case errors.Is(err, service.ErrParentNotFound):
-		httpresponse.Error(w, http.StatusNotFound, "not_found", "event not found")
-		return
-	case err != nil:
-		httpresponse.Error(w, http.StatusInternalServerError, "internal_error", "failed to reparent series")
+	if respondError(w, err, reparentErrors, "failed to reparent series") {
 		return
 	}
 

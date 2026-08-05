@@ -189,11 +189,12 @@ func (b *Backend) CreateCalendar(ctx context.Context, calendar *caldav.Calendar)
 	return webdav.NewHTTPError(http.StatusNotImplemented, fmt.Errorf("creating calendars over CalDAV is not supported"))
 }
 
-// ListCalendarObjects returns one calendar object per Master Event in the
-// Calendar at path — every series in full (ADR-0025). Partial retrieval via
-// req's component/property selection is not implemented; every object is
-// returned in full.
-func (b *Backend) ListCalendarObjects(ctx context.Context, path string, req *caldav.CalendarCompRequest) ([]caldav.CalendarObject, error) {
+// listSeriesObjects builds one calendar object per Master Event in the
+// Calendar at path, keeping only the series include accepts. A nil include
+// keeps every series. Shared by the two read paths go-webdav dispatches to —
+// PROPFIND's enumeration and calendar-query's filtered REPORT — which differ
+// only in that filter (ADR-0025).
+func (b *Backend) listSeriesObjects(ctx context.Context, path string, include func(master repository.Event) (bool, error)) ([]caldav.CalendarObject, error) {
 	userID, err := userIDFromContext(ctx)
 	if err != nil {
 		return nil, err
@@ -209,8 +210,20 @@ func (b *Backend) ListCalendarObjects(ctx context.Context, path string, req *cal
 		return nil, fmt.Errorf("list series: %w", err)
 	}
 
+	if include == nil {
+		include = func(repository.Event) (bool, error) { return true, nil }
+	}
+
 	objects := make([]caldav.CalendarObject, 0, len(masters))
 	for _, master := range masters {
+		keep, err := include(master)
+		if err != nil {
+			return nil, err
+		}
+		if !keep {
+			continue
+		}
+
 		object, err := buildCalendarObject(userID, master, overridesByParent[master.ID])
 		if err != nil {
 			return nil, err
@@ -220,48 +233,32 @@ func (b *Backend) ListCalendarObjects(ctx context.Context, path string, req *cal
 	return objects, nil
 }
 
+// ListCalendarObjects returns one calendar object per Master Event in the
+// Calendar at path — every series in full (ADR-0025). Partial retrieval via
+// req's component/property selection is not implemented; every object is
+// returned in full.
+func (b *Backend) ListCalendarObjects(ctx context.Context, path string, req *caldav.CalendarCompRequest) ([]caldav.CalendarObject, error) {
+	return b.listSeriesObjects(ctx, path, nil)
+}
+
 // QueryCalendarObjects implements calendar-query: it returns every series in
 // the Calendar at path that has an Occurrence starting in the query's
 // time-range, expanded at query time via rrule-go (ADR-0025's #64 acceptance
 // criteria) — stored objects are never expanded in the database. A query
 // without a time-range behaves like ListCalendarObjects.
 func (b *Backend) QueryCalendarObjects(ctx context.Context, path string, query *caldav.CalendarQuery) ([]caldav.CalendarObject, error) {
-	userID, err := userIDFromContext(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	calendarID, err := calendarIDFromPath(userID, path)
-	if err != nil {
-		return nil, webdav.NewHTTPError(http.StatusNotFound, err)
-	}
-
-	masters, overridesByParent, err := b.events.ListSeriesByCalendar(ctx, userID, calendarID)
-	if err != nil {
-		return nil, fmt.Errorf("list series: %w", err)
-	}
-
 	from, to, hasRange := timeRangeFromQuery(query)
-
-	objects := make([]caldav.CalendarObject, 0, len(masters))
-	for _, master := range masters {
-		if hasRange {
-			inRange, err := seriesHasOccurrenceInRange(master, from, to)
-			if err != nil {
-				return nil, fmt.Errorf("expand series %q: %w", master.ID, err)
-			}
-			if !inRange {
-				continue
-			}
-		}
-
-		object, err := buildCalendarObject(userID, master, overridesByParent[master.ID])
-		if err != nil {
-			return nil, err
-		}
-		objects = append(objects, *object)
+	if !hasRange {
+		return b.listSeriesObjects(ctx, path, nil)
 	}
-	return objects, nil
+
+	return b.listSeriesObjects(ctx, path, func(master repository.Event) (bool, error) {
+		inRange, err := seriesHasOccurrenceInRange(master, from, to)
+		if err != nil {
+			return false, fmt.Errorf("expand series %q: %w", master.ID, err)
+		}
+		return inRange, nil
+	})
 }
 
 // timeRangeFromQuery extracts the VEVENT-level time-range a calendar-query

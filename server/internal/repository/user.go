@@ -8,8 +8,6 @@ import (
 	"time"
 )
 
-var ErrNotFound = errors.New("not found")
-
 type User struct {
 	ID                 int64
 	Username           string

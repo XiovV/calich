@@ -55,7 +55,7 @@ func newTestLedger(t *testing.T) (ledger *repository.FiredReminderRepository, re
 		t.Fatalf("create calendar: %v", err)
 	}
 	events := repository.NewEventRepository(sqlDB)
-	if _, err := events.Create(ctx, "evt-1", user.ID, cal.ID, "Standup", at(2026, 1, 1, 9, 0), at(2026, 1, 1, 9, 30), false, "", nil, nil, nil, "", "", 0); err != nil {
+	if _, err := events.Create(ctx, "evt-1", user.ID, repository.EventFields{CalendarID: cal.ID, Title: "Standup", Start: at(2026, 1, 1, 9, 0), End: at(2026, 1, 1, 9, 30)}, 0); err != nil {
 		t.Fatalf("create event: %v", err)
 	}
 

@@ -1,7 +1,7 @@
 import { format } from "date-fns";
 import type { Occurrence } from "./occurrence";
 
-export const MONTHS_PER_YEAR = 12;
+const MONTHS_PER_YEAR = 12;
 
 /** Stable per-day key (local calendar date) used to mark Event presence. */
 export function dayKey(date: Date): string {

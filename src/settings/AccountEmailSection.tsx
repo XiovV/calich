@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useAuthStore } from "../lib/authStore";
+import { useAsyncAction } from "../hooks/useAsyncAction";
 import { Button } from "../components/ui/Button";
 import { Input } from "../components/ui/Input";
 
@@ -12,27 +13,20 @@ export function AccountEmailSection() {
   const updateEmail = useAuthStore((state) => state.updateEmail);
 
   const [email, setEmail] = useState(user?.email ?? "");
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
+  const { isSubmitting, error, run } = useAsyncAction();
 
   const isUnchanged = email === (user?.email ?? "");
 
   async function handleSubmit(domEvent: React.FormEvent) {
     domEvent.preventDefault();
-    if (isSubmitting || isUnchanged) return;
+    if (isUnchanged) return;
 
-    setIsSubmitting(true);
-    setError(null);
-    setSaved(false);
-    try {
+    await run(async () => {
+      setSaved(false);
       await updateEmail(email);
       setSaved(true);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Something went wrong.");
-    } finally {
-      setIsSubmitting(false);
-    }
+    });
   }
 
   return (

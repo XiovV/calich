@@ -2,9 +2,9 @@ import { addDays, isSameDay, isSameMonth, startOfMonth, startOfWeek } from "date
 import type { Occurrence } from "./occurrence";
 import { roundUpToIncrement, type DraftBlock } from "./gridTime";
 
-export const MONTH_GRID_ROWS = 6;
-export const MONTH_GRID_COLUMNS = 7;
-export const MONTH_GRID_CELL_COUNT = MONTH_GRID_ROWS * MONTH_GRID_COLUMNS;
+const MONTH_GRID_ROWS = 6;
+const MONTH_GRID_COLUMNS = 7;
+const MONTH_GRID_CELL_COUNT = MONTH_GRID_ROWS * MONTH_GRID_COLUMNS;
 
 export interface MonthGridCell {
   date: Date;

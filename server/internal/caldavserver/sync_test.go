@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/XiovV/calendar/server/internal/service"
 )
 
 func report(t *testing.T, srv *httptest.Server, path, username, password, body string) *http.Response {
@@ -71,9 +73,7 @@ func TestSyncCollection_InitialSync_ReturnsAllLiveObjects(t *testing.T) {
 	env := newTestCalDAVEnv(t)
 	ctx := context.Background()
 
-	created, err := env.eventService.Create(ctx, env.userID, "evt-1", env.calendarID, "Standup",
-		time.Date(2026, 6, 1, 9, 0, 0, 0, time.UTC), time.Date(2026, 6, 1, 9, 30, 0, 0, time.UTC),
-		false, "", nil, nil, nil, nil, "", "")
+	created, err := env.eventService.Create(ctx, env.userID, "evt-1", service.EventWrite{CalendarID: env.calendarID, Title: "Standup", Start: time.Date(2026, 6, 1, 9, 0, 0, 0, time.UTC), End: time.Date(2026, 6, 1, 9, 30, 0, 0, time.UTC)})
 	if err != nil {
 		t.Fatalf("create event: %v", err)
 	}
@@ -99,9 +99,7 @@ func TestSyncCollection_UnchangedCalendar_ReturnsNothingNew(t *testing.T) {
 	env := newTestCalDAVEnv(t)
 	ctx := context.Background()
 
-	if _, err := env.eventService.Create(ctx, env.userID, "evt-1", env.calendarID, "Standup",
-		time.Date(2026, 6, 1, 9, 0, 0, 0, time.UTC), time.Date(2026, 6, 1, 9, 30, 0, 0, time.UTC),
-		false, "", nil, nil, nil, nil, "", ""); err != nil {
+	if _, err := env.eventService.Create(ctx, env.userID, "evt-1", service.EventWrite{CalendarID: env.calendarID, Title: "Standup", Start: time.Date(2026, 6, 1, 9, 0, 0, 0, time.UTC), End: time.Date(2026, 6, 1, 9, 30, 0, 0, time.UTC)}); err != nil {
 		t.Fatalf("create event: %v", err)
 	}
 
@@ -126,9 +124,7 @@ func TestSyncCollection_AfterMutation_ReturnsOnlyTheChangedObject(t *testing.T) 
 	env := newTestCalDAVEnv(t)
 	ctx := context.Background()
 
-	if _, err := env.eventService.Create(ctx, env.userID, "evt-1", env.calendarID, "Standup",
-		time.Date(2026, 6, 1, 9, 0, 0, 0, time.UTC), time.Date(2026, 6, 1, 9, 30, 0, 0, time.UTC),
-		false, "", nil, nil, nil, nil, "", ""); err != nil {
+	if _, err := env.eventService.Create(ctx, env.userID, "evt-1", service.EventWrite{CalendarID: env.calendarID, Title: "Standup", Start: time.Date(2026, 6, 1, 9, 0, 0, 0, time.UTC), End: time.Date(2026, 6, 1, 9, 30, 0, 0, time.UTC)}); err != nil {
 		t.Fatalf("create event: %v", err)
 	}
 
@@ -138,9 +134,7 @@ func TestSyncCollection_AfterMutation_ReturnsOnlyTheChangedObject(t *testing.T) 
 	initial.Body.Close()
 	token := extractSyncToken(t, initialBody)
 
-	created2, err := env.eventService.Create(ctx, env.userID, "evt-2", env.calendarID, "Lunch",
-		time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC), time.Date(2026, 6, 1, 13, 0, 0, 0, time.UTC),
-		false, "", nil, nil, nil, nil, "", "")
+	created2, err := env.eventService.Create(ctx, env.userID, "evt-2", service.EventWrite{CalendarID: env.calendarID, Title: "Lunch", Start: time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC), End: time.Date(2026, 6, 1, 13, 0, 0, 0, time.UTC)})
 	if err != nil {
 		t.Fatalf("create second event: %v", err)
 	}
@@ -163,9 +157,7 @@ func TestSyncCollection_AfterDelete_ReportsDeletedHrefAsNotFound(t *testing.T) {
 	env := newTestCalDAVEnv(t)
 	ctx := context.Background()
 
-	created, err := env.eventService.Create(ctx, env.userID, "evt-1", env.calendarID, "Standup",
-		time.Date(2026, 6, 1, 9, 0, 0, 0, time.UTC), time.Date(2026, 6, 1, 9, 30, 0, 0, time.UTC),
-		false, "", nil, nil, nil, nil, "", "")
+	created, err := env.eventService.Create(ctx, env.userID, "evt-1", service.EventWrite{CalendarID: env.calendarID, Title: "Standup", Start: time.Date(2026, 6, 1, 9, 0, 0, 0, time.UTC), End: time.Date(2026, 6, 1, 9, 30, 0, 0, time.UTC)})
 	if err != nil {
 		t.Fatalf("create event: %v", err)
 	}
@@ -203,9 +195,7 @@ func TestSyncCollection_AfterCalDAVDelete_ReportsDeletedHrefAsNotFound(t *testin
 	env := newTestCalDAVEnv(t)
 	ctx := context.Background()
 
-	created, err := env.eventService.Create(ctx, env.userID, "evt-1", env.calendarID, "Standup",
-		time.Date(2026, 6, 1, 9, 0, 0, 0, time.UTC), time.Date(2026, 6, 1, 9, 30, 0, 0, time.UTC),
-		false, "", nil, nil, nil, nil, "", "")
+	created, err := env.eventService.Create(ctx, env.userID, "evt-1", service.EventWrite{CalendarID: env.calendarID, Title: "Standup", Start: time.Date(2026, 6, 1, 9, 0, 0, 0, time.UTC), End: time.Date(2026, 6, 1, 9, 30, 0, 0, time.UTC)})
 	if err != nil {
 		t.Fatalf("create event: %v", err)
 	}
