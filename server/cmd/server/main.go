@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/XiovV/calendar/server/internal/caldavserver"
 	"github.com/XiovV/calendar/server/internal/config"
 	"github.com/XiovV/calendar/server/internal/db"
 	"github.com/XiovV/calendar/server/internal/handlers"
@@ -46,9 +47,10 @@ func main() {
 	sessions := repository.NewSessionRepository(sqlDB)
 	authService := service.NewAuthService(users, sessions, jwtSecret, cfg.InitialUsername, cfg.InitialPassword)
 	calendarService := service.NewCalendarService(repository.NewCalendarRepository(sqlDB))
-	eventService := service.NewEventService(sqlDB, repository.NewEventRepository(sqlDB), repository.NewEventExceptionRepository(sqlDB), repository.NewEventReminderRepository(sqlDB), calendarService)
+	eventService := service.NewEventService(sqlDB, repository.NewEventRepository(sqlDB), repository.NewEventExceptionRepository(sqlDB), repository.NewEventReminderRepository(sqlDB), repository.NewSyncRepository(sqlDB), calendarService)
 	notificationRepo := repository.NewNotificationRepository(sqlDB)
 	notificationService := service.NewNotificationService(notificationRepo)
+	appPasswordService := service.NewAppPasswordService(repository.NewAppPasswordRepository(sqlDB), users)
 
 	ctx := context.Background()
 	bootstrapUser, bootstrapCreatedUser, err := authService.Bootstrap(ctx)
@@ -68,8 +70,10 @@ func main() {
 	calendarHandler := handlers.NewCalendarHandler(calendarService)
 	eventHandler := handlers.NewEventHandler(eventService)
 	notificationHandler := handlers.NewNotificationHandler(notificationService)
+	appPasswordHandler := handlers.NewAppPasswordHandler(appPasswordService)
+	calDAVHandler := caldavserver.NewHTTPHandler(caldavserver.NewBackend(calendarService, eventService))
 
-	handler, err := router.New(logger, authHandler, calendarHandler, eventHandler, notificationHandler, authService, authService)
+	handler, err := router.New(logger, authHandler, calendarHandler, eventHandler, notificationHandler, appPasswordHandler, calDAVHandler, authService, authService, appPasswordService)
 	if err != nil {
 		logger.Error("failed to build router", "error", err)
 		os.Exit(1)
@@ -89,7 +93,7 @@ func main() {
 		smtpMailer := mailer.NewSMTPMailer(cfg.SMTPHost, cfg.SMTPPort, cfg.SMTPUser, cfg.SMTPPass, cfg.SMTPFrom)
 		emailDispatcher = reminder.EmailDispatcher{Users: users, Mailer: smtpMailer, Fallback: reminder.LogDispatcher{}}
 	}
-	dispatcher := reminder.NotificationDispatcher{Notifications: notificationRepo, Fallback: emailDispatcher, Now: time.Now}
+	dispatcher := reminder.NotificationDispatcher{Notifications: notificationRepo, Users: users, Fallback: emailDispatcher, Now: time.Now}
 	schedulerCtx, stopScheduler := context.WithCancel(context.Background())
 	defer stopScheduler()
 	scheduler := reminder.NewScheduler(eventService, repository.NewFiredReminderRepository(sqlDB), dispatcher, time.Now)

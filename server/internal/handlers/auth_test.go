@@ -47,6 +47,7 @@ func newAuthTestServerWithSMTP(t *testing.T, smtpConfigured bool) *httptest.Serv
 	r.With(httpauth.RequireAuth(auth)).Post("/api/auth/change-password", h.ChangePassword)
 	r.With(httpauth.RequireAuth(auth), httpauth.RequireActiveUser(auth)).Get("/api/auth/me", h.Me)
 	r.With(httpauth.RequireAuth(auth), httpauth.RequireActiveUser(auth)).Put("/api/auth/email", h.UpdateEmail)
+	r.With(httpauth.RequireAuth(auth), httpauth.RequireActiveUser(auth)).Put("/api/auth/synced-device-reminders", h.UpdateSyncedDeviceReminders)
 
 	srv := httptest.NewServer(r)
 	t.Cleanup(srv.Close)
@@ -337,6 +338,74 @@ func TestUpdateEmail_RejectsAnInvalidAddress(t *testing.T) {
 
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d", resp.StatusCode)
+	}
+}
+
+func TestMe_SyncedDeviceRemindersEnabled_DefaultsFalse(t *testing.T) {
+	srv := newAuthTestServer(t)
+	accessToken := authenticatedAccessToken(t, srv)
+
+	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/api/auth/me", nil)
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET /api/auth/me: %v", err)
+	}
+	defer resp.Body.Close()
+
+	var me meResponse
+	if err := json.NewDecoder(resp.Body).Decode(&me); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if me.SyncedDeviceRemindersEnabled {
+		t.Fatalf("expected synced device reminders to default off")
+	}
+}
+
+func TestUpdateSyncedDeviceReminders_TogglesThePreference(t *testing.T) {
+	srv := newAuthTestServer(t)
+	accessToken := authenticatedAccessToken(t, srv)
+
+	body, _ := json.Marshal(updateSyncedDeviceRemindersRequest{SyncedDeviceRemindersEnabled: true})
+	req, _ := http.NewRequest(http.MethodPut, srv.URL+"/api/auth/synced-device-reminders", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("PUT /api/auth/synced-device-reminders: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	var me meResponse
+	if err := json.NewDecoder(resp.Body).Decode(&me); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if !me.SyncedDeviceRemindersEnabled {
+		t.Fatalf("expected synced device reminders to be enabled")
+	}
+}
+
+func TestUpdateSyncedDeviceReminders_RequiresAuthentication(t *testing.T) {
+	srv := newAuthTestServer(t)
+
+	body, _ := json.Marshal(updateSyncedDeviceRemindersRequest{SyncedDeviceRemindersEnabled: true})
+	req, _ := http.NewRequest(http.MethodPut, srv.URL+"/api/auth/synced-device-reminders", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("PUT /api/auth/synced-device-reminders: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", resp.StatusCode)
 	}
 }
 

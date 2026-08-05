@@ -12,6 +12,7 @@ vi.mock("./authApi", async () => {
       me: vi.fn(),
       changePassword: vi.fn(),
       updateEmail: vi.fn(),
+      updateSyncedDeviceReminders: vi.fn(),
     },
   };
 });
@@ -25,6 +26,7 @@ const adminUser = {
   mustChangePassword: false,
   email: null,
   emailReminderChannelAvailable: false,
+  syncedDeviceRemindersEnabled: false,
 };
 
 function resetStore() {
@@ -177,5 +179,29 @@ describe("updateEmail", () => {
 
     expect(useAuthStore.getState().user).toEqual(updatedUser);
     expect(authApi.updateEmail).toHaveBeenCalledWith("token-123", "admin@example.com");
+  });
+});
+
+describe("updateSyncedDeviceReminders", () => {
+  it("throws when there is no access token", async () => {
+    await expect(useAuthStore.getState().updateSyncedDeviceReminders(true)).rejects.toThrow(
+      "Not authenticated.",
+    );
+  });
+
+  it("stores the fresh user returned by the API", async () => {
+    useAuthStore.setState({
+      status: "authenticated",
+      user: adminUser,
+      pendingUsername: null,
+      accessToken: "token-123",
+    });
+    const updatedUser = { ...adminUser, syncedDeviceRemindersEnabled: true };
+    vi.mocked(authApi.updateSyncedDeviceReminders).mockResolvedValue(updatedUser);
+
+    await useAuthStore.getState().updateSyncedDeviceReminders(true);
+
+    expect(useAuthStore.getState().user).toEqual(updatedUser);
+    expect(authApi.updateSyncedDeviceReminders).toHaveBeenCalledWith("token-123", true);
   });
 });

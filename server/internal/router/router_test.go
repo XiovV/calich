@@ -8,6 +8,9 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/emersion/go-webdav/caldav"
+
+	"github.com/XiovV/calendar/server/internal/caldavserver"
 	"github.com/XiovV/calendar/server/internal/db"
 	"github.com/XiovV/calendar/server/internal/handlers"
 	"github.com/XiovV/calendar/server/internal/repository"
@@ -32,11 +35,14 @@ func newTestRouter(t *testing.T) http.Handler {
 	authHandler := handlers.NewAuthHandler(authService, false)
 	calendarService := service.NewCalendarService(repository.NewCalendarRepository(sqlDB))
 	calendarHandler := handlers.NewCalendarHandler(calendarService)
-	eventService := service.NewEventService(sqlDB, repository.NewEventRepository(sqlDB), repository.NewEventExceptionRepository(sqlDB), repository.NewEventReminderRepository(sqlDB), calendarService)
+	eventService := service.NewEventService(sqlDB, repository.NewEventRepository(sqlDB), repository.NewEventExceptionRepository(sqlDB), repository.NewEventReminderRepository(sqlDB), repository.NewSyncRepository(sqlDB), calendarService)
 	eventHandler := handlers.NewEventHandler(eventService)
 	notificationHandler := handlers.NewNotificationHandler(service.NewNotificationService(repository.NewNotificationRepository(sqlDB)))
+	appPasswordService := service.NewAppPasswordService(repository.NewAppPasswordRepository(sqlDB), users)
+	appPasswordHandler := handlers.NewAppPasswordHandler(appPasswordService)
+	calDAVHandler := &caldav.Handler{Backend: caldavserver.NewBackend(calendarService, eventService), Prefix: "/dav"}
 
-	r, err := New(slog.New(slog.NewTextHandler(io.Discard, nil)), authHandler, calendarHandler, eventHandler, notificationHandler, authService, authService)
+	r, err := New(slog.New(slog.NewTextHandler(io.Discard, nil)), authHandler, calendarHandler, eventHandler, notificationHandler, appPasswordHandler, calDAVHandler, authService, authService, appPasswordService)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

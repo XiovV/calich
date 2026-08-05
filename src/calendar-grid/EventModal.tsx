@@ -29,6 +29,7 @@ import { useCalendarsStore } from "../lib/calendarsStore";
 import { useAuthStore } from "../lib/authStore";
 import { Select } from "../components/ui/Select";
 import { Input } from "../components/ui/Input";
+import { Textarea } from "../components/ui/Textarea";
 import { Checkbox } from "../components/ui/Checkbox";
 import { Button } from "../components/ui/Button";
 import { buttonClasses } from "../components/ui/buttonClasses";
@@ -62,6 +63,8 @@ interface InitialFormState {
   customRule: string | undefined;
   allDay: boolean;
   reminders: Reminder[];
+  description: string;
+  location: string;
 }
 
 function timeStringToDate(day: Date, time: string): Date {
@@ -92,6 +95,8 @@ function deriveInitialFormState(
       customRule: repeat === "custom" ? rrule : undefined,
       allDay: Boolean(event.allDay),
       reminders: event.reminders ?? [],
+      description: event.description ?? "",
+      location: event.location ?? "",
     };
   }
 
@@ -105,6 +110,8 @@ function deriveInitialFormState(
     customRule: undefined,
     allDay: false,
     reminders: [],
+    description: "",
+    location: "",
   };
 }
 
@@ -162,6 +169,8 @@ export function EventModal(props: EventModalProps) {
   const [reminders, setReminders] = useState<ReminderDraft[]>(() =>
     initial.reminders.map((reminder) => ({ ...reminder, draftId: crypto.randomUUID() })),
   );
+  const [description, setDescription] = useState(initial.description);
+  const [location, setLocation] = useState(initial.location);
   const [isCustomDialogOpen, setIsCustomDialogOpen] = useState(false);
   const [isDeleteConfirmOpen, setIsDeleteConfirmOpen] = useState(false);
   const [pendingEditChanges, setPendingEditChanges] = useState<
@@ -249,6 +258,8 @@ export function EventModal(props: EventModalProps) {
       allDay,
       rrule,
       reminders: reminderChanges,
+      description: description.trim(),
+      location: location.trim(),
     };
 
     if (mode !== "edit") {
@@ -368,6 +379,22 @@ export function EventModal(props: EventModalProps) {
               value={title}
               onChange={(event) => setTitle(event.target.value)}
               placeholder="Add title"
+              className="mt-4"
+            />
+
+            <Input
+              label="Location"
+              value={location}
+              onChange={(event) => setLocation(event.target.value)}
+              placeholder="Add location"
+              className="mt-4"
+            />
+
+            <Textarea
+              label="Description"
+              value={description}
+              onChange={(event) => setDescription(event.target.value)}
+              placeholder="Add description"
               className="mt-4"
             />
 

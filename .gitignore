@@ -2,3 +2,4 @@ node_modules
 /dist
 /data
 /server/bin
+.claude/settings.local.json

@@ -39,4 +39,7 @@ export interface Event {
   tzid?: string;
   // This Event's Reminders. Undefined/empty means none. See ADR-0020.
   reminders?: Reminder[];
+  // Free-text description and location, both optional.
+  description?: string;
+  location?: string;
 }

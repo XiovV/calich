@@ -261,6 +261,17 @@ func (s *AuthService) UpdateEmail(ctx context.Context, userID int64, email strin
 	return user, nil
 }
 
+// UpdateSyncedDeviceReminders sets userID's "let my synced devices show
+// reminder pop-ups (disable in-app reminder notifications)" preference
+// (ADR-0027).
+func (s *AuthService) UpdateSyncedDeviceReminders(ctx context.Context, userID int64, enabled bool) (repository.User, error) {
+	user, err := s.users.UpdateSyncedDeviceReminders(ctx, userID, enabled)
+	if err != nil {
+		return repository.User{}, fmt.Errorf("update synced device reminders preference: %w", err)
+	}
+	return user, nil
+}
+
 // Refresh mints a new access token for the session identified by the given
 // (raw, unhashed) refresh token, without rotating the refresh token itself.
 func (s *AuthService) Refresh(ctx context.Context, refreshToken string) (string, error) {

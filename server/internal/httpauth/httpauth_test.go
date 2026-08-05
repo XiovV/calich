@@ -8,6 +8,75 @@ import (
 	"testing"
 )
 
+type fakeCalDAVAuthenticator struct {
+	userID int64
+	err    error
+}
+
+func (f fakeCalDAVAuthenticator) Authenticate(ctx context.Context, username, password string) (int64, error) {
+	if f.err != nil {
+		return 0, f.err
+	}
+	return f.userID, nil
+}
+
+func TestRequireCalDAVAuth_MissingCredentials_Returns401(t *testing.T) {
+	handler := RequireCalDAVAuth(fakeCalDAVAuthenticator{userID: 1})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatalf("next handler should not be called")
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/dav/", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", rec.Code)
+	}
+	if rec.Header().Get("WWW-Authenticate") == "" {
+		t.Fatalf("expected a WWW-Authenticate header to prompt the client for Basic credentials")
+	}
+}
+
+func TestRequireCalDAVAuth_InvalidCredentials_Returns401(t *testing.T) {
+	handler := RequireCalDAVAuth(fakeCalDAVAuthenticator{err: errors.New("bad credentials")})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatalf("next handler should not be called")
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/dav/", nil)
+	req.SetBasicAuth("admin", "wrong-secret")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", rec.Code)
+	}
+}
+
+func TestRequireCalDAVAuth_ValidCredentials_SetsUserIDInContext(t *testing.T) {
+	var gotUserID int64
+	var gotOK bool
+
+	handler := RequireCalDAVAuth(fakeCalDAVAuthenticator{userID: 7})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotUserID, gotOK = UserIDFromContext(r.Context())
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/dav/", nil)
+	req.SetBasicAuth("admin", "an-app-password-secret")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	if !gotOK {
+		t.Fatalf("expected user id to be set in context")
+	}
+	if gotUserID != 7 {
+		t.Fatalf("expected user id 7, got %d", gotUserID)
+	}
+}
+
 type fakeAuthenticator struct {
 	userID int64
 	err    error

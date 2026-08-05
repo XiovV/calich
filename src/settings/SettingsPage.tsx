@@ -2,9 +2,11 @@ import { ArrowLeft } from "lucide-react";
 import { useNavigate } from "react-router";
 import { IconButton } from "../components/ui/IconButton";
 import { AccountEmailSection } from "./AccountEmailSection";
+import { AppPasswordsSection } from "./AppPasswordsSection";
+import { ReminderDeliverySection } from "./ReminderDeliverySection";
 
-// The Settings page shell. Notification preferences, timezone, and password
-// sections will be dropped into the content area below by later work.
+// The Settings page shell. Timezone and password sections will be dropped
+// into the content area below by later work.
 export function SettingsPage() {
   const navigate = useNavigate();
 
@@ -21,6 +23,8 @@ export function SettingsPage() {
       </header>
       <main className="flex-1 overflow-y-auto p-6">
         <AccountEmailSection />
+        <AppPasswordsSection />
+        <ReminderDeliverySection />
       </main>
     </div>
   );

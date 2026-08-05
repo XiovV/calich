@@ -6,6 +6,8 @@ import {
   makeException,
   makeOverride,
   resolveAllDay,
+  resolveDescription,
+  resolveLocation,
   resolveReminders,
   shouldDiscardChildren,
   splitFollowing,
@@ -24,7 +26,10 @@ export type MasterFieldChanges = EventFieldChanges & { rrule?: string };
  * silently clears the Anchor zone (ADR-0019), and `reminders` so it never
  * silently clears the master's own Reminders either (ADR-0020) — the update
  * API replaces Reminders wholesale, so an omitted field would wipe them. */
-type MasterCoreFields = Pick<Event, "calendarId" | "title" | "start" | "end" | "tzid" | "reminders">;
+type MasterCoreFields = Pick<
+  Event,
+  "calendarId" | "title" | "start" | "end" | "tzid" | "reminders" | "description" | "location"
+>;
 
 /**
  * A scoped edit (This event/This and following/All events) compiles down to
@@ -161,6 +166,8 @@ export function planEditOccurrence(
           // Preserved unchanged — no picker exists to change it (ADR-0019).
           tzid: master.tzid,
           reminders: resolveReminders(changes, master),
+          description: resolveDescription(changes, master),
+          location: resolveLocation(changes, master),
         },
         discardChildren: shouldDiscardChildren(master.rrule, rrule),
       },
@@ -188,6 +195,8 @@ export function planEditOccurrence(
           end: master.end,
           tzid: master.tzid,
           reminders: master.reminders,
+          description: master.description,
+          location: master.location,
         },
         truncatedRrule: truncatedMaster.rrule,
         keptExdates,
@@ -221,6 +230,8 @@ export function planEditOccurrence(
           // Editing an existing Override's Reminders only affects its own
           // row, never the rest of the series (ADR-0020).
           reminders: resolveReminders(changes, occurrence.event),
+          description: resolveDescription(changes, occurrence.event),
+          location: resolveLocation(changes, occurrence.event),
         },
       },
     ];
@@ -242,6 +253,8 @@ export function planEditOccurrence(
         allDay: override.allDay,
         tzid: override.tzid,
         reminders: override.reminders,
+        description: override.description,
+        location: override.location,
       },
     },
   ];
@@ -298,6 +311,8 @@ export function planDeleteOccurrence({
           end: master.end,
           tzid: master.tzid,
           reminders: master.reminders,
+          description: master.description,
+          location: master.location,
         },
         truncatedRrule,
         keptExdates,

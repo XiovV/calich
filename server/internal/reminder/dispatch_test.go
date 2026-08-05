@@ -23,8 +23,9 @@ func (f *fakeNotificationInserter) Insert(_ context.Context, userID int64, event
 func TestNotificationDispatcher_NotificationChannelInsertsANotification(t *testing.T) {
 	inserter := &fakeNotificationInserter{}
 	fallback := &fakeDispatcher{}
+	users := fakeUserLookup{usersByID: map[int64]repository.User{7: {ID: 7}}}
 	fixedNow := time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC)
-	dispatcher := NotificationDispatcher{Notifications: inserter, Fallback: fallback, Now: func() time.Time { return fixedNow }}
+	dispatcher := NotificationDispatcher{Notifications: inserter, Users: users, Fallback: fallback, Now: func() time.Time { return fixedNow }}
 
 	due := DueReminder{
 		EventID:         "evt-1",
@@ -71,13 +72,87 @@ func TestNotificationDispatcher_NonNotificationChannelGoesToFallback(t *testing.
 	}
 }
 
-// fakeEmailUserLookup returns a fixed user by id, standing in for the real
+// TestNotificationDispatcher_SkipsNotificationChannelWhenUserOptedIntoSyncedDeviceReminders
+// covers ADR-0027: a user who has opted a synced device into showing its own
+// reminder pop-ups must not also get a server-side Notification for the
+// same Reminder.
+func TestNotificationDispatcher_SkipsNotificationChannelWhenUserOptedIntoSyncedDeviceReminders(t *testing.T) {
+	inserter := &fakeNotificationInserter{}
+	fallback := &fakeDispatcher{}
+	users := fakeUserLookup{usersByID: map[int64]repository.User{
+		7: {ID: 7, SyncedDeviceRemindersEnabled: true},
+	}}
+	dispatcher := NotificationDispatcher{Notifications: inserter, Users: users, Fallback: fallback, Now: time.Now}
+
+	due := DueReminder{EventID: "evt-1", UserID: 7, ReminderID: 100, Channel: "notification"}
+
+	if err := dispatcher.Dispatch(context.Background(), due); err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+
+	if len(inserter.inserts) != 0 {
+		t.Fatalf("expected no notification insert when the user opted into synced device reminders, got %+v", inserter.inserts)
+	}
+	if len(fallback.dispatched) != 1 || fallback.dispatched[0].EventID != "evt-1" {
+		t.Fatalf("expected the suppressed Notification Reminder to reach the fallback, got %+v", fallback.dispatched)
+	}
+}
+
+// TestNotificationDispatcher_InsertsWhenSyncedDeviceRemindersDisabled is the
+// default-off half of ADR-0027: a user who hasn't opted in still gets the
+// in-app Notification exactly as before.
+func TestNotificationDispatcher_InsertsWhenSyncedDeviceRemindersDisabled(t *testing.T) {
+	inserter := &fakeNotificationInserter{}
+	fallback := &fakeDispatcher{}
+	users := fakeUserLookup{usersByID: map[int64]repository.User{
+		7: {ID: 7, SyncedDeviceRemindersEnabled: false},
+	}}
+	dispatcher := NotificationDispatcher{Notifications: inserter, Users: users, Fallback: fallback, Now: time.Now}
+
+	due := DueReminder{EventID: "evt-1", UserID: 7, ReminderID: 100, Channel: "notification"}
+
+	if err := dispatcher.Dispatch(context.Background(), due); err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+
+	if len(inserter.inserts) != 1 {
+		t.Fatalf("expected a notification insert when synced device reminders are disabled, got %+v", inserter.inserts)
+	}
+	if len(fallback.dispatched) != 0 {
+		t.Fatalf("expected fallback not to be called, got %+v", fallback.dispatched)
+	}
+}
+
+// TestNotificationDispatcher_EmailChannelUnaffectedBySyncedDeviceRemindersToggle
+// covers ADR-0027's "Email channel: always server-fired" — the toggle must
+// never gate anything but the Notification channel, so a "notification"
+// dispatcher never even needs to consult the toggle for an email Reminder.
+func TestNotificationDispatcher_EmailChannelUnaffectedBySyncedDeviceRemindersToggle(t *testing.T) {
+	inserter := &fakeNotificationInserter{}
+	fallback := &fakeDispatcher{}
+	users := fakeUserLookup{usersByID: map[int64]repository.User{
+		7: {ID: 7, SyncedDeviceRemindersEnabled: true},
+	}}
+	dispatcher := NotificationDispatcher{Notifications: inserter, Users: users, Fallback: fallback, Now: time.Now}
+
+	due := DueReminder{EventID: "evt-1", UserID: 7, ReminderID: 100, Channel: "email"}
+
+	if err := dispatcher.Dispatch(context.Background(), due); err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+
+	if len(fallback.dispatched) != 1 || fallback.dispatched[0].EventID != "evt-1" {
+		t.Fatalf("expected the email Reminder to reach the fallback regardless of the toggle, got %+v", fallback.dispatched)
+	}
+}
+
+// fakeUserLookup returns a fixed user by id, standing in for the real
 // UserRepository.
-type fakeEmailUserLookup struct {
+type fakeUserLookup struct {
 	usersByID map[int64]repository.User
 }
 
-func (f fakeEmailUserLookup) GetByID(_ context.Context, id int64) (repository.User, error) {
+func (f fakeUserLookup) GetByID(_ context.Context, id int64) (repository.User, error) {
 	return f.usersByID[id], nil
 }
 
@@ -99,7 +174,7 @@ func (f *fakeMailer) Send(to, subject, body string) error {
 func emailPtr(s string) *string { return &s }
 
 func TestEmailDispatcher_EmailChannelSendsToTheUsersAddress(t *testing.T) {
-	users := fakeEmailUserLookup{usersByID: map[int64]repository.User{
+	users := fakeUserLookup{usersByID: map[int64]repository.User{
 		7: {ID: 7, Email: emailPtr("alice@example.com")},
 	}}
 	mailer := &fakeMailer{}
@@ -131,7 +206,7 @@ func TestEmailDispatcher_EmailChannelSendsToTheUsersAddress(t *testing.T) {
 }
 
 func TestEmailDispatcher_NonEmailChannelGoesToFallback(t *testing.T) {
-	users := fakeEmailUserLookup{usersByID: map[int64]repository.User{}}
+	users := fakeUserLookup{usersByID: map[int64]repository.User{}}
 	mailer := &fakeMailer{}
 	fallback := &fakeDispatcher{}
 	dispatcher := EmailDispatcher{Users: users, Mailer: mailer, Fallback: fallback}
@@ -151,7 +226,7 @@ func TestEmailDispatcher_NonEmailChannelGoesToFallback(t *testing.T) {
 }
 
 func TestEmailDispatcher_SkipsSendingWhenTheUserHasNoEmailConfigured(t *testing.T) {
-	users := fakeEmailUserLookup{usersByID: map[int64]repository.User{
+	users := fakeUserLookup{usersByID: map[int64]repository.User{
 		7: {ID: 7, Email: nil},
 	}}
 	mailer := &fakeMailer{}

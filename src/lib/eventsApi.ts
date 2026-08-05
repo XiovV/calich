@@ -20,6 +20,8 @@ interface EventWire {
   tzid?: string | null;
   // Absent/empty means no Reminders (ADR-0020).
   reminders?: Reminder[];
+  description?: string;
+  location?: string;
 }
 
 /**
@@ -61,6 +63,8 @@ function fromWire(wire: EventWire): Event {
     exdates: wire.exdates?.map((exdate) => new Date(exdate)),
     tzid: wire.tzid ?? undefined,
     reminders: wire.reminders,
+    description: wire.description || undefined,
+    location: wire.location || undefined,
   };
 }
 
@@ -90,6 +94,8 @@ export const eventsApi = {
       recurrenceId?: Date;
       tzid?: string;
       reminders?: Reminder[];
+      description?: string;
+      location?: string;
     },
   ): Promise<Event> {
     const response = await fetch("/api/events/", {
@@ -108,6 +114,8 @@ export const eventsApi = {
         recurrenceId: event.recurrenceId?.toISOString(),
         tzid: event.tzid,
         reminders: event.reminders,
+        description: event.description,
+        location: event.location,
       }),
     });
     if (!response.ok) throw await errorFromResponse(response);
@@ -127,6 +135,8 @@ export const eventsApi = {
       rrule?: string;
       tzid?: string;
       reminders?: Reminder[];
+      description?: string;
+      location?: string;
     },
   ): Promise<Event> {
     const response = await fetch(`/api/events/${id}`, {
@@ -142,6 +152,8 @@ export const eventsApi = {
         rrule: changes.rrule ?? "",
         tzid: changes.tzid,
         reminders: changes.reminders,
+        description: changes.description,
+        location: changes.location,
       }),
     });
     if (!response.ok) throw await errorFromResponse(response);
