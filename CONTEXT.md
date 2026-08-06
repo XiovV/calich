@@ -139,6 +139,16 @@ _Avoid_: app-specific password (in prose), device password, API key
 The unit CalDAV addresses — one `.ics` resource per Event *series*, sharing a single iCalendar `UID` (the Master's id) and bundling the Master, all its Overrides, and its Exceptions in one file. The CalDAV-visible counterpart to the many rows a series occupies and to the Occurrences it expands to: one Calendar object, one series, many rows. Exposed at `{masterId}.ics`. See ADR-0025.
 _Avoid_: calendar resource, ics file, vevent
 
+## Interchange
+
+**Calendar file**:
+A standalone `.ics` document exchanged with the world outside this instance — downloaded to hand to a person or another app, or uploaded to bring foreign events in. Distinct from a Calendar object: that is the sync unit CalDAV addresses (always exactly one series), whereas a Calendar file may hold one Event, one whole Calendar, or a foreign app's entire export. See ADR-0030.
+_Avoid_: ics file, export file, calendar export
+
+**Import summary**:
+The counted account of what an import did to a Calendar file's contents — what was skipped (and why), what was imported but altered, and what was ignored as unmodelled. Shown before the import is confirmed and again after it runs. The user's only view of a deliberately lossy translation, so it is part of the feature rather than a diagnostic. See ADR-0030.
+_Avoid_: import report, import log, import result
+
 ## Deployment
 
 **Data directory**:

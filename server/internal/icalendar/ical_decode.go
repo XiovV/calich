@@ -1,10 +1,10 @@
-// ical_decode.go is seriesToICal's inverse: it decomposes one incoming
+// ical_decode.go is SeriesToICal's inverse: it decomposes one incoming
 // VCALENDAR into the Master/Overrides/Exdates PutCalendarObject writes
 // (ADR-0025). Anything it does not recognize — VALARM actions other than
 // DISPLAY/EMAIL, end-relative or absolute-datetime TRIGGERs (ADR-0020
 // deferred) — is silently dropped rather than rejected, matching ADR-0026's
 // "unmodeled data is normalized away, not preserved" decision.
-package caldavserver
+package icalendar
 
 import (
 	"fmt"
@@ -16,9 +16,9 @@ import (
 	"github.com/XiovV/calendar/server/internal/repository"
 )
 
-// parsedEvent is one decoded VEVENT — a Master or an Override — before it is
+// ParsedEvent is one decoded VEVENT — a Master or an Override — before it is
 // turned into a service.SeriesWrite/OverrideWrite.
-type parsedEvent struct {
+type ParsedEvent struct {
 	Title, Description, Location string
 	Start, End                   time.Time
 	AllDay                       bool
@@ -26,36 +26,38 @@ type parsedEvent struct {
 	Reminders                    []repository.Reminder
 }
 
-// parsedSeries is a whole decomposed calendar object: the Master VEVENT
+// ParsedSeries is a whole decomposed calendar object: the Master VEVENT
 // (identified by having no RECURRENCE-ID), every Override VEVENT (has one),
 // and the Master's EXDATEs.
-type parsedSeries struct {
+type ParsedSeries struct {
 	UID       string
 	Rrule     string
 	Exdates   []time.Time
-	Master    parsedEvent
-	Overrides []overrideEvent
+	Master    ParsedEvent
+	Overrides []OverrideEvent
 }
 
-type overrideEvent struct {
-	parsedEvent
+// OverrideEvent is a ParsedEvent carrying the RECURRENCE-ID that identifies
+// which Occurrence of the Master it overrides.
+type OverrideEvent struct {
+	ParsedEvent
 	RecurrenceID time.Time
 }
 
-// parseCalendarObject decomposes cal into a parsedSeries: exactly one VEVENT
+// ParseCalendarObject decomposes cal into a ParsedSeries: exactly one VEVENT
 // without RECURRENCE-ID becomes the Master, every VEVENT with one becomes an
 // Override, and all must share one UID (ADR-0025).
-func parseCalendarObject(cal *ical.Calendar) (*parsedSeries, error) {
+func ParseCalendarObject(cal *ical.Calendar) (*ParsedSeries, error) {
 	events := cal.Events()
 	if len(events) == 0 {
 		return nil, fmt.Errorf("calendar object has no VEVENT")
 	}
 
 	var uid string
-	var master *parsedEvent
+	var master *ParsedEvent
 	var masterRrule string
 	var exdates []time.Time
-	var overrides []overrideEvent
+	var overrides []OverrideEvent
 
 	for _, v := range events {
 		vUID, err := v.Props.Text(ical.PropUID)
@@ -98,14 +100,14 @@ func parseCalendarObject(cal *ical.Calendar) (*parsedSeries, error) {
 		if err != nil {
 			return nil, fmt.Errorf("parse recurrence-id: %w", err)
 		}
-		overrides = append(overrides, overrideEvent{parsedEvent: pe, RecurrenceID: recurrenceID})
+		overrides = append(overrides, OverrideEvent{ParsedEvent: pe, RecurrenceID: recurrenceID})
 	}
 
 	if master == nil {
 		return nil, fmt.Errorf("calendar object has no master VEVENT (every VEVENT carries RECURRENCE-ID)")
 	}
 
-	return &parsedSeries{
+	return &ParsedSeries{
 		UID:       uid,
 		Rrule:     masterRrule,
 		Exdates:   exdates,
@@ -117,35 +119,35 @@ func parseCalendarObject(cal *ical.Calendar) (*parsedSeries, error) {
 // parseVEvent decodes v's shared fields. rrule is only populated for a
 // Master (isOverride false) — an Override is never itself a recurring
 // series (ADR-0016), so an RRULE on one is unmodeled and dropped.
-func parseVEvent(v ical.Event, isOverride bool) (parsedEvent, string, error) {
+func parseVEvent(v ical.Event, isOverride bool) (ParsedEvent, string, error) {
 	startProp := v.Props.Get(ical.PropDateTimeStart)
 	if startProp == nil {
-		return parsedEvent{}, "", fmt.Errorf("VEVENT missing DTSTART")
+		return ParsedEvent{}, "", fmt.Errorf("VEVENT missing DTSTART")
 	}
 	start, allDay, tzid, err := parseEventTime(startProp)
 	if err != nil {
-		return parsedEvent{}, "", fmt.Errorf("parse dtstart: %w", err)
+		return ParsedEvent{}, "", fmt.Errorf("parse dtstart: %w", err)
 	}
 
 	end := start
 	if endProp := v.Props.Get(ical.PropDateTimeEnd); endProp != nil {
 		end, _, _, err = parseEventTime(endProp)
 		if err != nil {
-			return parsedEvent{}, "", fmt.Errorf("parse dtend: %w", err)
+			return ParsedEvent{}, "", fmt.Errorf("parse dtend: %w", err)
 		}
 	}
 
 	title, err := v.Props.Text(ical.PropSummary)
 	if err != nil {
-		return parsedEvent{}, "", fmt.Errorf("parse summary: %w", err)
+		return ParsedEvent{}, "", fmt.Errorf("parse summary: %w", err)
 	}
 	description, err := v.Props.Text(ical.PropDescription)
 	if err != nil {
-		return parsedEvent{}, "", fmt.Errorf("parse description: %w", err)
+		return ParsedEvent{}, "", fmt.Errorf("parse description: %w", err)
 	}
 	location, err := v.Props.Text(ical.PropLocation)
 	if err != nil {
-		return parsedEvent{}, "", fmt.Errorf("parse location: %w", err)
+		return ParsedEvent{}, "", fmt.Errorf("parse location: %w", err)
 	}
 
 	var rrule string
@@ -157,10 +159,10 @@ func parseVEvent(v ical.Event, isOverride bool) (parsedEvent, string, error) {
 
 	reminders, err := parseVAlarms(v, allDay)
 	if err != nil {
-		return parsedEvent{}, "", err
+		return ParsedEvent{}, "", err
 	}
 
-	return parsedEvent{
+	return ParsedEvent{
 		Title:       title,
 		Description: description,
 		Location:    location,

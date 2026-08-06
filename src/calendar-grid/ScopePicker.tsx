@@ -13,8 +13,13 @@ const SCOPE_OPTIONS: { value: EditScope; label: string }[] = [
 ];
 
 interface ScopePickerProps {
-  /** "Edit" or "Delete" — used in the title and the confirm button's label. */
+  /** "Edit", "Delete", or "Download" — used in the title and the confirm
+   * button's label. */
   action: string;
+  /** Which of the three scopes to offer — defaults to all three. Download
+   * only offers This event/All events, since "This and following" doesn't
+   * make sense for a single file export (issue #78). */
+  scopes?: EditScope[];
   onConfirm: (scope: EditScope) => void;
   onClose: () => void;
 }
@@ -24,8 +29,11 @@ interface ScopePickerProps {
  * deleting a recurring Occurrence, mirroring Google Calendar (ADR-0016).
  * Defaults to "This event".
  */
-export function ScopePicker({ action, onConfirm, onClose }: ScopePickerProps) {
-  const [scope, setScope] = useState<EditScope>("this");
+export function ScopePicker({ action, scopes, onConfirm, onClose }: ScopePickerProps) {
+  const options = scopes
+    ? SCOPE_OPTIONS.filter((option) => scopes.includes(option.value))
+    : SCOPE_OPTIONS;
+  const [scope, setScope] = useState<EditScope>(options[0]?.value ?? "this");
 
   return (
     <Dialog.Root
@@ -46,7 +54,7 @@ export function ScopePicker({ action, onConfirm, onClose }: ScopePickerProps) {
             onValueChange={(value) => setScope(value as EditScope)}
             className="mt-4 flex flex-col gap-3"
           >
-            {SCOPE_OPTIONS.map((option) => (
+            {options.map((option) => (
               <label
                 key={option.value}
                 className="flex items-center gap-2 text-body text-ink"

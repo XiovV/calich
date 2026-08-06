@@ -6,4 +6,7 @@ export const toast = {
   error(message: string) {
     toastManager.add({ title: message, type: "error" });
   },
+  success(message: string) {
+    toastManager.add({ title: message, type: "success" });
+  },
 };

@@ -1,4 +1,4 @@
-package caldavserver
+package icalendar
 
 import (
 	"bytes"
@@ -13,7 +13,7 @@ import (
 
 func mustEncode(t *testing.T, master repository.Event, overrides []repository.Event) string {
 	t.Helper()
-	cal, err := seriesToICal(master, overrides)
+	cal, err := SeriesToICal(master, overrides)
 	if err != nil {
 		t.Fatalf("seriesToICal: %v", err)
 	}
@@ -250,20 +250,20 @@ func TestCalendarETag_ChangesWhenReconstructionChanges(t *testing.T) {
 		CreatedAt: time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC),
 	}
 
-	cal1, err := seriesToICal(base, nil)
+	cal1, err := SeriesToICal(base, nil)
 	if err != nil {
 		t.Fatalf("seriesToICal: %v", err)
 	}
-	etag1, err := calendarETag(cal1)
+	etag1, err := CalendarETag(cal1)
 	if err != nil {
 		t.Fatalf("calendarETag: %v", err)
 	}
 
-	cal2, err := seriesToICal(base, nil)
+	cal2, err := SeriesToICal(base, nil)
 	if err != nil {
 		t.Fatalf("seriesToICal: %v", err)
 	}
-	etag2, err := calendarETag(cal2)
+	etag2, err := CalendarETag(cal2)
 	if err != nil {
 		t.Fatalf("calendarETag: %v", err)
 	}
@@ -273,11 +273,11 @@ func TestCalendarETag_ChangesWhenReconstructionChanges(t *testing.T) {
 
 	changed := base
 	changed.Title = "Meeting (renamed)"
-	cal3, err := seriesToICal(changed, nil)
+	cal3, err := SeriesToICal(changed, nil)
 	if err != nil {
 		t.Fatalf("seriesToICal: %v", err)
 	}
-	etag3, err := calendarETag(cal3)
+	etag3, err := CalendarETag(cal3)
 	if err != nil {
 		t.Fatalf("calendarETag: %v", err)
 	}

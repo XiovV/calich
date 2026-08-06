@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/XiovV/calendar/server/internal/recurrence"
 )
 
 type Event struct {
@@ -109,15 +111,32 @@ func (r *EventRepository) GetByID(ctx context.Context, userID int64, id string) 
 // ListByUser returns a user's events ordered by start time. When from/to are
 // non-nil, only events overlapping that half-open range are returned; either
 // may be nil to leave that side of the range unbounded.
+//
+// A recurring Master's own start/end columns are just its first Occurrence —
+// windowing on those directly would wrongly exclude e.g. a 2009 Master with
+// an open-ended rrule from a 2026 window despite it still generating
+// Occurrences there (#80). So a Master (rrule != "") is only cheaply
+// pre-filtered by SQL on its lower bound — Occurrences never precede a
+// series' own start, so "start" >= to rules it out on its own — and then
+// checked in Go via recurrence.ExpandOccurrences, the same query-time
+// expander CalDAV and ICS export use, to decide whether it actually
+// produces an Occurrence in [from, to) — a widened, effectively-unbounded
+// window on whichever side has no caller-given bound, so e.g. a from-only
+// query still excludes a Master whose rule ended before from. A plain Event
+// or an Override (both rrule == "") has no such ambiguity: its stored
+// start/end IS the Occurrence, so the SQL column filter alone is exact.
 func (r *EventRepository) ListByUser(ctx context.Context, userID int64, from, to *time.Time) ([]Event, error) {
 	query := `SELECT id, user_id, calendar_id, title, "start", "end", all_day, rrule, parent_id, recurrence_id, tzid, description, location, created_at, change_seq FROM events WHERE user_id = ?`
 	args := []any{userID}
 
-	if from != nil {
-		query += ` AND "end" > ?`
+	switch {
+	case from != nil && to != nil:
+		query += ` AND ((rrule = '' AND "end" > ? AND "start" < ?) OR (rrule != '' AND "start" < ?))`
+		args = append(args, *from, *to, *to)
+	case from != nil:
+		query += ` AND (rrule != '' OR "end" > ?)`
 		args = append(args, *from)
-	}
-	if to != nil {
+	case to != nil:
 		query += ` AND "start" < ?`
 		args = append(args, *to)
 	}
@@ -141,7 +160,52 @@ func (r *EventRepository) ListByUser(ctx context.Context, userID int64, from, to
 		return nil, fmt.Errorf("iterate events: %w", err)
 	}
 
-	return events, nil
+	if from == nil && to == nil {
+		return events, nil
+	}
+	// One-sided windows still need the Go-side recurrence check — a
+	// from-only query must still exclude a Master whose rule ended before
+	// from, not just one starting after it — so a missing bound is widened
+	// to an effectively unbounded sentinel rather than skipped outright.
+	windowFrom, windowTo := openWindowStart, openWindowEnd
+	if from != nil {
+		windowFrom = *from
+	}
+	if to != nil {
+		windowTo = *to
+	}
+	return filterRecurringByWindow(events, windowFrom, windowTo)
+}
+
+// openWindowStart and openWindowEnd stand in for a missing from/to bound in
+// ListByUser's Go-side recurrence check, wide enough to never themselves
+// exclude a real Occurrence.
+var (
+	openWindowStart = time.Time{}
+	openWindowEnd   = time.Date(9999, 1, 1, 0, 0, 0, 0, time.UTC)
+)
+
+// filterRecurringByWindow drops a recurring Master (rrule != "") from events
+// when its rrule produces no Occurrence in [from, to) — SQL already excluded
+// what it safely could; this is the recurrence-aware half of the filter
+// SQL can't express (#80).
+func filterRecurringByWindow(events []Event, from, to time.Time) ([]Event, error) {
+	filtered := make([]Event, 0, len(events))
+	for _, e := range events {
+		if e.Rrule == "" {
+			filtered = append(filtered, e)
+			continue
+		}
+
+		occurrences, err := recurrence.ExpandOccurrences(e.Rrule, e.Tzid, e.Start, from, to)
+		if err != nil {
+			return nil, fmt.Errorf("expand occurrences for event %q: %w", e.ID, err)
+		}
+		if len(occurrences) > 0 {
+			filtered = append(filtered, e)
+		}
+	}
+	return filtered, nil
 }
 
 // ListAllWithReminders returns every Event across every user that carries at

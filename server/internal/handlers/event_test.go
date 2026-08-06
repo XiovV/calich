@@ -120,6 +120,7 @@ func newEventTestServer(t *testing.T) (baseURL, accessToken, calendarID string) 
 		r.Delete("/{id}", eventHandler.Delete)
 		r.Post("/{id}/exceptions", eventHandler.AddException)
 		r.Post("/{id}/reparent", eventHandler.Reparent)
+		r.Get("/{id}/ics", eventHandler.ICS)
 	})
 
 	srv := httptest.NewServer(r)

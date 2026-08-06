@@ -1,19 +1,23 @@
 import { useState } from "react";
-import { Pencil, Plus, Trash2 } from "lucide-react";
+import { Download, Pencil, Plus, Trash2 } from "lucide-react";
 import { Checkbox } from "../ui/Checkbox";
 import { IconButton } from "../ui/IconButton";
 import type { Calendar } from "../../lib/calendar";
 import { resolveCalendarFill, toOpaqueHex } from "../../lib/calendarColors";
+import { useAuthStore } from "../../lib/authStore";
 import { useCalendarsStore } from "../../lib/calendarsStore";
 import { useEventsStore } from "../../lib/eventsStore";
 import { useShellStore } from "../../lib/shellStore";
 import { deleteCalendarCascade } from "../../lib/deleteCalendarCascade";
+import { icsApi } from "../../lib/icsApi";
+import { toast } from "../../lib/toast";
 import { CalendarModal } from "./CalendarModal";
 import { DeleteCalendarConfirmation } from "./DeleteCalendarConfirmation";
 
 export function CalendarList() {
   const calendars = useCalendarsStore((state) => state.calendars);
   const events = useEventsStore((state) => state.events);
+  const accessToken = useAuthStore((state) => state.accessToken);
   const checkedCalendarIds = useShellStore((state) => state.checkedCalendarIds);
   const toggleCalendarChecked = useShellStore(
     (state) => state.toggleCalendarChecked,
@@ -32,6 +36,15 @@ export function CalendarList() {
     if (!deletingCalendar) return;
     deleteCalendarCascade(deletingCalendar.id);
     setDeletingCalendarId(null);
+  }
+
+  async function handleDownload(calendar: Calendar) {
+    if (!accessToken) return;
+    try {
+      await icsApi.downloadCalendar(accessToken, calendar.id, calendar.name);
+    } catch {
+      toast.error("Failed to download calendar.");
+    }
   }
 
   return (
@@ -62,6 +75,14 @@ export function CalendarList() {
             <span className="flex-1 truncate text-body text-ink">
               {calendar.name}
             </span>
+            <IconButton
+              size="tiny"
+              onClick={() => handleDownload(calendar)}
+              aria-label={`Download ${calendar.name}`}
+              className="opacity-0 focus-visible:opacity-100 group-hover:opacity-100"
+            >
+              <Download className="size-3.5" />
+            </IconButton>
             <IconButton
               size="tiny"
               onClick={() => setEditingCalendar(calendar)}

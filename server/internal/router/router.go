@@ -45,9 +45,12 @@ func New(logger *slog.Logger, authHandler *handlers.AuthHandler, calendarHandler
 
 			r.Get("/", calendarHandler.List)
 			r.Post("/", calendarHandler.Create)
+			r.Get("/ics", calendarHandler.ICSAll)
+			r.Post("/import", calendarHandler.Import)
 			r.Get("/{id}", calendarHandler.Get)
 			r.Patch("/{id}", calendarHandler.Update)
 			r.Delete("/{id}", calendarHandler.Delete)
+			r.Get("/{id}/ics", calendarHandler.ICS)
 		})
 
 		r.Route("/events", func(r chi.Router) {
@@ -61,6 +64,7 @@ func New(logger *slog.Logger, authHandler *handlers.AuthHandler, calendarHandler
 			r.Delete("/{id}", eventHandler.Delete)
 			r.Post("/{id}/exceptions", eventHandler.AddException)
 			r.Post("/{id}/reparent", eventHandler.Reparent)
+			r.Get("/{id}/ics", eventHandler.ICS)
 		})
 
 		r.Route("/notifications", func(r chi.Router) {

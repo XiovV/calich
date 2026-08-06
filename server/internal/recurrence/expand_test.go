@@ -1,11 +1,11 @@
-package caldavserver
+package recurrence
 
 import (
 	"testing"
 	"time"
 )
 
-// mustTZ loads an IANA zone or fails the test, keeping expandOccurrences
+// mustTZ loads an IANA zone or fails the test, keeping ExpandOccurrences
 // fixtures readable.
 func mustTZ(t *testing.T, name string) *time.Location {
 	t.Helper()
@@ -81,7 +81,7 @@ func TestExpandOccurrences(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := expandOccurrences(tt.rrule, tt.tzid, tt.dtstart, tt.from, tt.to)
+			got, err := ExpandOccurrences(tt.rrule, tt.tzid, tt.dtstart, tt.from, tt.to)
 			if err != nil {
 				t.Fatalf("expandOccurrences: %v", err)
 			}
@@ -102,7 +102,7 @@ func TestExpandOccurrences_BerlinDSTOffsetActuallyShifts(t *testing.T) {
 	berlinTZID := "Europe/Berlin"
 
 	dtstart := inLoc(t, berlin, 2026, 3, 24, 9, 0).UTC()
-	got, err := expandOccurrences("FREQ=WEEKLY;BYDAY=TU", &berlinTZID, dtstart,
+	got, err := ExpandOccurrences("FREQ=WEEKLY;BYDAY=TU", &berlinTZID, dtstart,
 		inLoc(t, berlin, 2026, 3, 24, 0, 0).UTC(), inLoc(t, berlin, 2026, 4, 1, 0, 0).UTC())
 	if err != nil {
 		t.Fatalf("expandOccurrences: %v", err)

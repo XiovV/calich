@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/XiovV/calendar/server/internal/recurrence"
 	"github.com/XiovV/calendar/server/internal/repository"
 )
 
@@ -43,6 +44,10 @@ var (
 	// other than "notification" or "email" — the only Channels ADR-0020
 	// defines.
 	ErrInvalidReminderChannel = errors.New("reminder channel must be \"notification\" or \"email\"")
+	// ErrOccurrenceNotFound is returned when occurrenceStart doesn't name a
+	// real Occurrence of the series: it isn't dtstart nor a start the rrule
+	// generates, or it's excluded by an Exdate (#76).
+	ErrOccurrenceNotFound = errors.New("occurrence not found")
 )
 
 // isValidReminderChannel reports whether channel is one of the Channels
@@ -434,6 +439,89 @@ func (s *EventService) Update(ctx context.Context, userID int64, id string, writ
 	return result[0], nil
 }
 
+// ImportSeries writes every series in writes as a brand-new Master (mints
+// its own id, discards whatever foreign identity the caller tracked) plus
+// its Overrides and Exdates, in one transaction taking one change_seq
+// (ADR-0030). Unlike PutSeries, this never updates an existing row — an
+// import is always insert-only — and looping PutSeries once per series
+// would mean N transactions, N sync bumps, and a half-imported Calendar if
+// it died partway through; ImportSeries validates every write up front so a
+// bad series in a large import fails before anything is written, not
+// partway through the transaction. Returns the number of series written.
+func (s *EventService) ImportSeries(ctx context.Context, userID int64, calendarID string, writes []SeriesWrite) (int, error) {
+	if err := validateSeriesWrites(writes); err != nil {
+		return 0, err
+	}
+
+	if _, err := s.calendars.Get(ctx, userID, calendarID); err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			return 0, ErrCalendarNotFound
+		}
+		return 0, err
+	}
+
+	err := s.withTx(ctx, func(repos txRepos) error {
+		seq, err := repos.sync.NextChangeSeq(ctx)
+		if err != nil {
+			return err
+		}
+
+		for _, w := range writes {
+			masterID := uuid.NewString()
+			master := repository.EventFields{
+				CalendarID:  calendarID,
+				Title:       w.Title,
+				Start:       w.Start,
+				End:         w.End,
+				AllDay:      w.AllDay,
+				Rrule:       w.Rrule,
+				Tzid:        w.Tzid,
+				Description: w.Description,
+				Location:    w.Location,
+			}
+			if _, err := repos.events.Create(ctx, masterID, userID, master, seq); err != nil {
+				return fmt.Errorf("create master: %w", err)
+			}
+			if err := repos.reminders.ReplaceByEventID(ctx, masterID, w.Reminders); err != nil {
+				return fmt.Errorf("persist master reminders: %w", err)
+			}
+			for _, exdate := range w.Exdates {
+				if err := repos.exceptions.Add(ctx, masterID, exdate); err != nil {
+					return fmt.Errorf("add exdate: %w", err)
+				}
+			}
+
+			for _, o := range w.Overrides {
+				override := repository.EventFields{
+					CalendarID:   calendarID,
+					Title:        o.Title,
+					Start:        o.Start,
+					End:          o.End,
+					AllDay:       o.AllDay,
+					Tzid:         o.Tzid,
+					Description:  o.Description,
+					Location:     o.Location,
+					ParentID:     &masterID,
+					RecurrenceID: &o.RecurrenceID,
+				}
+				overrideID := uuid.NewString()
+				if _, err := repos.events.Create(ctx, overrideID, userID, override, seq); err != nil {
+					return fmt.Errorf("create override: %w", err)
+				}
+				if err := repos.reminders.ReplaceByEventID(ctx, overrideID, o.Reminders); err != nil {
+					return fmt.Errorf("persist override reminders: %w", err)
+				}
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return 0, fmt.Errorf("import series: %w", err)
+	}
+
+	return len(writes), nil
+}
+
 // GetSeries returns masterID's Master (with Exdates and Reminders attached)
 // and its Overrides (each with its own Reminders attached), for CalDAV's
 // {masterId}.ics resource (ADR-0025). Only a Master is independently
@@ -464,6 +552,94 @@ func (s *EventService) GetSeries(ctx context.Context, userID int64, masterID str
 	}
 
 	return all[0], all[1:], nil
+}
+
+// GetSeriesForEvent is GetSeries generalized to accept id naming either a
+// Master or one of its Overrides — both resolve to the same series, since a
+// caller addressing an Occurrence often only knows the Override id it fired
+// against, not its parent's (#76).
+func (s *EventService) GetSeriesForEvent(ctx context.Context, userID int64, id string) (repository.Event, []repository.Event, error) {
+	event, err := s.events.GetByID(ctx, userID, id)
+	if err != nil {
+		return repository.Event{}, nil, err
+	}
+
+	masterID := id
+	if event.ParentID != nil {
+		masterID = *event.ParentID
+	}
+	return s.GetSeries(ctx, userID, masterID)
+}
+
+// GetOccurrence returns id's series flattened to the single Occurrence
+// starting at occurrenceStart, for ICS export's scope=occurrence (#76): the
+// matching Override's own fields verbatim if one exists at that
+// RecurrenceID, or the Master's own fields with Start/End shifted to
+// occurrenceStart/occurrenceStart+duration otherwise. id may name either a
+// Master or an Override (see GetSeriesForEvent). The returned Event always
+// carries a cleared Rrule/ParentID/RecurrenceID — it describes one concrete
+// Occurrence, not a series or a series member.
+func (s *EventService) GetOccurrence(ctx context.Context, userID int64, id string, occurrenceStart time.Time) (repository.Event, error) {
+	master, overrides, err := s.GetSeriesForEvent(ctx, userID, id)
+	if err != nil {
+		return repository.Event{}, err
+	}
+
+	for _, override := range overrides {
+		if override.RecurrenceID != nil && override.RecurrenceID.Equal(occurrenceStart) {
+			flattened := override
+			flattened.ParentID = nil
+			flattened.RecurrenceID = nil
+			// An Override never carries a rule of its own (ADR-0016), so
+			// this is always already "", but cleared explicitly since
+			// icalendar.OccurrenceToICal trusts its caller to have done so.
+			flattened.Rrule = ""
+			return flattened, nil
+		}
+	}
+
+	valid, err := isOccurrenceStart(master, occurrenceStart)
+	if err != nil {
+		return repository.Event{}, err
+	}
+	if !valid {
+		return repository.Event{}, ErrOccurrenceNotFound
+	}
+
+	flattened := master
+	flattened.Start = occurrenceStart
+	flattened.End = occurrenceStart.Add(master.End.Sub(master.Start))
+	flattened.Rrule = ""
+	flattened.Exdates = nil
+	return flattened, nil
+}
+
+// isOccurrenceStart reports whether occurrenceStart is a real, non-excepted
+// Occurrence of master's series: master's own start if it doesn't recur, or
+// one of the rrule's generated starts otherwise — reusing the same Go
+// expander CalDAV's time-range query uses (recurrence.ExpandOccurrences)
+// rather than adding a third implementation (see the note on #74).
+func isOccurrenceStart(master repository.Event, occurrenceStart time.Time) (bool, error) {
+	for _, exdate := range master.Exdates {
+		if exdate.Equal(occurrenceStart) {
+			return false, nil
+		}
+	}
+
+	if master.Rrule == "" {
+		return master.Start.Equal(occurrenceStart), nil
+	}
+
+	starts, err := recurrence.ExpandOccurrences(master.Rrule, master.Tzid, master.Start, occurrenceStart, occurrenceStart.Add(time.Second))
+	if err != nil {
+		return false, fmt.Errorf("expand occurrences: %w", err)
+	}
+	for _, start := range starts {
+		if start.Equal(occurrenceStart) {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // ListSeriesByCalendar returns every Master in calendarID (with Exdates and
@@ -719,6 +895,34 @@ func validateEventFields(title string, start, end time.Time, reminders []reposit
 		return "", err
 	}
 	return title, nil
+}
+
+// validateSeriesWrites applies validateEventFields (trimming each title in
+// place) and the recurrence-rule check to every write and its Overrides,
+// stopping at the first failure without writing anything. Shared by
+// ImportSeries and ImportService.Import, which both need the same check to
+// run before any Calendar is created or any row written — including on a
+// dry run, so a preview reports exactly the errors a real run would hit
+// (ADR-0030).
+func validateSeriesWrites(writes []SeriesWrite) error {
+	for i, w := range writes {
+		title, err := validateEventFields(w.Title, w.Start, w.End, w.Reminders)
+		if err != nil {
+			return err
+		}
+		writes[i].Title = title
+		if !isValidRecurrenceRule(w.Rrule) {
+			return ErrInvalidRecurrenceRule
+		}
+		for j, o := range w.Overrides {
+			trimmed, err := validateEventFields(o.Title, o.Start, o.End, o.Reminders)
+			if err != nil {
+				return err
+			}
+			writes[i].Overrides[j].Title = trimmed
+		}
+	}
+	return nil
 }
 
 // PutSeries atomically decomposes a CalDAV PUT into masterID's Master row,

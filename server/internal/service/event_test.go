@@ -1504,3 +1504,268 @@ func TestEventService_PutSeries_RejectsUnknownCalendar(t *testing.T) {
 		t.Fatalf("expected ErrCalendarNotFound, got %v", err)
 	}
 }
+
+func TestEventService_GetOccurrence_NonRecurring_ReturnsMasterFlattened(t *testing.T) {
+	svc, userID, calendarID := newTestEventService(t)
+	ctx := context.Background()
+	start := time.Date(2026, 6, 2, 9, 0, 0, 0, time.UTC)
+	end := time.Date(2026, 6, 2, 9, 30, 0, 0, time.UTC)
+
+	master, err := svc.Create(ctx, userID, "evt-1", EventWrite{CalendarID: calendarID, Title: "Standup", Start: start, End: end})
+	if err != nil {
+		t.Fatalf("create master: %v", err)
+	}
+
+	got, err := svc.GetOccurrence(ctx, userID, master.ID, start)
+	if err != nil {
+		t.Fatalf("get occurrence: %v", err)
+	}
+	if got.Title != "Standup" || !got.Start.Equal(start) || !got.End.Equal(end) {
+		t.Fatalf("unexpected occurrence: %+v", got)
+	}
+	if got.Rrule != "" {
+		t.Fatalf("expected a cleared rrule, got %q", got.Rrule)
+	}
+}
+
+func TestEventService_GetOccurrence_NonRecurring_WrongStartIsNotFound(t *testing.T) {
+	svc, userID, calendarID := newTestEventService(t)
+	ctx := context.Background()
+	start := time.Date(2026, 6, 2, 9, 0, 0, 0, time.UTC)
+	end := time.Date(2026, 6, 2, 9, 30, 0, 0, time.UTC)
+
+	master, err := svc.Create(ctx, userID, "evt-1", EventWrite{CalendarID: calendarID, Title: "Standup", Start: start, End: end})
+	if err != nil {
+		t.Fatalf("create master: %v", err)
+	}
+
+	_, err = svc.GetOccurrence(ctx, userID, master.ID, start.Add(time.Hour))
+	if !errors.Is(err, ErrOccurrenceNotFound) {
+		t.Fatalf("expected ErrOccurrenceNotFound, got %v", err)
+	}
+}
+
+func TestEventService_GetOccurrence_Recurring_ShiftsStartAndEndByDuration(t *testing.T) {
+	svc, userID, calendarID := newTestEventService(t)
+	ctx := context.Background()
+	start := time.Date(2026, 6, 2, 9, 0, 0, 0, time.UTC)
+	end := time.Date(2026, 6, 2, 9, 30, 0, 0, time.UTC)
+
+	master, err := svc.Create(ctx, userID, "evt-1", EventWrite{CalendarID: calendarID, Title: "Standup", Start: start, End: end, Rrule: "FREQ=WEEKLY;BYDAY=TU"})
+	if err != nil {
+		t.Fatalf("create master: %v", err)
+	}
+
+	occurrenceStart := start.AddDate(0, 0, 7)
+	got, err := svc.GetOccurrence(ctx, userID, master.ID, occurrenceStart)
+	if err != nil {
+		t.Fatalf("get occurrence: %v", err)
+	}
+	wantEnd := occurrenceStart.Add(30 * time.Minute)
+	if !got.Start.Equal(occurrenceStart) || !got.End.Equal(wantEnd) {
+		t.Fatalf("expected start %v end %v, got start %v end %v", occurrenceStart, wantEnd, got.Start, got.End)
+	}
+	if got.Title != "Standup" {
+		t.Fatalf("expected the master's own title, got %q", got.Title)
+	}
+}
+
+func TestEventService_GetOccurrence_Recurring_ExcludedByExdateIsNotFound(t *testing.T) {
+	svc, userID, calendarID := newTestEventService(t)
+	ctx := context.Background()
+	start := time.Date(2026, 6, 2, 9, 0, 0, 0, time.UTC)
+	end := time.Date(2026, 6, 2, 9, 30, 0, 0, time.UTC)
+
+	master, err := svc.Create(ctx, userID, "evt-1", EventWrite{CalendarID: calendarID, Title: "Standup", Start: start, End: end, Rrule: "FREQ=WEEKLY;BYDAY=TU"})
+	if err != nil {
+		t.Fatalf("create master: %v", err)
+	}
+
+	exdate := start.AddDate(0, 0, 7)
+	if err := svc.AddException(ctx, userID, master.ID, exdate); err != nil {
+		t.Fatalf("add exception: %v", err)
+	}
+
+	_, err = svc.GetOccurrence(ctx, userID, master.ID, exdate)
+	if !errors.Is(err, ErrOccurrenceNotFound) {
+		t.Fatalf("expected ErrOccurrenceNotFound, got %v", err)
+	}
+}
+
+func TestEventService_GetOccurrence_OverriddenOccurrence_ReturnsOverrideFields(t *testing.T) {
+	svc, userID, calendarID := newTestEventService(t)
+	ctx := context.Background()
+	start := time.Date(2026, 6, 2, 9, 0, 0, 0, time.UTC)
+	end := time.Date(2026, 6, 2, 9, 30, 0, 0, time.UTC)
+
+	master, err := svc.Create(ctx, userID, "evt-1", EventWrite{CalendarID: calendarID, Title: "Standup", Start: start, End: end, Rrule: "FREQ=WEEKLY;BYDAY=TU"})
+	if err != nil {
+		t.Fatalf("create master: %v", err)
+	}
+
+	recurrenceID := start.AddDate(0, 0, 7)
+	overrideStart := recurrenceID.Add(2 * time.Hour)
+	overrideEnd := recurrenceID.Add(2*time.Hour + 30*time.Minute)
+	override, err := svc.Create(ctx, userID, "evt-1-override", EventWrite{
+		CalendarID: calendarID, Title: "Standup (moved)", Start: overrideStart, End: overrideEnd,
+		ParentID: &master.ID, RecurrenceID: &recurrenceID,
+	})
+	if err != nil {
+		t.Fatalf("create override: %v", err)
+	}
+
+	got, err := svc.GetOccurrence(ctx, userID, master.ID, recurrenceID)
+	if err != nil {
+		t.Fatalf("get occurrence: %v", err)
+	}
+	if got.Title != "Standup (moved)" || !got.Start.Equal(overrideStart) || !got.End.Equal(overrideEnd) {
+		t.Fatalf("expected the override's own fields, got %+v", got)
+	}
+	if got.ParentID != nil || got.RecurrenceID != nil {
+		t.Fatalf("expected a flattened occurrence with no parent/recurrence-id, got %+v", got)
+	}
+
+	// Also reachable via the Override's own id, not just the Master's.
+	got2, err := svc.GetOccurrence(ctx, userID, override.ID, recurrenceID)
+	if err != nil {
+		t.Fatalf("get occurrence via override id: %v", err)
+	}
+	if got2.Title != "Standup (moved)" {
+		t.Fatalf("expected the override's own title via its own id, got %q", got2.Title)
+	}
+}
+
+func TestEventService_GetSeriesForEvent_ResolvesViaOverrideID(t *testing.T) {
+	svc, userID, calendarID := newTestEventService(t)
+	ctx := context.Background()
+	start := time.Date(2026, 6, 2, 9, 0, 0, 0, time.UTC)
+	end := time.Date(2026, 6, 2, 9, 30, 0, 0, time.UTC)
+
+	master, err := svc.Create(ctx, userID, "evt-1", EventWrite{CalendarID: calendarID, Title: "Standup", Start: start, End: end, Rrule: "FREQ=WEEKLY;BYDAY=TU"})
+	if err != nil {
+		t.Fatalf("create master: %v", err)
+	}
+
+	recurrenceID := start.AddDate(0, 0, 7)
+	override, err := svc.Create(ctx, userID, "evt-1-override", EventWrite{
+		CalendarID: calendarID, Title: "Standup (moved)", Start: recurrenceID.Add(2 * time.Hour), End: recurrenceID.Add(2*time.Hour + 30*time.Minute),
+		ParentID: &master.ID, RecurrenceID: &recurrenceID,
+	})
+	if err != nil {
+		t.Fatalf("create override: %v", err)
+	}
+
+	gotMaster, overrides, err := svc.GetSeriesForEvent(ctx, userID, override.ID)
+	if err != nil {
+		t.Fatalf("get series for event: %v", err)
+	}
+	if gotMaster.ID != master.ID {
+		t.Fatalf("expected master %q, got %q", master.ID, gotMaster.ID)
+	}
+	if len(overrides) != 1 || overrides[0].ID != override.ID {
+		t.Fatalf("expected the one override, got %+v", overrides)
+	}
+}
+
+func TestEventService_ImportSeries_WritesEverySeriesInOneChangeSeq(t *testing.T) {
+	svc, userID, calendarID := newTestEventService(t)
+	ctx := context.Background()
+	start := time.Date(2026, 6, 1, 9, 0, 0, 0, time.UTC)
+	end := time.Date(2026, 6, 1, 9, 30, 0, 0, time.UTC)
+	recurrenceID := start.AddDate(0, 0, 7)
+
+	writes := []SeriesWrite{
+		{
+			Title: "Standup", Start: start, End: end, Rrule: "FREQ=WEEKLY",
+			Exdates: []time.Time{start.AddDate(0, 0, 14)},
+			Overrides: []OverrideWrite{
+				{RecurrenceID: recurrenceID, Title: "Standup (moved)", Start: recurrenceID.Add(time.Hour), End: recurrenceID.Add(time.Hour + 30*time.Minute)},
+			},
+		},
+		{Title: "Planning", Start: start.AddDate(0, 0, 1), End: end.AddDate(0, 0, 1)},
+	}
+
+	count, err := svc.ImportSeries(ctx, userID, calendarID, writes)
+	if err != nil {
+		t.Fatalf("import series: %v", err)
+	}
+	if count != 2 {
+		t.Fatalf("expected 2 series written, got %d", count)
+	}
+
+	events, err := svc.List(ctx, userID, nil, nil)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(events) != 3 { // 2 masters + 1 override
+		t.Fatalf("expected 3 rows, got %d: %+v", len(events), events)
+	}
+
+	var standup repository.Event
+	for _, e := range events {
+		if e.Title == "Standup" {
+			standup = e
+		}
+	}
+	if standup.ID == "" {
+		t.Fatalf("expected to find the imported Standup master")
+	}
+	if len(standup.Exdates) != 1 {
+		t.Fatalf("expected 1 exdate, got %d", len(standup.Exdates))
+	}
+
+	_, overrides, err := svc.GetSeries(ctx, userID, standup.ID)
+	if err != nil {
+		t.Fatalf("get series: %v", err)
+	}
+	if len(overrides) != 1 || overrides[0].Title != "Standup (moved)" {
+		t.Fatalf("expected 1 override, got %+v", overrides)
+	}
+
+	// Both series' masters and the override all share the same change_seq —
+	// the whole import is one atomic change (ADR-0030).
+	changeSeqs := map[int64]bool{}
+	for _, e := range events {
+		changeSeqs[e.ChangeSeq] = true
+	}
+	if len(changeSeqs) != 1 {
+		t.Fatalf("expected every row to share one change_seq, got %v", changeSeqs)
+	}
+}
+
+func TestEventService_ImportSeries_RejectsInvalidTitleBeforeWritingAnything(t *testing.T) {
+	svc, userID, calendarID := newTestEventService(t)
+	ctx := context.Background()
+	start := time.Date(2026, 6, 1, 9, 0, 0, 0, time.UTC)
+	end := time.Date(2026, 6, 1, 9, 30, 0, 0, time.UTC)
+
+	writes := []SeriesWrite{
+		{Title: "Standup", Start: start, End: end},
+		{Title: "   ", Start: start, End: end},
+	}
+
+	_, err := svc.ImportSeries(ctx, userID, calendarID, writes)
+	if !errors.Is(err, ErrInvalidTitle) {
+		t.Fatalf("expected ErrInvalidTitle, got %v", err)
+	}
+
+	events, err := svc.List(ctx, userID, nil, nil)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(events) != 0 {
+		t.Fatalf("expected nothing written when a later series is invalid, got %+v", events)
+	}
+}
+
+func TestEventService_ImportSeries_UnknownCalendar(t *testing.T) {
+	svc, userID, _ := newTestEventService(t)
+	ctx := context.Background()
+	start := time.Date(2026, 6, 1, 9, 0, 0, 0, time.UTC)
+	end := time.Date(2026, 6, 1, 9, 30, 0, 0, time.UTC)
+
+	_, err := svc.ImportSeries(ctx, userID, "does-not-exist", []SeriesWrite{{Title: "Standup", Start: start, End: end}})
+	if !errors.Is(err, ErrCalendarNotFound) {
+		t.Fatalf("expected ErrCalendarNotFound, got %v", err)
+	}
+}

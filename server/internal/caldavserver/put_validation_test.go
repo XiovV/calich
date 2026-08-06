@@ -8,6 +8,7 @@ import (
 
 	"github.com/emersion/go-ical"
 
+	"github.com/XiovV/calendar/server/internal/icalendar"
 	"github.com/XiovV/calendar/server/internal/repository"
 )
 
@@ -17,7 +18,7 @@ import (
 func putSeriesStatus(t *testing.T, env testCalDAVEnv, calendarID string, master repository.Event) int {
 	t.Helper()
 
-	cal, err := seriesToICal(master, nil)
+	cal, err := icalendar.SeriesToICal(master, nil)
 	if err != nil {
 		t.Fatalf("seriesToICal: %v", err)
 	}
@@ -120,7 +121,7 @@ func TestPutCalendarObject_UIDMismatchIsConflict(t *testing.T) {
 	env := newTestCalDAVEnv(t)
 
 	master := validPutMaster()
-	cal, err := seriesToICal(master, nil)
+	cal, err := icalendar.SeriesToICal(master, nil)
 	if err != nil {
 		t.Fatalf("seriesToICal: %v", err)
 	}
@@ -139,7 +140,7 @@ func TestPutCalendarObject_UIDMismatchIsConflict(t *testing.T) {
 func TestPutCalendarObject_CalendarWithNoVEventIsRejected(t *testing.T) {
 	env := newTestCalDAVEnv(t)
 
-	body := "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:" + prodID + "\r\nEND:VCALENDAR\r\n"
+	body := "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:" + icalendar.ProdID + "\r\nEND:VCALENDAR\r\n"
 
 	req, err := http.NewRequest(http.MethodPut,
 		env.srv.URL+calendarObjectPath(env.userID, env.calendarID, "device-uid-1"),

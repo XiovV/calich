@@ -188,6 +188,100 @@ func TestEventRepository_ListByUser_FiltersByRange(t *testing.T) {
 	}
 }
 
+// TestEventRepository_ListByUser_RecurringMasterFarBeforeWindowIsIncluded is
+// #80's motivating case: a naive filter on the stored start/end columns
+// would exclude this Master from a 2026 window since its own start is in
+// 2009, even though its open-ended weekly rule still generates Occurrences
+// there.
+func TestEventRepository_ListByUser_RecurringMasterFarBeforeWindowIsIncluded(t *testing.T) {
+	repo, userID, calendarID, _ := newTestEventRepository(t)
+	ctx := context.Background()
+
+	mustCreateRecurringEvent(t, repo, "old-standup", userID, calendarID,
+		"2009-01-05T09:00:00Z", "2009-01-05T09:30:00Z", "FREQ=WEEKLY;BYDAY=MO")
+
+	from := mustParseTime(t, "2026-01-01T00:00:00Z")
+	to := mustParseTime(t, "2026-02-01T00:00:00Z")
+
+	events, err := repo.ListByUser(ctx, userID, &from, &to)
+	if err != nil {
+		t.Fatalf("list by user: %v", err)
+	}
+	if len(events) != 1 || events[0].ID != "old-standup" {
+		t.Fatalf("expected the recurring master to be included, got %+v", events)
+	}
+}
+
+// TestEventRepository_ListByUser_RecurringMasterEndedBeforeWindowIsExcluded
+// is the flip side: a Master whose rule stopped generating Occurrences
+// before the window (via UNTIL) must not come back just because it's
+// recurring.
+func TestEventRepository_ListByUser_RecurringMasterEndedBeforeWindowIsExcluded(t *testing.T) {
+	repo, userID, calendarID, _ := newTestEventRepository(t)
+	ctx := context.Background()
+
+	mustCreateRecurringEvent(t, repo, "retired-standup", userID, calendarID,
+		"2009-01-05T09:00:00Z", "2009-01-05T09:30:00Z", "FREQ=WEEKLY;BYDAY=MO;UNTIL=20100301T000000Z")
+
+	from := mustParseTime(t, "2026-01-01T00:00:00Z")
+	to := mustParseTime(t, "2026-02-01T00:00:00Z")
+
+	events, err := repo.ListByUser(ctx, userID, &from, &to)
+	if err != nil {
+		t.Fatalf("list by user: %v", err)
+	}
+	if len(events) != 0 {
+		t.Fatalf("expected the ended series to be excluded, got %+v", events)
+	}
+}
+
+// TestEventRepository_ListByUser_FromOnly_ExcludesEndedRecurringMaster
+// regression-tests the one-sided window case: a from-only query must still
+// run the Go-side rrule check on recurring rows, not just include every
+// recurring Master unconditionally because there's no "to" to bound it by.
+func TestEventRepository_ListByUser_FromOnly_ExcludesEndedRecurringMaster(t *testing.T) {
+	repo, userID, calendarID, _ := newTestEventRepository(t)
+	ctx := context.Background()
+
+	mustCreateRecurringEvent(t, repo, "retired-standup", userID, calendarID,
+		"2009-01-05T09:00:00Z", "2009-01-05T09:30:00Z", "FREQ=WEEKLY;BYDAY=MO;UNTIL=20100301T000000Z")
+	mustCreateRecurringEvent(t, repo, "ongoing-standup", userID, calendarID,
+		"2009-01-05T09:00:00Z", "2009-01-05T09:30:00Z", "FREQ=WEEKLY;BYDAY=MO")
+
+	from := mustParseTime(t, "2026-01-01T00:00:00Z")
+
+	events, err := repo.ListByUser(ctx, userID, &from, nil)
+	if err != nil {
+		t.Fatalf("list by user: %v", err)
+	}
+	if len(events) != 1 || events[0].ID != "ongoing-standup" {
+		t.Fatalf("expected only the still-ongoing series, got %+v", events)
+	}
+}
+
+// TestEventRepository_ListByUser_RecurringMasterStartingAfterWindowIsExcluded
+// checks the cheap SQL pre-filter's lower bound: a series can't have
+// Occurrences before its own first one, so a Master starting on/after the
+// window's end is excluded without even reaching the Go-side rrule check.
+func TestEventRepository_ListByUser_RecurringMasterStartingAfterWindowIsExcluded(t *testing.T) {
+	repo, userID, calendarID, _ := newTestEventRepository(t)
+	ctx := context.Background()
+
+	mustCreateRecurringEvent(t, repo, "future-standup", userID, calendarID,
+		"2027-01-04T09:00:00Z", "2027-01-04T09:30:00Z", "FREQ=WEEKLY;BYDAY=MO")
+
+	from := mustParseTime(t, "2026-01-01T00:00:00Z")
+	to := mustParseTime(t, "2026-02-01T00:00:00Z")
+
+	events, err := repo.ListByUser(ctx, userID, &from, &to)
+	if err != nil {
+		t.Fatalf("list by user: %v", err)
+	}
+	if len(events) != 0 {
+		t.Fatalf("expected the future series to be excluded, got %+v", events)
+	}
+}
+
 func TestEventRepository_ListByUser_ScopedToUser(t *testing.T) {
 	repo, userID, calendarID, _ := newTestEventRepository(t)
 	ctx := context.Background()
@@ -478,6 +572,13 @@ func mustCreateEvent(t *testing.T, repo *EventRepository, id string, userID int6
 	t.Helper()
 	if _, err := repo.Create(context.Background(), id, userID, EventFields{CalendarID: calendarID, Title: id, Start: mustParseTime(t, start), End: mustParseTime(t, end)}, 0); err != nil {
 		t.Fatalf("create event %q: %v", id, err)
+	}
+}
+
+func mustCreateRecurringEvent(t *testing.T, repo *EventRepository, id string, userID int64, calendarID, start, end, rrule string) {
+	t.Helper()
+	if _, err := repo.Create(context.Background(), id, userID, EventFields{CalendarID: calendarID, Title: id, Start: mustParseTime(t, start), End: mustParseTime(t, end), Rrule: rrule}, 0); err != nil {
+		t.Fatalf("create recurring event %q: %v", id, err)
 	}
 }
 

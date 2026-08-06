@@ -1,4 +1,4 @@
-package caldavserver
+package icalendar
 
 import (
 	"testing"
@@ -9,13 +9,13 @@ import (
 	"github.com/XiovV/calendar/server/internal/repository"
 )
 
-func mustParse(t *testing.T, master repository.Event, overrides []repository.Event) *parsedSeries {
+func mustParse(t *testing.T, master repository.Event, overrides []repository.Event) *ParsedSeries {
 	t.Helper()
-	cal, err := seriesToICal(master, overrides)
+	cal, err := SeriesToICal(master, overrides)
 	if err != nil {
 		t.Fatalf("seriesToICal: %v", err)
 	}
-	parsed, err := parseCalendarObject(cal)
+	parsed, err := ParseCalendarObject(cal)
 	if err != nil {
 		t.Fatalf("parseCalendarObject: %v", err)
 	}
@@ -206,7 +206,7 @@ func TestParseCalendarObject_AllDayReminder_RoundTrips(t *testing.T) {
 
 func TestParseCalendarObject_MismatchedUIDs_Errors(t *testing.T) {
 	cal := ical.NewCalendar()
-	cal.Props.SetText(ical.PropProductID, prodID)
+	cal.Props.SetText(ical.PropProductID, ProdID)
 	cal.Props.SetText(ical.PropVersion, "2.0")
 
 	v1 := ical.NewEvent()
@@ -222,14 +222,14 @@ func TestParseCalendarObject_MismatchedUIDs_Errors(t *testing.T) {
 	v2.Props.Add(recurrenceIDProp)
 	cal.Children = append(cal.Children, v2.Component)
 
-	if _, err := parseCalendarObject(cal); err == nil {
+	if _, err := ParseCalendarObject(cal); err == nil {
 		t.Fatalf("expected an error for mismatched UIDs")
 	}
 }
 
 func TestParseCalendarObject_NoMasterVEvent_Errors(t *testing.T) {
 	cal := ical.NewCalendar()
-	cal.Props.SetText(ical.PropProductID, prodID)
+	cal.Props.SetText(ical.PropProductID, ProdID)
 	cal.Props.SetText(ical.PropVersion, "2.0")
 
 	v := ical.NewEvent()
@@ -240,7 +240,7 @@ func TestParseCalendarObject_NoMasterVEvent_Errors(t *testing.T) {
 	v.Props.Add(recurrenceIDProp)
 	cal.Children = append(cal.Children, v.Component)
 
-	if _, err := parseCalendarObject(cal); err == nil {
+	if _, err := ParseCalendarObject(cal); err == nil {
 		t.Fatalf("expected an error when no VEVENT lacks RECURRENCE-ID")
 	}
 }
@@ -253,7 +253,7 @@ func TestParseCalendarObject_UnmodeledValarmAction_IsDropped(t *testing.T) {
 		End:       time.Date(2026, 7, 1, 16, 0, 0, 0, time.UTC),
 		CreatedAt: time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC),
 	}
-	cal, err := seriesToICal(master, nil)
+	cal, err := SeriesToICal(master, nil)
 	if err != nil {
 		t.Fatalf("seriesToICal: %v", err)
 	}
@@ -264,7 +264,7 @@ func TestParseCalendarObject_UnmodeledValarmAction_IsDropped(t *testing.T) {
 	alarm.Props.Add(trigger)
 	cal.Children[0].Children = append(cal.Children[0].Children, alarm)
 
-	parsed, err := parseCalendarObject(cal)
+	parsed, err := ParseCalendarObject(cal)
 	if err != nil {
 		t.Fatalf("parseCalendarObject: %v", err)
 	}

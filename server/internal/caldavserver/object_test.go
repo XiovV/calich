@@ -12,6 +12,7 @@ import (
 	"github.com/emersion/go-webdav"
 	"github.com/emersion/go-webdav/caldav"
 
+	"github.com/XiovV/calendar/server/internal/icalendar"
 	"github.com/XiovV/calendar/server/internal/repository"
 	"github.com/XiovV/calendar/server/internal/service"
 )
@@ -279,7 +280,7 @@ func TestPutCalendarObject_CreatesNewEvent_PutThenGetRoundTrips(t *testing.T) {
 		End:       time.Date(2026, 6, 1, 9, 30, 0, 0, time.UTC),
 		CreatedAt: time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC),
 	}
-	cal, err := seriesToICal(newEvent, nil)
+	cal, err := icalendar.SeriesToICal(newEvent, nil)
 	if err != nil {
 		t.Fatalf("seriesToICal: %v", err)
 	}
@@ -326,7 +327,7 @@ func TestPutCalendarObject_UpdatesExistingEvent(t *testing.T) {
 
 	updated := created
 	updated.Title = "Standup (renamed)"
-	cal, err := seriesToICal(updated, nil)
+	cal, err := icalendar.SeriesToICal(updated, nil)
 	if err != nil {
 		t.Fatalf("seriesToICal: %v", err)
 	}
@@ -366,7 +367,7 @@ func TestPutCalendarObject_EditingOneOccurrence_CreatesOverride_OthersUnchanged(
 		End:          recurrenceID.Add(2*time.Hour + 30*time.Minute),
 		CreatedAt:    masterStart,
 	}
-	cal, err := seriesToICal(master, []repository.Event{override})
+	cal, err := icalendar.SeriesToICal(master, []repository.Event{override})
 	if err != nil {
 		t.Fatalf("seriesToICal: %v", err)
 	}
@@ -400,7 +401,7 @@ func TestPutCalendarObject_IfMatch_StaleETag_Returns412(t *testing.T) {
 
 	updated := created
 	updated.Title = "Standup (renamed)"
-	cal, err := seriesToICal(updated, nil)
+	cal, err := icalendar.SeriesToICal(updated, nil)
 	if err != nil {
 		t.Fatalf("seriesToICal: %v", err)
 	}
@@ -440,7 +441,7 @@ func TestPutCalendarObject_IfMatch_MatchingETag_Succeeds(t *testing.T) {
 
 	updated := created
 	updated.Title = "Standup (renamed)"
-	cal, err := seriesToICal(updated, nil)
+	cal, err := icalendar.SeriesToICal(updated, nil)
 	if err != nil {
 		t.Fatalf("seriesToICal: %v", err)
 	}
@@ -472,7 +473,7 @@ func TestPutCalendarObject_UnmodeledData_NormalizedAway_StableETag(t *testing.T)
 		End:       time.Date(2026, 6, 1, 9, 30, 0, 0, time.UTC),
 		CreatedAt: time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC),
 	}
-	cal, err := seriesToICal(newEvent, nil)
+	cal, err := icalendar.SeriesToICal(newEvent, nil)
 	if err != nil {
 		t.Fatalf("seriesToICal: %v", err)
 	}

@@ -1,4 +1,4 @@
-package caldavserver
+package recurrence
 
 import (
 	"fmt"
@@ -7,24 +7,7 @@ import (
 	"github.com/teambition/rrule-go"
 )
 
-// resolveLocation maps an Event's tzid anchor (ADR-0019) onto a
-// *time.Location for RRULE expansion: a named IANA zone expands in that
-// zone, "Etc/UTC" expands in UTC, and nil (a Floating Event) also expands in
-// UTC — the server has no Viewer zone to expand in, and floating instants are
-// stored as literal wall-clock components regardless of Location (see
-// setDateTimeProp).
-func resolveLocation(tzid *string) (*time.Location, error) {
-	if tzid == nil {
-		return time.UTC, nil
-	}
-	loc, err := time.LoadLocation(*tzid)
-	if err != nil {
-		return nil, fmt.Errorf("load location %q: %w", *tzid, err)
-	}
-	return loc, nil
-}
-
-// expandOccurrences returns rruleStr's Occurrence starts that fall in the
+// ExpandOccurrences returns rruleStr's Occurrence starts that fall in the
 // half-open window [from, to), expanded in tzid's zone so wall-clock
 // semantics (and DST transitions) match the frontend's own expansion
 // (ADR-0016). dtstart is the series' first Occurrence start (a UTC instant,
@@ -32,12 +15,20 @@ func resolveLocation(tzid *string) (*time.Location, error) {
 // most one Occurrence, dtstart itself, reported only if it falls in the
 // window.
 //
-// This is the query-time expander CalendarQuery's time-range filter drives
-// (ADR-0025's #64 acceptance criteria) — it must stay in sync with the
+// This is the query-time expander CalDAV's CalendarQuery time-range filter
+// drives (ADR-0025's #64 acceptance criteria), ICS export's single-
+// Occurrence flatten drives (#76), and EventRepository.ListByUser's
+// recurrence-aware windowing drives (#80) — it must stay in sync with the
 // frontend's rrule.js expansion (ADR-0016) and the firing engine's own Go
 // expander (ADR-0021, internal/reminder), since all three are expected to
 // agree on which Occurrences exist.
-func expandOccurrences(rruleStr string, tzid *string, dtstart, from, to time.Time) ([]time.Time, error) {
+//
+// Lives in its own leaf package (no internal dependencies) rather than
+// alongside icalendar's other codec code so EventRepository can import it
+// directly without repository -> icalendar -> repository forming a cycle
+// (icalendar depends on repository elsewhere, for its Event/Reminder
+// shapes).
+func ExpandOccurrences(rruleStr string, tzid *string, dtstart, from, to time.Time) ([]time.Time, error) {
 	if rruleStr == "" {
 		if !dtstart.Before(from) && dtstart.Before(to) {
 			return []time.Time{dtstart}, nil
@@ -45,7 +36,7 @@ func expandOccurrences(rruleStr string, tzid *string, dtstart, from, to time.Tim
 		return nil, nil
 	}
 
-	loc, err := resolveLocation(tzid)
+	loc, err := ResolveLocation(tzid)
 	if err != nil {
 		return nil, err
 	}

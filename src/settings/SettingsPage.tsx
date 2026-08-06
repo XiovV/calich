@@ -3,6 +3,7 @@ import { useNavigate } from "react-router";
 import { IconButton } from "../components/ui/IconButton";
 import { AccountEmailSection } from "./AccountEmailSection";
 import { AppPasswordsSection } from "./AppPasswordsSection";
+import { ImportExportSection } from "./ImportExportSection";
 import { ReminderDeliverySection } from "./ReminderDeliverySection";
 
 // The Settings page shell. Timezone and password sections will be dropped
@@ -25,6 +26,7 @@ export function SettingsPage() {
         <AccountEmailSection />
         <AppPasswordsSection />
         <ReminderDeliverySection />
+        <ImportExportSection />
       </main>
     </div>
   );

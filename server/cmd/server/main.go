@@ -66,8 +66,10 @@ func main() {
 		}
 	}
 
+	importService := service.NewImportService(eventService, calendarService)
+
 	authHandler := handlers.NewAuthHandler(authService, cfg.SMTPConfigured())
-	calendarHandler := handlers.NewCalendarHandler(calendarService)
+	calendarHandler := handlers.NewCalendarHandler(calendarService, eventService, importService)
 	eventHandler := handlers.NewEventHandler(eventService)
 	notificationHandler := handlers.NewNotificationHandler(notificationService)
 	appPasswordHandler := handlers.NewAppPasswordHandler(appPasswordService)

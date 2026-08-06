@@ -23,6 +23,8 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/XiovV/calendar/server/internal/httpauth"
+	"github.com/XiovV/calendar/server/internal/icalendar"
+	"github.com/XiovV/calendar/server/internal/recurrence"
 	"github.com/XiovV/calendar/server/internal/repository"
 	"github.com/XiovV/calendar/server/internal/service"
 )
@@ -287,7 +289,7 @@ func seriesHasOccurrenceInRange(master repository.Event, from, to time.Time) (bo
 
 	// Occurrences starting before "from" can still overlap it, so the
 	// expansion window is padded on the left by the series' own duration.
-	starts, err := expandOccurrences(master.Rrule, master.Tzid, master.Start, from.Add(-duration), to)
+	starts, err := recurrence.ExpandOccurrences(master.Rrule, master.Tzid, master.Start, from.Add(-duration), to)
 	if err != nil {
 		return false, err
 	}
@@ -312,12 +314,12 @@ func seriesHasOccurrenceInRange(master repository.Event, from, to time.Time) (bo
 // CalendarObject GetCalendarObject/ListCalendarObjects/QueryCalendarObjects
 // all serve (ADR-0025).
 func buildCalendarObject(userID int64, master repository.Event, overrides []repository.Event) (*caldav.CalendarObject, error) {
-	cal, err := seriesToICal(master, overrides)
+	cal, err := icalendar.SeriesToICal(master, overrides)
 	if err != nil {
 		return nil, fmt.Errorf("serialize series %q: %w", master.ID, err)
 	}
 
-	etag, err := calendarETag(cal)
+	etag, err := icalendar.CalendarETag(cal)
 	if err != nil {
 		return nil, fmt.Errorf("compute etag for series %q: %w", master.ID, err)
 	}
@@ -376,7 +378,7 @@ func (b *Backend) PutCalendarObject(ctx context.Context, path string, calendar *
 		return nil, webdav.NewHTTPError(http.StatusNotFound, err)
 	}
 
-	parsed, err := parseCalendarObject(calendar)
+	parsed, err := icalendar.ParseCalendarObject(calendar)
 	if err != nil {
 		return nil, webdav.NewHTTPError(http.StatusBadRequest, err)
 	}
@@ -449,11 +451,11 @@ func (b *Backend) currentObjectETag(ctx context.Context, userID int64, calendarI
 		return false, "", nil
 	}
 
-	cal, err := seriesToICal(master, overrides)
+	cal, err := icalendar.SeriesToICal(master, overrides)
 	if err != nil {
 		return false, "", err
 	}
-	etag, err = calendarETag(cal)
+	etag, err = icalendar.CalendarETag(cal)
 	if err != nil {
 		return false, "", err
 	}
@@ -462,7 +464,7 @@ func (b *Backend) currentObjectETag(ctx context.Context, userID int64, calendarI
 
 // seriesWriteFromParsed converts a decomposed calendar object into the
 // service.SeriesWrite PutSeries writes.
-func seriesWriteFromParsed(parsed *parsedSeries) service.SeriesWrite {
+func seriesWriteFromParsed(parsed *icalendar.ParsedSeries) service.SeriesWrite {
 	overrides := make([]service.OverrideWrite, len(parsed.Overrides))
 	for i, o := range parsed.Overrides {
 		overrides[i] = service.OverrideWrite{

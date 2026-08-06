@@ -34,8 +34,8 @@ func newTestRouter(t *testing.T) http.Handler {
 	}
 	authHandler := handlers.NewAuthHandler(authService, false)
 	calendarService := service.NewCalendarService(repository.NewCalendarRepository(sqlDB))
-	calendarHandler := handlers.NewCalendarHandler(calendarService)
 	eventService := service.NewEventService(sqlDB, repository.NewEventRepository(sqlDB), repository.NewEventExceptionRepository(sqlDB), repository.NewEventReminderRepository(sqlDB), repository.NewSyncRepository(sqlDB), calendarService)
+	calendarHandler := handlers.NewCalendarHandler(calendarService, eventService, service.NewImportService(eventService, calendarService))
 	eventHandler := handlers.NewEventHandler(eventService)
 	notificationHandler := handlers.NewNotificationHandler(service.NewNotificationService(repository.NewNotificationRepository(sqlDB)))
 	appPasswordService := service.NewAppPasswordService(repository.NewAppPasswordRepository(sqlDB), users)

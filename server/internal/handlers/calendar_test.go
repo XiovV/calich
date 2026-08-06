@@ -39,16 +39,21 @@ func newCalendarTestServer(t *testing.T) (baseURL string, accessToken string) {
 	}
 
 	calendars := service.NewCalendarService(repository.NewCalendarRepository(sqlDB))
-	calendarHandler := NewCalendarHandler(calendars)
+	events := service.NewEventService(sqlDB, repository.NewEventRepository(sqlDB), repository.NewEventExceptionRepository(sqlDB), repository.NewEventReminderRepository(sqlDB), repository.NewSyncRepository(sqlDB), calendars)
+	imports := service.NewImportService(events, calendars)
+	calendarHandler := NewCalendarHandler(calendars, events, imports)
 
 	r := chi.NewRouter()
 	r.Route("/api/calendars", func(r chi.Router) {
 		r.Use(httpauth.RequireAuth(auth))
 		r.Get("/", calendarHandler.List)
 		r.Post("/", calendarHandler.Create)
+		r.Get("/ics", calendarHandler.ICSAll)
+		r.Post("/import", calendarHandler.Import)
 		r.Get("/{id}", calendarHandler.Get)
 		r.Patch("/{id}", calendarHandler.Update)
 		r.Delete("/{id}", calendarHandler.Delete)
+		r.Get("/{id}/ics", calendarHandler.ICS)
 	})
 
 	srv := httptest.NewServer(r)

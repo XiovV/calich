@@ -1,6 +1,7 @@
 import { useState, type KeyboardEvent } from "react";
 import { addDays, format, setHours, setMinutes, startOfDay } from "date-fns";
 import { Dialog } from "@base-ui/react/dialog";
+import { Download } from "lucide-react";
 import type { DraftBlock } from "../lib/gridTime";
 import type { Event, Reminder } from "../lib/event";
 import { isRecurringOccurrence, resolveMaster, type Occurrence } from "../lib/occurrence";
@@ -27,11 +28,14 @@ import { useShellStore } from "../lib/shellStore";
 import { useEventsStore } from "../lib/eventsStore";
 import { useCalendarsStore } from "../lib/calendarsStore";
 import { useAuthStore } from "../lib/authStore";
+import { icsApi } from "../lib/icsApi";
+import { toast } from "../lib/toast";
 import { Select } from "../components/ui/Select";
 import { Input } from "../components/ui/Input";
 import { Textarea } from "../components/ui/Textarea";
 import { Checkbox } from "../components/ui/Checkbox";
 import { Button } from "../components/ui/Button";
+import { IconButton } from "../components/ui/IconButton";
 import { buttonClasses } from "../components/ui/buttonClasses";
 import { DeleteEventConfirmation } from "./DeleteEventConfirmation";
 import { CustomRecurrenceDialog } from "./CustomRecurrenceDialog";
@@ -129,6 +133,7 @@ export function EventModal(props: EventModalProps) {
   const emailAvailable = useAuthStore(
     (state) => state.user?.emailReminderChannelAvailable ?? false,
   );
+  const accessToken = useAuthStore((state) => state.accessToken);
 
   const isRecurring = mode === "edit" && isRecurringOccurrence(props.occurrence);
   const master =
@@ -178,6 +183,7 @@ export function EventModal(props: EventModalProps) {
   >(null);
   const [isDiscardWarningOpen, setIsDiscardWarningOpen] = useState(false);
   const [isDeleteScopePickerOpen, setIsDeleteScopePickerOpen] = useState(false);
+  const [isDownloadScopePickerOpen, setIsDownloadScopePickerOpen] = useState(false);
 
   // Preset labels are derived from the event's start date, so e.g. "Weekly on
   // Tuesday" tracks the day the event lives on.
@@ -334,6 +340,35 @@ export function EventModal(props: EventModalProps) {
     onClose();
   }
 
+  async function downloadEvent(scope: "all" | "occurrence") {
+    if (mode !== "edit" || !accessToken) return;
+    try {
+      await icsApi.downloadEvent(
+        accessToken,
+        props.occurrence.event.id,
+        props.occurrence.event.title,
+        scope === "occurrence"
+          ? { type: "occurrence", occurrenceStart: props.occurrence.start }
+          : { type: "all" },
+      );
+    } catch {
+      toast.error("Failed to download event.");
+    }
+  }
+
+  function handleDownloadClick() {
+    if (isRecurring) {
+      setIsDownloadScopePickerOpen(true);
+      return;
+    }
+    downloadEvent("all");
+  }
+
+  function handleDownloadScopeConfirm(scope: EditScope) {
+    setIsDownloadScopePickerOpen(false);
+    downloadEvent(scope === "all" ? "all" : "occurrence");
+  }
+
   // Submit on Enter from anywhere in the dialog (base-ui may leave focus on the
   // popup rather than a field — e.g. when editing, where inputs are pre-filled),
   // but not from buttons (Cancel/Delete/Select) or a textarea.
@@ -364,9 +399,20 @@ export function EventModal(props: EventModalProps) {
             onKeyDown={handleEnterToSave}
             className="fixed top-1/2 left-1/2 z-50 w-[28rem] -translate-x-1/2 -translate-y-1/2 rounded-shell-lg bg-surface p-5 shadow-elevation-3"
           >
-            <Dialog.Title className="text-heading font-medium text-ink">
-              {mode === "edit" ? "Edit event" : "New event"}
-            </Dialog.Title>
+            <div className="flex items-center justify-between gap-2">
+              <Dialog.Title className="text-heading font-medium text-ink">
+                {mode === "edit" ? "Edit event" : "New event"}
+              </Dialog.Title>
+              {mode === "edit" && (
+                <IconButton
+                  size="tiny"
+                  onClick={handleDownloadClick}
+                  aria-label="Download event"
+                >
+                  <Download className="size-3.5" />
+                </IconButton>
+              )}
+            </div>
 
             <form
               onSubmit={(event) => {
@@ -543,6 +589,14 @@ export function EventModal(props: EventModalProps) {
           action="Delete"
           onConfirm={handleDeleteScopeConfirm}
           onClose={() => setIsDeleteScopePickerOpen(false)}
+        />
+      )}
+      {mode === "edit" && isDownloadScopePickerOpen && (
+        <ScopePicker
+          action="Download"
+          scopes={["this", "all"]}
+          onConfirm={handleDownloadScopeConfirm}
+          onClose={() => setIsDownloadScopePickerOpen(false)}
         />
       )}
       {pendingEditChanges && !isDiscardWarningOpen && (
