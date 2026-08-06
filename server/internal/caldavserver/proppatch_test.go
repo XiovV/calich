@@ -6,6 +6,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/XiovV/calendar/server/internal/service"
 )
 
 func proppatch(t *testing.T, srv *httptest.Server, path, username, password, body string) *http.Response {
@@ -377,6 +379,61 @@ func TestPropPatch_ThenPropfindTwice_RoundTripStable(t *testing.T) {
 
 	if color1 != "#8F45AEFF" || color2 != "#8F45AEFF" {
 		t.Fatalf("expected both GETs to return the canonical hex #8F45AEFF, got %q then %q", color1, color2)
+	}
+}
+
+// PROPPATCH on a Subscribed Calendar's collection is refused outright
+// (ADR-0032, #89) — renaming or recoloring one over CalDAV would be
+// incoherent with the read-only privilege set it advertises, so the request
+// never reaches applyPropPatch and the Calendar stays untouched.
+func TestPropPatch_SubscribedCalendarIsForbidden(t *testing.T) {
+	env := newTestCalDAVEnv(t)
+
+	sourceURL := "https://example.com/feed.ics"
+	subCalendar, err := env.calendarService.Create(t.Context(), env.userID, "sub-cal-1", service.CalendarWrite{
+		Name: "Feed", Color: "#123456FF", SourceURL: &sourceURL,
+	})
+	if err != nil {
+		t.Fatalf("create subscribed calendar: %v", err)
+	}
+
+	path := calendarPath(env.userID, subCalendar.ID)
+	resp := proppatch(t, env.srv, path, "admin", env.appPasswordSecret, proppatchSetDisplayName("Renamed"))
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d", resp.StatusCode)
+	}
+
+	cal, err := env.calendarService.Get(t.Context(), env.userID, subCalendar.ID)
+	if err != nil {
+		t.Fatalf("get calendar: %v", err)
+	}
+	if cal.Name != "Feed" || cal.Color != "#123456FF" {
+		t.Fatalf("expected the subscribed calendar to stay unchanged, got name=%q color=%q", cal.Name, cal.Color)
+	}
+}
+
+// The multi-property rename path (displayname + calendar-color in one
+// request) still works on an owned Calendar — the subscribed guard must not
+// have broadened beyond subscribed collections.
+func TestPropPatch_OwnedCalendarMultiPropertyRename_StillWorks(t *testing.T) {
+	env := newTestCalDAVEnv(t)
+
+	path := calendarPath(env.userID, env.calendarID)
+	resp := proppatch(t, env.srv, path, "admin", env.appPasswordSecret, proppatchSetDisplayNameAndCalendarColor("Renamed", "#8e44ad"))
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusMultiStatus {
+		t.Fatalf("expected 207, got %d", resp.StatusCode)
+	}
+
+	cal, err := env.calendarService.Get(t.Context(), env.userID, env.calendarID)
+	if err != nil {
+		t.Fatalf("get calendar: %v", err)
+	}
+	if cal.Name != "Renamed" || cal.Color != "#8E44ADFF" {
+		t.Fatalf("expected both name and color to be updated, got name=%q color=%q", cal.Name, cal.Color)
 	}
 }
 
