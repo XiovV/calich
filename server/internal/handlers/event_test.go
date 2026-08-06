@@ -791,6 +791,46 @@ func TestEventHandler_Reparent_MovesOverridesAndExceptions(t *testing.T) {
 	}
 }
 
+func TestEventHandler_UpdateOverride_RejectsOwnRrule(t *testing.T) {
+	baseURL, accessToken, calendarID := newEventTestServer(t)
+
+	masterResp := postJSON(t, baseURL, accessToken, "/api/events/", createEventRequest{
+		ID:         "22222222-2222-2222-2222-222222222222",
+		CalendarID: calendarID,
+		Title:      "Standup",
+		Start:      "2026-01-01T09:00:00Z",
+		End:        "2026-01-01T09:30:00Z",
+		Rrule:      "FREQ=DAILY",
+	})
+	var master decodedEvent
+	json.NewDecoder(masterResp.Body).Decode(&master)
+
+	recurrenceID := mustParseRFC3339(t, "2026-01-02T09:00:00Z")
+	overrideResp := postJSON(t, baseURL, accessToken, "/api/events/", createEventRequest{
+		ID:           "33333333-3333-3333-3333-333333333333",
+		CalendarID:   calendarID,
+		Title:        "Standup (moved)",
+		Start:        "2026-01-02T10:00:00Z",
+		End:          "2026-01-02T10:30:00Z",
+		ParentID:     &master.ID,
+		RecurrenceID: &recurrenceID,
+	})
+	var override decodedEvent
+	json.NewDecoder(overrideResp.Body).Decode(&override)
+
+	body, _ := json.Marshal(updateEventRequest{CalendarID: calendarID, Title: "Standup (moved)", Start: "2026-01-02T10:00:00Z", End: "2026-01-02T10:30:00Z", Rrule: "FREQ=DAILY"})
+	req, _ := http.NewRequest(http.MethodPatch, baseURL+"/api/events/"+override.ID, bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("patch: %v", err)
+	}
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", resp.StatusCode)
+	}
+}
+
 func TestEventHandler_Update_DiscardsOverridesOnRuleChange(t *testing.T) {
 	baseURL, accessToken, calendarID := newEventTestServer(t)
 

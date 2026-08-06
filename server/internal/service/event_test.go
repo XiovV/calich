@@ -456,6 +456,29 @@ func TestEventService_AddException_NotFound(t *testing.T) {
 	}
 }
 
+func TestEventService_UpdateOverride_RejectsOwnRrule(t *testing.T) {
+	svc, userID, calendarID := newTestEventService(t)
+	ctx := context.Background()
+	start := time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC)
+	end := time.Date(2026, 1, 1, 9, 30, 0, 0, time.UTC)
+
+	master, err := svc.Create(ctx, userID, "master", EventWrite{CalendarID: calendarID, Title: "Standup", Start: start, End: end, Rrule: "FREQ=DAILY"})
+	if err != nil {
+		t.Fatalf("create master: %v", err)
+	}
+
+	recurrenceID := time.Date(2026, 1, 2, 9, 0, 0, 0, time.UTC)
+	override, err := svc.Create(ctx, userID, "override", EventWrite{CalendarID: calendarID, Title: "Standup (moved)", Start: time.Date(2026, 1, 2, 10, 0, 0, 0, time.UTC), End: time.Date(2026, 1, 2, 10, 30, 0, 0, time.UTC), ParentID: &master.ID, RecurrenceID: &recurrenceID})
+	if err != nil {
+		t.Fatalf("create override: %v", err)
+	}
+
+	_, err = svc.Update(ctx, userID, override.ID, EventWrite{CalendarID: calendarID, Title: "Standup (moved)", Start: start, End: end, Rrule: "FREQ=DAILY"})
+	if !errors.Is(err, ErrInvalidOverride) {
+		t.Fatalf("expected ErrInvalidOverride, got %v", err)
+	}
+}
+
 func TestEventService_Update_DiscardsChildrenOnRuleChange(t *testing.T) {
 	svc, userID, calendarID := newTestEventService(t)
 	ctx := context.Background()

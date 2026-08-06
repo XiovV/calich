@@ -149,6 +149,7 @@ var createEventErrors = alsoHandling(eventWriteErrors,
 )
 
 var updateEventErrors = alsoHandling(eventWriteErrors,
+	errorCase{service.ErrInvalidOverride, badRequest("an override must not have its own recurrence rule")},
 	errorCase{repository.ErrNotFound, notFound("event not found")},
 )
 

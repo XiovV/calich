@@ -151,7 +151,7 @@ func (s *EventService) Create(ctx context.Context, userID int64, id string, writ
 	}
 
 	if write.ParentID != nil {
-		if write.Rrule != "" || write.RecurrenceID == nil {
+		if overrideCarriesOwnRrule(write.ParentID, write.Rrule) || write.RecurrenceID == nil {
 			return repository.Event{}, ErrInvalidOverride
 		}
 		parent, err := s.events.GetByID(ctx, userID, *write.ParentID)
@@ -204,6 +204,14 @@ func (s *EventService) Create(ctx context.Context, userID int64, id string, writ
 	}
 	event.Reminders = write.Reminders
 	return event, nil
+}
+
+// overrideCarriesOwnRrule reports whether a write to parentID names an
+// Override that also carries a non-empty rrule — a combination Create and
+// Update both reject, since an Override is a complete standalone instance,
+// never itself a Master (ADR-0016).
+func overrideCarriesOwnRrule(parentID *string, rrule string) bool {
+	return parentID != nil && rrule != ""
 }
 
 // isValidRecurrenceRule is the backend's light sanity check on an rrule. An
@@ -365,6 +373,10 @@ func (s *EventService) Update(ctx context.Context, userID int64, id string, writ
 	existing, err := s.events.GetByID(ctx, userID, id)
 	if err != nil {
 		return repository.Event{}, err
+	}
+
+	if overrideCarriesOwnRrule(existing.ParentID, write.Rrule) {
+		return repository.Event{}, ErrInvalidOverride
 	}
 
 	// A Master's rule changing (or being removed) is forced to "All events" and
