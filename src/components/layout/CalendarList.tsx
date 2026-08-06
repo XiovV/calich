@@ -129,14 +129,19 @@ export function CalendarList() {
             <RefreshCw className={`size-3.5 ${isRefreshing ? "animate-spin" : ""}`} />
           </IconButton>
         )}
-        <IconButton
-          size="tiny"
-          onClick={() => handleDownload(calendar)}
-          aria-label={`Download ${calendar.name}`}
-          className="opacity-0 focus-visible:opacity-100 group-hover:opacity-100"
-        >
-          <Download className="size-3.5" />
-        </IconButton>
+        {/* A Subscribed Calendar offers no per-Calendar download (#90,
+            ADR-0032): its source URL is what actually carries it elsewhere,
+            not a frozen snapshot a Refresh will overwrite anyway. */}
+        {!isSubscribed && (
+          <IconButton
+            size="tiny"
+            onClick={() => handleDownload(calendar)}
+            aria-label={`Download ${calendar.name}`}
+            className="opacity-0 focus-visible:opacity-100 group-hover:opacity-100"
+          >
+            <Download className="size-3.5" />
+          </IconButton>
+        )}
         <IconButton
           size="tiny"
           onClick={() => setEditingCalendar(calendar)}
