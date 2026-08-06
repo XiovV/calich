@@ -253,6 +253,15 @@ const (
 	propAppleCalendarColor = "X-APPLE-CALENDAR-COLOR"
 )
 
+// propRefreshInterval and propPublishedTTL are the two ways a publisher
+// states its own feed's poll cadence: RFC 7986's registered property, and
+// the older Microsoft/Google convention it superseded. A Refresh honours
+// whichever is present, preferring the RFC 7986 form (#86, ADR-0033).
+const (
+	propRefreshInterval = "REFRESH-INTERVAL"
+	propPublishedTTL    = "X-PUBLISHED-TTL"
+)
+
 // setRawText sets an X- property to value with no VALUE=TEXT param and no
 // backslash-escaping — go-ical's SetText adds both for any property it has
 // no built-in default value type for, which is correct but not how other

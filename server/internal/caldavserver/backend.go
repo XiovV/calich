@@ -497,9 +497,13 @@ func seriesWriteFromParsed(parsed *icalendar.ParsedSeries) service.SeriesWrite {
 
 // mapPutSeriesError maps PutSeries' validation/lookup errors onto the HTTP
 // status a CalDAV client expects: a bad request body is 400, an unresolved
-// calendar or an id naming an Override is 404 (matching GetCalendarObject).
+// calendar or an id naming an Override is 404 (matching GetCalendarObject),
+// and a Subscribed Calendar's collection is 403 (ADR-0032) — it exists and
+// is visible, the write is simply refused.
 func mapPutSeriesError(err error) error {
 	switch {
+	case errors.Is(err, service.ErrSubscribedCalendarReadOnly):
+		return webdav.NewHTTPError(http.StatusForbidden, err)
 	case errors.Is(err, service.ErrCalendarNotFound), errors.Is(err, service.ErrParentIsOverride), errors.Is(err, repository.ErrNotFound):
 		return webdav.NewHTTPError(http.StatusNotFound, err)
 	case errors.Is(err, service.ErrInvalidTitle),
@@ -518,7 +522,9 @@ func mapPutSeriesError(err error) error {
 // reports the removal (ADR-0025, #67). If-Match is honored via the header
 // dispatchHandler stashes into ctx for DELETE (go-webdav's
 // DeleteCalendarObject signature carries no options, unlike
-// PutCalendarObject's).
+// PutCalendarObject's). A Subscribed Calendar's object refuses the delete
+// with 403, not 404 — the object is visible, the write is refused
+// (ADR-0032).
 func (b *Backend) DeleteCalendarObject(ctx context.Context, path string) error {
 	userID, err := userIDFromContext(ctx)
 	if err != nil {
@@ -545,6 +551,9 @@ func (b *Backend) DeleteCalendarObject(ctx context.Context, path string) error {
 	}
 
 	if err := b.events.Delete(ctx, userID, masterID); err != nil {
+		if errors.Is(err, service.ErrSubscribedCalendarReadOnly) {
+			return webdav.NewHTTPError(http.StatusForbidden, err)
+		}
 		return fmt.Errorf("delete calendar object: %w", err)
 	}
 	return nil

@@ -32,7 +32,7 @@ func TestCalendarService_Create(t *testing.T) {
 	svc, userID := newTestCalendarService(t)
 	ctx := context.Background()
 
-	calendar, err := svc.Create(ctx, userID, "cal-1", "Personal", "#12809CFF")
+	calendar, err := svc.Create(ctx, userID, "cal-1", CalendarWrite{Name: "Personal", Color: "#12809CFF"})
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
@@ -45,7 +45,7 @@ func TestCalendarService_Create_NormalizesColor(t *testing.T) {
 	svc, userID := newTestCalendarService(t)
 	ctx := context.Background()
 
-	calendar, err := svc.Create(ctx, userID, "cal-1", "Personal", "#12809c")
+	calendar, err := svc.Create(ctx, userID, "cal-1", CalendarWrite{Name: "Personal", Color: "#12809c"})
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
@@ -57,7 +57,7 @@ func TestCalendarService_Create_NormalizesColor(t *testing.T) {
 func TestCalendarService_Create_RejectsInvalidColor(t *testing.T) {
 	svc, userID := newTestCalendarService(t)
 
-	_, err := svc.Create(context.Background(), userID, "cal-1", "Personal", "not-a-real-color")
+	_, err := svc.Create(context.Background(), userID, "cal-1", CalendarWrite{Name: "Personal", Color: "not-a-real-color"})
 	if !errors.Is(err, ErrInvalidColor) {
 		t.Fatalf("expected ErrInvalidColor, got %v", err)
 	}
@@ -66,7 +66,7 @@ func TestCalendarService_Create_RejectsInvalidColor(t *testing.T) {
 func TestCalendarService_Create_RejectsEmptyName(t *testing.T) {
 	svc, userID := newTestCalendarService(t)
 
-	_, err := svc.Create(context.Background(), userID, "cal-1", "  ", "#12809CFF")
+	_, err := svc.Create(context.Background(), userID, "cal-1", CalendarWrite{Name: "  ", Color: "#12809CFF"})
 	if !errors.Is(err, ErrInvalidName) {
 		t.Fatalf("expected ErrInvalidName, got %v", err)
 	}
@@ -76,7 +76,7 @@ func TestCalendarService_List(t *testing.T) {
 	svc, userID := newTestCalendarService(t)
 	ctx := context.Background()
 
-	if _, err := svc.Create(ctx, userID, "cal-1", "Personal", "#12809CFF"); err != nil {
+	if _, err := svc.Create(ctx, userID, "cal-1", CalendarWrite{Name: "Personal", Color: "#12809CFF"}); err != nil {
 		t.Fatalf("create: %v", err)
 	}
 
@@ -93,11 +93,11 @@ func TestCalendarService_Update(t *testing.T) {
 	svc, userID := newTestCalendarService(t)
 	ctx := context.Background()
 
-	if _, err := svc.Create(ctx, userID, "cal-1", "Personal", "#12809CFF"); err != nil {
+	if _, err := svc.Create(ctx, userID, "cal-1", CalendarWrite{Name: "Personal", Color: "#12809CFF"}); err != nil {
 		t.Fatalf("create: %v", err)
 	}
 
-	updated, err := svc.Update(ctx, userID, "cal-1", "Renamed", "#E2483DFF")
+	updated, err := svc.Update(ctx, userID, "cal-1", CalendarWrite{Name: "Renamed", Color: "#E2483DFF"})
 	if err != nil {
 		t.Fatalf("update: %v", err)
 	}
@@ -110,11 +110,11 @@ func TestCalendarService_Update_RejectsInvalidColor(t *testing.T) {
 	svc, userID := newTestCalendarService(t)
 	ctx := context.Background()
 
-	if _, err := svc.Create(ctx, userID, "cal-1", "Personal", "#12809CFF"); err != nil {
+	if _, err := svc.Create(ctx, userID, "cal-1", CalendarWrite{Name: "Personal", Color: "#12809CFF"}); err != nil {
 		t.Fatalf("create: %v", err)
 	}
 
-	_, err := svc.Update(ctx, userID, "cal-1", "Personal", "not-a-real-color")
+	_, err := svc.Update(ctx, userID, "cal-1", CalendarWrite{Name: "Personal", Color: "not-a-real-color"})
 	if !errors.Is(err, ErrInvalidColor) {
 		t.Fatalf("expected ErrInvalidColor, got %v", err)
 	}
@@ -123,7 +123,7 @@ func TestCalendarService_Update_RejectsInvalidColor(t *testing.T) {
 func TestCalendarService_Update_NotFound(t *testing.T) {
 	svc, userID := newTestCalendarService(t)
 
-	_, err := svc.Update(context.Background(), userID, "nope", "Renamed", "#E2483DFF")
+	_, err := svc.Update(context.Background(), userID, "nope", CalendarWrite{Name: "Renamed", Color: "#E2483DFF"})
 	if !errors.Is(err, repository.ErrNotFound) {
 		t.Fatalf("expected ErrNotFound, got %v", err)
 	}
@@ -133,7 +133,7 @@ func TestCalendarService_Delete(t *testing.T) {
 	svc, userID := newTestCalendarService(t)
 	ctx := context.Background()
 
-	if _, err := svc.Create(ctx, userID, "cal-1", "Personal", "#12809CFF"); err != nil {
+	if _, err := svc.Create(ctx, userID, "cal-1", CalendarWrite{Name: "Personal", Color: "#12809CFF"}); err != nil {
 		t.Fatalf("create: %v", err)
 	}
 

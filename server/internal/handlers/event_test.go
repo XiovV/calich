@@ -76,6 +76,15 @@ func (d *decodedEvent) UnmarshalJSON(data []byte) error {
 
 func newEventTestServer(t *testing.T) (baseURL, accessToken, calendarID string) {
 	t.Helper()
+	baseURL, accessToken, calendarID, _, _, _ = newEventTestServerWithServices(t)
+	return baseURL, accessToken, calendarID
+}
+
+// newEventTestServerWithServices is newEventTestServer plus the userID and
+// the raw CalendarService/EventService, for tests that need to seed state
+// (e.g. a Subscribed Calendar, ADR-0032) no REST endpoint can produce.
+func newEventTestServerWithServices(t *testing.T) (baseURL, accessToken, calendarID string, userID int64, calendars *service.CalendarService, events *service.EventService) {
+	t.Helper()
 
 	sqlDB, err := db.OpenInMemory()
 	if err != nil {
@@ -95,19 +104,19 @@ func newEventTestServer(t *testing.T) (baseURL, accessToken, calendarID string) 
 		t.Fatalf("login: %v", err)
 	}
 
-	userID, err := auth.Authenticate(context.Background(), loginResult.AccessToken)
+	userID, err = auth.Authenticate(context.Background(), loginResult.AccessToken)
 	if err != nil {
 		t.Fatalf("authenticate: %v", err)
 	}
 
 	calendarRepo := repository.NewCalendarRepository(sqlDB)
-	calendars := service.NewCalendarService(calendarRepo)
-	cal, err := calendars.Create(context.Background(), userID, "11111111-1111-1111-1111-111111111111", "Personal", "#12809CFF")
+	calendars = service.NewCalendarService(calendarRepo)
+	cal, err := calendars.Create(context.Background(), userID, "11111111-1111-1111-1111-111111111111", service.CalendarWrite{Name: "Personal", Color: "#12809CFF"})
 	if err != nil {
 		t.Fatalf("create calendar: %v", err)
 	}
 
-	events := service.NewEventService(sqlDB, repository.NewEventRepository(sqlDB), repository.NewEventExceptionRepository(sqlDB), repository.NewEventReminderRepository(sqlDB), repository.NewSyncRepository(sqlDB), calendars)
+	events = service.NewEventService(sqlDB, repository.NewEventRepository(sqlDB), repository.NewEventExceptionRepository(sqlDB), repository.NewEventReminderRepository(sqlDB), repository.NewSyncRepository(sqlDB), calendars)
 	eventHandler := NewEventHandler(events)
 
 	r := chi.NewRouter()
@@ -125,7 +134,7 @@ func newEventTestServer(t *testing.T) (baseURL, accessToken, calendarID string) 
 
 	srv := httptest.NewServer(r)
 	t.Cleanup(srv.Close)
-	return srv.URL, loginResult.AccessToken, cal.ID
+	return srv.URL, loginResult.AccessToken, cal.ID, userID, calendars, events
 }
 
 func TestEventHandler_CreateAndList(t *testing.T) {
@@ -436,6 +445,26 @@ func TestEventHandler_Create_RejectsUnknownCalendar(t *testing.T) {
 	resp := createEvent(t, baseURL, accessToken, "22222222-2222-2222-2222-222222222222", "does-not-exist", "Standup", "2026-01-01T09:00:00Z", "2026-01-01T10:00:00Z")
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d", resp.StatusCode)
+	}
+}
+
+// A Subscribed Calendar's Events are written only by Refresh's bypass
+// (ADR-0032); every REST write against one names the reason as a 403, not a
+// plain validation 400.
+func TestEventHandler_Create_RejectsSubscribedCalendarWith403(t *testing.T) {
+	baseURL, accessToken, _, userID, calendars, _ := newEventTestServerWithServices(t)
+
+	sourceURL := "https://example.com/feed.ics"
+	subCalendar, err := calendars.Create(context.Background(), userID, "33333333-3333-3333-3333-333333333333", service.CalendarWrite{
+		Name: "Feed", Color: "#123456FF", SourceURL: &sourceURL,
+	})
+	if err != nil {
+		t.Fatalf("create subscribed calendar: %v", err)
+	}
+
+	resp := createEvent(t, baseURL, accessToken, "22222222-2222-2222-2222-222222222222", subCalendar.ID, "Standup", "2026-01-01T09:00:00Z", "2026-01-01T10:00:00Z")
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d", resp.StatusCode)
 	}
 }
 

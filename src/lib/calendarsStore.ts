@@ -10,12 +10,29 @@ interface CalendarsState {
   addCalendar: (calendar: Calendar) => Promise<void>;
   updateCalendar: (
     id: string,
-    changes: { name: string; color: string },
+    changes: { name: string; color: string; keepAlarms?: boolean },
   ) => Promise<void>;
   // Resolves to whether the delete actually succeeded, so callers that
   // cascade other local state off of it (e.g. deleteCalendarCascade) know
   // whether to undo that cascade too.
   removeCalendar: (id: string) => Promise<boolean>;
+  // Not optimistic, unlike addCalendar — the server does the fetch and
+  // write, so there's nothing to show until it responds. Rethrows on
+  // failure so the Subscribe dialog can show the specific error (bad URL,
+  // auth failure, ...) inline rather than a generic toast.
+  subscribeCalendar: (
+    url: string,
+    name: string,
+    color: string,
+    keepAlarms: boolean,
+  ) => Promise<Calendar>;
+  // refreshCalendar triggers Refresh now for a Subscribed Calendar (#85).
+  // Not optimistic, like subscribeCalendar — the server does the fetch and
+  // reconcile, so there's nothing to show until it responds. Re-fetches the
+  // Calendar afterward for its updated lastSyncedAt, since the refresh
+  // response itself only carries a summary. Rethrows on failure so the
+  // caller can show a specific error.
+  refreshCalendar: (id: string) => Promise<void>;
 }
 
 function requireAccessToken(): string {
@@ -75,5 +92,25 @@ export const useCalendarsStore = create<CalendarsState>((set, get) => ({
       toast.error("Failed to delete calendar.");
       return false;
     }
+  },
+
+  subscribeCalendar: async (url, name, color, keepAlarms) => {
+    const calendar = await calendarsApi.subscribe(requireAccessToken(), {
+      url,
+      name,
+      color,
+      keepAlarms,
+    });
+    set((state) => ({ calendars: [...state.calendars, calendar] }));
+    return calendar;
+  },
+
+  refreshCalendar: async (id) => {
+    const accessToken = requireAccessToken();
+    await calendarsApi.refresh(accessToken, id);
+    const calendar = await calendarsApi.get(accessToken, id);
+    set((state) => ({
+      calendars: state.calendars.map((c) => (c.id === id ? calendar : c)),
+    }));
   },
 }));

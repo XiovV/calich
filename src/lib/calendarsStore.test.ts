@@ -6,6 +6,9 @@ vi.mock("./calendarsApi", () => ({
     create: vi.fn(),
     update: vi.fn(),
     remove: vi.fn(),
+    subscribe: vi.fn(),
+    get: vi.fn(),
+    refresh: vi.fn(),
   },
 }));
 
@@ -128,5 +131,82 @@ describe("removeCalendar", () => {
 
     expect(useCalendarsStore.getState().calendars).toEqual([personal]);
     expect(toast.error).toHaveBeenCalledWith("Failed to delete calendar.");
+  });
+});
+
+describe("subscribeCalendar", () => {
+  const subscribed = {
+    id: "cal-3",
+    name: "Team Holidays",
+    color: "#8E44ADFF",
+    sourceUrl: "https://example.com/feed.ics",
+  };
+
+  it("appends the calendar once the API call resolves", async () => {
+    vi.mocked(calendarsApi.subscribe).mockResolvedValue(subscribed);
+
+    const result = await useCalendarsStore
+      .getState()
+      .subscribeCalendar("https://example.com/feed.ics", "Team Holidays", "#8E44ADFF", true);
+
+    expect(result).toEqual(subscribed);
+    expect(useCalendarsStore.getState().calendars).toEqual([subscribed]);
+    expect(calendarsApi.subscribe).toHaveBeenCalledWith("token-123", {
+      url: "https://example.com/feed.ics",
+      name: "Team Holidays",
+      color: "#8E44ADFF",
+      keepAlarms: true,
+    });
+  });
+
+  it("does not add anything and rethrows when the API call fails", async () => {
+    vi.mocked(calendarsApi.subscribe).mockRejectedValue(new Error("fetch failed"));
+
+    await expect(
+      useCalendarsStore
+        .getState()
+        .subscribeCalendar("https://example.com/feed.ics", "Team Holidays", "#8E44ADFF", false),
+    ).rejects.toThrow("fetch failed");
+    expect(useCalendarsStore.getState().calendars).toEqual([]);
+  });
+});
+
+describe("refreshCalendar", () => {
+  const subscribed = {
+    id: "cal-3",
+    name: "Team Holidays",
+    color: "#8E44ADFF",
+    sourceUrl: "https://example.com/feed.ics",
+  };
+
+  it("refreshes then replaces the calendar with its updated lastSyncedAt", async () => {
+    useCalendarsStore.setState({ calendars: [subscribed] });
+    vi.mocked(calendarsApi.refresh).mockResolvedValue({
+      notModified: false,
+      created: 0,
+      updated: 1,
+      tombstoned: 0,
+      unparseable: 0,
+      noOp: 0,
+    });
+    const refreshed = { ...subscribed, lastSyncedAt: "2026-08-06T12:00:00Z" };
+    vi.mocked(calendarsApi.get).mockResolvedValue(refreshed);
+
+    await useCalendarsStore.getState().refreshCalendar("cal-3");
+
+    expect(calendarsApi.refresh).toHaveBeenCalledWith("token-123", "cal-3");
+    expect(calendarsApi.get).toHaveBeenCalledWith("token-123", "cal-3");
+    expect(useCalendarsStore.getState().calendars).toEqual([refreshed]);
+  });
+
+  it("rethrows and leaves the calendar untouched when the API call fails", async () => {
+    useCalendarsStore.setState({ calendars: [subscribed] });
+    vi.mocked(calendarsApi.refresh).mockRejectedValue(new Error("fetch failed"));
+
+    await expect(
+      useCalendarsStore.getState().refreshCalendar("cal-3"),
+    ).rejects.toThrow("fetch failed");
+    expect(useCalendarsStore.getState().calendars).toEqual([subscribed]);
+    expect(calendarsApi.get).not.toHaveBeenCalled();
   });
 });

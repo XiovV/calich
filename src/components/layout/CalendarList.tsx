@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { Download, Pencil, Plus, Trash2 } from "lucide-react";
+import { formatDistanceToNow } from "date-fns";
+import { Download, Pencil, Plus, RefreshCw, Trash2, TriangleAlert } from "lucide-react";
 import { Checkbox } from "../ui/Checkbox";
 import { IconButton } from "../ui/IconButton";
 import type { Calendar } from "../../lib/calendar";
@@ -12,7 +13,20 @@ import { deleteCalendarCascade } from "../../lib/deleteCalendarCascade";
 import { icsApi } from "../../lib/icsApi";
 import { toast } from "../../lib/toast";
 import { CalendarModal } from "./CalendarModal";
+import { SubscribeCalendarModal } from "./SubscribeCalendarModal";
 import { DeleteCalendarConfirmation } from "./DeleteCalendarConfirmation";
+
+// subscriptionErrorReason renders a broken Subscription's sidebar tooltip,
+// undefined for a healthy Calendar. The two error classes need different
+// sentences (#86): needs_attention means a human must fix something (bad
+// credentials, a feed that no longer exists), retrying means the poller
+// expects the problem to clear on its own.
+function subscriptionErrorReason(calendar: Calendar): string | undefined {
+  if (!calendar.errorClass) return undefined;
+  return calendar.errorClass === "needs_attention"
+    ? `Needs attention: ${calendar.errorMessage}`
+    : `Temporarily unreachable, retrying automatically: ${calendar.errorMessage}`;
+}
 
 export function CalendarList() {
   const calendars = useCalendarsStore((state) => state.calendars);
@@ -22,11 +36,19 @@ export function CalendarList() {
   const toggleCalendarChecked = useShellStore(
     (state) => state.toggleCalendarChecked,
   );
+  const refreshCalendar = useCalendarsStore((state) => state.refreshCalendar);
   const [isCreateOpen, setIsCreateOpen] = useState(false);
+  const [isSubscribeOpen, setIsSubscribeOpen] = useState(false);
   const [editingCalendar, setEditingCalendar] = useState<Calendar | null>(null);
   const [deletingCalendarId, setDeletingCalendarId] = useState<string | null>(
     null,
   );
+  const [refreshingCalendarIds, setRefreshingCalendarIds] = useState<
+    Set<string>
+  >(new Set());
+
+  const ownedCalendars = calendars.filter((calendar) => !calendar.sourceUrl);
+  const subscribedCalendars = calendars.filter((calendar) => calendar.sourceUrl);
 
   const deletingCalendar = calendars.find(
     (calendar) => calendar.id === deletingCalendarId,
@@ -47,6 +69,99 @@ export function CalendarList() {
     }
   }
 
+  async function handleRefresh(calendar: Calendar) {
+    setRefreshingCalendarIds((ids) => new Set(ids).add(calendar.id));
+    try {
+      await refreshCalendar(calendar.id);
+    } catch {
+      toast.error(`Failed to refresh "${calendar.name}".`);
+    } finally {
+      setRefreshingCalendarIds((ids) => {
+        const next = new Set(ids);
+        next.delete(calendar.id);
+        return next;
+      });
+    }
+  }
+
+  function renderCalendarItem(calendar: Calendar) {
+    const isSubscribed = Boolean(calendar.sourceUrl);
+    const isRefreshing = refreshingCalendarIds.has(calendar.id);
+    const errorReason = subscriptionErrorReason(calendar);
+    return (
+      <li
+        key={calendar.id}
+        className="group flex items-center gap-2 rounded-e-full py-2 ps-5 pe-2 transition-colors hover:bg-surface-hover"
+      >
+        {errorReason ? (
+          <span title={errorReason} className="shrink-0">
+            <TriangleAlert
+              aria-label={errorReason}
+              className={`size-3 ${
+                calendar.errorClass === "needs_attention" ? "text-danger" : "text-warning"
+              }`}
+            />
+          </span>
+        ) : (
+          <span
+            aria-hidden="true"
+            style={{ backgroundColor: toOpaqueHex(resolveCalendarFill(calendar)) }}
+            className="size-2.5 shrink-0 rounded-shell-pill"
+          />
+        )}
+        <span className="flex min-w-0 flex-1 flex-col">
+          <span className="truncate text-body text-ink">{calendar.name}</span>
+          {isSubscribed && calendar.lastSyncedAt && (
+            <span className="truncate text-label-sm text-ink-muted">
+              Synced{" "}
+              {formatDistanceToNow(calendar.lastSyncedAt, { addSuffix: true })}
+            </span>
+          )}
+        </span>
+        {isSubscribed && (
+          <IconButton
+            size="tiny"
+            onClick={() => handleRefresh(calendar)}
+            disabled={isRefreshing}
+            aria-label={`Refresh ${calendar.name}`}
+            className="opacity-0 focus-visible:opacity-100 group-hover:opacity-100"
+          >
+            <RefreshCw className={`size-3.5 ${isRefreshing ? "animate-spin" : ""}`} />
+          </IconButton>
+        )}
+        <IconButton
+          size="tiny"
+          onClick={() => handleDownload(calendar)}
+          aria-label={`Download ${calendar.name}`}
+          className="opacity-0 focus-visible:opacity-100 group-hover:opacity-100"
+        >
+          <Download className="size-3.5" />
+        </IconButton>
+        <IconButton
+          size="tiny"
+          onClick={() => setEditingCalendar(calendar)}
+          aria-label={`Edit ${calendar.name}`}
+          className="opacity-0 focus-visible:opacity-100 group-hover:opacity-100"
+        >
+          <Pencil className="size-3.5" />
+        </IconButton>
+        <IconButton
+          size="tiny"
+          onClick={() => setDeletingCalendarId(calendar.id)}
+          aria-label={isSubscribed ? `Unsubscribe from ${calendar.name}` : `Delete ${calendar.name}`}
+          className="opacity-0 focus-visible:opacity-100 group-hover:opacity-100"
+        >
+          <Trash2 className="size-3.5" />
+        </IconButton>
+        <Checkbox
+          checked={checkedCalendarIds.has(calendar.id)}
+          onCheckedChange={() => toggleCalendarChecked(calendar.id)}
+          aria-label={calendar.name}
+        />
+      </li>
+    );
+  }
+
   return (
     <div>
       <div className="flex items-center justify-between py-2 ps-5 pe-2">
@@ -61,54 +176,27 @@ export function CalendarList() {
           <Plus className="size-4" />
         </IconButton>
       </div>
-      <ul>
-        {calendars.map((calendar) => (
-          <li
-            key={calendar.id}
-            className="group flex items-center gap-2 rounded-e-full py-2 ps-5 pe-2 transition-colors hover:bg-surface-hover"
-          >
-            <span
-              aria-hidden="true"
-              style={{ backgroundColor: toOpaqueHex(resolveCalendarFill(calendar)) }}
-              className="size-2.5 shrink-0 rounded-shell-pill"
-            />
-            <span className="flex-1 truncate text-body text-ink">
-              {calendar.name}
-            </span>
-            <IconButton
-              size="tiny"
-              onClick={() => handleDownload(calendar)}
-              aria-label={`Download ${calendar.name}`}
-              className="opacity-0 focus-visible:opacity-100 group-hover:opacity-100"
-            >
-              <Download className="size-3.5" />
-            </IconButton>
-            <IconButton
-              size="tiny"
-              onClick={() => setEditingCalendar(calendar)}
-              aria-label={`Edit ${calendar.name}`}
-              className="opacity-0 focus-visible:opacity-100 group-hover:opacity-100"
-            >
-              <Pencil className="size-3.5" />
-            </IconButton>
-            <IconButton
-              size="tiny"
-              onClick={() => setDeletingCalendarId(calendar.id)}
-              aria-label={`Delete ${calendar.name}`}
-              className="opacity-0 focus-visible:opacity-100 group-hover:opacity-100"
-            >
-              <Trash2 className="size-3.5" />
-            </IconButton>
-            <Checkbox
-              checked={checkedCalendarIds.has(calendar.id)}
-              onCheckedChange={() => toggleCalendarChecked(calendar.id)}
-              aria-label={calendar.name}
-            />
-          </li>
-        ))}
-      </ul>
+      <ul>{ownedCalendars.map(renderCalendarItem)}</ul>
+
+      <div className="flex items-center justify-between py-2 ps-5 pe-2">
+        <p className="text-label-sm font-medium text-ink-muted">
+          Subscribed calendars
+        </p>
+        <IconButton
+          size="tiny"
+          onClick={() => setIsSubscribeOpen(true)}
+          aria-label="Subscribe to a calendar"
+        >
+          <Plus className="size-4" />
+        </IconButton>
+      </div>
+      <ul>{subscribedCalendars.map(renderCalendarItem)}</ul>
+
       {isCreateOpen && (
         <CalendarModal mode="create" onClose={() => setIsCreateOpen(false)} />
+      )}
+      {isSubscribeOpen && (
+        <SubscribeCalendarModal onClose={() => setIsSubscribeOpen(false)} />
       )}
       {editingCalendar && (
         <CalendarModal

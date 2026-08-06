@@ -248,7 +248,7 @@ func (h *dispatchHandler) applyPropPatch(ctx context.Context, userID int64, cale
 	}
 
 	if changed {
-		if _, err := h.backend.calendars.Update(ctx, userID, calendarID, newName, newColor); err != nil {
+		if _, err := h.backend.calendars.Update(ctx, userID, calendarID, service.CalendarWrite{Name: newName, Color: newColor}); err != nil {
 			return nil, err
 		}
 	}

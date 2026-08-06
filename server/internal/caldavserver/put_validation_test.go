@@ -10,6 +10,7 @@ import (
 
 	"github.com/XiovV/calendar/server/internal/icalendar"
 	"github.com/XiovV/calendar/server/internal/repository"
+	"github.com/XiovV/calendar/server/internal/service"
 )
 
 // putSeriesStatus PUTs one series and reports the raw status, so the mapping
@@ -159,5 +160,60 @@ func TestPutCalendarObject_CalendarWithNoVEventIsRejected(t *testing.T) {
 
 	if resp.StatusCode < 400 || resp.StatusCode >= 500 {
 		t.Fatalf("expected a 4xx rejection, got %d", resp.StatusCode)
+	}
+}
+
+// A Subscribed Calendar's collection is visible over CalDAV but read-only
+// (ADR-0032): PUT on one of its objects is refused with 403, not 404 — the
+// object (or its intended location) exists, the write is what's refused.
+func TestPutCalendarObject_SubscribedCalendarIsForbidden(t *testing.T) {
+	env := newTestCalDAVEnv(t)
+
+	sourceURL := "https://example.com/feed.ics"
+	subCalendar, err := env.calendarService.Create(t.Context(), env.userID, "sub-cal-1", service.CalendarWrite{
+		Name: "Feed", Color: "#123456FF", SourceURL: &sourceURL,
+	})
+	if err != nil {
+		t.Fatalf("create subscribed calendar: %v", err)
+	}
+
+	if got := putSeriesStatus(t, env, subCalendar.ID, validPutMaster()); got != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d", got)
+	}
+}
+
+// DELETE on a Subscribed Calendar's object is refused with 403 for the same
+// reason PUT is (ADR-0032) — the object stays untouched.
+func TestDeleteCalendarObject_SubscribedCalendarIsForbidden(t *testing.T) {
+	env := newTestCalDAVEnv(t)
+
+	sourceURL := "https://example.com/feed.ics"
+	subCalendar, err := env.calendarService.Create(t.Context(), env.userID, "sub-cal-1", service.CalendarWrite{
+		Name: "Feed", Color: "#123456FF", SourceURL: &sourceURL,
+	})
+	if err != nil {
+		t.Fatalf("create subscribed calendar: %v", err)
+	}
+
+	master := validPutMaster()
+	if _, err := env.eventService.ImportSubscribedSeries(t.Context(), env.userID, subCalendar.ID, []service.SeriesWrite{
+		{Title: master.Title, Start: master.Start, End: master.End},
+	}); err != nil {
+		t.Fatalf("seed subscribed event: %v", err)
+	}
+
+	masters, _, err := env.eventService.ListSeriesByCalendar(t.Context(), env.userID, subCalendar.ID)
+	if err != nil {
+		t.Fatalf("list series: %v", err)
+	}
+	if len(masters) != 1 {
+		t.Fatalf("expected 1 master, got %+v", masters)
+	}
+
+	resp := rawDelete(t, env, calendarObjectPath(env.userID, subCalendar.ID, masters[0].ID), "")
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d", resp.StatusCode)
 	}
 }

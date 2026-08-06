@@ -57,14 +57,14 @@ func newICSTestEnv(t *testing.T) icsTestEnv {
 
 	calendarRepo := repository.NewCalendarRepository(sqlDB)
 	calendars := service.NewCalendarService(calendarRepo)
-	cal, err := calendars.Create(context.Background(), userID, "11111111-1111-1111-1111-111111111111", "Personal", "#12809CFF")
+	cal, err := calendars.Create(context.Background(), userID, "11111111-1111-1111-1111-111111111111", service.CalendarWrite{Name: "Personal", Color: "#12809CFF"})
 	if err != nil {
 		t.Fatalf("create calendar: %v", err)
 	}
 
 	events := service.NewEventService(sqlDB, repository.NewEventRepository(sqlDB), repository.NewEventExceptionRepository(sqlDB), repository.NewEventReminderRepository(sqlDB), repository.NewSyncRepository(sqlDB), calendars)
 	eventHandler := NewEventHandler(events)
-	calendarHandler := NewCalendarHandler(calendars, events, service.NewImportService(events, calendars))
+	calendarHandler := NewCalendarHandler(calendars, events, service.NewImportService(events, calendars), service.NewSubscribeService(events, calendars, 0))
 
 	r := chi.NewRouter()
 	r.Route("/api/events", func(r chi.Router) {
@@ -364,7 +364,7 @@ func TestCalendarHandler_ICSAll_ReturnsOneZipEntryPerCalendar(t *testing.T) {
 	if _, err := env.events.Create(ctx, 1, "evt-1", service.EventWrite{CalendarID: env.calendarID, Title: "Standup", Start: start, End: end}); err != nil {
 		t.Fatalf("create event: %v", err)
 	}
-	secondCal, err := env.calendars.Create(ctx, 1, "22222222-2222-2222-2222-222222222222", "Work", "#E2483DFF")
+	secondCal, err := env.calendars.Create(ctx, 1, "22222222-2222-2222-2222-222222222222", service.CalendarWrite{Name: "Work", Color: "#E2483DFF"})
 	if err != nil {
 		t.Fatalf("create second calendar: %v", err)
 	}

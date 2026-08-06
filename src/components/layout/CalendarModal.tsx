@@ -1,12 +1,13 @@
 import { useState, type KeyboardEvent } from "react";
 import { Dialog } from "@base-ui/react/dialog";
-import type { Calendar } from "../../lib/calendar";
+import { isSubscribedCalendar, type Calendar } from "../../lib/calendar";
 import { getNextUnusedColor } from "../../lib/calendarColors";
 import { useCalendarsStore } from "../../lib/calendarsStore";
 import { useShellStore } from "../../lib/shellStore";
 import { ColorSwatchPicker } from "./ColorSwatchPicker";
 import { Button } from "../ui/Button";
 import { buttonClasses } from "../ui/buttonClasses";
+import { Checkbox } from "../ui/Checkbox";
 import { Input } from "../ui/Input";
 import { fieldLabelClass } from "../ui/fieldStyles";
 
@@ -30,6 +31,10 @@ export function CalendarModal(props: CalendarModalProps) {
       ? props.calendar.color
       : getNextUnusedColor(calendars.map((calendar) => calendar.color)),
   );
+  const [keepAlarms, setKeepAlarms] = useState(
+    mode === "edit" ? (props.calendar.keepAlarms ?? false) : false,
+  );
+  const isSubscribed = mode === "edit" && isSubscribedCalendar(props.calendar);
 
   const canSave = name.trim() !== "";
 
@@ -37,7 +42,11 @@ export function CalendarModal(props: CalendarModalProps) {
     if (!canSave) return;
 
     if (mode === "edit") {
-      updateCalendar(props.calendar.id, { name: name.trim(), color });
+      updateCalendar(props.calendar.id, {
+        name: name.trim(),
+        color,
+        ...(isSubscribed ? { keepAlarms } : {}),
+      });
     } else {
       const id = crypto.randomUUID();
       addCalendar({ id, name: name.trim(), color });
@@ -99,6 +108,20 @@ export function CalendarModal(props: CalendarModalProps) {
               <ColorSwatchPicker value={color} onValueChange={setColor} />
             </div>
           </div>
+
+          {isSubscribed && (
+            <label className="mt-4 flex items-start gap-2 text-label-sm text-ink">
+              <Checkbox
+                checked={keepAlarms}
+                onCheckedChange={setKeepAlarms}
+                aria-label="Keep this feed's reminders"
+              />
+              <span>
+                Keep this feed&apos;s reminders, including email reminders
+                this instance will send
+              </span>
+            </label>
+          )}
 
           <div className="mt-5 flex justify-end gap-2">
             <Dialog.Close

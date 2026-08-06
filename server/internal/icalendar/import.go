@@ -37,9 +37,14 @@ type ImportedSeries struct {
 }
 
 // SkippedSeries is one VEVENT UID group import declined to write, and why.
+// UID is the group's own iCalendar UID (the map key ParseImportFile grouped
+// it under) — a Refresh needs it to tell "present in the feed but
+// unparseable" apart from "absent from the feed" for the same ExternalUID
+// (#85, ADR-0033); ordinary import ignores it.
 type SkippedSeries struct {
 	Reason string
 	Title  string
+	UID    string
 }
 
 // ParsedFile is one Calendar file's (or zip entry's) whole decoded content
@@ -49,8 +54,14 @@ type ParsedFile struct {
 	// X-APPLE-CALENDAR-COLOR when present, empty otherwise.
 	CalendarName string
 	Color        string
-	Series       []ImportedSeries
-	Skipped      []SkippedSeries
+	// RefreshInterval is the publisher's own stated poll cadence, read from
+	// REFRESH-INTERVAL (RFC 7986) or, lacking that, X-PUBLISHED-TTL — nil
+	// when the feed states neither or states one unparseably (#86,
+	// ADR-0033). A poller honours this only when it is longer than its own
+	// default; it never polls faster than asked.
+	RefreshInterval *time.Duration
+	Series          []ImportedSeries
+	Skipped         []SkippedSeries
 	// IgnoredVTodo/VJournal/VFreeBusy count components import doesn't model
 	// at all, never converted into Series or Skipped entries.
 	IgnoredVTodo, IgnoredVJournal, IgnoredVFreeBusy int
@@ -70,6 +81,15 @@ func ParseImportFile(r io.Reader) (*ParsedFile, error) {
 	}
 	if p := cal.Props.Get(propAppleCalendarColor); p != nil {
 		out.Color = p.Value
+	}
+	if p := cal.Props.Get(propRefreshInterval); p != nil {
+		if d, err := p.Duration(); err == nil {
+			out.RefreshInterval = &d
+		}
+	} else if p := cal.Props.Get(propPublishedTTL); p != nil {
+		if d, err := p.Duration(); err == nil {
+			out.RefreshInterval = &d
+		}
 	}
 
 	var order []string
@@ -95,6 +115,7 @@ func ParseImportFile(r io.Reader) (*ParsedFile, error) {
 	for _, uid := range order {
 		series, skipped := parseSeriesGroup(groups[uid])
 		if skipped != nil {
+			skipped.UID = uid
 			out.Skipped = append(out.Skipped, *skipped)
 			continue
 		}

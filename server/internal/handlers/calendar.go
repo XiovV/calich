@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -18,23 +19,48 @@ import (
 )
 
 type CalendarHandler struct {
-	calendars *service.CalendarService
-	events    *service.EventService
-	imports   *service.ImportService
+	calendars     *service.CalendarService
+	events        *service.EventService
+	imports       *service.ImportService
+	subscriptions *service.SubscribeService
 }
 
-func NewCalendarHandler(calendars *service.CalendarService, events *service.EventService, imports *service.ImportService) *CalendarHandler {
-	return &CalendarHandler{calendars: calendars, events: events, imports: imports}
+func NewCalendarHandler(calendars *service.CalendarService, events *service.EventService, imports *service.ImportService, subscriptions *service.SubscribeService) *CalendarHandler {
+	return &CalendarHandler{calendars: calendars, events: events, imports: imports, subscriptions: subscriptions}
 }
 
 type calendarResponse struct {
 	ID    string `json:"id"`
 	Name  string `json:"name"`
 	Color string `json:"color"`
+	// SourceURL is set only on a Subscribed Calendar (#83, ADR-0032), and
+	// always masked — every display surface must hide a URL's password.
+	SourceURL *string `json:"sourceUrl,omitempty"`
+	// LastSyncedAt is when a Refresh last completed successfully against
+	// SourceURL, whether or not it changed anything — nil until the first
+	// Refresh runs, and always nil for an ordinary Calendar (#85, ADR-0033).
+	LastSyncedAt *time.Time `json:"lastSyncedAt,omitempty"`
+	// ErrorClass is "needs_attention" or "retrying" when the Subscription's
+	// last Refresh attempt failed, nil while healthy or for an ordinary
+	// Calendar — the sidebar's broken-Subscription indicator reads both this
+	// and ErrorMessage (#86, ADR-0033).
+	ErrorClass *string `json:"errorClass,omitempty"`
+	// ErrorMessage is the human-readable reason behind ErrorClass, nil while
+	// healthy.
+	ErrorMessage *string `json:"errorMessage,omitempty"`
+	// KeepAlarms is a Subscribed Calendar's opt-in to honouring the feed's
+	// VALARMs on both Channels, off by default and meaningless on an
+	// ordinary Calendar (#87, ADR-0032).
+	KeepAlarms bool `json:"keepAlarms"`
 }
 
 func toCalendarResponse(c repository.Calendar) calendarResponse {
-	return calendarResponse{ID: c.ID, Name: c.Name, Color: c.Color}
+	response := calendarResponse{ID: c.ID, Name: c.Name, Color: c.Color, LastSyncedAt: c.LastSyncedAt, ErrorClass: c.ErrorClass, ErrorMessage: c.ErrorMessage, KeepAlarms: c.KeepAlarms}
+	if c.SourceURL != nil {
+		masked := service.MaskURL(*c.SourceURL)
+		response.SourceURL = &masked
+	}
+	return response
 }
 
 // calendarWriteErrors is the rendering shared by the create and update paths,
@@ -95,7 +121,7 @@ func (h *CalendarHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	calendar, err := h.calendars.Create(r.Context(), userID, req.ID, req.Name, req.Color)
+	calendar, err := h.calendars.Create(r.Context(), userID, req.ID, service.CalendarWrite{Name: req.Name, Color: req.Color})
 	if respondError(w, err, calendarWriteErrors, "failed to create calendar") {
 		return
 	}
@@ -123,7 +149,19 @@ func (h *CalendarHandler) Get(w http.ResponseWriter, r *http.Request) {
 type updateCalendarRequest struct {
 	Name  string `json:"name"`
 	Color string `json:"color"`
+	// KeepAlarms is a Subscribed Calendar's KeepAlarms toggle (#87,
+	// ADR-0032). A pointer so an ordinary name/color edit — which never
+	// sends this field — can't accidentally turn a Subscription's alarms
+	// off; only a request that names it explicitly reaches
+	// SubscribeService.UpdateKeepAlarms.
+	KeepAlarms *bool `json:"keepAlarms,omitempty"`
 }
+
+var updateKeepAlarmsErrors = []errorCase{
+	{service.ErrRefreshNotSubscribed, badRequest("calendar is not a subscribed calendar")},
+}
+
+var updateKeepAlarmsErrorsWithNotFound = alsoHandling(updateKeepAlarmsErrors, calendarNotFoundErrors...)
 
 func (h *CalendarHandler) Update(w http.ResponseWriter, r *http.Request) {
 	userID, ok := httpauth.UserIDFromContext(r.Context())
@@ -140,9 +178,16 @@ func (h *CalendarHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	calendar, err := h.calendars.Update(r.Context(), userID, id, req.Name, req.Color)
+	calendar, err := h.calendars.Update(r.Context(), userID, id, service.CalendarWrite{Name: req.Name, Color: req.Color})
 	if respondError(w, err, updateCalendarErrors, "failed to update calendar") {
 		return
+	}
+
+	if req.KeepAlarms != nil {
+		calendar, err = h.subscriptions.UpdateKeepAlarms(r.Context(), userID, id, *req.KeepAlarms)
+		if respondError(w, err, updateKeepAlarmsErrorsWithNotFound, "failed to update keep alarms") {
+			return
+		}
 	}
 
 	httpresponse.JSON(w, http.StatusOK, toCalendarResponse(calendar))

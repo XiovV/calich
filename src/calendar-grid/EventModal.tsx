@@ -23,7 +23,7 @@ import {
   parseCustomRule,
   summarizeCustomRule,
 } from "../lib/customRecurrence";
-import { getCheckedCalendars } from "../lib/calendar";
+import { getCalendarById, getCheckedCalendars, isSubscribedCalendar } from "../lib/calendar";
 import { useShellStore } from "../lib/shellStore";
 import { useEventsStore } from "../lib/eventsStore";
 import { useCalendarsStore } from "../lib/calendarsStore";
@@ -146,16 +146,28 @@ export function EventModal(props: EventModalProps) {
       (master.exdates?.length ?? 0) > 0);
 
   const eventForOptions = mode === "edit" ? props.occurrence.event : undefined;
-  const checkedCalendars = getCheckedCalendars(calendars, checkedCalendarIds);
+  // A Subscribed Calendar is never a valid write target — Refresh is its
+  // only legitimate writer (#84, ADR-0032) — so it never appears as a
+  // Calendar picker option, whether checked or not.
+  const writableCalendars = calendars.filter((c) => !isSubscribedCalendar(c));
+  const checkedCalendars = getCheckedCalendars(writableCalendars, checkedCalendarIds);
   // An event's calendar may have been unchecked (hidden) since it was created —
   // still include it as an option so its current selection isn't silently lost.
   const calendarOptions =
     eventForOptions && !checkedCalendars.some((c) => c.id === eventForOptions.calendarId)
       ? [
           ...checkedCalendars,
-          ...calendars.filter((c) => c.id === eventForOptions.calendarId),
+          ...writableCalendars.filter((c) => c.id === eventForOptions.calendarId),
         ]
       : checkedCalendars;
+
+  // An Occurrence whose own Calendar is Subscribed can't be saved or deleted
+  // — every write to it is refused server-side (#84, ADR-0032) — so the form
+  // offers neither affordance rather than letting Save/Delete fail.
+  const editedCalendar = eventForOptions
+    ? getCalendarById(calendars, eventForOptions.calendarId)
+    : undefined;
+  const isSubscribedEvent = isSubscribedCalendar(editedCalendar);
 
   const [initial] = useState(() =>
     deriveInitialFormState(props, master, checkedCalendars[0]?.id ?? ""),
@@ -242,7 +254,8 @@ export function EventModal(props: EventModalProps) {
   // validate (ADR-0017).
   const isTimeRangeValid =
     allDay || timeStringToDate(day, endTime) > timeStringToDate(day, startTime);
-  const canSave = title.trim() !== "" && calendarId !== "" && isTimeRangeValid;
+  const canSave =
+    !isSubscribedEvent && title.trim() !== "" && calendarId !== "" && isTimeRangeValid;
 
   function handleSave() {
     if (!canSave) return;
@@ -482,15 +495,21 @@ export function EventModal(props: EventModalProps) {
             )}
 
             <div className="mt-4">
-              <Select
-                label="Calendar"
-                value={calendarId}
-                onValueChange={setCalendarId}
-                options={calendarOptions.map((calendar) => ({
-                  value: calendar.id,
-                  label: calendar.name,
-                }))}
-              />
+              {isSubscribedEvent && editedCalendar ? (
+                <p className="text-label-sm text-ink-muted">
+                  Calendar: {editedCalendar.name} (subscribed, read-only)
+                </p>
+              ) : (
+                <Select
+                  label="Calendar"
+                  value={calendarId}
+                  onValueChange={setCalendarId}
+                  options={calendarOptions.map((calendar) => ({
+                    value: calendar.id,
+                    label: calendar.name,
+                  }))}
+                />
+              )}
             </div>
 
             <div className="mt-4">
@@ -534,7 +553,7 @@ export function EventModal(props: EventModalProps) {
             </div>
 
             <div className="mt-5 flex items-center justify-between gap-2">
-              {mode === "edit" ? (
+              {mode === "edit" && !isSubscribedEvent ? (
                 <Button
                   variant="outline"
                   color="danger"

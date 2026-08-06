@@ -110,6 +110,83 @@ describe("calendarsApi.update", () => {
   });
 });
 
+describe("calendarsApi.previewSubscription", () => {
+  it("posts the url with dryRun=1 and returns the preview", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(200, { name: "Team Holidays", color: "#8E44ADFF", eventCount: 2 }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const preview = await calendarsApi.previewSubscription(
+      "token-123",
+      "https://example.com/feed.ics",
+    );
+
+    expect(preview).toEqual({ name: "Team Holidays", color: "#8E44ADFF", eventCount: 2 });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/calendars/subscribe?dryRun=1",
+      expect.objectContaining({
+        method: "POST",
+        credentials: "include",
+        headers: expect.objectContaining({ Authorization: "Bearer token-123" }),
+        body: JSON.stringify({ url: "https://example.com/feed.ics" }),
+      }),
+    );
+  });
+
+  it("throws an ApiError on failure", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(400, { error: { code: "invalid_request", message: "subscription URL is invalid" } }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      calendarsApi.previewSubscription("token-123", "not a url"),
+    ).rejects.toMatchObject({ code: "invalid_request" });
+  });
+});
+
+describe("calendarsApi.subscribe", () => {
+  it("posts with dryRun=0 and returns the created calendar", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(201, {
+        id: "cal-1",
+        name: "Team Holidays",
+        color: "#8E44ADFF",
+        sourceUrl: "https://example.com/feed.ics",
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const calendar = await calendarsApi.subscribe("token-123", {
+      url: "https://example.com/feed.ics",
+      name: "Team Holidays",
+      color: "#8E44ADFF",
+      keepAlarms: false,
+    });
+
+    expect(calendar).toEqual({
+      id: "cal-1",
+      name: "Team Holidays",
+      color: "#8E44ADFF",
+      sourceUrl: "https://example.com/feed.ics",
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/calendars/subscribe?dryRun=0",
+      expect.objectContaining({
+        method: "POST",
+        credentials: "include",
+        body: JSON.stringify({
+          url: "https://example.com/feed.ics",
+          name: "Team Holidays",
+          color: "#8E44ADFF",
+          keepAlarms: false,
+        }),
+      }),
+    );
+  });
+});
+
 describe("calendarsApi.remove", () => {
   it("sends a DELETE request", async () => {
     const fetchMock = vi.fn().mockResolvedValue(emptyResponse(204));
@@ -134,6 +211,83 @@ describe("calendarsApi.remove", () => {
 
     await expect(calendarsApi.remove("token-123", "cal-1")).rejects.toMatchObject({
       code: "not_found",
+    });
+  });
+});
+
+describe("calendarsApi.get", () => {
+  it("returns the calendar", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(200, { id: "cal-1", name: "Personal", color: "peacock" }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const calendar = await calendarsApi.get("token-123", "cal-1");
+
+    expect(calendar).toEqual({ id: "cal-1", name: "Personal", color: "peacock" });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/calendars/cal-1",
+      expect.objectContaining({
+        credentials: "include",
+        headers: { Authorization: "Bearer token-123" },
+      }),
+    );
+  });
+
+  it("throws on failure", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(404, { error: { code: "not_found", message: "calendar not found" } }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(calendarsApi.get("token-123", "cal-1")).rejects.toMatchObject({
+      code: "not_found",
+    });
+  });
+});
+
+describe("calendarsApi.refresh", () => {
+  it("posts to the refresh endpoint and returns the summary", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(200, {
+        notModified: false,
+        created: 1,
+        updated: 0,
+        tombstoned: 0,
+        unparseable: 0,
+        noOp: 0,
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await calendarsApi.refresh("token-123", "cal-1");
+
+    expect(result).toEqual({
+      notModified: false,
+      created: 1,
+      updated: 0,
+      tombstoned: 0,
+      unparseable: 0,
+      noOp: 0,
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/calendars/cal-1/refresh",
+      expect.objectContaining({
+        method: "POST",
+        credentials: "include",
+        headers: { Authorization: "Bearer token-123" },
+      }),
+    );
+  });
+
+  it("throws on failure", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(400, { error: { code: "invalid_request", message: "not a subscribed calendar" } }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(calendarsApi.refresh("token-123", "cal-1")).rejects.toMatchObject({
+      code: "invalid_request",
     });
   });
 });

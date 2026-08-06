@@ -26,6 +26,7 @@ var importErrors = []errorCase{
 	{service.ErrImportInvalidAction, badRequest(`import target action must be "new", "existing", or "skip"`)},
 	{service.ErrImportExistingNotAllowedForZip, badRequest("a zip import may not target an existing calendar")},
 	{service.ErrImportMissingCalendarID, badRequest(`import target action "existing" requires a calendarId`)},
+	{service.ErrImportTargetSubscribed, forbidden("import target is a subscribed calendar")},
 	{service.ErrCalendarNotFound, notFound("calendar not found")},
 	{service.ErrInvalidTitle, badRequest("event title must not be empty")},
 	{service.ErrInvalidTimeRange, badRequest("event end must be after start")},

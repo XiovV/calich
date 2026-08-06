@@ -48,6 +48,13 @@ var (
 	// real Occurrence of the series: it isn't dtstart nor a start the rrule
 	// generates, or it's excluded by an Exdate (#76).
 	ErrOccurrenceNotFound = errors.New("occurrence not found")
+	// ErrSubscribedCalendarReadOnly is returned by every mutating method
+	// (Create, Update, Delete, AddException, ReparentFrom, ImportSeries,
+	// PutSeries) when the Calendar a write targets carries a SourceURL — a
+	// Subscribed Calendar's Events are written only by Refresh's bypass,
+	// ImportSubscribedSeries (ADR-0032). The guard lives here rather than at
+	// the REST/CalDAV edges so every entry point is covered by construction.
+	ErrSubscribedCalendarReadOnly = errors.New("subscribed calendar is read-only")
 )
 
 // isValidReminderChannel reports whether channel is one of the Channels
@@ -66,6 +73,16 @@ func validateReminders(reminders []repository.Reminder) error {
 	return nil
 }
 
+// requireWritable returns ErrSubscribedCalendarReadOnly if calendar carries a
+// SourceURL. Every mutating method calls this on every Calendar its write
+// touches (ADR-0032).
+func requireWritable(calendar repository.Calendar) error {
+	if calendar.SourceURL != nil {
+		return ErrSubscribedCalendarReadOnly
+	}
+	return nil
+}
+
 type EventService struct {
 	db         *sql.DB
 	events     *repository.EventRepository
@@ -77,6 +94,35 @@ type EventService struct {
 
 func NewEventService(db *sql.DB, events *repository.EventRepository, exceptions *repository.EventExceptionRepository, reminders *repository.EventReminderRepository, sync *repository.SyncRepository, calendars *CalendarService) *EventService {
 	return &EventService{db: db, events: events, exceptions: exceptions, reminders: reminders, sync: sync, calendars: calendars}
+}
+
+// calendarByID resolves calendarID via s.calendars.Get, translating
+// repository.ErrNotFound to ErrCalendarNotFound so every write path reports
+// the same sentinel a caller already handles. The writes allowed to target
+// a Subscribed Calendar — ImportSubscribedSeries and ReconcileSubscribedSeries
+// (#85, ADR-0033) — call this directly, skipping requireWritableCalendar's
+// guard; every other mutating method calls that instead.
+func (s *EventService) calendarByID(ctx context.Context, userID int64, calendarID string) (repository.Calendar, error) {
+	calendar, err := s.calendars.Get(ctx, userID, calendarID)
+	if err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			return repository.Calendar{}, ErrCalendarNotFound
+		}
+		return repository.Calendar{}, err
+	}
+	return calendar, nil
+}
+
+// requireWritableCalendar resolves calendarID and refuses it if it's a
+// Subscribed Calendar, in one call — the guard every mutating method except
+// ImportSubscribedSeries applies to every Calendar its write touches
+// (ADR-0032).
+func (s *EventService) requireWritableCalendar(ctx context.Context, userID int64, calendarID string) error {
+	calendar, err := s.calendarByID(ctx, userID, calendarID)
+	if err != nil {
+		return err
+	}
+	return requireWritable(calendar)
 }
 
 // txRepos is the set of transaction-bound repositories a withTx body writes
@@ -173,10 +219,7 @@ func (s *EventService) Create(ctx context.Context, userID int64, id string, writ
 		return repository.Event{}, ErrInvalidRecurrenceRule
 	}
 
-	if _, err := s.calendars.Get(ctx, userID, write.CalendarID); err != nil {
-		if errors.Is(err, repository.ErrNotFound) {
-			return repository.Event{}, ErrCalendarNotFound
-		}
+	if err := s.requireWritableCalendar(ctx, userID, write.CalendarID); err != nil {
 		return repository.Event{}, err
 	}
 
@@ -368,16 +411,22 @@ func (s *EventService) Update(ctx context.Context, userID int64, id string, writ
 	if err := validateReminders(write.Reminders); err != nil {
 		return repository.Event{}, err
 	}
-	if _, err := s.calendars.Get(ctx, userID, write.CalendarID); err != nil {
-		if errors.Is(err, repository.ErrNotFound) {
-			return repository.Event{}, ErrCalendarNotFound
-		}
+	if err := s.requireWritableCalendar(ctx, userID, write.CalendarID); err != nil {
 		return repository.Event{}, err
 	}
 
 	existing, err := s.events.GetByID(ctx, userID, id)
 	if err != nil {
 		return repository.Event{}, err
+	}
+	// A moving Update targets write.CalendarID but still touches existing's
+	// current row, so its source Calendar (if different) is guarded too —
+	// otherwise editing an Event out of a Subscribed Calendar would be a
+	// legitimate write, exactly the case ADR-0032 exists to prevent.
+	if existing.CalendarID != write.CalendarID {
+		if err := s.requireWritableCalendar(ctx, userID, existing.CalendarID); err != nil {
+			return repository.Event{}, err
+		}
 	}
 
 	if overrideCarriesOwnRrule(existing.ParentID, write.Rrule) {
@@ -440,26 +489,57 @@ func (s *EventService) Update(ctx context.Context, userID int64, id string, writ
 }
 
 // ImportSeries writes every series in writes as a brand-new Master (mints
-// its own id, discards whatever foreign identity the caller tracked) plus
-// its Overrides and Exdates, in one transaction taking one change_seq
-// (ADR-0030). Unlike PutSeries, this never updates an existing row — an
-// import is always insert-only — and looping PutSeries once per series
-// would mean N transactions, N sync bumps, and a half-imported Calendar if
-// it died partway through; ImportSeries validates every write up front so a
-// bad series in a large import fails before anything is written, not
-// partway through the transaction. Returns the number of series written.
+// its own id) plus its Overrides and Exdates, in one transaction taking one
+// change_seq (ADR-0030). It is ordinary ICS import's writer, and refuses a
+// Subscribed Calendar as its target like every other mutating method
+// (ADR-0032) — SubscribeService writes through ImportSubscribedSeries
+// instead, since it targets its own Subscribed Calendar deliberately.
+// Ordinary import leaves ExternalUID empty, discarding the foreign identity
+// entirely; a Subscription's writer sets it so a later Refresh can
+// reconcile by it (ADR-0033). Unlike PutSeries, this never updates an
+// existing row — an import is always insert-only — and looping PutSeries
+// once per series would mean N transactions, N sync bumps, and a
+// half-imported Calendar if it died partway through; ImportSeries validates
+// every write up front so a bad series in a large import fails before
+// anything is written, not partway through the transaction. Returns the
+// number of series written.
 func (s *EventService) ImportSeries(ctx context.Context, userID int64, calendarID string, writes []SeriesWrite) (int, error) {
 	if err := validateSeriesWrites(writes); err != nil {
 		return 0, err
 	}
 
-	if _, err := s.calendars.Get(ctx, userID, calendarID); err != nil {
-		if errors.Is(err, repository.ErrNotFound) {
-			return 0, ErrCalendarNotFound
-		}
+	if err := s.requireWritableCalendar(ctx, userID, calendarID); err != nil {
 		return 0, err
 	}
 
+	return s.writeSeries(ctx, userID, calendarID, writes)
+}
+
+// ImportSubscribedSeries is one of EventService's two bypasses of the
+// Subscribed Calendar write guard (ADR-0032), alongside
+// ReconcileSubscribedSeries (#85): otherwise identical to ImportSeries, it
+// skips requireWritable because writing a Subscription's own fetched Events
+// into its own Subscribed Calendar is a legitimate write. Its only caller is
+// SubscribeService.Subscribe's initial import — a later Refresh writes
+// through ReconcileSubscribedSeries instead, since it must update existing
+// rows in place rather than always inserting. Every other write must go
+// through ImportSeries or one of the guarded methods instead.
+func (s *EventService) ImportSubscribedSeries(ctx context.Context, userID int64, calendarID string, writes []SeriesWrite) (int, error) {
+	if err := validateSeriesWrites(writes); err != nil {
+		return 0, err
+	}
+
+	if _, err := s.calendarByID(ctx, userID, calendarID); err != nil {
+		return 0, err
+	}
+
+	return s.writeSeries(ctx, userID, calendarID, writes)
+}
+
+// writeSeries is ImportSeries and ImportSubscribedSeries' shared insert-only
+// write, once each has resolved and (except for the bypass) guarded
+// calendarID.
+func (s *EventService) writeSeries(ctx context.Context, userID int64, calendarID string, writes []SeriesWrite) (int, error) {
 	err := s.withTx(ctx, func(repos txRepos) error {
 		seq, err := repos.sync.NextChangeSeq(ctx)
 		if err != nil {
@@ -478,6 +558,7 @@ func (s *EventService) ImportSeries(ctx context.Context, userID int64, calendarI
 				Tzid:        w.Tzid,
 				Description: w.Description,
 				Location:    w.Location,
+				ExternalUID: nonEmptyPtr(w.ExternalUID),
 			}
 			if _, err := repos.events.Create(ctx, masterID, userID, master, seq); err != nil {
 				return fmt.Errorf("create master: %w", err)
@@ -503,6 +584,7 @@ func (s *EventService) ImportSeries(ctx context.Context, userID int64, calendarI
 					Location:     o.Location,
 					ParentID:     &masterID,
 					RecurrenceID: &o.RecurrenceID,
+					ExternalUID:  nonEmptyPtr(o.ExternalUID),
 				}
 				overrideID := uuid.NewString()
 				if _, err := repos.events.Create(ctx, overrideID, userID, override, seq); err != nil {
@@ -520,6 +602,307 @@ func (s *EventService) ImportSeries(ctx context.Context, userID int64, calendarI
 	}
 
 	return len(writes), nil
+}
+
+// nonEmptyPtr returns nil for "", else a pointer to s — for optional string
+// fields (like ExternalUID) that repository.EventFields stores as *string.
+func nonEmptyPtr(s string) *string {
+	if s == "" {
+		return nil
+	}
+	return &s
+}
+
+// ReconcileSummary is what a Refresh's DB apply actually did, for the
+// caller to report (#85, ADR-0033).
+type ReconcileSummary struct {
+	Created    int
+	Updated    int
+	Tombstoned int
+}
+
+// ReconcileSubscribedSeries applies result — Refresh's already-decided plan
+// (service.ReconcileSeries) — to calendarID inside one transaction: each
+// upsert creates a new series (MasterID empty) or updates one in place
+// (Overrides matched by RecurrenceID and Exdates replaced wholesale,
+// exactly as PutSeries does for a CalDAV PUT), each tombstone deletes an
+// existing series outright, cascading to its Overrides. One change_seq bump
+// per series actually written; ReconcileSeries has already excluded
+// unchanged series from result.Upserts, so those cost nothing here. This is
+// ImportSubscribedSeries' sibling bypass of the Subscribed Calendar write
+// guard (ADR-0032) — the only other legitimate writer of one, alongside
+// Subscribe's initial import.
+func (s *EventService) ReconcileSubscribedSeries(ctx context.Context, userID int64, calendarID string, result ReconcileResult) (ReconcileSummary, error) {
+	for i, upsert := range result.Upserts {
+		title, err := validateEventFields(upsert.Write.Title, upsert.Write.Start, upsert.Write.End, upsert.Write.Reminders)
+		if err != nil {
+			return ReconcileSummary{}, err
+		}
+		result.Upserts[i].Write.Title = title
+		if !isValidRecurrenceRule(upsert.Write.Rrule) {
+			return ReconcileSummary{}, ErrInvalidRecurrenceRule
+		}
+		for j, o := range upsert.Write.Overrides {
+			trimmed, err := validateEventFields(o.Title, o.Start, o.End, o.Reminders)
+			if err != nil {
+				return ReconcileSummary{}, err
+			}
+			result.Upserts[i].Write.Overrides[j].Title = trimmed
+		}
+	}
+
+	if _, err := s.calendarByID(ctx, userID, calendarID); err != nil {
+		return ReconcileSummary{}, err
+	}
+
+	var summary ReconcileSummary
+	err := s.withTx(ctx, func(repos txRepos) error {
+		for _, upsert := range result.Upserts {
+			if upsert.MasterID == "" {
+				if err := s.createSubscribedSeries(ctx, repos, userID, calendarID, upsert.Write); err != nil {
+					return err
+				}
+				summary.Created++
+				continue
+			}
+			if err := s.updateSubscribedSeries(ctx, repos, userID, calendarID, upsert.MasterID, upsert.Write); err != nil {
+				return err
+			}
+			summary.Updated++
+		}
+
+		for _, masterID := range result.Tombstones {
+			if err := s.tombstoneSubscribedSeries(ctx, repos, userID, calendarID, masterID); err != nil {
+				return err
+			}
+			summary.Tombstoned++
+		}
+
+		return nil
+	})
+	if err != nil {
+		return ReconcileSummary{}, fmt.Errorf("reconcile subscribed series: %w", err)
+	}
+
+	return summary, nil
+}
+
+// createSubscribedSeries mints a new Master (and its Overrides) for write,
+// carrying its ExternalUID, taking one change_seq bump for the whole series.
+func (s *EventService) createSubscribedSeries(ctx context.Context, repos txRepos, userID int64, calendarID string, write SeriesWrite) error {
+	seq, err := repos.sync.NextChangeSeq(ctx)
+	if err != nil {
+		return err
+	}
+
+	masterID := uuid.NewString()
+	master := repository.EventFields{
+		CalendarID:  calendarID,
+		Title:       write.Title,
+		Start:       write.Start,
+		End:         write.End,
+		AllDay:      write.AllDay,
+		Rrule:       write.Rrule,
+		Tzid:        write.Tzid,
+		Description: write.Description,
+		Location:    write.Location,
+		ExternalUID: nonEmptyPtr(write.ExternalUID),
+	}
+	if _, err := repos.events.Create(ctx, masterID, userID, master, seq); err != nil {
+		return fmt.Errorf("create master: %w", err)
+	}
+	if err := repos.reminders.ReplaceByEventID(ctx, masterID, write.Reminders); err != nil {
+		return fmt.Errorf("persist master reminders: %w", err)
+	}
+	for _, exdate := range write.Exdates {
+		if err := repos.exceptions.Add(ctx, masterID, exdate); err != nil {
+			return fmt.Errorf("add exdate: %w", err)
+		}
+	}
+
+	for _, o := range write.Overrides {
+		override := repository.EventFields{
+			CalendarID:   calendarID,
+			Title:        o.Title,
+			Start:        o.Start,
+			End:          o.End,
+			AllDay:       o.AllDay,
+			Tzid:         o.Tzid,
+			Description:  o.Description,
+			Location:     o.Location,
+			ParentID:     &masterID,
+			RecurrenceID: &o.RecurrenceID,
+			ExternalUID:  nonEmptyPtr(o.ExternalUID),
+		}
+		overrideID := uuid.NewString()
+		if _, err := repos.events.Create(ctx, overrideID, userID, override, seq); err != nil {
+			return fmt.Errorf("create override: %w", err)
+		}
+		if err := repos.reminders.ReplaceByEventID(ctx, overrideID, o.Reminders); err != nil {
+			return fmt.Errorf("persist override reminders: %w", err)
+		}
+	}
+	return nil
+}
+
+// updateSubscribedSeries updates masterID's row and its Overrides in place
+// from write — the same match-by-RecurrenceID, replace-Exdates-wholesale
+// shape PutSeries uses for a CalDAV PUT — taking one change_seq bump for the
+// whole series. masterID's own ExternalUID is never touched (it is set on
+// insert only); Overrides created here inherit it from write.ExternalUID,
+// exactly as createSubscribedSeries does.
+func (s *EventService) updateSubscribedSeries(ctx context.Context, repos txRepos, userID int64, calendarID, masterID string, write SeriesWrite) error {
+	existingOverrides, err := repos.events.ListChildrenByParentIDs(ctx, userID, []string{masterID})
+	if err != nil {
+		return fmt.Errorf("list existing overrides: %w", err)
+	}
+	existingByRecurrenceID := make(map[int64]repository.Event, len(existingOverrides[masterID]))
+	for _, o := range existingOverrides[masterID] {
+		existingByRecurrenceID[o.RecurrenceID.UnixNano()] = o
+	}
+
+	seq, err := repos.sync.NextChangeSeq(ctx)
+	if err != nil {
+		return err
+	}
+
+	master := repository.EventFields{
+		CalendarID:  calendarID,
+		Title:       write.Title,
+		Start:       write.Start,
+		End:         write.End,
+		AllDay:      write.AllDay,
+		Rrule:       write.Rrule,
+		Tzid:        write.Tzid,
+		Description: write.Description,
+		Location:    write.Location,
+	}
+	if _, err := repos.events.Update(ctx, userID, masterID, master, seq); err != nil {
+		return fmt.Errorf("update master: %w", err)
+	}
+	if err := repos.reminders.ReplaceByEventID(ctx, masterID, write.Reminders); err != nil {
+		return fmt.Errorf("persist master reminders: %w", err)
+	}
+
+	if err := repos.exceptions.DeleteByParentID(ctx, masterID); err != nil {
+		return fmt.Errorf("clear exdates: %w", err)
+	}
+	for _, exdate := range write.Exdates {
+		if err := repos.exceptions.Add(ctx, masterID, exdate); err != nil {
+			return fmt.Errorf("add exdate: %w", err)
+		}
+	}
+
+	seen := make(map[int64]bool, len(write.Overrides))
+	for _, o := range write.Overrides {
+		key := o.RecurrenceID.UnixNano()
+		seen[key] = true
+
+		override := repository.EventFields{
+			CalendarID:  calendarID,
+			Title:       o.Title,
+			Start:       o.Start,
+			End:         o.End,
+			AllDay:      o.AllDay,
+			Tzid:        o.Tzid,
+			Description: o.Description,
+			Location:    o.Location,
+		}
+
+		if existing, ok := existingByRecurrenceID[key]; ok {
+			if _, err := repos.events.Update(ctx, userID, existing.ID, override, seq); err != nil {
+				return fmt.Errorf("update override: %w", err)
+			}
+			if err := repos.reminders.ReplaceByEventID(ctx, existing.ID, o.Reminders); err != nil {
+				return fmt.Errorf("persist override reminders: %w", err)
+			}
+			continue
+		}
+
+		override.ParentID = &masterID
+		override.RecurrenceID = &o.RecurrenceID
+		override.ExternalUID = nonEmptyPtr(o.ExternalUID)
+
+		overrideID := uuid.NewString()
+		if _, err := repos.events.Create(ctx, overrideID, userID, override, seq); err != nil {
+			return fmt.Errorf("create override: %w", err)
+		}
+		if err := repos.reminders.ReplaceByEventID(ctx, overrideID, o.Reminders); err != nil {
+			return fmt.Errorf("persist override reminders: %w", err)
+		}
+	}
+
+	for key, existing := range existingByRecurrenceID {
+		if seen[key] {
+			continue
+		}
+		if err := repos.events.Delete(ctx, userID, existing.ID); err != nil {
+			return fmt.Errorf("delete removed override: %w", err)
+		}
+	}
+
+	return nil
+}
+
+// tombstoneSubscribedSeries deletes masterID outright (cascading to its
+// Overrides via the events table's foreign key) and records its removal as
+// a tombstone under calendarID, one change_seq bump — mirroring Delete's
+// Master case, but bypassing the Subscribed Calendar write guard the way
+// every Refresh write does (ADR-0032).
+func (s *EventService) tombstoneSubscribedSeries(ctx context.Context, repos txRepos, userID int64, calendarID, masterID string) error {
+	if err := repos.events.Delete(ctx, userID, masterID); err != nil {
+		return fmt.Errorf("delete tombstoned series: %w", err)
+	}
+
+	seq, err := repos.sync.NextChangeSeq(ctx)
+	if err != nil {
+		return err
+	}
+
+	return repos.sync.Tombstone(ctx, calendarID, masterID, seq)
+}
+
+// ClearSubscribedCalendarReminders deletes every Reminder attached to
+// calendarID's Events — Masters and Overrides alike — the immediate
+// consequence of a Subscription's KeepAlarms being turned off (#87,
+// ADR-0032): "off" must mean no Reminders exist, not merely that a future
+// Refresh will stop adding them. Bumps each Master's change_seq once so a
+// CalDAV client sees the alarm-less object on its next sync, mirroring how
+// an Override's own change is reflected on its Master (ADR-0025). This is
+// ImportSubscribedSeries and ReconcileSubscribedSeries' third sibling
+// bypass of the Subscribed Calendar write guard (ADR-0032) — clearing a
+// Subscription's own Reminders in its own Subscribed Calendar is a
+// legitimate write.
+func (s *EventService) ClearSubscribedCalendarReminders(ctx context.Context, userID int64, calendarID string) error {
+	if _, err := s.calendarByID(ctx, userID, calendarID); err != nil {
+		return err
+	}
+
+	masters, overridesByParent, err := s.ListSeriesByCalendar(ctx, userID, calendarID)
+	if err != nil {
+		return err
+	}
+
+	return s.withTx(ctx, func(repos txRepos) error {
+		for _, m := range masters {
+			seq, err := repos.sync.NextChangeSeq(ctx)
+			if err != nil {
+				return err
+			}
+			if err := repos.reminders.ReplaceByEventID(ctx, m.ID, nil); err != nil {
+				return fmt.Errorf("clear master reminders: %w", err)
+			}
+			for _, o := range overridesByParent[m.ID] {
+				if err := repos.reminders.ReplaceByEventID(ctx, o.ID, nil); err != nil {
+					return fmt.Errorf("clear override reminders: %w", err)
+				}
+			}
+			if err := repos.events.SetChangeSeq(ctx, userID, m.ID, seq); err != nil {
+				return fmt.Errorf("bump master change_seq: %w", err)
+			}
+		}
+		return nil
+	})
 }
 
 // GetSeries returns masterID's Master (with Exdates and Reminders attached)
@@ -760,6 +1143,9 @@ func (s *EventService) Delete(ctx context.Context, userID int64, id string) erro
 	if err != nil {
 		return err
 	}
+	if err := s.requireWritableCalendar(ctx, userID, existing.CalendarID); err != nil {
+		return err
+	}
 
 	return s.withTx(ctx, func(repos txRepos) error {
 		if err := repos.events.Delete(ctx, userID, id); err != nil {
@@ -798,6 +1184,9 @@ func (s *EventService) AddException(ctx context.Context, userID int64, parentID 
 	if parent.Rrule == "" {
 		return ErrParentNotRecurring
 	}
+	if err := s.requireWritableCalendar(ctx, userID, parent.CalendarID); err != nil {
+		return err
+	}
 
 	return s.withTx(ctx, func(repos txRepos) error {
 		if err := repos.exceptions.Add(ctx, parentID, occurrenceStart); err != nil {
@@ -819,17 +1208,28 @@ func (s *EventService) AddException(ctx context.Context, userID int64, parentID 
 // reparenting at the boundary (ADR-0016). Both events must already exist and
 // belong to the caller.
 func (s *EventService) ReparentFrom(ctx context.Context, userID int64, oldParentID, newParentID string, fromStart time.Time) error {
-	if _, err := s.events.GetByID(ctx, userID, oldParentID); err != nil {
+	oldParent, err := s.events.GetByID(ctx, userID, oldParentID)
+	if err != nil {
 		if errors.Is(err, repository.ErrNotFound) {
 			return ErrParentNotFound
 		}
 		return err
 	}
-	if _, err := s.events.GetByID(ctx, userID, newParentID); err != nil {
+	newParent, err := s.events.GetByID(ctx, userID, newParentID)
+	if err != nil {
 		if errors.Is(err, repository.ErrNotFound) {
 			return ErrParentNotFound
 		}
 		return err
+	}
+
+	if err := s.requireWritableCalendar(ctx, userID, oldParent.CalendarID); err != nil {
+		return err
+	}
+	if newParent.CalendarID != oldParent.CalendarID {
+		if err := s.requireWritableCalendar(ctx, userID, newParent.CalendarID); err != nil {
+			return err
+		}
 	}
 
 	return s.withTx(ctx, func(repos txRepos) error {
@@ -868,6 +1268,10 @@ type SeriesWrite struct {
 	Reminders                    []repository.Reminder
 	Exdates                      []time.Time
 	Overrides                    []OverrideWrite
+	// ExternalUID is set only when ImportSeries is writing a Subscribed
+	// Calendar's Events (#83, ADR-0033) — empty for ordinary import and
+	// CalDAV PUT, which leave the row's external_uid column NULL.
+	ExternalUID string
 }
 
 // OverrideWrite is one Override VEVENT's fields, keyed by the Occurrence it
@@ -879,6 +1283,9 @@ type OverrideWrite struct {
 	AllDay                       bool
 	Tzid                         *string
 	Reminders                    []repository.Reminder
+	// ExternalUID mirrors SeriesWrite.ExternalUID — an Override shares its
+	// Master's foreign UID (#83, ADR-0033).
+	ExternalUID string
 }
 
 // validateEventFields applies the Create/Update validation shared by every
@@ -950,10 +1357,7 @@ func (s *EventService) PutSeries(ctx context.Context, userID int64, calendarID, 
 		write.Overrides[i].Title = trimmed
 	}
 
-	if _, err := s.calendars.Get(ctx, userID, calendarID); err != nil {
-		if errors.Is(err, repository.ErrNotFound) {
-			return repository.Event{}, nil, ErrCalendarNotFound
-		}
+	if err := s.requireWritableCalendar(ctx, userID, calendarID); err != nil {
 		return repository.Event{}, nil, err
 	}
 

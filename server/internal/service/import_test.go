@@ -31,7 +31,7 @@ func newTestImportService(t *testing.T) (svc *ImportService, events *EventServic
 
 	calendarRepo := repository.NewCalendarRepository(sqlDB)
 	calendarSvc := NewCalendarService(calendarRepo)
-	cal, err := calendarRepo.Create(context.Background(), user.ID, "cal-1", "Existing", "#12809CFF")
+	cal, err := calendarRepo.Create(context.Background(), user.ID, "cal-1", repository.CalendarFields{Name: "Existing", Color: "#12809CFF"})
 	if err != nil {
 		t.Fatalf("create calendar: %v", err)
 	}
@@ -171,6 +171,28 @@ func TestImportService_ExistingCalendar_UnknownID(t *testing.T) {
 	}, false)
 	if !errors.Is(err, ErrCalendarNotFound) {
 		t.Fatalf("expected ErrCalendarNotFound, got %v", err)
+	}
+}
+
+// ICS import must refuse a Subscribed Calendar as an "existing" target
+// (#84, ADR-0032): its Events are written only by Refresh's bypass, so a
+// User importing a file into it would silently disappear on the next
+// Refresh.
+func TestImportService_ExistingCalendar_RejectsSubscribedTarget(t *testing.T) {
+	svc, _, calendars, userID, _ := newTestImportService(t)
+	ctx := context.Background()
+
+	sourceURL := "https://example.com/feed.ics"
+	subCalendar, err := calendars.Create(ctx, userID, "sub-cal-1", CalendarWrite{Name: "Feed", Color: "#123456FF", SourceURL: &sourceURL})
+	if err != nil {
+		t.Fatalf("create subscribed calendar: %v", err)
+	}
+
+	_, err = svc.Import(ctx, userID, "invite.ics", []byte(crlf(singleEventICS)), []ImportTarget{
+		{Filename: "invite.ics", Action: ImportTargetExisting, CalendarID: subCalendar.ID},
+	}, false)
+	if !errors.Is(err, ErrImportTargetSubscribed) {
+		t.Fatalf("expected ErrImportTargetSubscribed, got %v", err)
 	}
 }
 

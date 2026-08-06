@@ -47,10 +47,12 @@ func New(logger *slog.Logger, authHandler *handlers.AuthHandler, calendarHandler
 			r.Post("/", calendarHandler.Create)
 			r.Get("/ics", calendarHandler.ICSAll)
 			r.Post("/import", calendarHandler.Import)
+			r.Post("/subscribe", calendarHandler.Subscribe)
 			r.Get("/{id}", calendarHandler.Get)
 			r.Patch("/{id}", calendarHandler.Update)
 			r.Delete("/{id}", calendarHandler.Delete)
 			r.Get("/{id}/ics", calendarHandler.ICS)
+			r.Post("/{id}/refresh", calendarHandler.Refresh)
 		})
 
 		r.Route("/events", func(r chi.Router) {

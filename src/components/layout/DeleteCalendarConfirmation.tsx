@@ -16,6 +16,11 @@ export function DeleteCalendarConfirmation({
   onConfirm,
   onClose,
 }: DeleteCalendarConfirmationProps) {
+  // A Subscribed Calendar's Events are a mirror of the feed, not data this
+  // app owns — removing it un-mirrors the feed rather than deleting
+  // anything, so the copy says so instead of reading as data loss (#83).
+  const isSubscribed = Boolean(calendar.sourceUrl);
+
   return (
     <AlertDialog.Root
       open
@@ -27,12 +32,16 @@ export function DeleteCalendarConfirmation({
         <AlertDialog.Backdrop className="fixed inset-0 z-40 bg-ink/20" />
         <AlertDialog.Popup className="fixed top-1/2 left-1/2 z-50 w-80 -translate-x-1/2 -translate-y-1/2 rounded-shell-lg bg-surface p-5 shadow-elevation-3">
           <AlertDialog.Title className="text-heading font-medium text-ink">
-            Delete "{calendar.name}"?
+            {isSubscribed
+              ? `Unsubscribe from "${calendar.name}"?`
+              : `Delete "${calendar.name}"?`}
           </AlertDialog.Title>
           <AlertDialog.Description className="mt-2 text-body text-ink-muted">
-            {eventCount > 0
-              ? `This will also delete ${eventCount} event${eventCount === 1 ? "" : "s"} on this calendar.`
-              : "This calendar has no events."}
+            {isSubscribed
+              ? `This stops mirroring the feed and removes its ${eventCount} event${eventCount === 1 ? "" : "s"} from this app — the source calendar is unaffected.`
+              : eventCount > 0
+                ? `This will also delete ${eventCount} event${eventCount === 1 ? "" : "s"} on this calendar.`
+                : "This calendar has no events."}
           </AlertDialog.Description>
 
           <div className="mt-5 flex justify-end gap-2">
@@ -46,7 +55,7 @@ export function DeleteCalendarConfirmation({
               Cancel
             </AlertDialog.Close>
             <Button color="danger" size="small" onClick={onConfirm}>
-              Delete
+              {isSubscribed ? "Unsubscribe" : "Delete"}
             </Button>
           </div>
         </AlertDialog.Popup>

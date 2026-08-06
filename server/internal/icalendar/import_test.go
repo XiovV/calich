@@ -3,6 +3,7 @@ package icalendar
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 func mustParseFile(t *testing.T, ics string) *ParsedFile {
@@ -281,6 +282,86 @@ END:VCALENDAR
 	}
 	if f.Color != "#FF0000FF" {
 		t.Fatalf("expected color to round-trip, got %q", f.Color)
+	}
+}
+
+func TestParseImportFile_ReadsRefreshInterval(t *testing.T) {
+	ics := `BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//test//EN
+REFRESH-INTERVAL;VALUE=DURATION:PT6H
+BEGIN:VEVENT
+UID:series-1
+DTSTART:20260601T090000Z
+DTEND:20260601T093000Z
+SUMMARY:Event
+END:VEVENT
+END:VCALENDAR
+`
+	f := mustParseFile(t, ics)
+
+	if f.RefreshInterval == nil || *f.RefreshInterval != 6*time.Hour {
+		t.Fatalf("expected a 6h refresh interval, got %v", f.RefreshInterval)
+	}
+}
+
+func TestParseImportFile_FallsBackToPublishedTTLWhenNoRefreshInterval(t *testing.T) {
+	ics := `BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//test//EN
+X-PUBLISHED-TTL:PT2H
+BEGIN:VEVENT
+UID:series-1
+DTSTART:20260601T090000Z
+DTEND:20260601T093000Z
+SUMMARY:Event
+END:VEVENT
+END:VCALENDAR
+`
+	f := mustParseFile(t, ics)
+
+	if f.RefreshInterval == nil || *f.RefreshInterval != 2*time.Hour {
+		t.Fatalf("expected a 2h refresh interval from X-PUBLISHED-TTL, got %v", f.RefreshInterval)
+	}
+}
+
+func TestParseImportFile_PrefersRefreshIntervalOverPublishedTTL(t *testing.T) {
+	ics := `BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//test//EN
+REFRESH-INTERVAL;VALUE=DURATION:PT6H
+X-PUBLISHED-TTL:PT2H
+BEGIN:VEVENT
+UID:series-1
+DTSTART:20260601T090000Z
+DTEND:20260601T093000Z
+SUMMARY:Event
+END:VEVENT
+END:VCALENDAR
+`
+	f := mustParseFile(t, ics)
+
+	if f.RefreshInterval == nil || *f.RefreshInterval != 6*time.Hour {
+		t.Fatalf("expected REFRESH-INTERVAL to win over X-PUBLISHED-TTL, got %v", f.RefreshInterval)
+	}
+}
+
+func TestParseImportFile_NoRefreshIntervalStated(t *testing.T) {
+	ics := `BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//test//EN
+BEGIN:VEVENT
+UID:series-1
+DTSTART:20260601T090000Z
+DTEND:20260601T093000Z
+SUMMARY:Event
+END:VEVENT
+END:VCALENDAR
+`
+	f := mustParseFile(t, ics)
+
+	if f.RefreshInterval != nil {
+		t.Fatalf("expected no refresh interval, got %v", f.RefreshInterval)
 	}
 }
 

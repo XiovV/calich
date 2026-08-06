@@ -39,6 +39,11 @@ var (
 	// ErrImportMissingCalendarID is returned when action "existing" names no
 	// CalendarID to write into.
 	ErrImportMissingCalendarID = errors.New(`import target action "existing" requires a calendarId`)
+	// ErrImportTargetSubscribed is returned when action "existing" names a
+	// Subscribed Calendar — its Events are written only by Refresh's bypass
+	// (ADR-0032), so import cannot target it even though EventService's own
+	// guard would already refuse the later write.
+	ErrImportTargetSubscribed = errors.New("import target is a subscribed calendar")
 )
 
 // ImportTargetAction is how one Calendar file's contents map onto a
@@ -290,7 +295,7 @@ func (s *ImportService) Import(ctx context.Context, userID int64, filename strin
 	for _, p := range prepared {
 		calendarID := p.summary.CalendarID
 		if p.target.Action == ImportTargetNew && !dryRun {
-			calendar, err := s.calendars.Create(ctx, userID, uuid.NewString(), p.summary.CalendarName, p.color)
+			calendar, err := s.calendars.Create(ctx, userID, uuid.NewString(), CalendarWrite{Name: p.summary.CalendarName, Color: p.color})
 			if err != nil {
 				return ImportSummary{}, fmt.Errorf("create calendar %q: %w", p.summary.CalendarName, err)
 			}
@@ -349,6 +354,9 @@ func (s *ImportService) proposeTarget(ctx context.Context, userID int64, filenam
 				return FileSummary{}, "", fmt.Errorf("%w: %q", ErrCalendarNotFound, target.CalendarID)
 			}
 			return FileSummary{}, "", err
+		}
+		if calendar.SourceURL != nil {
+			return FileSummary{}, "", fmt.Errorf("%w: %q", ErrImportTargetSubscribed, target.CalendarID)
 		}
 		summary.CalendarName = calendar.Name
 		summary.CalendarID = calendar.ID

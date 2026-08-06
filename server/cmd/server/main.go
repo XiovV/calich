@@ -26,6 +26,13 @@ import (
 // once-a-minute tick is fine-grained enough without being wasteful.
 const reminderTickInterval = time.Minute
 
+// subscriptionPollerTickInterval is how often the background poller checks
+// for due Subscriptions (#86, ADR-0033) — independent of, and much finer
+// than, any individual Subscription's own refresh cadence: this only
+// governs how promptly a due Calendar is noticed, not how often it's
+// actually refreshed.
+const subscriptionPollerTickInterval = time.Minute
+
 func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	cfg := config.Load()
@@ -67,9 +74,10 @@ func main() {
 	}
 
 	importService := service.NewImportService(eventService, calendarService)
+	subscribeService := service.NewSubscribeService(eventService, calendarService, cfg.SubscriptionRefreshInterval)
 
 	authHandler := handlers.NewAuthHandler(authService, cfg.SMTPConfigured())
-	calendarHandler := handlers.NewCalendarHandler(calendarService, eventService, importService)
+	calendarHandler := handlers.NewCalendarHandler(calendarService, eventService, importService, subscribeService)
 	eventHandler := handlers.NewEventHandler(eventService)
 	notificationHandler := handlers.NewNotificationHandler(notificationService)
 	appPasswordHandler := handlers.NewAppPasswordHandler(appPasswordService)
@@ -101,6 +109,13 @@ func main() {
 	scheduler := reminder.NewScheduler(eventService, repository.NewFiredReminderRepository(sqlDB), dispatcher, time.Now)
 	go scheduler.Run(schedulerCtx, reminderTickInterval)
 
+	// The background poller that refreshes Subscribed Calendars on its own,
+	// whether or not a browser is open (#86, ADR-0033).
+	pollerCtx, stopPoller := context.WithCancel(context.Background())
+	defer stopPoller()
+	poller := service.NewPoller(calendarService, subscribeService, time.Now)
+	go poller.Run(pollerCtx, subscriptionPollerTickInterval)
+
 	go func() {
 		logger.Info("starting server", "port", cfg.Port, "data_dir", cfg.DataDir)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
@@ -115,6 +130,7 @@ func main() {
 
 	logger.Info("shutting down")
 	stopScheduler()
+	stopPoller()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 

@@ -32,11 +32,11 @@ func newTestEventRepository(t *testing.T) (repo *EventRepository, userID int64, 
 	}
 
 	calendars := NewCalendarRepository(sqlDB)
-	cal, err := calendars.Create(context.Background(), user.ID, "cal-1", "Personal", "peacock")
+	cal, err := calendars.Create(context.Background(), user.ID, "cal-1", CalendarFields{Name: "Personal", Color: "peacock"})
 	if err != nil {
 		t.Fatalf("create calendar: %v", err)
 	}
-	otherCal, err := calendars.Create(context.Background(), other.ID, "cal-2", "Other", "tomato")
+	otherCal, err := calendars.Create(context.Background(), other.ID, "cal-2", CalendarFields{Name: "Other", Color: "tomato"})
 	if err != nil {
 		t.Fatalf("create other calendar: %v", err)
 	}
@@ -397,7 +397,7 @@ func TestEventRepository_CascadeDeletesWhenCalendarDeleted(t *testing.T) {
 	}
 
 	calendars := NewCalendarRepository(sqlDB)
-	cal, err := calendars.Create(context.Background(), user.ID, "cal-1", "Personal", "peacock")
+	cal, err := calendars.Create(context.Background(), user.ID, "cal-1", CalendarFields{Name: "Personal", Color: "peacock"})
 	if err != nil {
 		t.Fatalf("create calendar: %v", err)
 	}
@@ -521,11 +521,11 @@ func TestEventRepository_ListAllWithReminders(t *testing.T) {
 	}
 
 	calendars := NewCalendarRepository(sqlDB)
-	calA, err := calendars.Create(ctx, userA.ID, "cal-a", "A", "peacock")
+	calA, err := calendars.Create(ctx, userA.ID, "cal-a", CalendarFields{Name: "A", Color: "peacock"})
 	if err != nil {
 		t.Fatalf("create calendar a: %v", err)
 	}
-	calB, err := calendars.Create(ctx, userB.ID, "cal-b", "B", "tomato")
+	calB, err := calendars.Create(ctx, userB.ID, "cal-b", CalendarFields{Name: "B", Color: "tomato"})
 	if err != nil {
 		t.Fatalf("create calendar b: %v", err)
 	}
