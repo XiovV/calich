@@ -103,6 +103,33 @@ describe("updateCalendar", () => {
     expect(useCalendarsStore.getState().calendars).toEqual([personal]);
     expect(toast.error).toHaveBeenCalledWith("Failed to update calendar.");
   });
+
+  // #88, ADR-0032: the User typed a raw, possibly password-bearing URL —
+  // it must never show up in local state, only the masked value the
+  // server's response carries.
+  it("applies the server's masked sourceUrl rather than the raw typed url", async () => {
+    const subscribed = {
+      id: "cal-3",
+      name: "Team Holidays",
+      color: "#8E44ADFF",
+      sourceUrl: "https://old.example.com/••••••@feed.ics",
+    };
+    useCalendarsStore.setState({ calendars: [subscribed] });
+    vi.mocked(calendarsApi.update).mockResolvedValue({
+      ...subscribed,
+      sourceUrl: "https://new.example.com/••••••@feed.ics",
+    });
+
+    await useCalendarsStore.getState().updateCalendar("cal-3", {
+      name: "Team Holidays",
+      color: "#8E44ADFF",
+      url: "https://new.example.com/alice:s3cret@feed.ics",
+    });
+
+    const stored = useCalendarsStore.getState().calendars[0];
+    expect(stored.sourceUrl).toBe("https://new.example.com/••••••@feed.ics");
+    expect(stored.sourceUrl).not.toContain("s3cret");
+  });
 });
 
 describe("removeCalendar", () => {

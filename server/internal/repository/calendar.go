@@ -14,8 +14,9 @@ type Calendar struct {
 	Name   string
 	Color  string
 	// SourceURL is non-nil only on a Subscribed Calendar (#83, ADR-0032):
-	// the external .ics feed URL it was created from. Set on insert only —
-	// there is no rename-the-source flow, so Update never touches it.
+	// the external .ics feed URL it was created from. Editable later via
+	// UpdateSourceURL (#88), which also resets the conditional-GET
+	// validators below since they were earned from the old URL.
 	SourceURL *string
 	CreatedAt time.Time
 	// LastSyncedAt is when a Refresh last completed successfully against
@@ -56,15 +57,20 @@ type Calendar struct {
 	// they become Reminders on both Channels, matching ICS import's
 	// behaviour. Meaningless on an ordinary Calendar, which never sets it.
 	KeepAlarms bool
+	// FeedName and FeedColor are the last X-WR-CALNAME/
+	// X-APPLE-CALENDAR-COLOR the feed actually supplied — not what's
+	// displayed, which lives in Name/Color. A Refresh updates the displayed
+	// value only while it still equals its shadow; nil means the feed has
+	// never supplied one (#88, ADR-0032).
+	FeedName, FeedColor *string
 }
 
 // CalendarFields are a calendar's writable columns, gathered into one value
 // the same way EventFields already gathers an event's — so Create and Update
 // take one argument each instead of separately threading every column.
 //
-// SourceURL is set on insert only (like ParentID/RecurrenceID on
-// EventFields) — Update's SQL ignores it, since a Calendar's source is
-// fixed at subscribe time.
+// SourceURL is set on insert only — Update's SQL ignores it; a later change
+// goes through the dedicated UpdateSourceURL instead (#88, ADR-0032).
 type CalendarFields struct {
 	Name      string
 	Color     string
@@ -73,6 +79,11 @@ type CalendarFields struct {
 	// ignores it too, since changing it later goes through the dedicated
 	// UpdateKeepAlarms (#87, ADR-0032).
 	KeepAlarms bool
+	// FeedName and FeedColor are set on insert only too — the shadow of
+	// whatever the feed supplied at Subscribe time, whether or not the
+	// User's chosen Name/Color at that moment matched it. A later change
+	// goes through RecordRefreshSuccess (#88, ADR-0032).
+	FeedName, FeedColor *string
 }
 
 type CalendarRepository struct {
@@ -85,8 +96,8 @@ func NewCalendarRepository(db *sql.DB) *CalendarRepository {
 
 func (r *CalendarRepository) Create(ctx context.Context, userID int64, id string, fields CalendarFields) (Calendar, error) {
 	if _, err := r.db.ExecContext(ctx,
-		`INSERT INTO calendars (id, user_id, name, color, source_url, keep_alarms) VALUES (?, ?, ?, ?, ?, ?)`,
-		id, userID, fields.Name, fields.Color, fields.SourceURL, fields.KeepAlarms,
+		`INSERT INTO calendars (id, user_id, name, color, source_url, keep_alarms, feed_name, feed_color) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		id, userID, fields.Name, fields.Color, fields.SourceURL, fields.KeepAlarms, fields.FeedName, fields.FeedColor,
 	); err != nil {
 		return Calendar{}, fmt.Errorf("insert calendar: %w", err)
 	}
@@ -94,7 +105,7 @@ func (r *CalendarRepository) Create(ctx context.Context, userID int64, id string
 	return r.GetByID(ctx, userID, id)
 }
 
-const calendarColumns = `id, user_id, name, color, source_url, created_at, last_synced_at, etag, last_modified, content_hash, next_refresh_at, refresh_interval_seconds, failure_count, error_class, error_message, keep_alarms`
+const calendarColumns = `id, user_id, name, color, source_url, created_at, last_synced_at, etag, last_modified, content_hash, next_refresh_at, refresh_interval_seconds, failure_count, error_class, error_message, keep_alarms, feed_name, feed_color`
 
 func (r *CalendarRepository) GetByID(ctx context.Context, userID int64, id string) (Calendar, error) {
 	return r.scanCalendar(r.db.QueryRowContext(ctx,
@@ -191,6 +202,13 @@ type RefreshSuccess struct {
 	ETag, LastModified, ContentHash *string
 	NextRefreshAt                   time.Time
 	RefreshIntervalSeconds          *int
+	// Name and Color are what should be displayed after this attempt —
+	// pass-through of the Calendar's existing values on a short-circuited
+	// (NotModified) attempt, recomputed against the feed's own values
+	// otherwise. FeedName and FeedColor are the shadow those displayed
+	// values are compared against on the next attempt (#88, ADR-0032).
+	Name, Color         string
+	FeedName, FeedColor *string
 }
 
 // RecordRefreshSuccess records a Refresh's successful outcome, whether or
@@ -199,15 +217,39 @@ type RefreshSuccess struct {
 func (r *CalendarRepository) RecordRefreshSuccess(ctx context.Context, userID int64, id string, s RefreshSuccess) error {
 	res, err := r.db.ExecContext(ctx,
 		`UPDATE calendars SET last_synced_at = ?, etag = ?, last_modified = ?, content_hash = ?,
-			next_refresh_at = ?, refresh_interval_seconds = ?, failure_count = 0, error_class = NULL, error_message = NULL
+			next_refresh_at = ?, refresh_interval_seconds = ?, failure_count = 0, error_class = NULL, error_message = NULL,
+			name = ?, color = ?, feed_name = ?, feed_color = ?
 		 WHERE user_id = ? AND id = ?`,
-		s.SyncedAt, s.ETag, s.LastModified, s.ContentHash, s.NextRefreshAt, s.RefreshIntervalSeconds, userID, id,
+		s.SyncedAt, s.ETag, s.LastModified, s.ContentHash, s.NextRefreshAt, s.RefreshIntervalSeconds,
+		s.Name, s.Color, s.FeedName, s.FeedColor, userID, id,
 	)
 	if err != nil {
 		return fmt.Errorf("record refresh success: %w", err)
 	}
 
 	return requireAffected(res)
+}
+
+// UpdateSourceURL changes id's Subscription URL (#88, ADR-0032): a
+// publisher moving their feed shouldn't force an unsubscribe-and-restart,
+// which would discard the Subscription and recreate every Event. Resets
+// the conditional-GET validators, since they were earned from the old
+// URL's responses and sending them to whatever now answers the new one
+// would be meaningless at best.
+func (r *CalendarRepository) UpdateSourceURL(ctx context.Context, userID int64, id, url string) (Calendar, error) {
+	res, err := r.db.ExecContext(ctx,
+		`UPDATE calendars SET source_url = ?, etag = NULL, last_modified = NULL, content_hash = NULL WHERE user_id = ? AND id = ?`,
+		url, userID, id,
+	)
+	if err != nil {
+		return Calendar{}, fmt.Errorf("update source_url: %w", err)
+	}
+
+	if err := requireAffected(res); err != nil {
+		return Calendar{}, err
+	}
+
+	return r.GetByID(ctx, userID, id)
 }
 
 // RefreshFailure is what a failed Refresh persists (#86, ADR-0033): the
@@ -285,7 +327,7 @@ func (r *CalendarRepository) scanCalendar(row *sql.Row) (Calendar, error) {
 func scanCalendarRow(row rowScanner) (Calendar, error) {
 	var c Calendar
 	err := row.Scan(&c.ID, &c.UserID, &c.Name, &c.Color, &c.SourceURL, &c.CreatedAt, &c.LastSyncedAt, &c.ETag, &c.LastModified, &c.ContentHash,
-		&c.NextRefreshAt, &c.RefreshIntervalSeconds, &c.FailureCount, &c.ErrorClass, &c.ErrorMessage, &c.KeepAlarms)
+		&c.NextRefreshAt, &c.RefreshIntervalSeconds, &c.FailureCount, &c.ErrorClass, &c.ErrorMessage, &c.KeepAlarms, &c.FeedName, &c.FeedColor)
 	if err != nil {
 		return Calendar{}, err
 	}

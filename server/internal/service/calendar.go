@@ -38,6 +38,11 @@ type CalendarWrite struct {
 	// ADR-0032) — a later change goes through UpdateKeepAlarms instead,
 	// since Update ignores this field just like SourceURL.
 	KeepAlarms bool
+	// FeedName and FeedColor are set only alongside SourceURL too, at
+	// Subscribe time (#88, ADR-0032) — a later change goes through
+	// RecordRefreshSuccess instead, since Update ignores these fields just
+	// like SourceURL.
+	FeedName, FeedColor *string
 }
 
 // fields projects the write onto the columns the repository stores.
@@ -47,6 +52,8 @@ func (w CalendarWrite) fields() repository.CalendarFields {
 		Color:      w.Color,
 		SourceURL:  w.SourceURL,
 		KeepAlarms: w.KeepAlarms,
+		FeedName:   w.FeedName,
+		FeedColor:  w.FeedColor,
 	}
 }
 
@@ -126,6 +133,15 @@ func (s *CalendarService) ScheduleNextRefresh(ctx context.Context, userID int64,
 // turn-off requires; this method is the plain column write underneath it.
 func (s *CalendarService) UpdateKeepAlarms(ctx context.Context, userID int64, id string, keepAlarms bool) (repository.Calendar, error) {
 	return s.calendars.UpdateKeepAlarms(ctx, userID, id, keepAlarms)
+}
+
+// UpdateSourceURL changes id's source_url alone, resetting the
+// conditional-GET validators earned from the old URL (#88, ADR-0032).
+// SubscribeService.UpdateSourceURL is the caller that enforces the
+// Subscribed-Calendar-only rule and normalizes/validates the URL; this
+// method is the plain column write underneath it.
+func (s *CalendarService) UpdateSourceURL(ctx context.Context, userID int64, id, url string) (repository.Calendar, error) {
+	return s.calendars.UpdateSourceURL(ctx, userID, id, url)
 }
 
 // ListDueForRefresh returns every Subscribed Calendar, across every user,

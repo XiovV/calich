@@ -141,11 +141,27 @@ func (s *SubscribeService) Subscribe(ctx context.Context, userID int64, rawURL, 
 		return repository.Calendar{}, err
 	}
 
+	// The shadow starts at whatever the feed actually supplied, regardless
+	// of what name/color the User finally chose in the dialog — the User
+	// deliberately picking something else at Subscribe time is exactly the
+	// same "diverged from the feed" state a later rename produces, and the
+	// two are meant to compare identically (#88, ADR-0032).
+	var feedName *string
+	if parsed.CalendarName != "" {
+		feedName = &parsed.CalendarName
+	}
+	var feedColor *string
+	if normalizedFeedColor, ok := NormalizeColor(parsed.Color); ok {
+		feedColor = &normalizedFeedColor
+	}
+
 	calendar, err := s.calendars.Create(ctx, userID, uuid.NewString(), CalendarWrite{
 		Name:       name,
 		Color:      color,
 		SourceURL:  &normalized,
 		KeepAlarms: keepAlarms,
+		FeedName:   feedName,
+		FeedColor:  feedColor,
 	})
 	if err != nil {
 		return repository.Calendar{}, err
@@ -172,6 +188,37 @@ func (s *SubscribeService) Subscribe(ctx context.Context, userID int64, rawURL, 
 	}
 
 	return calendar, nil
+}
+
+// UpdateSourceURL changes calendarID's Subscription URL (#88, ADR-0032): a
+// publisher moving their feed shouldn't force an unsubscribe-and-restart.
+// rawURL is normalized and format-validated exactly as Subscribe's own URL
+// is — reachability isn't checked here; the next Refresh (scheduled or
+// manual) discovers whether the new URL actually answers, surfaced through
+// the same needs_attention/retrying machinery any other feed failure uses
+// (ADR-0033). The stored conditional-GET validators are reset alongside
+// the URL (CalendarRepository.UpdateSourceURL) so the next Refresh doesn't
+// send validators earned from the old feed to whatever now answers the
+// new one.
+func (s *SubscribeService) UpdateSourceURL(ctx context.Context, userID int64, calendarID, rawURL string) (repository.Calendar, error) {
+	calendar, err := s.calendars.Get(ctx, userID, calendarID)
+	if err != nil {
+		return repository.Calendar{}, err
+	}
+	if calendar.SourceURL == nil {
+		return repository.Calendar{}, ErrRefreshNotSubscribed
+	}
+
+	normalized, err := normalizeSubscribeURL(rawURL)
+	if err != nil {
+		return repository.Calendar{}, err
+	}
+
+	updated, err := s.calendars.UpdateSourceURL(ctx, userID, calendarID, normalized)
+	if err != nil {
+		return repository.Calendar{}, fmt.Errorf("update source url: %w", err)
+	}
+	return updated, nil
 }
 
 // UpdateKeepAlarms changes calendarID's Subscription KeepAlarms setting
@@ -277,6 +324,7 @@ func (s *SubscribeService) Refresh(ctx context.Context, userID int64, calendarID
 	if err := s.calendars.RecordRefreshSuccess(ctx, userID, calendarID, repository.RefreshSuccess{
 		SyncedAt: now, ETag: syncOutcome.etag, LastModified: syncOutcome.lastModified, ContentHash: syncOutcome.contentHash,
 		NextRefreshAt: next, RefreshIntervalSeconds: intervalSeconds,
+		Name: syncOutcome.name, Color: syncOutcome.color, FeedName: syncOutcome.feedName, FeedColor: syncOutcome.feedColor,
 	}); err != nil {
 		return RefreshResult{}, fmt.Errorf("record refresh success: %w", err)
 	}
@@ -295,6 +343,14 @@ type refreshSyncOutcome struct {
 	// (nothing was parsed) or a feed stating none, in which case Refresh
 	// keeps whatever was already stored.
 	refreshIntervalSeconds *int
+	// name/color are what Refresh should store as the Calendar's displayed
+	// Name/Color after this attempt: a pass-through of calendar's existing
+	// values on a NotModified short-circuit (nothing to compare against),
+	// or recomputed against the feed's own values otherwise. feedName/
+	// feedColor are the shadow those decisions are made from, similarly
+	// passed through unchanged when nothing was parsed (#88, ADR-0032).
+	name, color         string
+	feedName, feedColor *string
 }
 
 // doRefresh performs one fetch-and-reconcile attempt against calendar's
@@ -329,12 +385,18 @@ func (s *SubscribeService) doRefresh(ctx context.Context, userID int64, calendar
 		// earned this 304 are still the ones to send on the next Refresh —
 		// overwriting them with the empty response would leave nothing to
 		// send and turn every later Refresh into an unconditional fetch.
-		return RefreshResult{NotModified: true}, refreshSyncOutcome{etag: calendar.ETag, lastModified: calendar.LastModified, contentHash: calendar.ContentHash}, nil
+		return RefreshResult{NotModified: true}, refreshSyncOutcome{
+			etag: calendar.ETag, lastModified: calendar.LastModified, contentHash: calendar.ContentHash,
+			name: calendar.Name, color: calendar.Color, feedName: calendar.FeedName, feedColor: calendar.FeedColor,
+		}, nil
 	}
 
 	hash := contentHash(fetched.Data)
 	if !force && calendar.ContentHash != nil && *calendar.ContentHash == hash {
-		return RefreshResult{NotModified: true}, refreshSyncOutcome{etag: fetched.ETag, lastModified: fetched.LastModified, contentHash: &hash}, nil
+		return RefreshResult{NotModified: true}, refreshSyncOutcome{
+			etag: fetched.ETag, lastModified: fetched.LastModified, contentHash: &hash,
+			name: calendar.Name, color: calendar.Color, feedName: calendar.FeedName, feedColor: calendar.FeedColor,
+		}, nil
 	}
 
 	parsed, err := icalendar.ParseImportFile(bytes.NewReader(fetched.Data))
@@ -366,13 +428,49 @@ func (s *SubscribeService) doRefresh(ctx context.Context, userID int64, calendar
 		return RefreshResult{}, refreshSyncOutcome{}, err
 	}
 
+	newName, newFeedName := resolveFollowedField(calendar.Name, calendar.FeedName, parsed.CalendarName)
+	feedColorValue := ""
+	if normalized, ok := NormalizeColor(parsed.Color); ok {
+		feedColorValue = normalized
+	}
+	newColor, newFeedColor := resolveFollowedField(calendar.Color, calendar.FeedColor, feedColorValue)
+
 	return RefreshResult{
 		Created:     summary.Created,
 		Updated:     summary.Updated,
 		Tombstoned:  summary.Tombstoned,
 		Unparseable: result.SkippedCount,
 		NoOp:        result.NoOpCount,
-	}, refreshSyncOutcome{etag: fetched.ETag, lastModified: fetched.LastModified, contentHash: &hash, refreshIntervalSeconds: durationSecondsPtr(parsed.RefreshInterval)}, nil
+	}, refreshSyncOutcome{
+		etag: fetched.ETag, lastModified: fetched.LastModified, contentHash: &hash, refreshIntervalSeconds: durationSecondsPtr(parsed.RefreshInterval),
+		name: newName, color: newColor, feedName: newFeedName, feedColor: newFeedColor,
+	}, nil
+}
+
+// resolveFollowedField applies #88's name/color-follows-publisher rule to
+// one field: currentDisplay is what's shown now, currentShadow is the last
+// feed value it was compared against, and feedValue is what this fetch
+// just supplied ("" meaning the feed didn't supply one this time). It
+// returns the new displayed value and the new shadow to store.
+//
+//   - feedValue == "": the feed supplied nothing this round — leave both
+//     alone (ADR-0032: a feed that stops supplying a name/colour must not
+//     blank the existing value).
+//   - currentShadow is nil, or currentDisplay still equals it: the User
+//     hasn't diverged from the feed (or there was nothing to diverge from
+//     yet) — track the publisher's latest value in both.
+//   - otherwise: the User has customized the displayed value — leave it,
+//     but still record what the feed supplied, so a later coincidental
+//     match resumes tracking. The comparison above is the entire
+//     "overridden" flag; there is no separate one.
+func resolveFollowedField(currentDisplay string, currentShadow *string, feedValue string) (display string, shadow *string) {
+	if feedValue == "" {
+		return currentDisplay, currentShadow
+	}
+	if currentShadow == nil || currentDisplay == *currentShadow {
+		return feedValue, &feedValue
+	}
+	return currentDisplay, &feedValue
 }
 
 // existingSeriesFromMasters converts a Subscribed Calendar's current

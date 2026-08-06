@@ -214,9 +214,11 @@ func TestCalendarRepository_RecordRefreshSuccess(t *testing.T) {
 	syncedAt := time.Now().UTC().Truncate(time.Second)
 	nextRefreshAt := syncedAt.Add(time.Hour)
 	intervalSeconds := 3600
+	feedName, feedColor := "Team Holidays", "#8E44ADFF"
 	if err := repo.RecordRefreshSuccess(ctx, userID, "cal-1", RefreshSuccess{
 		SyncedAt: syncedAt, ETag: &etag, LastModified: &lastModified, ContentHash: &hash,
 		NextRefreshAt: nextRefreshAt, RefreshIntervalSeconds: &intervalSeconds,
+		Name: "Team Holidays", Color: "#8E44ADFF", FeedName: &feedName, FeedColor: &feedColor,
 	}); err != nil {
 		t.Fatalf("record refresh success: %v", err)
 	}
@@ -248,6 +250,67 @@ func TestCalendarRepository_RecordRefreshSuccess(t *testing.T) {
 	}
 	if got.ErrorClass != nil || got.ErrorMessage != nil {
 		t.Fatalf("expected a success to clear the error state, got class=%v message=%v", got.ErrorClass, got.ErrorMessage)
+	}
+	if got.Name != "Team Holidays" || got.Color != "#8E44ADFF" {
+		t.Fatalf("expected Name/Color to be persisted, got %+v", got)
+	}
+	if got.FeedName == nil || *got.FeedName != feedName || got.FeedColor == nil || *got.FeedColor != feedColor {
+		t.Fatalf("expected FeedName/FeedColor to be persisted, got %+v", got)
+	}
+}
+
+func TestCalendarRepository_UpdateSourceURL(t *testing.T) {
+	repo, userID, _ := newTestCalendarRepository(t)
+	ctx := context.Background()
+	sourceURL := "https://old.example.com/feed.ics"
+
+	created, err := repo.Create(ctx, userID, "cal-1", CalendarFields{Name: "Feed", Color: "peacock", SourceURL: &sourceURL})
+	if err != nil {
+		t.Fatalf("create calendar: %v", err)
+	}
+
+	etag, hash := `"v1"`, "deadbeef"
+	if err := repo.RecordRefreshSuccess(ctx, userID, created.ID, RefreshSuccess{
+		SyncedAt: time.Now(), ETag: &etag, ContentHash: &hash, NextRefreshAt: time.Now().Add(time.Hour),
+		Name: "Feed", Color: "peacock",
+	}); err != nil {
+		t.Fatalf("seed refresh success: %v", err)
+	}
+
+	newURL := "https://new.example.com/feed.ics"
+	updated, err := repo.UpdateSourceURL(ctx, userID, created.ID, newURL)
+	if err != nil {
+		t.Fatalf("update source url: %v", err)
+	}
+	if updated.SourceURL == nil || *updated.SourceURL != newURL {
+		t.Fatalf("expected SourceURL updated, got %+v", updated.SourceURL)
+	}
+	if updated.ETag != nil || updated.LastModified != nil || updated.ContentHash != nil {
+		t.Fatalf("expected the conditional-GET validators reset, got %+v", updated)
+	}
+}
+
+func TestCalendarRepository_UpdateSourceURL_NotFound(t *testing.T) {
+	repo, userID, _ := newTestCalendarRepository(t)
+
+	_, err := repo.UpdateSourceURL(context.Background(), userID, "nope", "https://example.com/feed.ics")
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected ErrNotFound, got %v", err)
+	}
+}
+
+func TestCalendarRepository_UpdateSourceURL_ScopedToUser(t *testing.T) {
+	repo, userID, otherUserID := newTestCalendarRepository(t)
+	ctx := context.Background()
+	sourceURL := "https://example.com/feed.ics"
+
+	if _, err := repo.Create(ctx, userID, "cal-1", CalendarFields{Name: "Feed", Color: "peacock", SourceURL: &sourceURL}); err != nil {
+		t.Fatalf("create calendar: %v", err)
+	}
+
+	_, err := repo.UpdateSourceURL(ctx, otherUserID, "cal-1", "https://new.example.com/feed.ics")
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected ErrNotFound updating another user's calendar, got %v", err)
 	}
 }
 

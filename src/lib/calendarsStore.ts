@@ -10,7 +10,12 @@ interface CalendarsState {
   addCalendar: (calendar: Calendar) => Promise<void>;
   updateCalendar: (
     id: string,
-    changes: { name: string; color: string; keepAlarms?: boolean },
+    changes: {
+      name: string;
+      color: string;
+      keepAlarms?: boolean;
+      url?: string;
+    },
   ) => Promise<void>;
   // Resolves to whether the delete actually succeeded, so callers that
   // cascade other local state off of it (e.g. deleteCalendarCascade) know
@@ -64,14 +69,28 @@ export const useCalendarsStore = create<CalendarsState>((set, get) => ({
 
   updateCalendar: async (id, changes) => {
     const previousCalendars = get().calendars;
+    // url is optimistically applied from the server's response, not from
+    // changes itself — the User typed a raw (possibly password-bearing)
+    // URL, and every surface showing a Subscription URL must show the
+    // masked form the server returns instead (#88, ADR-0032).
+    const { url, ...displayChanges } = changes;
     set((state) => ({
       calendars: state.calendars.map((calendar) =>
-        calendar.id === id ? { ...calendar, ...changes } : calendar,
+        calendar.id === id ? { ...calendar, ...displayChanges } : calendar,
       ),
     }));
 
     try {
-      await calendarsApi.update(requireAccessToken(), id, changes);
+      const updated = await calendarsApi.update(requireAccessToken(), id, changes);
+      if (url !== undefined) {
+        set((state) => ({
+          calendars: state.calendars.map((calendar) =>
+            calendar.id === id
+              ? { ...calendar, sourceUrl: updated.sourceUrl }
+              : calendar,
+          ),
+        }));
+      }
     } catch {
       set({ calendars: previousCalendars });
       toast.error("Failed to update calendar.");

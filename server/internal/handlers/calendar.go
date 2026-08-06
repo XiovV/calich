@@ -155,6 +155,11 @@ type updateCalendarRequest struct {
 	// off; only a request that names it explicitly reaches
 	// SubscribeService.UpdateKeepAlarms.
 	KeepAlarms *bool `json:"keepAlarms,omitempty"`
+	// URL edits a Subscribed Calendar's feed URL (#88, ADR-0032) — a
+	// pointer for the same reason as KeepAlarms: an ordinary edit never
+	// sends it, so it can't accidentally clobber a Subscription's URL with
+	// an empty string.
+	URL *string `json:"url,omitempty"`
 }
 
 var updateKeepAlarmsErrors = []errorCase{
@@ -162,6 +167,13 @@ var updateKeepAlarmsErrors = []errorCase{
 }
 
 var updateKeepAlarmsErrorsWithNotFound = alsoHandling(updateKeepAlarmsErrors, calendarNotFoundErrors...)
+
+var updateSourceURLErrors = []errorCase{
+	{service.ErrRefreshNotSubscribed, badRequest("calendar is not a subscribed calendar")},
+	{service.ErrSubscribeInvalidURL, badRequest("subscription URL is invalid")},
+}
+
+var updateSourceURLErrorsWithNotFound = alsoHandling(updateSourceURLErrors, calendarNotFoundErrors...)
 
 func (h *CalendarHandler) Update(w http.ResponseWriter, r *http.Request) {
 	userID, ok := httpauth.UserIDFromContext(r.Context())
@@ -181,6 +193,13 @@ func (h *CalendarHandler) Update(w http.ResponseWriter, r *http.Request) {
 	calendar, err := h.calendars.Update(r.Context(), userID, id, service.CalendarWrite{Name: req.Name, Color: req.Color})
 	if respondError(w, err, updateCalendarErrors, "failed to update calendar") {
 		return
+	}
+
+	if req.URL != nil {
+		calendar, err = h.subscriptions.UpdateSourceURL(r.Context(), userID, id, *req.URL)
+		if respondError(w, err, updateSourceURLErrorsWithNotFound, "failed to update subscription url") {
+			return
+		}
 	}
 
 	if req.KeepAlarms != nil {

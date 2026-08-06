@@ -108,6 +108,39 @@ describe("calendarsApi.update", () => {
       }),
     );
   });
+
+  it("includes url and keepAlarms when editing a Subscription", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(200, {
+        id: "cal-1",
+        name: "Team Holidays",
+        color: "#8E44ADFF",
+        sourceUrl: "https://new.example.com/feed.ics",
+        keepAlarms: true,
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await calendarsApi.update("token-123", "cal-1", {
+      name: "Team Holidays",
+      color: "#8E44ADFF",
+      keepAlarms: true,
+      url: "https://new.example.com/feed.ics",
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/calendars/cal-1",
+      expect.objectContaining({
+        method: "PATCH",
+        body: JSON.stringify({
+          name: "Team Holidays",
+          color: "#8E44ADFF",
+          keepAlarms: true,
+          url: "https://new.example.com/feed.ics",
+        }),
+      }),
+    );
+  });
 });
 
 describe("calendarsApi.previewSubscription", () => {

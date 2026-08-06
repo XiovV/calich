@@ -1065,3 +1065,275 @@ func TestSubscribeService_UpdateKeepAlarms_TurningOnTakesEffectOnNextForcedRefre
 		t.Fatalf("expected the feed's VALARM to become 1 Reminder after the forced refresh, got %+v", after.Reminders)
 	}
 }
+
+// --- Name/color follows the publisher until the User touches them (#88, ADR-0032) ---
+
+// renamedFeedICS mirrors subscribeFeedICS's single series but under a
+// different X-WR-CALNAME/X-APPLE-CALENDAR-COLOR — a publisher rename.
+const renamedFeedICS = `BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//test//EN
+X-WR-CALNAME:Company Holidays
+X-APPLE-CALENDAR-COLOR:#2ECC71FF
+BEGIN:VEVENT
+UID:feed-uid-1
+DTSTART:20260601T090000Z
+DTEND:20260601T093000Z
+SUMMARY:Standup
+RRULE:FREQ=WEEKLY;COUNT=3
+END:VEVENT
+END:VCALENDAR
+`
+
+// namelessFeedICS mirrors subscribeFeedICS's single series with no
+// X-WR-CALNAME/X-APPLE-CALENDAR-COLOR at all — a publisher that stops
+// supplying either.
+const namelessFeedICS = `BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//test//EN
+BEGIN:VEVENT
+UID:feed-uid-1
+DTSTART:20260601T090000Z
+DTEND:20260601T093000Z
+SUMMARY:Standup
+RRULE:FREQ=WEEKLY;COUNT=3
+END:VEVENT
+END:VCALENDAR
+`
+
+// switchableICSServer serves whatever *body currently points at, so a test
+// can change the feed's content between two Refresh calls against the same
+// URL.
+func switchableICSServer(t *testing.T, body *string) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/calendar")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(crlfSub(*body)))
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func TestSubscribeService_Subscribe_FeedNameColorShadowTracksFeedNotUsersChoice(t *testing.T) {
+	svc, _, calendars, userID := newTestSubscribeService(t)
+	srv := icsServer(t, subscribeFeedICS)
+	ctx := context.Background()
+
+	// The User picks a name/color different from what the feed proposes —
+	// diverging right from Subscribe, same as a later rename would.
+	calendar, err := svc.Subscribe(ctx, userID, srv.URL+"/feed.ics", "My Calendar", "#123456FF", false)
+	if err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+
+	if calendar.Name != "My Calendar" || calendar.Color != "#123456FF" {
+		t.Fatalf("expected the User's chosen name/color to be stored, got %+v", calendar)
+	}
+	if calendar.FeedName == nil || *calendar.FeedName != "Team Holidays" {
+		t.Fatalf("expected the shadow to track the feed's own name regardless, got %+v", calendar.FeedName)
+	}
+	if calendar.FeedColor == nil || *calendar.FeedColor != "#8E44ADFF" {
+		t.Fatalf("expected the shadow to track the feed's own color regardless, got %+v", calendar.FeedColor)
+	}
+
+	got, err := calendars.Get(ctx, userID, calendar.ID)
+	if err != nil {
+		t.Fatalf("get calendar: %v", err)
+	}
+	if got.Name != "My Calendar" {
+		t.Fatalf("expected the stored Name to survive, got %q", got.Name)
+	}
+}
+
+func TestSubscribeService_Refresh_UntouchedNameFollowsPublisherRename(t *testing.T) {
+	svc, _, calendars, userID := newTestSubscribeService(t)
+	body := subscribeFeedICS
+	srv := switchableICSServer(t, &body)
+	ctx := context.Background()
+
+	// Accepting the feed's proposed name/color, as Preview would suggest,
+	// means Name/Color start out equal to the shadow — "untouched".
+	calendar, err := svc.Subscribe(ctx, userID, srv.URL+"/feed.ics", "Team Holidays", "#8E44ADFF", false)
+	if err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+
+	body = renamedFeedICS
+	if _, err := svc.Refresh(ctx, userID, calendar.ID, true); err != nil {
+		t.Fatalf("refresh: %v", err)
+	}
+
+	got, err := calendars.Get(ctx, userID, calendar.ID)
+	if err != nil {
+		t.Fatalf("get calendar: %v", err)
+	}
+	if got.Name != "Company Holidays" {
+		t.Fatalf("expected the untouched Name to follow the publisher's rename, got %q", got.Name)
+	}
+	if got.Color != "#2ECC71FF" {
+		t.Fatalf("expected the untouched Color to follow the publisher's recolor, got %q", got.Color)
+	}
+	if got.FeedName == nil || *got.FeedName != "Company Holidays" {
+		t.Fatalf("expected the shadow to track the new name, got %+v", got.FeedName)
+	}
+	if got.FeedColor == nil || *got.FeedColor != "#2ECC71FF" {
+		t.Fatalf("expected the shadow to track the new color, got %+v", got.FeedColor)
+	}
+}
+
+func TestSubscribeService_Refresh_CustomizedNameNeverOverwritten(t *testing.T) {
+	svc, _, calendars, userID := newTestSubscribeService(t)
+	body := subscribeFeedICS
+	srv := switchableICSServer(t, &body)
+	ctx := context.Background()
+
+	// The User picks their own name/color at Subscribe time — diverged
+	// from the shadow immediately.
+	calendar, err := svc.Subscribe(ctx, userID, srv.URL+"/feed.ics", "My Calendar", "#123456FF", false)
+	if err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+
+	body = renamedFeedICS
+	if _, err := svc.Refresh(ctx, userID, calendar.ID, true); err != nil {
+		t.Fatalf("refresh: %v", err)
+	}
+
+	got, err := calendars.Get(ctx, userID, calendar.ID)
+	if err != nil {
+		t.Fatalf("get calendar: %v", err)
+	}
+	if got.Name != "My Calendar" {
+		t.Fatalf("expected the User's customized Name to survive the publisher's rename, got %q", got.Name)
+	}
+	if got.Color != "#123456FF" {
+		t.Fatalf("expected the User's customized Color to survive the publisher's recolor, got %q", got.Color)
+	}
+	// The shadow still tracks the feed's latest value even while
+	// overridden — the comparison alone is the "overridden" flag, so a
+	// later coincidental match would resume tracking.
+	if got.FeedName == nil || *got.FeedName != "Company Holidays" {
+		t.Fatalf("expected the shadow to still track the new feed name, got %+v", got.FeedName)
+	}
+	if got.FeedColor == nil || *got.FeedColor != "#2ECC71FF" {
+		t.Fatalf("expected the shadow to still track the new feed color, got %+v", got.FeedColor)
+	}
+}
+
+func TestSubscribeService_Refresh_FeedStopsSupplyingNameColor_DoesNotBlank(t *testing.T) {
+	svc, _, calendars, userID := newTestSubscribeService(t)
+	body := subscribeFeedICS
+	srv := switchableICSServer(t, &body)
+	ctx := context.Background()
+
+	calendar, err := svc.Subscribe(ctx, userID, srv.URL+"/feed.ics", "Team Holidays", "#8E44ADFF", false)
+	if err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+
+	body = namelessFeedICS
+	if _, err := svc.Refresh(ctx, userID, calendar.ID, true); err != nil {
+		t.Fatalf("refresh: %v", err)
+	}
+
+	got, err := calendars.Get(ctx, userID, calendar.ID)
+	if err != nil {
+		t.Fatalf("get calendar: %v", err)
+	}
+	if got.Name != "Team Holidays" {
+		t.Fatalf("expected the existing Name to survive a feed that stops supplying one, got %q", got.Name)
+	}
+	if got.Color != "#8E44ADFF" {
+		t.Fatalf("expected the existing Color to survive a feed that stops supplying one, got %q", got.Color)
+	}
+	if got.FeedName == nil || *got.FeedName != "Team Holidays" {
+		t.Fatalf("expected the shadow to survive unchanged too, got %+v", got.FeedName)
+	}
+	if got.FeedColor == nil || *got.FeedColor != "#8E44ADFF" {
+		t.Fatalf("expected the shadow to survive unchanged too, got %+v", got.FeedColor)
+	}
+}
+
+// --- Editing a Subscription's URL (#88, ADR-0032) ---
+
+func TestSubscribeService_UpdateSourceURL_ReconcilesAgainstNewSourceOnNextRefresh(t *testing.T) {
+	svc, events, calendars, userID := newTestSubscribeService(t)
+	oldSrv := icsServer(t, subscribeFeedICS)
+	ctx := context.Background()
+
+	calendar, err := svc.Subscribe(ctx, userID, oldSrv.URL+"/feed.ics", "Team Holidays", "#8E44ADFF", false)
+	if err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+
+	// The publisher moves the feed to a new host, still serving the same
+	// series but with the Standup renamed — proving reconciliation runs
+	// against the *new* URL's content on the next Refresh.
+	newSrv := icsServer(t, strings.Replace(subscribeFeedICS, "Standup", "Standup (moved)", 1))
+
+	updated, err := svc.UpdateSourceURL(ctx, userID, calendar.ID, newSrv.URL+"/feed.ics")
+	if err != nil {
+		t.Fatalf("update source url: %v", err)
+	}
+	if updated.SourceURL == nil || *updated.SourceURL != newSrv.URL+"/feed.ics" {
+		t.Fatalf("expected SourceURL updated, got %+v", updated.SourceURL)
+	}
+
+	if _, err := svc.Refresh(ctx, userID, calendar.ID, false); err != nil {
+		t.Fatalf("refresh: %v", err)
+	}
+
+	all, err := events.List(ctx, userID, nil, nil)
+	if err != nil {
+		t.Fatalf("list events: %v", err)
+	}
+	var found bool
+	for _, e := range all {
+		if e.Title == "Standup (moved)" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected the Refresh to reconcile against the new URL's content, got %+v", all)
+	}
+
+	got, err := calendars.Get(ctx, userID, calendar.ID)
+	if err != nil {
+		t.Fatalf("get calendar: %v", err)
+	}
+	if got.SourceURL == nil || *got.SourceURL != newSrv.URL+"/feed.ics" {
+		t.Fatalf("expected the new SourceURL to persist, got %+v", got.SourceURL)
+	}
+}
+
+func TestSubscribeService_UpdateSourceURL_RejectsNonSubscribedCalendar(t *testing.T) {
+	svc, _, calendars, userID := newTestSubscribeService(t)
+	ctx := context.Background()
+
+	cal, err := calendars.Create(ctx, userID, "cal-1", CalendarWrite{Name: "Personal", Color: "#12809CFF"})
+	if err != nil {
+		t.Fatalf("create calendar: %v", err)
+	}
+
+	_, err = svc.UpdateSourceURL(ctx, userID, cal.ID, "https://example.com/feed.ics")
+	if !errors.Is(err, ErrRefreshNotSubscribed) {
+		t.Fatalf("expected ErrRefreshNotSubscribed, got %v", err)
+	}
+}
+
+func TestSubscribeService_UpdateSourceURL_RejectsInvalidURL(t *testing.T) {
+	svc, _, _, userID := newTestSubscribeService(t)
+	srv := icsServer(t, subscribeFeedICS)
+	ctx := context.Background()
+
+	calendar, err := svc.Subscribe(ctx, userID, srv.URL+"/feed.ics", "Team Holidays", "#8E44ADFF", false)
+	if err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+
+	_, err = svc.UpdateSourceURL(ctx, userID, calendar.ID, "not a url")
+	if !errors.Is(err, ErrSubscribeInvalidURL) {
+		t.Fatalf("expected ErrSubscribeInvalidURL, got %v", err)
+	}
+}

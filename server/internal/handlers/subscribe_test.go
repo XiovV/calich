@@ -85,6 +85,31 @@ func patchKeepAlarms(t *testing.T, baseURL, accessToken, id, name, color string,
 	return resp
 }
 
+// patchURL sends a PATCH carrying name/color alongside url — the shape
+// the frontend's edit dialog sends for a Subscribed Calendar (#88,
+// ADR-0032): the whole form's current state, not a partial diff.
+func patchURL(t *testing.T, baseURL, accessToken, id, name, color, url string) *http.Response {
+	t.Helper()
+
+	body, err := json.Marshal(updateCalendarRequest{Name: name, Color: color, URL: &url})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	req, err := http.NewRequest(http.MethodPatch, baseURL+"/api/calendars/"+id, bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("patch: %v", err)
+	}
+	return resp
+}
+
 func TestCalendarHandler_Subscribe_Preview(t *testing.T) {
 	baseURL, accessToken := newCalendarTestServer(t)
 	feed := icsFeedServer(t)
@@ -387,5 +412,85 @@ func TestCalendarHandler_Update_OmittingKeepAlarmsLeavesItUnchanged(t *testing.T
 	}
 	if !updated.KeepAlarms {
 		t.Fatalf("expected keepAlarms to survive an ordinary name/color edit, got %+v", updated)
+	}
+}
+
+func TestCalendarHandler_UpdateURL_Success(t *testing.T) {
+	baseURL, accessToken := newCalendarTestServer(t)
+	feed := icsFeedServer(t)
+
+	subscribeResp := postSubscribe(t, baseURL, accessToken, "0", feed.URL+"/feed.ics", "Team Holidays", "#8E44ADFF")
+	var calendar calendarResponse
+	if err := json.NewDecoder(subscribeResp.Body).Decode(&calendar); err != nil {
+		t.Fatalf("decode subscribe response: %v", err)
+	}
+
+	newFeed := icsFeedServer(t)
+	resp := patchURL(t, baseURL, accessToken, calendar.ID, calendar.Name, calendar.Color, newFeed.URL+"/other.ics")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	var updated calendarResponse
+	if err := json.NewDecoder(resp.Body).Decode(&updated); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if updated.SourceURL == nil || *updated.SourceURL != newFeed.URL+"/other.ics" {
+		t.Fatalf("expected sourceUrl updated, got %+v", updated.SourceURL)
+	}
+}
+
+func TestCalendarHandler_UpdateURL_MasksPasswordInResponse(t *testing.T) {
+	baseURL, accessToken := newCalendarTestServer(t)
+	feed := icsFeedServer(t)
+
+	subscribeResp := postSubscribe(t, baseURL, accessToken, "0", feed.URL+"/feed.ics", "Team Holidays", "#8E44ADFF")
+	var calendar calendarResponse
+	if err := json.NewDecoder(subscribeResp.Body).Decode(&calendar); err != nil {
+		t.Fatalf("decode subscribe response: %v", err)
+	}
+
+	newFeedURL := strings.Replace(feed.URL, "http://", "http://alice:s3cret@", 1) + "/feed.ics"
+	resp := patchURL(t, baseURL, accessToken, calendar.ID, calendar.Name, calendar.Color, newFeedURL)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	var updated calendarResponse
+	if err := json.NewDecoder(resp.Body).Decode(&updated); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if updated.SourceURL == nil {
+		t.Fatalf("expected sourceUrl to be set")
+	}
+	if strings.Contains(*updated.SourceURL, "s3cret") {
+		t.Fatalf("expected the password to be masked, got %q", *updated.SourceURL)
+	}
+}
+
+func TestCalendarHandler_UpdateURL_RejectsOrdinaryCalendar(t *testing.T) {
+	baseURL, accessToken := newCalendarTestServer(t)
+
+	createResp := createCalendar(t, baseURL, accessToken, "11111111-1111-1111-1111-111111111111", "Personal", "#12809CFF")
+	var created calendarResponse
+	json.NewDecoder(createResp.Body).Decode(&created)
+
+	resp := patchURL(t, baseURL, accessToken, created.ID, created.Name, created.Color, "https://example.com/feed.ics")
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", resp.StatusCode)
+	}
+}
+
+func TestCalendarHandler_UpdateURL_InvalidURL(t *testing.T) {
+	baseURL, accessToken := newCalendarTestServer(t)
+	feed := icsFeedServer(t)
+
+	subscribeResp := postSubscribe(t, baseURL, accessToken, "0", feed.URL+"/feed.ics", "Team Holidays", "#8E44ADFF")
+	var calendar calendarResponse
+	if err := json.NewDecoder(subscribeResp.Body).Decode(&calendar); err != nil {
+		t.Fatalf("decode subscribe response: %v", err)
+	}
+
+	resp := patchURL(t, baseURL, accessToken, calendar.ID, calendar.Name, calendar.Color, "not a url")
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", resp.StatusCode)
 	}
 }

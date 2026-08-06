@@ -47,7 +47,12 @@ export const calendarsApi = {
   async update(
     accessToken: string,
     id: string,
-    changes: { name: string; color: string; keepAlarms?: boolean },
+    changes: {
+      name: string;
+      color: string;
+      keepAlarms?: boolean;
+      url?: string;
+    },
   ): Promise<Calendar> {
     const response = await fetch(`/api/calendars/${id}`, {
       method: "PATCH",
