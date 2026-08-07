@@ -24,6 +24,14 @@ fired_reminders
 
 Per-User gating that already exists composes naturally. ADR-0027's `synced_device_reminders_enabled` is per-User, so one firing may create a Notification for Bob while skipping it for Alice; a per-User ledger key makes that expressible rather than awkward.
 
+## An offset override replaces the Event's Reminders, it does not retune each of them
+
+An Event may carry more than one Reminder (a day before by Email, 30 minutes before by Notification). A User's offset override is a statement about the Event — "remind me two hours before this" — not a transformation applied to each of the Owner's Reminders in turn. So a User with an offset override gets exactly **one** DueReminder per Occurrence, at their own offset, regardless of how many Reminders the Event carries; the Event's other Reminders are not separately evaluated for that User. Firing every one of the Event's Reminders with the override's offset substituted in was the original implementation, and it was a bug (#110): every Reminder collapses onto the same instant and Channel, so the User gets N identical alerts instead of one.
+
+A Channel-only override carries no such statement about timing, so it does not collapse anything: every Reminder still fires at its own offset, re-channelled. A muted override still drops the User from every Reminder, as before.
+
+The ledger key for an offset-overridden User's single trigger is one of the Event's own Reminder ids (the lowest, arbitrarily but consistently), not a synthetic id — `fired_reminders` has no row type of its own for "the override's trigger," and inventing one is unnecessary just to name a ledger entry.
+
 ## The accepted conflict with ADR-0027
 
 Once a User connects a device, that device fires its own `DISPLAY` alarm from the synced `VALARM` — the server is not in that loop (ADR-0027). Because CalDAV serves the *shared* VALARMs, a User whose device fires alarms gets the **Event's** timing on that device, not their override.
@@ -44,3 +52,4 @@ This is accepted rather than solved, and it is narrower than it first sounds: AD
 - **Reminder delivery cost scales with the size of the Share set.** At household scale this is irrelevant; it is worth knowing before anyone shares a Calendar with a large group.
 - **An override is scoped to the Event, not the Occurrence.** Overriding "Bin day" retunes every future Bin day for that User. Per-Occurrence overrides are not modelled, matching how Reminders themselves work.
 - **Overrides survive Event edits only if the Event survives.** ADR-0020 wholesale-replaces `event_reminders` rows on Event update, which resets fired history by design. A `user_event_reminders` row keyed on `event_id` outlives that replacement; one keyed on `reminder_id` would not, which is why it is not.
+- **An offset override collapses a multi-stage Reminder to one stage.** A User overriding an Event with a deliberate two-Reminder design (a day before *and* half an hour before) loses the second one — their override states their own single timing, and it wins outright rather than blending with the Owner's.

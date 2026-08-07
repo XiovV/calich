@@ -346,6 +346,163 @@ func TestDue_ChannelOverride_ChangesOnlyThatRecipientsChannel(t *testing.T) {
 	}
 }
 
+// An offset override replaces an Event's whole Reminder set with one trigger
+// at the overriding recipient's own offset — collapsing two Reminders that
+// would otherwise both substitute to the same instant into a single
+// DueReminder — while every other recipient still gets both Reminders at
+// their own distinct offsets (#110, ADR-0036).
+func TestDue_OffsetOverride_OnEventWithMultipleReminders_FiresOnce(t *testing.T) {
+	event := repository.Event{
+		ID:    "evt-1",
+		Start: at(2026, 1, 1, 9, 0),
+		End:   at(2026, 1, 1, 9, 30),
+		Reminders: []repository.Reminder{
+			{ID: 100, OffsetMinutes: 30, Channel: "notification"},
+			{ID: 101, OffsetMinutes: 1440, Channel: "email"},
+		},
+	}
+
+	overriddenOffset := 120
+	withOverride := withRecipients(event, 1, 1, 2)
+	withOverride.Overrides = map[int64]repository.ReminderOverride{2: {OffsetMinutes: &overriddenOffset}}
+
+	// 07:00 is 2 hours before the 09:00 start — user 2's single overridden
+	// trigger, not two collapsed copies of it.
+	due, err := Due(withOverride, at(2026, 1, 1, 6, 55), at(2026, 1, 1, 7, 0))
+	if err != nil {
+		t.Fatalf("due: %v", err)
+	}
+	if len(due) != 1 || due[0].UserID != 2 || due[0].OffsetMinutes != 120 {
+		t.Fatalf("expected exactly one due reminder for user 2's overridden offset, got %+v", due)
+	}
+
+	// User 1 (no override) still gets both of the Event's own Reminders, each
+	// at its own offset: the 30-minutes-before Reminder at 08:30...
+	due, err = Due(withOverride, at(2026, 1, 1, 8, 25), at(2026, 1, 1, 8, 30))
+	if err != nil {
+		t.Fatalf("due: %v", err)
+	}
+	if len(due) != 1 || due[0].UserID != 1 || due[0].ReminderID != 100 {
+		t.Fatalf("expected user 1's 30-minute Reminder to fire unchanged, got %+v", due)
+	}
+
+	// ...and the 1-day-before Reminder the morning before, unaffected by user
+	// 2's override.
+	due, err = Due(withOverride, at(2025, 12, 31, 8, 55), at(2025, 12, 31, 9, 0))
+	if err != nil {
+		t.Fatalf("due: %v", err)
+	}
+	if len(due) != 1 || due[0].UserID != 1 || due[0].ReminderID != 101 {
+		t.Fatalf("expected user 1's 1-day Reminder to fire unchanged, got %+v", due)
+	}
+}
+
+// A Channel-only override re-channels every Reminder on an Event without
+// collapsing their offsets — only an offset override replaces the Reminder
+// set (#110, ADR-0036).
+func TestDue_ChannelOnlyOverride_OnEventWithMultipleReminders_KeepsDistinctOffsets(t *testing.T) {
+	event := repository.Event{
+		ID:    "evt-1",
+		Start: at(2026, 1, 1, 9, 0),
+		End:   at(2026, 1, 1, 9, 30),
+		Reminders: []repository.Reminder{
+			{ID: 100, OffsetMinutes: 30, Channel: "notification"},
+			{ID: 101, OffsetMinutes: 1440, Channel: "email"},
+		},
+	}
+
+	overriddenChannel := "email"
+	withOverride := withRecipients(event, 1, 1, 2)
+	withOverride.Overrides = map[int64]repository.ReminderOverride{2: {Channel: &overriddenChannel}}
+
+	due, err := Due(withOverride, at(2026, 1, 1, 8, 25), at(2026, 1, 1, 8, 30))
+	if err != nil {
+		t.Fatalf("due: %v", err)
+	}
+	if len(due) != 2 {
+		t.Fatalf("expected both recipients' 30-minute Reminder to fire, got %+v", due)
+	}
+	byUser := map[int64]string{}
+	for _, d := range due {
+		byUser[d.UserID] = d.Channel
+	}
+	if byUser[1] != "notification" || byUser[2] != "email" {
+		t.Fatalf("expected user 1's own channel and user 2's re-channelled 30-minute Reminder, got %+v", byUser)
+	}
+
+	due, err = Due(withOverride, at(2025, 12, 31, 8, 55), at(2025, 12, 31, 9, 0))
+	if err != nil {
+		t.Fatalf("due: %v", err)
+	}
+	if len(due) != 2 {
+		t.Fatalf("expected both recipients' 1-day Reminder to fire, its offset unchanged by the channel override, got %+v", due)
+	}
+}
+
+// A muted override suppresses every one of an Event's Reminders for that
+// recipient alone, even when the Event carries more than one — the mute
+// check short-circuits before the offset-override collapse (#110, ADR-0036).
+func TestDue_MutedOverride_OnEventWithMultipleReminders_SuppressesOnlyThatRecipient(t *testing.T) {
+	event := repository.Event{
+		ID:    "evt-1",
+		Start: at(2026, 1, 1, 9, 0),
+		End:   at(2026, 1, 1, 9, 30),
+		Reminders: []repository.Reminder{
+			{ID: 100, OffsetMinutes: 30, Channel: "notification"},
+			{ID: 101, OffsetMinutes: 1440, Channel: "email"},
+		},
+	}
+
+	withOverride := withRecipients(event, 1, 1, 2)
+	withOverride.Overrides = map[int64]repository.ReminderOverride{2: {Muted: true}}
+
+	due, err := Due(withOverride, at(2026, 1, 1, 8, 25), at(2026, 1, 1, 8, 30))
+	if err != nil {
+		t.Fatalf("due: %v", err)
+	}
+	if len(due) != 1 || due[0].UserID != 1 {
+		t.Fatalf("expected only the unmuted recipient's 30-minute Reminder to fire, got %+v", due)
+	}
+
+	due, err = Due(withOverride, at(2025, 12, 31, 8, 55), at(2025, 12, 31, 9, 0))
+	if err != nil {
+		t.Fatalf("due: %v", err)
+	}
+	if len(due) != 1 || due[0].UserID != 1 {
+		t.Fatalf("expected only the unmuted recipient's 1-day Reminder to fire, got %+v", due)
+	}
+}
+
+// An override that sets both an offset and a Channel still collapses to one
+// DueReminder on a multi-Reminder Event, carrying both substituted values
+// (#110, ADR-0036).
+func TestDue_OffsetAndChannelOverride_OnEventWithMultipleReminders_FiresOnceWithBothSubstituted(t *testing.T) {
+	event := repository.Event{
+		ID:    "evt-1",
+		Start: at(2026, 1, 1, 9, 0),
+		End:   at(2026, 1, 1, 9, 30),
+		Reminders: []repository.Reminder{
+			{ID: 100, OffsetMinutes: 30, Channel: "notification"},
+			{ID: 101, OffsetMinutes: 1440, Channel: "email"},
+		},
+	}
+
+	overriddenOffset := 120
+	overriddenChannel := "email"
+	withOverride := withRecipients(event, 1, 1, 2)
+	withOverride.Overrides = map[int64]repository.ReminderOverride{
+		2: {OffsetMinutes: &overriddenOffset, Channel: &overriddenChannel},
+	}
+
+	due, err := Due(withOverride, at(2026, 1, 1, 6, 55), at(2026, 1, 1, 7, 0))
+	if err != nil {
+		t.Fatalf("due: %v", err)
+	}
+	if len(due) != 1 || due[0].UserID != 2 || due[0].OffsetMinutes != 120 || due[0].Channel != "email" {
+		t.Fatalf("expected exactly one due reminder for user 2 with both overrides applied, got %+v", due)
+	}
+}
+
 func TestDue_ZonedRecurringEvent_KeepsWallClockAcrossDST(t *testing.T) {
 	loc, err := time.LoadLocation("Europe/Berlin")
 	if err != nil {

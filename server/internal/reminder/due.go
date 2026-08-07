@@ -49,32 +49,62 @@ func anchor(event repository.Event, occurrenceStart time.Time) time.Time {
 // below, so this only needs to be wide enough to not miss a candidate.
 const occurrenceSearchPad = 24 * time.Hour
 
-// Due returns one DueReminder per (Reminder, recipient) pair on event whose
-// trigger — its Occurrence's anchor, minus the effective offset — falls in
-// the half-open window (from, to], matching the scheduler's "just-elapsed
-// tick" semantics (ADR-0021). A recurring Event's RRULE is expanded
-// (skipping any Exdated Occurrence); a non-recurring Event is checked as a
-// series of one. Every User in event.RecipientUserIDs — the Calendar's Owner
-// and every Shared Editor and Viewer — gets its own DueReminder, so a shared
+// representativeReminder is the single Reminder an offset override replaces
+// an Event's whole Reminder set with (ADR-0036): "remind me two hours before
+// this" is a statement about the Event, not a transformation applied to each
+// of its Reminders, so an offset override must collapse to one trigger
+// rather than one per underlying Reminder. Its id becomes that recipient's
+// ledger key for the Event, so the choice must be stable across ticks and
+// restarts regardless of query ordering — lowest id is arbitrary but fixed.
+// It is not stable across an Event edit, which is fine: ADR-0020
+// wholesale-replaces event_reminders on every edit anyway, so an edited
+// Event's fired history restarts for everyone, override or not.
+func representativeReminder(reminders []repository.Reminder) repository.Reminder {
+	best := reminders[0]
+	for _, r := range reminders[1:] {
+		if r.ID < best.ID {
+			best = r
+		}
+	}
+	return best
+}
+
+// Due returns the due Reminders on event for each recipient whose trigger —
+// an Occurrence's anchor, minus the effective offset — falls in the
+// half-open window (from, to], matching the scheduler's "just-elapsed tick"
+// semantics (ADR-0021). A recurring Event's RRULE is expanded (skipping any
+// Exdated Occurrence); a non-recurring Event is checked as a series of one.
+// Every User in event.RecipientUserIDs — the Calendar's Owner and every
+// Shared Editor and Viewer — is considered independently, so a shared
 // Calendar's Reminder fans out to everyone with Access (ADR-0036).
 //
-// A recipient's own entry in event.Overrides (ADR-0036) changes what
-// "effective" means for them alone: a muted override drops them from every
-// Reminder on this Event entirely; a non-muted override substitutes its own
-// OffsetMinutes and/or Channel for the Reminder's, wherever it sets one.
-// Because the effective offset can differ per recipient, the trigger window
-// and its Occurrence search are computed once per (Reminder, recipient)
-// pair rather than once per Reminder.
+// A recipient's own entry in event.Overrides (ADR-0036) changes what they
+// receive: a muted override drops them from every Reminder on this Event
+// entirely. An offset override replaces the Event's whole Reminder set with
+// one trigger at the override's offset — so a recipient with such an
+// override gets exactly one DueReminder per Occurrence regardless of how
+// many Reminders the Event carries — substituting the override's Channel too
+// if it also sets one. A Channel-only override (no offset) instead
+// re-channels every Reminder without collapsing their offsets, since nothing
+// about the recipient's timing has changed. Because the effective offset can
+// differ per recipient, the trigger window and its Occurrence search are
+// computed once per (Reminder, recipient) pair rather than once per
+// Reminder.
 func Due(event repository.EventWithOwner, from, to time.Time) ([]DueReminder, error) {
 	var due []DueReminder
 
-	for _, reminder := range event.Reminders {
-		for _, userID := range event.RecipientUserIDs {
-			override, hasOverride := event.Overrides[userID]
-			if hasOverride && override.Muted {
-				continue
-			}
+	for _, userID := range event.RecipientUserIDs {
+		override, hasOverride := event.Overrides[userID]
+		if hasOverride && override.Muted {
+			continue
+		}
 
+		reminders := event.Reminders
+		if hasOverride && override.OffsetMinutes != nil && len(event.Reminders) > 0 {
+			reminders = []repository.Reminder{representativeReminder(event.Reminders)}
+		}
+
+		for _, reminder := range reminders {
 			offsetMinutes := reminder.OffsetMinutes
 			channel := reminder.Channel
 			if hasOverride {
