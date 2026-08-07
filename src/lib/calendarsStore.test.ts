@@ -12,20 +12,29 @@ vi.mock("./calendarsApi", () => ({
   },
 }));
 
+vi.mock("./eventsApi", () => ({
+  eventsApi: {
+    list: vi.fn(),
+  },
+}));
+
 vi.mock("./toast", () => ({
   toast: { error: vi.fn() },
 }));
 
 const { calendarsApi } = await import("./calendarsApi");
+const { eventsApi } = await import("./eventsApi");
 const { toast } = await import("./toast");
 const { useAuthStore } = await import("./authStore");
 const { useCalendarsStore } = await import("./calendarsStore");
+const { useEventsStore } = await import("./eventsStore");
 
 const personal = { id: "cal-1", name: "Personal", color: "peacock" as const };
 const work = { id: "cal-2", name: "Work", color: "tomato" as const };
 
 function resetStore() {
   useCalendarsStore.setState({ calendars: [] });
+  useEventsStore.setState({ events: [] });
   useAuthStore.setState({ accessToken: "token-123" });
 }
 
@@ -171,6 +180,7 @@ describe("subscribeCalendar", () => {
 
   it("appends the calendar once the API call resolves", async () => {
     vi.mocked(calendarsApi.subscribe).mockResolvedValue(subscribed);
+    vi.mocked(eventsApi.list).mockResolvedValue([]);
 
     const result = await useCalendarsStore
       .getState()
@@ -186,6 +196,43 @@ describe("subscribeCalendar", () => {
     });
   });
 
+  // #93: the feed's Events already exist server-side by the time the
+  // Subscribe response resolves — the store must re-fetch them itself so
+  // the grid doesn't stay stale until a manual reload.
+  it("re-fetches events once the subscribe succeeds", async () => {
+    const imported = {
+      id: "evt-9",
+      calendarId: "cal-3",
+      title: "Holiday",
+      start: "2026-08-10T00:00:00Z",
+      end: "2026-08-11T00:00:00Z",
+    };
+    vi.mocked(calendarsApi.subscribe).mockResolvedValue(subscribed);
+    vi.mocked(eventsApi.list).mockResolvedValue([imported]);
+
+    await useCalendarsStore
+      .getState()
+      .subscribeCalendar("https://example.com/feed.ics", "Team Holidays", "#8E44ADFF", true);
+
+    expect(eventsApi.list).toHaveBeenCalledWith("token-123");
+    expect(useEventsStore.getState().events).toHaveLength(1);
+    expect(useEventsStore.getState().events[0].id).toBe("evt-9");
+  });
+
+  // A feed with no Events must still subscribe cleanly and leave the grid
+  // unchanged, not error out because there's nothing new to show.
+  it("subscribes to an empty feed without erroring", async () => {
+    vi.mocked(calendarsApi.subscribe).mockResolvedValue(subscribed);
+    vi.mocked(eventsApi.list).mockResolvedValue([]);
+
+    await useCalendarsStore
+      .getState()
+      .subscribeCalendar("https://example.com/feed.ics", "Team Holidays", "#8E44ADFF", true);
+
+    expect(useCalendarsStore.getState().calendars).toEqual([subscribed]);
+    expect(useEventsStore.getState().events).toEqual([]);
+  });
+
   it("does not add anything and rethrows when the API call fails", async () => {
     vi.mocked(calendarsApi.subscribe).mockRejectedValue(new Error("fetch failed"));
 
@@ -195,6 +242,27 @@ describe("subscribeCalendar", () => {
         .subscribeCalendar("https://example.com/feed.ics", "Team Holidays", "#8E44ADFF", false),
     ).rejects.toThrow("fetch failed");
     expect(useCalendarsStore.getState().calendars).toEqual([]);
+    expect(eventsApi.list).not.toHaveBeenCalled();
+    expect(useEventsStore.getState().events).toEqual([]);
+  });
+
+  // The subscribe itself already succeeded (the calendar is committed) by
+  // the time the events re-fetch runs, so a failure there must not read as
+  // a failed subscribe: it resolves, keeps the calendar, and toasts instead
+  // of rethrowing through the Subscribe dialog's inline-error path.
+  it("resolves and keeps the calendar when only the events re-fetch fails", async () => {
+    vi.mocked(calendarsApi.subscribe).mockResolvedValue(subscribed);
+    vi.mocked(eventsApi.list).mockRejectedValue(new Error("network error"));
+
+    const result = await useCalendarsStore
+      .getState()
+      .subscribeCalendar("https://example.com/feed.ics", "Team Holidays", "#8E44ADFF", false);
+
+    expect(result).toEqual(subscribed);
+    expect(useCalendarsStore.getState().calendars).toEqual([subscribed]);
+    expect(toast.error).toHaveBeenCalledWith(
+      "Subscribed, but couldn't load its events. Reload to see them.",
+    );
   });
 });
 
@@ -218,6 +286,7 @@ describe("refreshCalendar", () => {
     });
     const refreshed = { ...subscribed, lastSyncedAt: "2026-08-06T12:00:00Z" };
     vi.mocked(calendarsApi.get).mockResolvedValue(refreshed);
+    vi.mocked(eventsApi.list).mockResolvedValue([]);
 
     await useCalendarsStore.getState().refreshCalendar("cal-3");
 
@@ -226,7 +295,36 @@ describe("refreshCalendar", () => {
     expect(useCalendarsStore.getState().calendars).toEqual([refreshed]);
   });
 
-  it("rethrows and leaves the calendar untouched when the API call fails", async () => {
+  // #93: a Refresh that pulls in changed Events server-side must not leave
+  // the grid showing the old ones.
+  it("re-fetches events once the refresh succeeds", async () => {
+    useCalendarsStore.setState({ calendars: [subscribed] });
+    const updatedEvent = {
+      id: "evt-9",
+      calendarId: "cal-3",
+      title: "Holiday (moved)",
+      start: "2026-08-12T00:00:00Z",
+      end: "2026-08-13T00:00:00Z",
+    };
+    vi.mocked(calendarsApi.refresh).mockResolvedValue({
+      notModified: false,
+      created: 0,
+      updated: 1,
+      tombstoned: 0,
+      unparseable: 0,
+      noOp: 0,
+    });
+    vi.mocked(calendarsApi.get).mockResolvedValue(subscribed);
+    vi.mocked(eventsApi.list).mockResolvedValue([updatedEvent]);
+
+    await useCalendarsStore.getState().refreshCalendar("cal-3");
+
+    expect(eventsApi.list).toHaveBeenCalledWith("token-123");
+    expect(useEventsStore.getState().events).toHaveLength(1);
+    expect(useEventsStore.getState().events[0].title).toBe("Holiday (moved)");
+  });
+
+  it("rethrows and leaves the calendar and events untouched when the API call fails", async () => {
     useCalendarsStore.setState({ calendars: [subscribed] });
     vi.mocked(calendarsApi.refresh).mockRejectedValue(new Error("fetch failed"));
 
@@ -235,5 +333,34 @@ describe("refreshCalendar", () => {
     ).rejects.toThrow("fetch failed");
     expect(useCalendarsStore.getState().calendars).toEqual([subscribed]);
     expect(calendarsApi.get).not.toHaveBeenCalled();
+    expect(eventsApi.list).not.toHaveBeenCalled();
+    expect(useEventsStore.getState().events).toEqual([]);
+  });
+
+  // Same isolation as subscribeCalendar: the refresh itself already
+  // succeeded by the time the events re-fetch runs, so its failure must
+  // not read as a failed refresh.
+  it("resolves and keeps the refreshed calendar when only the events re-fetch fails", async () => {
+    useCalendarsStore.setState({ calendars: [subscribed] });
+    vi.mocked(calendarsApi.refresh).mockResolvedValue({
+      notModified: false,
+      created: 0,
+      updated: 1,
+      tombstoned: 0,
+      unparseable: 0,
+      noOp: 0,
+    });
+    const refreshed = { ...subscribed, lastSyncedAt: "2026-08-06T12:00:00Z" };
+    vi.mocked(calendarsApi.get).mockResolvedValue(refreshed);
+    vi.mocked(eventsApi.list).mockRejectedValue(new Error("network error"));
+
+    await expect(
+      useCalendarsStore.getState().refreshCalendar("cal-3"),
+    ).resolves.toBeUndefined();
+
+    expect(useCalendarsStore.getState().calendars).toEqual([refreshed]);
+    expect(toast.error).toHaveBeenCalledWith(
+      "Refreshed, but couldn't load its events. Reload to see them.",
+    );
   });
 });

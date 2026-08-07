@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { useAuthStore } from "./authStore";
 import { calendarsApi } from "./calendarsApi";
+import { useEventsStore } from "./eventsStore";
 import type { Calendar } from "./calendar";
 import { toast } from "./toast";
 
@@ -24,7 +25,10 @@ interface CalendarsState {
   // Not optimistic, unlike addCalendar — the server does the fetch and
   // write, so there's nothing to show until it responds. Rethrows on
   // failure so the Subscribe dialog can show the specific error (bad URL,
-  // auth failure, ...) inline rather than a generic toast.
+  // auth failure, ...) inline rather than a generic toast. Re-fetches
+  // events afterward, since SubscribeService.Subscribe writes the feed's
+  // Events synchronously before responding — nothing else asks for them,
+  // so without this the grid stays empty until a manual reload (#93).
   subscribeCalendar: (
     url: string,
     name: string,
@@ -35,7 +39,8 @@ interface CalendarsState {
   // Not optimistic, like subscribeCalendar — the server does the fetch and
   // reconcile, so there's nothing to show until it responds. Re-fetches the
   // Calendar afterward for its updated lastSyncedAt, since the refresh
-  // response itself only carries a summary. Rethrows on failure so the
+  // response itself only carries a summary, and re-fetches events for the
+  // same reason as subscribeCalendar (#93). Rethrows on failure so the
   // caller can show a specific error.
   refreshCalendar: (id: string) => Promise<void>;
 }
@@ -44,6 +49,23 @@ function requireAccessToken(): string {
   const accessToken = useAuthStore.getState().accessToken;
   if (!accessToken) throw new Error("Not authenticated.");
   return accessToken;
+}
+
+// Re-fetches events after a subscribe/refresh that already succeeded (#93).
+// Swallows its own failure rather than rethrowing: the calendar is already
+// committed to state at this point, so a failure here is a stale grid, not
+// a failed subscribe/refresh — the caller's own rethrow-on-failure contract
+// must stay reserved for genuine subscribe/refresh failures.
+async function refetchEventsAfter(action: "subscribe" | "refresh"): Promise<void> {
+  try {
+    await useEventsStore.getState().fetchEvents();
+  } catch {
+    toast.error(
+      action === "subscribe"
+        ? "Subscribed, but couldn't load its events. Reload to see them."
+        : "Refreshed, but couldn't load its events. Reload to see them.",
+    );
+  }
 }
 
 export const useCalendarsStore = create<CalendarsState>((set, get) => ({
@@ -121,6 +143,7 @@ export const useCalendarsStore = create<CalendarsState>((set, get) => ({
       keepAlarms,
     });
     set((state) => ({ calendars: [...state.calendars, calendar] }));
+    await refetchEventsAfter("subscribe");
     return calendar;
   },
 
@@ -131,5 +154,6 @@ export const useCalendarsStore = create<CalendarsState>((set, get) => ({
     set((state) => ({
       calendars: state.calendars.map((c) => (c.id === id ? calendar : c)),
     }));
+    await refetchEventsAfter("refresh");
   },
 }));
