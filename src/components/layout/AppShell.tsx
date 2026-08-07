@@ -2,7 +2,6 @@ import { useEffect, useState } from "react";
 import { startOfDay } from "date-fns";
 import { TopBar } from "./TopBar";
 import { Sidebar } from "./Sidebar";
-import { Toaster } from "../ui/Toaster";
 import { CalendarView } from "../../calendar-grid/CalendarView";
 import { EventModal } from "../../calendar-grid/EventModal";
 import { computeDefaultDraft, type DraftBlock } from "../../lib/gridTime";
@@ -75,7 +74,6 @@ export function AppShell() {
           onClose={() => setEventModalState(null)}
         />
       )}
-      <Toaster />
     </div>
   );
 }

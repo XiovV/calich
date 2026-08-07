@@ -4,6 +4,7 @@ import { AppShell } from "./components/layout/AppShell";
 import { LoginPage } from "./auth/LoginPage";
 import { ProtectedRoute } from "./auth/ProtectedRoute";
 import { SettingsPage } from "./settings/SettingsPage";
+import { Toaster } from "./components/ui/Toaster";
 import { useAuthStore } from "./lib/authStore";
 
 function App() {
@@ -34,6 +35,7 @@ function App() {
           }
         />
       </Routes>
+      <Toaster />
     </BrowserRouter>
   );
 }
