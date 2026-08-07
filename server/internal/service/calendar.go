@@ -83,10 +83,43 @@ func (s *CalendarService) List(ctx context.Context, userID int64) ([]repository.
 	return calendars, nil
 }
 
-func (s *CalendarService) Get(ctx context.Context, userID int64, id string) (repository.Calendar, error) {
-	return s.calendars.GetByID(ctx, userID, id)
+// Access resolves userID's Access to id's Calendar (ADR-0034) — the single
+// place every Calendar and Event permission check goes through. Unlike
+// Get, it fetches id regardless of who owns it, since the point is to
+// compute the answer rather than assume it.
+func (s *CalendarService) Access(ctx context.Context, userID int64, id string) (Access, repository.Calendar, error) {
+	calendar, err := s.calendars.GetByIDAny(ctx, id)
+	if err != nil {
+		return AccessNone, repository.Calendar{}, err
+	}
+	return ResolveAccess(userID, calendar), calendar, nil
 }
 
+// Get returns id if userID can read it. Callers that also need the resolved
+// Access value itself — not just whether it clears the CanRead bar — should
+// call Access directly instead, rather than resolving it here and
+// discarding it.
+func (s *CalendarService) Get(ctx context.Context, userID int64, id string) (repository.Calendar, error) {
+	access, calendar, err := s.Access(ctx, userID, id)
+	if err != nil {
+		return repository.Calendar{}, err
+	}
+	if !access.CanRead() {
+		return repository.Calendar{}, repository.ErrNotFound
+	}
+	return calendar, nil
+}
+
+// Update and Delete are Owner-only management operations (rename, recolour,
+// delete — CONTEXT.md's Owner entry) that stay scoped by
+// CalendarRepository's own `WHERE user_id = ?`, deliberately not routed
+// through Access: Access answers what a User may do with a Calendar's
+// Events and clamps a Subscribed Calendar to read-only even for its Owner,
+// but that Owner must still be able to manage the Calendar itself (rename
+// their own feed, turn KeepAlarms on and off, ...). ADR-0034 checks these
+// separately from Role for exactly that reason, and the repository's
+// unclamped ownership filter already expresses it — a second, service-level
+// ownership check here would only duplicate it.
 func (s *CalendarService) Update(ctx context.Context, userID int64, id string, write CalendarWrite) (repository.Calendar, error) {
 	write.Name = strings.TrimSpace(write.Name)
 	if write.Name == "" {

@@ -113,6 +113,16 @@ func (r *CalendarRepository) GetByID(ctx context.Context, userID int64, id strin
 	))
 }
 
+// GetByIDAny fetches id regardless of who owns it, unlike GetByID. Its only
+// caller is the Access resolver (ADR-0034): every permission decision needs
+// the row itself before it can ask whether userID may see it, so the check
+// can no longer live in SQL's WHERE clause the way GetByID's does.
+func (r *CalendarRepository) GetByIDAny(ctx context.Context, id string) (Calendar, error) {
+	return r.scanCalendar(r.db.QueryRowContext(ctx,
+		`SELECT `+calendarColumns+` FROM calendars WHERE id = ?`, id,
+	))
+}
+
 // ListByUser returns a user's calendars ordered by creation time, oldest first.
 func (r *CalendarRepository) ListByUser(ctx context.Context, userID int64) ([]Calendar, error) {
 	rows, err := r.db.QueryContext(ctx,

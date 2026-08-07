@@ -73,16 +73,6 @@ func validateReminders(reminders []repository.Reminder) error {
 	return nil
 }
 
-// requireWritable returns ErrSubscribedCalendarReadOnly if calendar carries a
-// SourceURL. Every mutating method calls this on every Calendar its write
-// touches (ADR-0032).
-func requireWritable(calendar repository.Calendar) error {
-	if calendar.SourceURL != nil {
-		return ErrSubscribedCalendarReadOnly
-	}
-	return nil
-}
-
 type EventService struct {
 	db         *sql.DB
 	events     *repository.EventRepository
@@ -102,27 +92,45 @@ func NewEventService(db *sql.DB, events *repository.EventRepository, exceptions 
 // a Subscribed Calendar — ImportSubscribedSeries and ReconcileSubscribedSeries
 // (#85, ADR-0033) — call this directly, skipping requireWritableCalendar's
 // guard; every other mutating method calls that instead.
+// asCalendarNotFound translates repository.ErrNotFound to
+// ErrCalendarNotFound, the sentinel calendarByID and requireWritableCalendar
+// both return instead, so a caller can't tell "no such calendar" apart from
+// "no such event" by error identity alone.
+func asCalendarNotFound(err error) error {
+	if errors.Is(err, repository.ErrNotFound) {
+		return ErrCalendarNotFound
+	}
+	return err
+}
+
 func (s *EventService) calendarByID(ctx context.Context, userID int64, calendarID string) (repository.Calendar, error) {
 	calendar, err := s.calendars.Get(ctx, userID, calendarID)
 	if err != nil {
-		if errors.Is(err, repository.ErrNotFound) {
-			return repository.Calendar{}, ErrCalendarNotFound
-		}
-		return repository.Calendar{}, err
+		return repository.Calendar{}, asCalendarNotFound(err)
 	}
 	return calendar, nil
 }
 
-// requireWritableCalendar resolves calendarID and refuses it if it's a
-// Subscribed Calendar, in one call — the guard every mutating method except
-// ImportSubscribedSeries applies to every Calendar its write touches
-// (ADR-0032).
+// requireWritableCalendar resolves the caller's Access to calendarID and
+// refuses it unless that Access can write — false for a stranger (None) and,
+// per ADR-0032's clamp, for a Subscribed Calendar's Owner too (Viewer) — in
+// one call: the guard every mutating method except ImportSubscribedSeries
+// applies to every Calendar its write touches. This is the Subscribed
+// Calendar write guard expressed through the Access resolver (ADR-0034)
+// rather than beside it: ResolveAccess is what now decides it's read-only,
+// not a SourceURL check made here.
 func (s *EventService) requireWritableCalendar(ctx context.Context, userID int64, calendarID string) error {
-	calendar, err := s.calendarByID(ctx, userID, calendarID)
+	access, _, err := s.calendars.Access(ctx, userID, calendarID)
 	if err != nil {
-		return err
+		return asCalendarNotFound(err)
 	}
-	return requireWritable(calendar)
+	if !access.CanRead() {
+		return ErrCalendarNotFound
+	}
+	if !access.CanWrite() {
+		return ErrSubscribedCalendarReadOnly
+	}
+	return nil
 }
 
 // getOwnedEvent resolves id and checks the caller's Access to its Calendar,
