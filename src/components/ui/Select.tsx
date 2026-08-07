@@ -14,6 +14,7 @@ interface SelectProps<T extends string> {
   options: SelectOption<T>[];
   label?: string;
   "aria-label"?: string;
+  disabled?: boolean;
   // Merged onto the trigger; pass `min-w-0` + a flex-basis utility to let a
   // row of Selects shrink and truncate instead of wrapping onto a new line.
   className?: string;
@@ -28,11 +29,16 @@ export function Select<T extends string>({
   options,
   label,
   "aria-label": ariaLabel,
+  disabled,
   className,
 }: SelectProps<T>) {
   const labelId = useId();
   return (
-    <BaseSelect.Root value={value} onValueChange={(next) => onValueChange(next as T)}>
+    <BaseSelect.Root
+      value={value}
+      onValueChange={(next) => onValueChange(next as T)}
+      disabled={disabled}
+    >
       {label && (
         <label id={labelId} className={`mb-1.5 block ${fieldLabelClass}`}>
           {label}
@@ -41,7 +47,7 @@ export function Select<T extends string>({
       <BaseSelect.Trigger
         aria-label={ariaLabel}
         aria-labelledby={label ? labelId : undefined}
-        className={`flex items-center gap-1.5 rounded-shell-pill bg-surface-sunken px-4 py-1.5 text-body text-ink ring-1 ring-border transition-colors outline-none hover:bg-surface-hover data-[popup-open]:ring-2 data-[popup-open]:ring-accent ${className ?? ""}`}
+        className={`flex items-center gap-1.5 rounded-shell-pill bg-surface-sunken px-4 py-1.5 text-body text-ink ring-1 ring-border transition-colors outline-none hover:bg-surface-hover data-[popup-open]:ring-2 data-[popup-open]:ring-accent data-[disabled]:cursor-not-allowed data-[disabled]:opacity-60 data-[disabled]:hover:bg-surface-sunken ${className ?? ""}`}
       >
         <BaseSelect.Value className="min-w-0 truncate">
           {(selected: T) => options.find((option) => option.value === selected)?.label}

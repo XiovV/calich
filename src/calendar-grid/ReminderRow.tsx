@@ -25,13 +25,22 @@ interface ReminderRowProps {
   emailAvailable: boolean;
   onChange: (reminder: Reminder) => void;
   onRemove: () => void;
+  // A Subscribed Event's Reminders are still legible but not editable (#94,
+  // ADR-0032) — Refresh is the collection's only legitimate writer.
+  disabled?: boolean;
 }
 
 // One Reminder row in the event modal's Reminders section: a Channel dropdown
 // and an always-editable offset entry (amount + unit), matching Google/Proton
 // Calendar rather than a preset list (ADR-0022, superseding ADR-0020's preset
 // list).
-export function ReminderRow({ reminder, emailAvailable, onChange, onRemove }: ReminderRowProps) {
+export function ReminderRow({
+  reminder,
+  emailAvailable,
+  onChange,
+  onRemove,
+  disabled,
+}: ReminderRowProps) {
   // Seeded once from the incoming offset so the fields don't jump around
   // while the user is typing.
   const [amount, setAmount] = useState(() => splitCustomOffset(reminder.offsetMinutes).amount);
@@ -56,6 +65,7 @@ export function ReminderRow({ reminder, emailAvailable, onChange, onRemove }: Re
         value={reminder.channel}
         onValueChange={(channel) => onChange({ ...reminder, channel })}
         options={reminderChannelOptions(emailAvailable)}
+        disabled={disabled}
         className="min-w-0 shrink truncate"
       />
       <Input
@@ -64,6 +74,7 @@ export function ReminderRow({ reminder, emailAvailable, onChange, onRemove }: Re
         min={0}
         value={amount}
         onChange={(event) => handleAmountChange(Number(event.target.value))}
+        disabled={disabled}
         className="w-16 shrink-0"
       />
       <Select
@@ -71,9 +82,10 @@ export function ReminderRow({ reminder, emailAvailable, onChange, onRemove }: Re
         value={unit}
         onValueChange={handleUnitChange}
         options={UNIT_OPTIONS}
+        disabled={disabled}
         className="min-w-0 shrink truncate"
       />
-      <IconButton aria-label="Remove reminder" onClick={onRemove}>
+      <IconButton aria-label="Remove reminder" onClick={onRemove} disabled={disabled}>
         <X className="size-4" />
       </IconButton>
     </div>

@@ -438,6 +438,7 @@ export function EventModal(props: EventModalProps) {
               value={title}
               onChange={(event) => setTitle(event.target.value)}
               placeholder="Add title"
+              disabled={isSubscribedEvent}
               className="mt-4"
             />
 
@@ -446,6 +447,7 @@ export function EventModal(props: EventModalProps) {
               value={location}
               onChange={(event) => setLocation(event.target.value)}
               placeholder="Add location"
+              disabled={isSubscribedEvent}
               className="mt-4"
             />
 
@@ -454,6 +456,7 @@ export function EventModal(props: EventModalProps) {
               value={description}
               onChange={(event) => setDescription(event.target.value)}
               placeholder="Add description"
+              disabled={isSubscribedEvent}
               className="mt-4"
             />
 
@@ -462,6 +465,7 @@ export function EventModal(props: EventModalProps) {
                 checked={allDay}
                 onCheckedChange={setAllDay}
                 aria-label="All day"
+                disabled={isSubscribedEvent}
               />
               All day
             </label>
@@ -475,6 +479,7 @@ export function EventModal(props: EventModalProps) {
                     value={startTime}
                     onChange={(event) => setStartTime(event.target.value)}
                     invalid={!isTimeRangeValid}
+                    disabled={isSubscribedEvent}
                     className="flex-1"
                   />
                   <Input
@@ -483,6 +488,7 @@ export function EventModal(props: EventModalProps) {
                     value={endTime}
                     onChange={(event) => setEndTime(event.target.value)}
                     invalid={!isTimeRangeValid}
+                    disabled={isSubscribedEvent}
                     className="flex-1"
                   />
                 </div>
@@ -497,7 +503,8 @@ export function EventModal(props: EventModalProps) {
             <div className="mt-4">
               {isSubscribedEvent && editedCalendar ? (
                 <p className="text-label-sm text-ink-muted">
-                  Calendar: {editedCalendar.name} (subscribed, read-only)
+                  Calendar: {editedCalendar.name} (subscribed) — read-only;
+                  only Refresh can update it.
                 </p>
               ) : (
                 <Select
@@ -518,8 +525,9 @@ export function EventModal(props: EventModalProps) {
                 value={repeat}
                 onValueChange={handleRepeatChange}
                 options={repeatOptions}
+                disabled={isSubscribedEvent}
               />
-              {repeat === "custom" && (
+              {repeat === "custom" && !isSubscribedEvent && (
                 <button
                   type="button"
                   onClick={() => setIsCustomDialogOpen(true)}
@@ -540,16 +548,19 @@ export function EventModal(props: EventModalProps) {
                     emailAvailable={emailAvailable}
                     onChange={(next) => handleReminderChange(reminder.draftId, next)}
                     onRemove={() => handleRemoveReminder(reminder.draftId)}
+                    disabled={isSubscribedEvent}
                   />
                 ))}
               </div>
-              <button
-                type="button"
-                onClick={handleAddReminder}
-                className="mt-1.5 text-label-sm text-accent hover:underline"
-              >
-                Add reminder
-              </button>
+              {!isSubscribedEvent && (
+                <button
+                  type="button"
+                  onClick={handleAddReminder}
+                  className="mt-1.5 text-label-sm text-accent hover:underline"
+                >
+                  Add reminder
+                </button>
+              )}
             </div>
 
             <div className="mt-5 flex items-center justify-between gap-2">
@@ -566,18 +577,32 @@ export function EventModal(props: EventModalProps) {
                 <span />
               )}
               <div className="flex gap-2">
-                <Dialog.Close
-                  className={buttonClasses({
-                    variant: "outline",
-                    color: "secondary",
-                    size: "small",
-                  })}
-                >
-                  Cancel
-                </Dialog.Close>
-                <Button type="submit" size="small" disabled={!canSave}>
-                  Save
-                </Button>
+                {isSubscribedEvent ? (
+                  <Dialog.Close
+                    className={buttonClasses({
+                      variant: "outline",
+                      color: "secondary",
+                      size: "small",
+                    })}
+                  >
+                    Close
+                  </Dialog.Close>
+                ) : (
+                  <>
+                    <Dialog.Close
+                      className={buttonClasses({
+                        variant: "outline",
+                        color: "secondary",
+                        size: "small",
+                      })}
+                    >
+                      Cancel
+                    </Dialog.Close>
+                    <Button type="submit" size="small" disabled={!canSave}>
+                      Save
+                    </Button>
+                  </>
+                )}
               </div>
             </div>
             </form>
