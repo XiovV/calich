@@ -44,6 +44,9 @@ func TestBootstrap_CreatesDefaultAdminWhenNoUsersAndNoEnvVars(t *testing.T) {
 	if !user.MustChangePassword {
 		t.Fatalf("expected default bootstrap user to require a password change")
 	}
+	if !user.IsAdmin {
+		t.Fatalf("expected the bootstrapped account to be the first admin (ADR-0037)")
+	}
 
 	if _, err := svc.Login(ctx, "admin", "admin"); err != nil {
 		t.Fatalf("expected default admin/admin credentials to work, got: %v", err)

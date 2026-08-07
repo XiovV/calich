@@ -87,6 +87,39 @@ func RequireActiveUser(checker ActiveUserChecker) func(http.Handler) http.Handle
 	}
 }
 
+// AdminChecker reports whether a user holds Admin (ADR-0037).
+type AdminChecker interface {
+	IsAdmin(ctx context.Context, userID int64) (bool, error)
+}
+
+// RequireAdmin blocks requests from a non-Admin user with a 403 forbidden
+// response — every account-management endpoint sits behind it, since an
+// Admin's authority is over who exists and nothing else grants it. It must
+// run after RequireAuth, which populates the user id in context.
+func RequireAdmin(checker AdminChecker) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			userID, ok := UserIDFromContext(r.Context())
+			if !ok {
+				httpresponse.Error(w, http.StatusUnauthorized, "unauthorized", "authentication required")
+				return
+			}
+
+			isAdmin, err := checker.IsAdmin(r.Context(), userID)
+			if err != nil {
+				httpresponse.Error(w, http.StatusInternalServerError, "internal_error", "failed to check user status")
+				return
+			}
+			if !isAdmin {
+				httpresponse.Error(w, http.StatusForbidden, "forbidden", "admin access required")
+				return
+			}
+
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
 // CalDAVAuthenticator validates HTTP Basic credentials against a per-user
 // hashed App password (ADR-0024) and returns the user id they resolve to.
 type CalDAVAuthenticator interface {

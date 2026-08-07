@@ -89,6 +89,13 @@ func (s *AuthService) Bootstrap(ctx context.Context) (user repository.User, crea
 		return repository.User{}, false, fmt.Errorf("create bootstrap user: %w", err)
 	}
 
+	// The bootstrapped account is the first Admin (ADR-0037), so the
+	// instance is never unadministrable.
+	newUser, err = s.users.SetAdmin(ctx, newUser.ID, true)
+	if err != nil {
+		return repository.User{}, false, fmt.Errorf("grant bootstrap user admin: %w", err)
+	}
+
 	return newUser, true, nil
 }
 
@@ -204,6 +211,16 @@ func (s *AuthService) MustChangePassword(ctx context.Context, userID int64) (boo
 		return false, fmt.Errorf("get user: %w", err)
 	}
 	return user.MustChangePassword, nil
+}
+
+// IsAdmin reports whether the given user holds Admin (ADR-0037), gating
+// every account-management endpoint via httpauth.RequireAdmin.
+func (s *AuthService) IsAdmin(ctx context.Context, userID int64) (bool, error) {
+	user, err := s.users.GetByID(ctx, userID)
+	if err != nil {
+		return false, fmt.Errorf("get user: %w", err)
+	}
+	return user.IsAdmin, nil
 }
 
 func (s *AuthService) ChangePassword(ctx context.Context, userID int64, currentPassword, newPassword string) error {

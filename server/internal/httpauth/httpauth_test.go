@@ -200,3 +200,61 @@ func TestRequireActiveUser_ActiveUser_CallsNext(t *testing.T) {
 		t.Fatalf("expected next handler to be called")
 	}
 }
+
+type fakeAdminChecker struct {
+	isAdmin bool
+	err     error
+}
+
+func (f fakeAdminChecker) IsAdmin(ctx context.Context, userID int64) (bool, error) {
+	return f.isAdmin, f.err
+}
+
+func TestRequireAdmin_NoUserIDInContext_Returns401(t *testing.T) {
+	handler := RequireAdmin(fakeAdminChecker{isAdmin: true})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatalf("next handler should not be called")
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", rec.Code)
+	}
+}
+
+func TestRequireAdmin_NonAdmin_Returns403(t *testing.T) {
+	handler := RequireAdmin(fakeAdminChecker{isAdmin: false})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatalf("next handler should not be called")
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req = req.WithContext(withUserID(req.Context(), 1))
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d", rec.Code)
+	}
+}
+
+func TestRequireAdmin_Admin_CallsNext(t *testing.T) {
+	called := false
+	handler := RequireAdmin(fakeAdminChecker{isAdmin: true})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req = req.WithContext(withUserID(req.Context(), 1))
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	if !called {
+		t.Fatalf("expected next handler to be called")
+	}
+}

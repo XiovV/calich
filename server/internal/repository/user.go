@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -22,7 +23,12 @@ type User struct {
 	// synced device already fires its own alarm from the VALARM. The Email
 	// channel is never gated by this. Defaults off.
 	SyncedDeviceRemindersEnabled bool
-	CreatedAt                    time.Time
+	// IsAdmin is authority over who exists on the instance — creating,
+	// listing, and administering other Users — and never over what they can
+	// see: an Admin still needs a Share to read another User's Calendars
+	// (ADR-0037).
+	IsAdmin   bool
+	CreatedAt time.Time
 }
 
 type UserRepository struct {
@@ -33,12 +39,19 @@ func NewUserRepository(db *sql.DB) *UserRepository {
 	return &UserRepository{db: db}
 }
 
+// ErrUsernameTaken is returned by Create when the username is already in
+// use — usernames are unique instance-wide (ADR-0037).
+var ErrUsernameTaken = errors.New("username already taken")
+
 func (r *UserRepository) Create(ctx context.Context, username, passwordHash string, mustChangePassword bool) (User, error) {
 	res, err := r.db.ExecContext(ctx,
 		`INSERT INTO users (username, password_hash, must_change_password) VALUES (?, ?, ?)`,
 		username, passwordHash, mustChangePassword,
 	)
 	if err != nil {
+		if strings.Contains(err.Error(), "UNIQUE constraint failed") {
+			return User{}, ErrUsernameTaken
+		}
 		return User{}, fmt.Errorf("insert user: %w", err)
 	}
 
@@ -52,14 +65,40 @@ func (r *UserRepository) Create(ctx context.Context, username, passwordHash stri
 
 func (r *UserRepository) GetByID(ctx context.Context, id int64) (User, error) {
 	return r.scanUser(r.db.QueryRowContext(ctx,
-		`SELECT id, username, password_hash, must_change_password, email, synced_device_reminders_enabled, created_at FROM users WHERE id = ?`, id,
+		`SELECT id, username, password_hash, must_change_password, email, synced_device_reminders_enabled, is_admin, created_at FROM users WHERE id = ?`, id,
 	))
 }
 
 func (r *UserRepository) GetByUsername(ctx context.Context, username string) (User, error) {
 	return r.scanUser(r.db.QueryRowContext(ctx,
-		`SELECT id, username, password_hash, must_change_password, email, synced_device_reminders_enabled, created_at FROM users WHERE username = ?`, username,
+		`SELECT id, username, password_hash, must_change_password, email, synced_device_reminders_enabled, is_admin, created_at FROM users WHERE username = ?`, username,
 	))
+}
+
+// List returns every account on the instance, ordered by id (i.e. creation
+// order) so the bootstrapped Admin always leads the list.
+func (r *UserRepository) List(ctx context.Context) ([]User, error) {
+	rows, err := r.db.QueryContext(ctx,
+		`SELECT id, username, password_hash, must_change_password, email, synced_device_reminders_enabled, is_admin, created_at FROM users ORDER BY id`,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("query users: %w", err)
+	}
+	defer rows.Close()
+
+	var users []User
+	for rows.Next() {
+		u, err := r.scanUserRow(rows)
+		if err != nil {
+			return nil, err
+		}
+		users = append(users, u)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate users: %w", err)
+	}
+
+	return users, nil
 }
 
 // UpdateEmail sets userID's account email — the Email-Channel Reminder
@@ -101,7 +140,7 @@ func (r *UserRepository) UpdatePassword(ctx context.Context, userID int64, passw
 // single-user instance (ADR-0010).
 func (r *UserRepository) First(ctx context.Context) (User, error) {
 	return r.scanUser(r.db.QueryRowContext(ctx,
-		`SELECT id, username, password_hash, must_change_password, email, synced_device_reminders_enabled, created_at FROM users ORDER BY id LIMIT 1`,
+		`SELECT id, username, password_hash, must_change_password, email, synced_device_reminders_enabled, is_admin, created_at FROM users ORDER BY id LIMIT 1`,
 	))
 }
 
@@ -113,17 +152,70 @@ func (r *UserRepository) Count(ctx context.Context) (int, error) {
 	return count, nil
 }
 
+// CountAdmins reports how many accounts currently hold Admin — used to
+// guard the last remaining Admin against demotion (ADR-0037).
+func (r *UserRepository) CountAdmins(ctx context.Context) (int, error) {
+	var count int
+	if err := r.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM users WHERE is_admin = 1`).Scan(&count); err != nil {
+		return 0, fmt.Errorf("count admins: %w", err)
+	}
+	return count, nil
+}
+
+// SetAdmin grants or revokes Admin for userID. Callers are responsible for
+// the last-Admin guard (ADR-0037) — this method applies whatever it's told.
+func (r *UserRepository) SetAdmin(ctx context.Context, userID int64, isAdmin bool) (User, error) {
+	if _, err := r.db.ExecContext(ctx, `UPDATE users SET is_admin = ? WHERE id = ?`, isAdmin, userID); err != nil {
+		return User{}, fmt.Errorf("set admin: %w", err)
+	}
+	return r.GetByID(ctx, userID)
+}
+
+// ResetPassword sets a new password hash and, unlike UpdatePassword, sets
+// must_change_password rather than clearing it: an Admin-set password is a
+// temporary one the User must replace on next login, reusing the same gate
+// that closes the bootstrap window (ADR-0010, ADR-0037).
+func (r *UserRepository) ResetPassword(ctx context.Context, userID int64, passwordHash string) error {
+	_, err := r.db.ExecContext(ctx,
+		`UPDATE users SET password_hash = ?, must_change_password = 1 WHERE id = ?`,
+		passwordHash, userID,
+	)
+	if err != nil {
+		return fmt.Errorf("reset password: %w", err)
+	}
+	return nil
+}
+
 func (r *UserRepository) scanUser(row *sql.Row) (User, error) {
-	var u User
-	var email sql.NullString
-	// modernc.org/sqlite converts the TIMESTAMP column straight into time.Time
-	// based on the declared column type — no manual parsing needed here.
-	err := row.Scan(&u.ID, &u.Username, &u.PasswordHash, &u.MustChangePassword, &email, &u.SyncedDeviceRemindersEnabled, &u.CreatedAt)
+	u, err := scanUserFields(row.Scan)
 	if errors.Is(err, sql.ErrNoRows) {
 		return User{}, ErrNotFound
 	}
 	if err != nil {
 		return User{}, fmt.Errorf("scan user: %w", err)
+	}
+	return u, nil
+}
+
+func (r *UserRepository) scanUserRow(rows *sql.Rows) (User, error) {
+	u, err := scanUserFields(rows.Scan)
+	if err != nil {
+		return User{}, fmt.Errorf("scan user: %w", err)
+	}
+	return u, nil
+}
+
+// scanUserFields scans one users row via scan, which is either a *sql.Row's
+// or *sql.Rows' Scan — the column list and null-handling are identical
+// either way, so List doesn't have to duplicate GetByID's.
+func scanUserFields(scan func(dest ...any) error) (User, error) {
+	var u User
+	var email sql.NullString
+	// modernc.org/sqlite converts the TIMESTAMP column straight into time.Time
+	// based on the declared column type — no manual parsing needed here.
+	err := scan(&u.ID, &u.Username, &u.PasswordHash, &u.MustChangePassword, &email, &u.SyncedDeviceRemindersEnabled, &u.IsAdmin, &u.CreatedAt)
+	if err != nil {
+		return User{}, err
 	}
 	if email.Valid {
 		u.Email = &email.String

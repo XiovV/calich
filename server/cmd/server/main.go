@@ -58,6 +58,7 @@ func main() {
 	notificationRepo := repository.NewNotificationRepository(sqlDB)
 	notificationService := service.NewNotificationService(notificationRepo)
 	appPasswordService := service.NewAppPasswordService(repository.NewAppPasswordRepository(sqlDB), users)
+	accountService := service.NewAccountService(users, sessions, calendarService)
 
 	ctx := context.Background()
 	bootstrapUser, bootstrapCreatedUser, err := authService.Bootstrap(ctx)
@@ -81,9 +82,10 @@ func main() {
 	eventHandler := handlers.NewEventHandler(eventService)
 	notificationHandler := handlers.NewNotificationHandler(notificationService)
 	appPasswordHandler := handlers.NewAppPasswordHandler(appPasswordService)
+	accountHandler := handlers.NewAccountHandler(accountService)
 	calDAVHandler := caldavserver.NewHTTPHandler(caldavserver.NewBackend(calendarService, eventService))
 
-	handler, err := router.New(logger, authHandler, calendarHandler, eventHandler, notificationHandler, appPasswordHandler, calDAVHandler, authService, authService, appPasswordService)
+	handler, err := router.New(logger, authHandler, calendarHandler, eventHandler, notificationHandler, appPasswordHandler, accountHandler, calDAVHandler, authService, authService, appPasswordService, authService)
 	if err != nil {
 		logger.Error("failed to build router", "error", err)
 		os.Exit(1)

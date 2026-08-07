@@ -187,6 +187,155 @@ func TestUserRepository_SyncedDeviceRemindersEnabled_DefaultsOff(t *testing.T) {
 	}
 }
 
+func TestUserRepository_Create_DefaultsToNonAdmin(t *testing.T) {
+	repo := newTestUserRepository(t)
+
+	created, err := repo.Create(context.Background(), "admin", "hash", true)
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	if created.IsAdmin {
+		t.Fatalf("expected a freshly created user to not be an admin")
+	}
+}
+
+func TestUserRepository_Create_DuplicateUsername_ReturnsErrUsernameTaken(t *testing.T) {
+	repo := newTestUserRepository(t)
+	ctx := context.Background()
+
+	if _, err := repo.Create(ctx, "admin", "hash1", true); err != nil {
+		t.Fatalf("create first user: %v", err)
+	}
+
+	if _, err := repo.Create(ctx, "admin", "hash2", true); !errors.Is(err, ErrUsernameTaken) {
+		t.Fatalf("expected ErrUsernameTaken, got %v", err)
+	}
+}
+
+func TestUserRepository_SetAdmin(t *testing.T) {
+	repo := newTestUserRepository(t)
+	ctx := context.Background()
+
+	created, err := repo.Create(ctx, "admin", "hash", true)
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+
+	granted, err := repo.SetAdmin(ctx, created.ID, true)
+	if err != nil {
+		t.Fatalf("set admin: %v", err)
+	}
+	if !granted.IsAdmin {
+		t.Fatalf("expected user to be an admin")
+	}
+
+	revoked, err := repo.SetAdmin(ctx, created.ID, false)
+	if err != nil {
+		t.Fatalf("revoke admin: %v", err)
+	}
+	if revoked.IsAdmin {
+		t.Fatalf("expected user to no longer be an admin")
+	}
+}
+
+func TestUserRepository_CountAdmins(t *testing.T) {
+	repo := newTestUserRepository(t)
+	ctx := context.Background()
+
+	alice, err := repo.Create(ctx, "alice", "hash", true)
+	if err != nil {
+		t.Fatalf("create alice: %v", err)
+	}
+	if _, err := repo.Create(ctx, "bob", "hash", true); err != nil {
+		t.Fatalf("create bob: %v", err)
+	}
+
+	count, err := repo.CountAdmins(ctx)
+	if err != nil {
+		t.Fatalf("count admins: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("expected 0 admins, got %d", count)
+	}
+
+	if _, err := repo.SetAdmin(ctx, alice.ID, true); err != nil {
+		t.Fatalf("set admin: %v", err)
+	}
+
+	count, err = repo.CountAdmins(ctx)
+	if err != nil {
+		t.Fatalf("count admins: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("expected 1 admin, got %d", count)
+	}
+}
+
+func TestUserRepository_ResetPassword_SetsMustChangePassword(t *testing.T) {
+	repo := newTestUserRepository(t)
+	ctx := context.Background()
+
+	created, err := repo.Create(ctx, "admin", "old-hash", false)
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+
+	if err := repo.ResetPassword(ctx, created.ID, "new-hash"); err != nil {
+		t.Fatalf("reset password: %v", err)
+	}
+
+	updated, err := repo.GetByID(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("get by id: %v", err)
+	}
+	if updated.PasswordHash != "new-hash" {
+		t.Fatalf("expected password hash to be updated, got %q", updated.PasswordHash)
+	}
+	if !updated.MustChangePassword {
+		t.Fatalf("expected must_change_password to be set after an admin reset")
+	}
+}
+
+func TestUserRepository_List(t *testing.T) {
+	repo := newTestUserRepository(t)
+	ctx := context.Background()
+
+	alice, err := repo.Create(ctx, "alice", "hash", true)
+	if err != nil {
+		t.Fatalf("create alice: %v", err)
+	}
+	bob, err := repo.Create(ctx, "bob", "hash", true)
+	if err != nil {
+		t.Fatalf("create bob: %v", err)
+	}
+
+	users, err := repo.List(ctx)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(users) != 2 {
+		t.Fatalf("expected 2 users, got %d", len(users))
+	}
+	if users[0] != alice {
+		t.Fatalf("expected alice first (creation order), got %+v", users[0])
+	}
+	if users[1] != bob {
+		t.Fatalf("expected bob second (creation order), got %+v", users[1])
+	}
+}
+
+func TestUserRepository_List_Empty(t *testing.T) {
+	repo := newTestUserRepository(t)
+
+	users, err := repo.List(context.Background())
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(users) != 0 {
+		t.Fatalf("expected no users, got %d", len(users))
+	}
+}
+
 func TestUserRepository_UpdateSyncedDeviceReminders(t *testing.T) {
 	repo := newTestUserRepository(t)
 	ctx := context.Background()

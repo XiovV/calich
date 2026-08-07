@@ -40,9 +40,10 @@ func newTestRouter(t *testing.T) http.Handler {
 	notificationHandler := handlers.NewNotificationHandler(service.NewNotificationService(repository.NewNotificationRepository(sqlDB)))
 	appPasswordService := service.NewAppPasswordService(repository.NewAppPasswordRepository(sqlDB), users)
 	appPasswordHandler := handlers.NewAppPasswordHandler(appPasswordService)
+	accountHandler := handlers.NewAccountHandler(service.NewAccountService(users, sessions, calendarService))
 	calDAVHandler := &caldav.Handler{Backend: caldavserver.NewBackend(calendarService, eventService), Prefix: "/dav"}
 
-	r, err := New(slog.New(slog.NewTextHandler(io.Discard, nil)), authHandler, calendarHandler, eventHandler, notificationHandler, appPasswordHandler, calDAVHandler, authService, authService, appPasswordService)
+	r, err := New(slog.New(slog.NewTextHandler(io.Discard, nil)), authHandler, calendarHandler, eventHandler, notificationHandler, appPasswordHandler, accountHandler, calDAVHandler, authService, authService, appPasswordService, authService)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

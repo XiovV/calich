@@ -15,7 +15,7 @@ import (
 	"github.com/XiovV/calendar/server/internal/static"
 )
 
-func New(logger *slog.Logger, authHandler *handlers.AuthHandler, calendarHandler *handlers.CalendarHandler, eventHandler *handlers.EventHandler, notificationHandler *handlers.NotificationHandler, appPasswordHandler *handlers.AppPasswordHandler, calDAVHandler http.Handler, authenticator httpauth.Authenticator, activeUserChecker httpauth.ActiveUserChecker, calDAVAuthenticator httpauth.CalDAVAuthenticator) (http.Handler, error) {
+func New(logger *slog.Logger, authHandler *handlers.AuthHandler, calendarHandler *handlers.CalendarHandler, eventHandler *handlers.EventHandler, notificationHandler *handlers.NotificationHandler, appPasswordHandler *handlers.AppPasswordHandler, accountHandler *handlers.AccountHandler, calDAVHandler http.Handler, authenticator httpauth.Authenticator, activeUserChecker httpauth.ActiveUserChecker, calDAVAuthenticator httpauth.CalDAVAuthenticator, adminChecker httpauth.AdminChecker) (http.Handler, error) {
 	r := chi.NewRouter()
 	r.Use(requestLogger(logger))
 	r.Use(middleware.Recoverer)
@@ -84,6 +84,19 @@ func New(logger *slog.Logger, authHandler *handlers.AuthHandler, calendarHandler
 			r.Get("/", appPasswordHandler.List)
 			r.Post("/", appPasswordHandler.Create)
 			r.Delete("/{id}", appPasswordHandler.Revoke)
+		})
+
+		// Account administration (ADR-0037): who exists, never what they can
+		// see — RequireAdmin is the only authorization this group needs.
+		r.Route("/accounts", func(r chi.Router) {
+			r.Use(httpauth.RequireAuth(authenticator))
+			r.Use(httpauth.RequireActiveUser(activeUserChecker))
+			r.Use(httpauth.RequireAdmin(adminChecker))
+
+			r.Get("/", accountHandler.List)
+			r.Post("/", accountHandler.Create)
+			r.Post("/{id}/reset-password", accountHandler.ResetPassword)
+			r.Put("/{id}/admin", accountHandler.SetAdmin)
 		})
 	})
 
