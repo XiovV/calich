@@ -18,6 +18,19 @@ export interface RefreshResult {
   noOp: number;
 }
 
+// Role is what a Share permits (ADR-0034): Viewer or Editor.
+export type Role = "viewer" | "editor";
+
+// Share is a Share (ADR-0034): the grant binding one Calendar to one User
+// with one Role, as an Owner's "who has Access to my Calendar" listing sees
+// it (#113).
+export interface Share {
+  userId: number;
+  username: string;
+  role: Role;
+  createdAt: string;
+}
+
 export const calendarsApi = {
   async list(accessToken: string): Promise<Calendar[]> {
     const response = await fetch("/api/calendars/", {
@@ -133,5 +146,45 @@ export const calendarsApi = {
     if (!response.ok) throw await errorFromResponse(response);
 
     return (await response.json()) as Calendar;
+  },
+
+  // listShares returns every Share on id, Owner-only (#113, ADR-0034).
+  async listShares(accessToken: string, id: string): Promise<Share[]> {
+    const response = await fetch(`/api/calendars/${id}/shares`, {
+      credentials: "include",
+      headers: authHeader(accessToken),
+    });
+    if (!response.ok) throw await errorFromResponse(response);
+
+    return (await response.json()) as Share[];
+  },
+
+  // share grants id a Share to username with role, or changes an existing
+  // Share's role if username already has one (#113, ADR-0034). Owner-only.
+  async share(
+    accessToken: string,
+    id: string,
+    username: string,
+    role: Role,
+  ): Promise<Share> {
+    const response = await fetch(`/api/calendars/${id}/shares`, {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json", ...authHeader(accessToken) },
+      body: JSON.stringify({ username, role }),
+    });
+    if (!response.ok) throw await errorFromResponse(response);
+
+    return (await response.json()) as Share;
+  },
+
+  // revokeShare removes userId's Share on id (#113, ADR-0034). Owner-only.
+  async revokeShare(accessToken: string, id: string, userId: number): Promise<void> {
+    const response = await fetch(`/api/calendars/${id}/shares/${userId}`, {
+      method: "DELETE",
+      credentials: "include",
+      headers: authHeader(accessToken),
+    });
+    if (!response.ok) throw await errorFromResponse(response);
   },
 };

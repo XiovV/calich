@@ -324,3 +324,99 @@ describe("calendarsApi.refresh", () => {
     });
   });
 });
+
+describe("calendarsApi.listShares", () => {
+  it("returns the calendar's shares", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(200, [
+        { userId: 2, username: "bob", role: "editor", createdAt: "2026-01-01T00:00:00Z" },
+      ]),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const shares = await calendarsApi.listShares("token-123", "cal-1");
+
+    expect(shares).toEqual([
+      { userId: 2, username: "bob", role: "editor", createdAt: "2026-01-01T00:00:00Z" },
+    ]);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/calendars/cal-1/shares",
+      expect.objectContaining({
+        credentials: "include",
+        headers: { Authorization: "Bearer token-123" },
+      }),
+    );
+  });
+
+  it("throws on failure", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(404, { error: { code: "not_found", message: "calendar not found" } }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(calendarsApi.listShares("token-123", "cal-1")).rejects.toMatchObject({
+      code: "not_found",
+    });
+  });
+});
+
+describe("calendarsApi.share", () => {
+  it("posts the username and role and returns the created share", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(200, { userId: 2, username: "bob", role: "viewer", createdAt: "2026-01-01T00:00:00Z" }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const share = await calendarsApi.share("token-123", "cal-1", "bob", "viewer");
+
+    expect(share).toEqual({ userId: 2, username: "bob", role: "viewer", createdAt: "2026-01-01T00:00:00Z" });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/calendars/cal-1/shares",
+      expect.objectContaining({
+        method: "POST",
+        credentials: "include",
+        headers: expect.objectContaining({ Authorization: "Bearer token-123" }),
+        body: JSON.stringify({ username: "bob", role: "viewer" }),
+      }),
+    );
+  });
+
+  it("throws an ApiError with the backend's specific message on failure", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(400, { error: { code: "invalid_request", message: "user not found" } }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      calendarsApi.share("token-123", "cal-1", "ghost", "viewer"),
+    ).rejects.toMatchObject({ code: "invalid_request", message: "user not found" });
+  });
+});
+
+describe("calendarsApi.revokeShare", () => {
+  it("sends a DELETE request to the share's user id", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(emptyResponse(204));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(calendarsApi.revokeShare("token-123", "cal-1", 2)).resolves.toBeUndefined();
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/calendars/cal-1/shares/2",
+      expect.objectContaining({
+        method: "DELETE",
+        credentials: "include",
+        headers: { Authorization: "Bearer token-123" },
+      }),
+    );
+  });
+
+  it("throws on failure", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(404, { error: { code: "not_found", message: "calendar not found" } }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(calendarsApi.revokeShare("token-123", "cal-1", 2)).rejects.toMatchObject({
+      code: "not_found",
+    });
+  });
+});

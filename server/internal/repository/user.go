@@ -113,6 +113,36 @@ func (r *UserRepository) List(ctx context.Context) ([]User, error) {
 	return users, nil
 }
 
+// ListEnabledExcluding returns every enabled User except excludeID, ordered
+// by username — the User directory (#113): any authenticated caller may see
+// who else has an account, so they can pick a Share recipient, but a
+// Disabled User is hidden the same way Share already hides one (ADR-0037),
+// and the caller never sees themselves in their own picker.
+func (r *UserRepository) ListEnabledExcluding(ctx context.Context, excludeID int64) ([]User, error) {
+	rows, err := r.db.QueryContext(ctx,
+		`SELECT id, username, password_hash, must_change_password, email, synced_device_reminders_enabled, is_admin, is_disabled, created_at
+		 FROM users WHERE is_disabled = 0 AND id != ? ORDER BY username`, excludeID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("query enabled users: %w", err)
+	}
+	defer rows.Close()
+
+	users := []User{}
+	for rows.Next() {
+		u, err := r.scanUserRow(rows)
+		if err != nil {
+			return nil, err
+		}
+		users = append(users, u)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate enabled users: %w", err)
+	}
+
+	return users, nil
+}
+
 // UpdateEmail sets userID's account email — the Email-Channel Reminder
 // recipient (ADR-0021). An empty string clears it back to unset.
 func (r *UserRepository) UpdateEmail(ctx context.Context, userID int64, email string) (User, error) {

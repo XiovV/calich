@@ -21,13 +21,14 @@ import (
 )
 
 type shareResponse struct {
+	UserID    int64     `json:"userId"`
 	Username  string    `json:"username"`
 	Role      string    `json:"role"`
 	CreatedAt time.Time `json:"createdAt"`
 }
 
 func toShareResponse(username string, s repository.CalendarShare) shareResponse {
-	return shareResponse{Username: username, Role: s.Role, CreatedAt: s.CreatedAt}
+	return shareResponse{UserID: s.UserID, Username: username, Role: s.Role, CreatedAt: s.CreatedAt}
 }
 
 func toShareWithUsernameResponse(s repository.CalendarShareWithUsername) shareResponse {

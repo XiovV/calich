@@ -87,9 +87,11 @@ func main() {
 	notificationHandler := handlers.NewNotificationHandler(notificationService)
 	appPasswordHandler := handlers.NewAppPasswordHandler(appPasswordService)
 	accountHandler := handlers.NewAccountHandler(accountService)
+	userService := service.NewUserService(users)
+	userHandler := handlers.NewUserHandler(userService)
 	calDAVHandler := caldavserver.NewHTTPHandler(caldavserver.NewBackend(calendarService, eventService))
 
-	handler, err := router.New(logger, authHandler, calendarHandler, eventHandler, notificationHandler, appPasswordHandler, accountHandler, calDAVHandler, authService, authService, appPasswordService, authService)
+	handler, err := router.New(logger, authHandler, calendarHandler, eventHandler, notificationHandler, appPasswordHandler, accountHandler, userHandler, calDAVHandler, authService, authService, appPasswordService, authService)
 	if err != nil {
 		logger.Error("failed to build router", "error", err)
 		os.Exit(1)

@@ -144,7 +144,7 @@ func TestCalendarHandler_Share(t *testing.T) {
 	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if got.Username != "other" || got.Role != repository.RoleEditor {
+	if got.Username != "other" || got.Role != repository.RoleEditor || got.UserID != s.otherUserID {
 		t.Fatalf("unexpected share: %+v", got)
 	}
 }
@@ -333,7 +333,7 @@ func TestCalendarHandler_ListShares(t *testing.T) {
 	if err := json.NewDecoder(resp.Body).Decode(&shares); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if len(shares) != 1 || shares[0].Username != "other" || shares[0].Role != repository.RoleEditor {
+	if len(shares) != 1 || shares[0].Username != "other" || shares[0].Role != repository.RoleEditor || shares[0].UserID != s.otherUserID {
 		t.Fatalf("unexpected shares: %+v", shares)
 	}
 }

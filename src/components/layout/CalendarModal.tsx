@@ -1,9 +1,10 @@
 import { useState, type KeyboardEvent } from "react";
 import { Dialog } from "@base-ui/react/dialog";
-import { isSubscribedCalendar, type Calendar } from "../../lib/calendar";
+import { canManageCalendar, isSubscribedCalendar, type Calendar } from "../../lib/calendar";
 import { getNextUnusedColor } from "../../lib/calendarColors";
 import { useCalendarsStore } from "../../lib/calendarsStore";
 import { useShellStore } from "../../lib/shellStore";
+import { CalendarSharingSection } from "./CalendarSharingSection";
 import { ColorSwatchPicker } from "./ColorSwatchPicker";
 import { Button } from "../ui/Button";
 import { buttonClasses } from "../ui/buttonClasses";
@@ -35,6 +36,7 @@ export function CalendarModal(props: CalendarModalProps) {
     mode === "edit" ? (props.calendar.keepAlarms ?? false) : false,
   );
   const isSubscribed = mode === "edit" && isSubscribedCalendar(props.calendar);
+  const showSharing = mode === "edit" && canManageCalendar(props.calendar);
   // initialUrl is the masked value the dialog opened with (#88, ADR-0032:
   // a password in an edited URL is masked here, same as everywhere else a
   // Subscription URL is shown) — captured once so Save can tell whether
@@ -92,7 +94,7 @@ export function CalendarModal(props: CalendarModalProps) {
         <Dialog.Backdrop className="fixed inset-0 z-40 bg-ink/20" />
         <Dialog.Popup
           onKeyDown={handleEnterToSave}
-          className={`fixed top-1/2 left-1/2 z-50 ${isSubscribed ? "w-96" : "w-80"} -translate-x-1/2 -translate-y-1/2 rounded-shell-lg bg-surface p-5 shadow-elevation-3`}
+          className={`fixed top-1/2 left-1/2 z-50 ${isSubscribed || showSharing ? "w-96" : "w-80"} -translate-x-1/2 -translate-y-1/2 rounded-shell-lg bg-surface p-5 shadow-elevation-3`}
         >
           <Dialog.Title className="text-heading font-medium text-ink">
             {mode === "edit" ? "Edit calendar" : "New calendar"}
@@ -142,6 +144,8 @@ export function CalendarModal(props: CalendarModalProps) {
               </span>
             </label>
           )}
+
+          {showSharing && <CalendarSharingSection calendar={props.calendar} />}
 
           <div className="mt-5 flex justify-end gap-2">
             <Dialog.Close

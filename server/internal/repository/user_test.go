@@ -527,6 +527,57 @@ func TestUserRepository_List_Empty(t *testing.T) {
 	}
 }
 
+func TestUserRepository_ListEnabledExcluding(t *testing.T) {
+	repo := newTestUserRepository(t)
+	ctx := context.Background()
+
+	caller, err := repo.Create(ctx, "caller", "hash", false)
+	if err != nil {
+		t.Fatalf("create caller: %v", err)
+	}
+	bob, err := repo.Create(ctx, "bob", "hash", false)
+	if err != nil {
+		t.Fatalf("create bob: %v", err)
+	}
+	alice, err := repo.Create(ctx, "alice", "hash", false)
+	if err != nil {
+		t.Fatalf("create alice: %v", err)
+	}
+	disabled, err := repo.Create(ctx, "ghost", "hash", false)
+	if err != nil {
+		t.Fatalf("create ghost: %v", err)
+	}
+	if _, err := repo.SetDisabled(ctx, disabled.ID, true); err != nil {
+		t.Fatalf("disable ghost: %v", err)
+	}
+
+	users, err := repo.ListEnabledExcluding(ctx, caller.ID)
+	if err != nil {
+		t.Fatalf("list enabled excluding: %v", err)
+	}
+	if len(users) != 2 || users[0] != alice || users[1] != bob {
+		t.Fatalf("expected [alice, bob] ordered by username, got %+v", users)
+	}
+}
+
+func TestUserRepository_ListEnabledExcluding_Empty(t *testing.T) {
+	repo := newTestUserRepository(t)
+	ctx := context.Background()
+
+	caller, err := repo.Create(ctx, "caller", "hash", false)
+	if err != nil {
+		t.Fatalf("create caller: %v", err)
+	}
+
+	users, err := repo.ListEnabledExcluding(ctx, caller.ID)
+	if err != nil {
+		t.Fatalf("list enabled excluding: %v", err)
+	}
+	if len(users) != 0 {
+		t.Fatalf("expected no users, got %+v", users)
+	}
+}
+
 func TestUserRepository_UpdateSyncedDeviceReminders(t *testing.T) {
 	repo := newTestUserRepository(t)
 	ctx := context.Background()
