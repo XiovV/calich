@@ -13,11 +13,11 @@ The single date the shell is currently focused on, shown in the mini calendar an
 _Avoid_: current date, active date
 
 **Calendar**:
-A named, independently-toggleable collection that groups events (e.g. "Work", "Personal"), carrying one Calendar color. Not the app itself, and not the view/grid.
+A named, independently-toggleable collection that groups events (e.g. "Work", "Personal"), carrying one Calendar color and exactly one Owner. The unit of both ownership and sharing — an Event has neither of its own, inheriting both from the Calendar it belongs to. Not the app itself, and not the view/grid. See ADR-0034.
 _Avoid_: calendar list item, source
 
 **Calendar color**:
-The single color a Calendar is displayed in, inherited by every Occurrence it contains — an arbitrary sRGB value with an alpha channel, not a choice from a fixed set. Shared by every client connected to the instance rather than being each client's private preference: whoever writes last wins, there is no conflict detection, and no bound on how long two clients may disagree. See ADR-0029.
+The single color a Calendar is displayed in, inherited by every Occurrence it contains — an arbitrary sRGB value with an alpha channel, not a choice from a fixed set. Set by the Owner and shared by every client rather than being each client's private preference: whoever writes last wins, there is no conflict detection, and no bound on how long two clients may disagree. A User with Access may shadow it with a personal override that applies to them alone. See ADR-0029, ADR-0038.
 _Avoid_: calendar colour (in prose), event color (Events have none of their own), color enum
 
 **Swatch**:
@@ -67,6 +67,10 @@ _Avoid_: pending event, temp event
 A single cue attached to an Event that fires a fixed offset before an Occurrence's start, on one Channel. An Event carries zero or more, each with its own offset and Channel. Maps to one iCalendar `VALARM` (`TRIGGER` for the offset, `ACTION` for the Channel) so it round-trips through CalDAV unchanged. See ADR-0020.
 _Avoid_: alert
 
+**Reminder override**:
+One User's personal replacement for an Event's Reminders — a different offset, a different Channel, or muted entirely — applying to that User alone. A server-side delivery preference, not a change to the Event: the Event's own Reminders are still what every CalDAV client receives as `VALARM`s, so a device that fires its own alarms fires the Event's timing rather than the override. See ADR-0036.
+_Avoid_: personal reminder, custom alarm, snooze
+
 **Channel**:
 The delivery method of a Reminder — **Notification** (shown in-app) or **Email** (sent to the User). Corresponds to the iCalendar `VALARM` `ACTION` (`DISPLAY` / `EMAIL`).
 _Avoid_: type, kind, action (in prose)
@@ -114,8 +118,16 @@ _Avoid_: color scheme, mode, dark-mode toggle
 ## Authentication
 
 **User**:
-The account record a Session belongs to, validated by the backend. One per self-hosted instance today; see ADR-0010 for why the schema doesn't treat this as a singleton.
+The account record a Session belongs to, validated by the backend. An instance holds many — the first is bootstrapped (ADR-0010), the rest are created by an Admin (ADR-0037). Either enabled or Disabled.
 _Avoid_: account, profile
+
+**Admin**:
+A User who may create, Disable, delete, and reset the password of other Users, and grant or revoke Admin. Authority over *who exists*, and nothing else — an Admin has no access to another User's Calendars or Events and needs a Share like anyone else. The last remaining Admin can be neither Disabled nor deleted. See ADR-0037.
+_Avoid_: owner (that's a Calendar's), superuser, root, administrator (in prose)
+
+**Disabled**:
+The reversible account state in which a User cannot log in, refresh a Session, or authenticate over CalDAV, and receives no Reminders. Everything they own stays live and unchanged for everyone else — Disabling an account never degrades another User's Calendars. Distinct from deletion, which removes the account and demands an explicit disposition for the Calendars it owned. See ADR-0037.
+_Avoid_: suspended, deactivated, locked, banned
 
 **Session**:
 The logged-in state for one User, established by the backend after validating credentials. Present or absent — there is no partial/expired-but-visible session state in this app.
@@ -132,6 +144,26 @@ _Avoid_: renewal token
 **App password**:
 A per-User, revocable credential a native calendar client uses to authenticate over CalDAV (HTTP Basic), distinct from the login password and shown to the User only once when generated. Stored hashed, one row per generated credential, so a single device can be revoked without touching the account password. The successor to the abandoned feed token. See ADR-0024.
 _Avoid_: app-specific password (in prose), device password, API key
+
+## Sharing
+
+**Owner**:
+The single User a Calendar belongs to — the only one who may rename, recolour, delete, or share it, or bind it to a Subscription. Implicit rather than granted: an Owner has no Share. Every Calendar has exactly one, and it does not change except by an explicit transfer when the Owner's account is deleted. See ADR-0034.
+_Avoid_: creator, admin (that's the instance role), author
+
+**Share**:
+The grant binding one Calendar to one User with one Role. What an Owner creates and revokes, and what a User may renounce to leave a Calendar. The Owner never has one.
+_Avoid_: invite, permission, membership, ACL entry
+
+**Role**:
+What a Share permits: **Viewer** (read the Calendar's Events) or **Editor** (create, edit, and delete them, and set their Reminders). Neither permits managing the Calendar itself — rename, delete, re-share, revoke, and binding a Subscription are Owner-only. See ADR-0034.
+_Avoid_: permission, level, access level (Access is the resolved value, not this)
+
+**Access**:
+The resolved answer to "what may this User do with this Calendar" — Owner, Editor, Viewer, or None. Computed on demand, never stored: ownership first, then a Share's Role, then None, and finally clamped to read-only if the Calendar carries a Subscription. The single question every permission check asks, replacing the single-user era's "does this row's user match". See ADR-0034.
+_Avoid_: permission, privilege (that's the CalDAV property), rights
+
+There is deliberately **no term for a Calendar someone shared with you.** "Shared Calendar" points both ways — the Owner shares it out, the recipient sees it shared in — and would sit confusingly beside Subscribed Calendar, which is also a Calendar you see and may not write. Say "a Calendar you have Editor Access to" instead. UI copy may still read "Shared with me"; that is a label, not a term.
 
 ## Sync
 
@@ -156,7 +188,7 @@ The binding of a Calendar to an external `.ics` URL, together with the state a R
 _Avoid_: feed (see Subscribed Calendar), subscribed URL, external source
 
 **Subscribed Calendar**:
-A Calendar carrying a Subscription. An ordinary Calendar in every respect a User can see — named, coloured, toggleable, rendered on the grid, exposed over CalDAV — except that it is read-only: its Events are written only by Refresh, never by the web app, the API, or a native client. Distinct from a Calendar whose Events merely arrived by import, which is an ordinary Calendar the User owns outright. See ADR-0032.
+A Calendar carrying a Subscription. An ordinary Calendar in every respect a User can see — named, coloured, toggleable, rendered on the grid, exposed over CalDAV — except that it is read-only: its Events are written only by Refresh, never by the web app, the API, or a native client. Read-only for its Owner and for every Editor alike, since a Subscription clamps Access to read-only for everyone. Distinct from a Calendar whose Events merely arrived by import, which is an ordinary Calendar the User owns outright. See ADR-0032, ADR-0034.
 _Avoid_: external calendar, remote calendar, read-only calendar, feed — "Calendar feed" meant the opposite direction (a feed this instance publishes) in the superseded ADR-0012, so the word points both ways in this repo and is best avoided entirely.
 
 **Refresh**:
