@@ -23,7 +23,7 @@ func newTestAccountService(t *testing.T) *AccountService {
 	sessions := repository.NewSessionRepository(sqlDB)
 	calendarRepo := repository.NewCalendarRepository(sqlDB)
 	shareRepo := repository.NewCalendarShareRepository(sqlDB)
-	calendars := NewCalendarService(calendarRepo, shareRepo, users, repository.NewReminderOverrideRepository(sqlDB))
+	calendars := NewCalendarService(calendarRepo, shareRepo, users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB))
 
 	return NewAccountService(sqlDB, users, sessions, calendarRepo, shareRepo, calendars)
 }
@@ -117,7 +117,7 @@ func TestAccountService_ResetPassword_ForcesPasswordChangeAndInvalidatesSessions
 	sessions := repository.NewSessionRepository(sqlDB)
 	calendarRepo := repository.NewCalendarRepository(sqlDB)
 	shareRepo := repository.NewCalendarShareRepository(sqlDB)
-	calendars := NewCalendarService(calendarRepo, shareRepo, users, repository.NewReminderOverrideRepository(sqlDB))
+	calendars := NewCalendarService(calendarRepo, shareRepo, users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB))
 	accounts := NewAccountService(sqlDB, users, sessions, calendarRepo, shareRepo, calendars)
 	ctx := context.Background()
 
@@ -249,7 +249,7 @@ func TestAccountService_SetDisabled_DeletesLiveSessions(t *testing.T) {
 	sessions := repository.NewSessionRepository(sqlDB)
 	calendarRepo := repository.NewCalendarRepository(sqlDB)
 	shareRepo := repository.NewCalendarShareRepository(sqlDB)
-	calendars := NewCalendarService(calendarRepo, shareRepo, users, repository.NewReminderOverrideRepository(sqlDB))
+	calendars := NewCalendarService(calendarRepo, shareRepo, users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB))
 	accounts := NewAccountService(sqlDB, users, sessions, calendarRepo, shareRepo, calendars)
 	ctx := context.Background()
 
@@ -540,7 +540,7 @@ func TestAccountService_Delete_DispositionTransfer_KeepsEventsAndShares(t *testi
 	sessions := repository.NewSessionRepository(sqlDB)
 	calendarRepo := repository.NewCalendarRepository(sqlDB)
 	shareRepo := repository.NewCalendarShareRepository(sqlDB)
-	calendarService := NewCalendarService(calendarRepo, shareRepo, users, repository.NewReminderOverrideRepository(sqlDB))
+	calendarService := NewCalendarService(calendarRepo, shareRepo, users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB))
 	accounts := NewAccountService(sqlDB, users, sessions, calendarRepo, shareRepo, calendarService)
 
 	alice, err := accounts.Create(ctx, "alice", "temp-secret")

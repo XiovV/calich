@@ -34,10 +34,11 @@ type CalendarService struct {
 	shares            *repository.CalendarShareRepository
 	users             *repository.UserRepository
 	reminderOverrides *repository.ReminderOverrideRepository
+	colorOverrides    *repository.CalendarUserColorRepository
 }
 
-func NewCalendarService(calendars *repository.CalendarRepository, shares *repository.CalendarShareRepository, users *repository.UserRepository, reminderOverrides *repository.ReminderOverrideRepository) *CalendarService {
-	return &CalendarService{calendars: calendars, shares: shares, users: users, reminderOverrides: reminderOverrides}
+func NewCalendarService(calendars *repository.CalendarRepository, shares *repository.CalendarShareRepository, users *repository.UserRepository, reminderOverrides *repository.ReminderOverrideRepository, colorOverrides *repository.CalendarUserColorRepository) *CalendarService {
+	return &CalendarService{calendars: calendars, shares: shares, users: users, reminderOverrides: reminderOverrides, colorOverrides: colorOverrides}
 }
 
 // CalendarWrite is a Calendar's writable fields, gathered into one value the
@@ -104,18 +105,26 @@ func (s *CalendarService) List(ctx context.Context, userID int64) ([]repository.
 }
 
 // CalendarWithAccess pairs a Calendar with the caller's resolved Access to
-// it (ADR-0034) — what ListAccessible returns, so a caller doesn't have to
-// resolve Access a second time per row.
+// it (ADR-0034) and their resolved display colour (ADR-0038) — what
+// ListAccessible returns, so a caller doesn't have to resolve either a
+// second time per row.
 type CalendarWithAccess struct {
 	repository.Calendar
 	Access Access
+	// Color is the caller's resolved display colour (ADR-0038's
+	// DisplayColor): their own override on this Calendar if they've set
+	// one, otherwise the embedded Calendar's own Color. Deliberately named
+	// to shadow the embedded field — c.Color means "what this caller
+	// sees"; c.Calendar.Color remains reachable for a caller that
+	// specifically wants the Owner's raw stored value.
+	Color string
 }
 
 // ListAccessible returns every Calendar userID has any Access to — owned
-// and shared alike (ADR-0034) — each paired with its resolved Access,
-// ordered by creation time. This is what a caller showing "everything I can
-// see" — the Calendar list endpoint, Event listing — should call, unlike
-// List's owned-only view.
+// and shared alike (ADR-0034) — each paired with its resolved Access and
+// resolved display colour, ordered by creation time. This is what a caller
+// showing "everything I can see" — the Calendar list endpoint, Event
+// listing — should call, unlike List's owned-only view.
 func (s *CalendarService) ListAccessible(ctx context.Context, userID int64) ([]CalendarWithAccess, error) {
 	owned, err := s.calendars.ListByUser(ctx, userID)
 	if err != nil {
@@ -128,11 +137,19 @@ func (s *CalendarService) ListAccessible(ctx context.Context, userID int64) ([]C
 
 	result := make([]CalendarWithAccess, 0, len(owned)+len(shared))
 	for _, c := range owned {
-		result = append(result, CalendarWithAccess{Calendar: c, Access: ResolveAccess(userID, c, nil)})
+		color, err := s.resolveDisplayColor(ctx, userID, c)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, CalendarWithAccess{Calendar: c, Access: ResolveAccess(userID, c, nil), Color: color})
 	}
 	for _, c := range shared {
 		role := c.Role
-		result = append(result, CalendarWithAccess{Calendar: c.Calendar, Access: ResolveAccess(userID, c.Calendar, &role)})
+		color, err := s.resolveDisplayColor(ctx, userID, c.Calendar)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, CalendarWithAccess{Calendar: c.Calendar, Access: ResolveAccess(userID, c.Calendar, &role), Color: color})
 	}
 
 	sort.Slice(result, func(i, j int) bool {
@@ -142,6 +159,93 @@ func (s *CalendarService) ListAccessible(ctx context.Context, userID int64) ([]C
 		return result[i].CreatedAt.Before(result[j].CreatedAt)
 	})
 	return result, nil
+}
+
+// resolveDisplayColor computes DisplayColor(user, calendar) (ADR-0038): the
+// User's own override on calendar if they've set one, otherwise the
+// Calendar's own stored colour. The single place both the REST Calendar
+// responses and CalDAV's calendar-color property resolve the value they
+// show, so a Subscribed Calendar's publisher-tracking (ADR-0032) — which
+// only ever touches the stored colour — is transparently overridden by a
+// User's own choice without either mechanism knowing about the other.
+func (s *CalendarService) resolveDisplayColor(ctx context.Context, userID int64, calendar repository.Calendar) (string, error) {
+	override, err := s.colorOverrides.Get(ctx, userID, calendar.ID)
+	if err == nil {
+		return override, nil
+	}
+	if !errors.Is(err, repository.ErrNotFound) {
+		return "", fmt.Errorf("get calendar color override: %w", err)
+	}
+	return calendar.Color, nil
+}
+
+// AccessWithColor resolves userID's Access to id's Calendar together with
+// their resolved display colour (ADR-0038) — the REST single-Calendar fetch
+// path, which must show the caller's own colour rather than always the
+// Owner's raw stored value.
+func (s *CalendarService) AccessWithColor(ctx context.Context, userID int64, id string) (CalendarWithAccess, error) {
+	access, calendar, err := s.Access(ctx, userID, id)
+	if err != nil {
+		return CalendarWithAccess{}, err
+	}
+	color, err := s.resolveDisplayColor(ctx, userID, calendar)
+	if err != nil {
+		return CalendarWithAccess{}, err
+	}
+	return CalendarWithAccess{Calendar: calendar, Access: access, Color: color}, nil
+}
+
+// requireRead resolves calendarID and refuses it unless userID has at least
+// Viewer Access — the CanRead counterpart to requireOwner, for operations
+// like a colour override that are open to any Access level rather than
+// Owner-only.
+func (s *CalendarService) requireRead(ctx context.Context, userID int64, calendarID string) error {
+	access, _, err := s.Access(ctx, userID, calendarID)
+	if err != nil {
+		return err
+	}
+	if !access.CanRead() {
+		return repository.ErrNotFound
+	}
+	return nil
+}
+
+// SetColorOverride sets userID's personal colour override on calendarID
+// (ADR-0038): any User with at least Viewer Access may call this, since a
+// colour override is a personal display preference rather than a write to
+// the Calendar itself — mirroring EventService.SetReminderOverride's
+// CanRead gate, not requireOwner. Unlike Update, this never touches
+// calendars.color and so is unaffected by a Subscribed Calendar's
+// publisher-tracking (ADR-0032): the override wins for this User
+// regardless of what the feed sends.
+func (s *CalendarService) SetColorOverride(ctx context.Context, userID int64, calendarID, color string) (string, error) {
+	if err := s.requireRead(ctx, userID, calendarID); err != nil {
+		return "", err
+	}
+
+	normalized, ok := NormalizeColor(color)
+	if !ok {
+		return "", ErrInvalidColor
+	}
+
+	if err := s.colorOverrides.Upsert(ctx, userID, calendarID, normalized); err != nil {
+		return "", fmt.Errorf("set calendar color override: %w", err)
+	}
+	return normalized, nil
+}
+
+// ClearColorOverride removes userID's personal colour override on
+// calendarID (ADR-0038) — the User falling back to the Calendar's own
+// colour. Requires the same Access as SetColorOverride, for symmetry.
+func (s *CalendarService) ClearColorOverride(ctx context.Context, userID int64, calendarID string) error {
+	if err := s.requireRead(ctx, userID, calendarID); err != nil {
+		return err
+	}
+
+	if err := s.colorOverrides.Delete(ctx, userID, calendarID); err != nil {
+		return fmt.Errorf("clear calendar color override: %w", err)
+	}
+	return nil
 }
 
 // Access resolves userID's Access to id's Calendar (ADR-0034) — the single
@@ -228,9 +332,10 @@ func (s *CalendarService) Share(ctx context.Context, ownerID int64, calendarID, 
 
 // RevokeShare removes targetUserID's Share on calendarID. Only calendarID's
 // Owner may call this. targetUserID's Reminder overrides on calendarID's
-// Events are cleared with it — an override with no Access behind it would
-// otherwise linger, invisible, until targetUserID was ever shared with it
-// again (ADR-0036's acceptance criteria).
+// Events, and their colour override on calendarID itself, are cleared with
+// it — an override with no Access behind it would otherwise linger,
+// invisible, until targetUserID was ever shared with it again (ADR-0036's
+// and ADR-0038's acceptance criteria).
 func (s *CalendarService) RevokeShare(ctx context.Context, ownerID int64, calendarID string, targetUserID int64) error {
 	if _, err := s.requireOwner(ctx, ownerID, calendarID); err != nil {
 		return err
@@ -240,6 +345,9 @@ func (s *CalendarService) RevokeShare(ctx context.Context, ownerID int64, calend
 	}
 	if err := s.reminderOverrides.DeleteByUserAndCalendar(ctx, targetUserID, calendarID); err != nil {
 		return fmt.Errorf("clear reminder overrides: %w", err)
+	}
+	if err := s.colorOverrides.Delete(ctx, targetUserID, calendarID); err != nil {
+		return fmt.Errorf("clear calendar color override: %w", err)
 	}
 	return nil
 }
@@ -260,14 +368,17 @@ func (s *CalendarService) ListShares(ctx context.Context, ownerID int64, calenda
 // Share row, so there's nothing else to authorize. Returns
 // repository.ErrNotFound if userID holds no Share on calendarID (including
 // when userID is the Owner, who never has one). userID's Reminder overrides
-// on calendarID's Events are cleared with it, mirroring RevokeShare
-// (ADR-0036).
+// on calendarID's Events, and their colour override on calendarID itself,
+// are cleared with it, mirroring RevokeShare (ADR-0036, ADR-0038).
 func (s *CalendarService) LeaveShare(ctx context.Context, userID int64, calendarID string) error {
 	if err := s.shares.Delete(ctx, calendarID, userID); err != nil {
 		return err
 	}
 	if err := s.reminderOverrides.DeleteByUserAndCalendar(ctx, userID, calendarID); err != nil {
 		return fmt.Errorf("clear reminder overrides: %w", err)
+	}
+	if err := s.colorOverrides.Delete(ctx, userID, calendarID); err != nil {
+		return fmt.Errorf("clear calendar color override: %w", err)
 	}
 	return nil
 }

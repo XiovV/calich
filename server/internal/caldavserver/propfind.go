@@ -62,16 +62,20 @@ func applyGetCTagPatch(ctx context.Context, h *dispatchHandler, userID int64, bo
 	}))
 }
 
-// applyCalendarColorPatch serves a Calendar's color exactly as stored — the
-// Color column is already the canonical "#RRGGBBAA" hex (ADR-0029), so
-// there's no enum-to-hex lookup left to do here.
+// applyCalendarColorPatch serves userID's resolved display colour for the
+// Calendar (ADR-0038's DisplayColor): their own override if they've set
+// one, otherwise the Calendar's own stored colour, which is already the
+// canonical "#RRGGBBAA" hex (ADR-0029) with no enum-to-hex lookup left to
+// do. Resolving per-principal here — the same shape as
+// applyPrivilegeSetPatch below — is what lets a shared Calendar show green
+// to one caller and blue to another over CalDAV.
 func applyCalendarColorPatch(ctx context.Context, h *dispatchHandler, userID int64, body []byte) []byte {
 	return injectProperty(ctx, body, "calendar-color", calendarColorNamespace, collectionValueFunc(userID, func(ctx context.Context, calendarID string) (string, bool) {
-		cal, err := h.backend.calendars.Get(ctx, userID, calendarID)
-		if err != nil {
+		result, err := h.backend.calendars.AccessWithColor(ctx, userID, calendarID)
+		if err != nil || !result.Access.CanRead() {
 			return "", false
 		}
-		return cal.Color, true
+		return result.Color, true
 	}))
 }
 

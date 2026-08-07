@@ -47,7 +47,7 @@ func newReminderOverrideTestServer(t *testing.T) reminderOverrideTestServer {
 
 	calendarRepo := repository.NewCalendarRepository(sqlDB)
 	shareRepo := repository.NewCalendarShareRepository(sqlDB)
-	calendars := service.NewCalendarService(calendarRepo, shareRepo, users, repository.NewReminderOverrideRepository(sqlDB))
+	calendars := service.NewCalendarService(calendarRepo, shareRepo, users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB))
 	accounts := service.NewAccountService(sqlDB, users, sessions, calendarRepo, shareRepo, calendars)
 	if _, err := accounts.ResetPassword(ctx, 2, "temp-password"); err != nil {
 		t.Fatalf("reset other user's password: %v", err)

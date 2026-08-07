@@ -73,6 +73,12 @@ func toCalendarResponse(c repository.Calendar) calendarResponse {
 func toCalendarWithAccessResponse(c service.CalendarWithAccess) calendarResponse {
 	response := toCalendarResponse(c.Calendar)
 	response.Access = c.Access.String()
+	// c.Color is the caller's resolved display colour (ADR-0038) — their
+	// own override if they've set one, otherwise the Calendar's own,
+	// already copied in by toCalendarResponse above. Overwriting it here
+	// is what makes a shared Calendar show green to one caller and blue to
+	// another.
+	response.Color = c.Color
 	return response
 }
 
@@ -151,16 +157,16 @@ func (h *CalendarHandler) Get(w http.ResponseWriter, r *http.Request) {
 
 	id := chi.URLParam(r, "id")
 
-	access, calendar, err := h.calendars.Access(r.Context(), userID, id)
+	result, err := h.calendars.AccessWithColor(r.Context(), userID, id)
 	if respondError(w, err, calendarNotFoundErrors, "failed to load calendar") {
 		return
 	}
-	if !access.CanRead() {
+	if !result.Access.CanRead() {
 		httpresponse.Error(w, http.StatusNotFound, "not_found", "calendar not found")
 		return
 	}
 
-	httpresponse.JSON(w, http.StatusOK, toCalendarWithAccessResponse(service.CalendarWithAccess{Calendar: calendar, Access: access}))
+	httpresponse.JSON(w, http.StatusOK, toCalendarWithAccessResponse(result))
 }
 
 type updateCalendarRequest struct {

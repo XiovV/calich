@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/XiovV/calendar/server/internal/repository"
 	"github.com/XiovV/calendar/server/internal/service"
 )
 
@@ -120,6 +121,33 @@ func TestPropfind_GetCTagOnly_CalendarColorUntouched(t *testing.T) {
 	extractGetCTag(t, body) // still works, unaffected by calendar-color's existence
 	if strings.Contains(body, "calendar-color") {
 		t.Fatalf("expected no calendar-color in a getctag-only request, got:\n%s", body)
+	}
+}
+
+// A shared Calendar's calendar-color resolves per principal (ADR-0038): the
+// Editor who set a personal colour override sees it, while the Owner —
+// PROPFINDing the very same Calendar at their own principal path — still
+// sees the Calendar's own stored colour.
+func TestPropfind_CalendarColor_ResolvesPerPrincipal_OverrideAppliesOnlyToTheEditor(t *testing.T) {
+	env := newTestCalDAVEnv(t)
+	editorID, editorSecret := env.addSharedUser(t, "editor", repository.RoleEditor)
+
+	if _, err := env.calendarService.SetColorOverride(context.Background(), editorID, env.calendarID, "#654321"); err != nil {
+		t.Fatalf("set color override: %v", err)
+	}
+
+	editorResp := propfind(t, env.srv, calendarPath(editorID, env.calendarID), "editor", editorSecret, "0", propfindCalendarColor)
+	defer editorResp.Body.Close()
+	editorColor := extractCalendarColor(t, readBody(t, editorResp))
+	if editorColor != "#654321FF" {
+		t.Fatalf("expected the editor's resolved colour to be their override, got %q", editorColor)
+	}
+
+	ownerResp := propfind(t, env.srv, calendarPath(env.userID, env.calendarID), "admin", env.appPasswordSecret, "0", propfindCalendarColor)
+	defer ownerResp.Body.Close()
+	ownerColor := extractCalendarColor(t, readBody(t, ownerResp))
+	if ownerColor != "#12809CFF" {
+		t.Fatalf("expected the owner's resolved colour to stay the calendar's own, got %q", ownerColor)
 	}
 }
 

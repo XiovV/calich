@@ -38,7 +38,7 @@ func newCalendarTestServer(t *testing.T) (baseURL string, accessToken string) {
 		t.Fatalf("login: %v", err)
 	}
 
-	calendars := service.NewCalendarService(repository.NewCalendarRepository(sqlDB), repository.NewCalendarShareRepository(sqlDB), users, repository.NewReminderOverrideRepository(sqlDB))
+	calendars := service.NewCalendarService(repository.NewCalendarRepository(sqlDB), repository.NewCalendarShareRepository(sqlDB), users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB))
 	events := service.NewEventService(sqlDB, repository.NewEventRepository(sqlDB), repository.NewEventExceptionRepository(sqlDB), repository.NewEventReminderRepository(sqlDB), repository.NewReminderOverrideRepository(sqlDB), repository.NewSyncRepository(sqlDB), calendars)
 	imports := service.NewImportService(events, calendars)
 	// The address guard (#97, ADR-0032) would otherwise refuse every fetch in

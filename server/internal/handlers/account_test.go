@@ -35,7 +35,7 @@ func newAccountTestServer(t *testing.T) (*httptest.Server, string) {
 
 	calendarRepo := repository.NewCalendarRepository(sqlDB)
 	shareRepo := repository.NewCalendarShareRepository(sqlDB)
-	calendars := service.NewCalendarService(calendarRepo, shareRepo, users, repository.NewReminderOverrideRepository(sqlDB))
+	calendars := service.NewCalendarService(calendarRepo, shareRepo, users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB))
 	accounts := service.NewAccountService(sqlDB, users, sessions, calendarRepo, shareRepo, calendars)
 	h := NewAccountHandler(accounts)
 	authHandler := NewAuthHandler(auth, false)

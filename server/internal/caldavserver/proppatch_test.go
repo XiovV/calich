@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/XiovV/calendar/server/internal/repository"
 	"github.com/XiovV/calendar/server/internal/service"
 )
 
@@ -382,10 +383,14 @@ func TestPropPatch_ThenPropfindTwice_RoundTripStable(t *testing.T) {
 	}
 }
 
-// PROPPATCH on a Subscribed Calendar's collection is refused outright
-// (ADR-0032, #89) — renaming or recoloring one over CalDAV would be
-// incoherent with the read-only privilege set it advertises, so the request
-// never reaches applyPropPatch and the Calendar stays untouched.
+// The Owner's rename or recolour of a Subscribed Calendar is refused
+// (ADR-0032, #89) — a Subscription's read-only privilege set would be
+// incoherent with either, so the property is staged Forbidden rather than
+// applied, and the Calendar stays untouched. Unlike before #106/ADR-0038,
+// the request itself still resolves to a 207 Multi-Status — only
+// calendar-color's per-property authorization decides Forbidden, since a
+// non-owner's colour override PROPPATCHes the same subscribed collection
+// successfully (see TestPropPatch_NonOwnerColorOverride_SucceedsOnSubscribedCalendar).
 func TestPropPatch_SubscribedCalendarIsForbidden(t *testing.T) {
 	env := newTestCalDAVEnv(t)
 
@@ -398,11 +403,15 @@ func TestPropPatch_SubscribedCalendarIsForbidden(t *testing.T) {
 	}
 
 	path := calendarPath(env.userID, subCalendar.ID)
-	resp := proppatch(t, env.srv, path, "admin", env.appPasswordSecret, proppatchSetDisplayName("Renamed"))
+	resp := proppatch(t, env.srv, path, "admin", env.appPasswordSecret, proppatchSetDisplayNameAndCalendarColor("Renamed", "#8e44ad"))
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusForbidden {
-		t.Fatalf("expected 403, got %d", resp.StatusCode)
+	if resp.StatusCode != http.StatusMultiStatus {
+		t.Fatalf("expected 207, got %d", resp.StatusCode)
+	}
+	body := readBody(t, resp)
+	if !strings.Contains(body, "displayname") || !strings.Contains(body, "calendar-color") || !strings.Contains(body, "403 Forbidden") {
+		t.Fatalf("expected a 403 Forbidden propstat covering both displayname and calendar-color, got:\n%s", body)
 	}
 
 	cal, err := env.calendarService.Get(t.Context(), env.userID, subCalendar.ID)
@@ -411,6 +420,55 @@ func TestPropPatch_SubscribedCalendarIsForbidden(t *testing.T) {
 	}
 	if cal.Name != "Feed" || cal.Color != "#123456FF" {
 		t.Fatalf("expected the subscribed calendar to stay unchanged, got name=%q color=%q", cal.Name, cal.Color)
+	}
+}
+
+// A non-owner's colour override PROPPATCHes successfully even on a
+// Subscribed Calendar (ADR-0038's acceptance criteria: "a User's override
+// wins over [publisher-tracking] for that User") — the override never
+// touches calendars.color or the feed-tracking shadow columns, so the
+// Subscription's read-only clamp on the Owner's own writes doesn't apply to
+// it.
+func TestPropPatch_NonOwnerColorOverride_SucceedsOnSubscribedCalendar(t *testing.T) {
+	env := newTestCalDAVEnv(t)
+
+	sourceURL := "https://example.com/feed.ics"
+	subCalendar, err := env.calendarService.Create(t.Context(), env.userID, "sub-cal-1", service.CalendarWrite{
+		Name: "Feed", Color: "#123456FF", SourceURL: &sourceURL,
+	})
+	if err != nil {
+		t.Fatalf("create subscribed calendar: %v", err)
+	}
+	viewer, err := env.users.Create(t.Context(), "viewer", "hash", false)
+	if err != nil {
+		t.Fatalf("create viewer: %v", err)
+	}
+	if _, err := env.calendarService.Share(t.Context(), env.userID, subCalendar.ID, "viewer", repository.RoleViewer); err != nil {
+		t.Fatalf("share subscribed calendar: %v", err)
+	}
+	created, err := env.appPasswordService.Create(t.Context(), viewer.ID, "Test device")
+	if err != nil {
+		t.Fatalf("create app password for viewer: %v", err)
+	}
+
+	path := calendarPath(viewer.ID, subCalendar.ID)
+	resp := proppatch(t, env.srv, path, "viewer", created.Secret, proppatchSetCalendarColor("#8e44ad"))
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusMultiStatus {
+		t.Fatalf("expected 207, got %d", resp.StatusCode)
+	}
+	body := readBody(t, resp)
+	if !strings.Contains(body, "200 OK") {
+		t.Fatalf("expected a 200 OK propstat for the viewer's colour override, got:\n%s", body)
+	}
+
+	cal, err := env.calendarService.Get(t.Context(), env.userID, subCalendar.ID)
+	if err != nil {
+		t.Fatalf("get calendar: %v", err)
+	}
+	if cal.Color != "#123456FF" {
+		t.Fatalf("expected the subscribed calendar's own colour to stay unchanged, got %q", cal.Color)
 	}
 }
 
@@ -434,6 +492,105 @@ func TestPropPatch_OwnedCalendarMultiPropertyRename_StillWorks(t *testing.T) {
 	}
 	if cal.Name != "Renamed" || cal.Color != "#8E44ADFF" {
 		t.Fatalf("expected both name and color to be updated, got name=%q color=%q", cal.Name, cal.Color)
+	}
+}
+
+// A Viewer — read-only, per ADR-0034/ADR-0035 — may still PROPPATCH their
+// own colour override (ADR-0038): the property is a personal display
+// preference, not a write to the Calendar's Events or the Calendar itself,
+// so it's open to any Access level that clears CanRead, same as
+// SetReminderOverride's gate.
+func TestPropPatch_ViewerSetsOwnColorOverride_Returns200(t *testing.T) {
+	env := newTestCalDAVEnv(t)
+	viewerID, viewerSecret := env.addSharedUser(t, "viewer", repository.RoleViewer)
+
+	path := calendarPath(viewerID, env.calendarID)
+	resp := proppatch(t, env.srv, path, "viewer", viewerSecret, proppatchSetCalendarColor("#654321"))
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusMultiStatus {
+		t.Fatalf("expected 207, got %d", resp.StatusCode)
+	}
+	body := readBody(t, resp)
+	if !strings.Contains(body, "200 OK") {
+		t.Fatalf("expected the viewer's colour override to succeed with a 200 OK propstat, got:\n%s", body)
+	}
+
+	view, err := env.calendarService.AccessWithColor(t.Context(), viewerID, env.calendarID)
+	if err != nil {
+		t.Fatalf("resolve viewer's view: %v", err)
+	}
+	if view.Color != "#654321FF" {
+		t.Fatalf("expected the viewer's resolved colour to be their override, got %q", view.Color)
+	}
+
+	ownerCal, err := env.calendarService.Get(t.Context(), env.userID, env.calendarID)
+	if err != nil {
+		t.Fatalf("get calendar: %v", err)
+	}
+	if ownerCal.Color != "#12809CFF" {
+		t.Fatalf("expected the owner's own colour to stay unchanged, got %q", ownerCal.Color)
+	}
+}
+
+// A non-owner's <remove> of calendar-color clears their own override,
+// falling back to the Calendar's own colour — unlike the Owner's, whose
+// backing column is NOT NULL, an override row simply may not exist, so
+// there's a real "unset" to perform (ADR-0038's acceptance criteria: "A
+// User ... can ... clear it to fall back to the Owner's").
+func TestPropPatch_NonOwnerRemoveColorOverride_Returns200AndFallsBackToOwnersColor(t *testing.T) {
+	env := newTestCalDAVEnv(t)
+	editorID, editorSecret := env.addSharedUser(t, "editor", repository.RoleEditor)
+
+	if _, err := env.calendarService.SetColorOverride(t.Context(), editorID, env.calendarID, "#654321"); err != nil {
+		t.Fatalf("set color override: %v", err)
+	}
+
+	path := calendarPath(editorID, env.calendarID)
+	resp := proppatch(t, env.srv, path, "editor", editorSecret, proppatchRemoveCalendarColor)
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusMultiStatus {
+		t.Fatalf("expected 207, got %d", resp.StatusCode)
+	}
+	body := readBody(t, resp)
+	if !strings.Contains(body, "200 OK") {
+		t.Fatalf("expected the editor's override removal to succeed with a 200 OK propstat, got:\n%s", body)
+	}
+
+	view, err := env.calendarService.AccessWithColor(t.Context(), editorID, env.calendarID)
+	if err != nil {
+		t.Fatalf("resolve editor's view: %v", err)
+	}
+	if view.Color != "#12809CFF" {
+		t.Fatalf("expected the editor's resolved colour to fall back to the owner's after removal, got %q", view.Color)
+	}
+}
+
+// A Viewer's rename attempt stays refused regardless of #106/ADR-0038 —
+// only calendar-color gained a non-owner path; displayname is unaffected.
+func TestPropPatch_ViewerCannotRename(t *testing.T) {
+	env := newTestCalDAVEnv(t)
+	viewerID, viewerSecret := env.addSharedUser(t, "viewer", repository.RoleViewer)
+
+	path := calendarPath(viewerID, env.calendarID)
+	resp := proppatch(t, env.srv, path, "viewer", viewerSecret, proppatchSetDisplayName("Renamed by viewer"))
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusMultiStatus {
+		t.Fatalf("expected 207, got %d", resp.StatusCode)
+	}
+	body := readBody(t, resp)
+	if !strings.Contains(body, "403 Forbidden") {
+		t.Fatalf("expected a 403 Forbidden propstat, got:\n%s", body)
+	}
+
+	cal, err := env.calendarService.Get(t.Context(), env.userID, env.calendarID)
+	if err != nil {
+		t.Fatalf("get calendar: %v", err)
+	}
+	if cal.Name == "Renamed by viewer" {
+		t.Fatalf("expected the rename to not have taken effect")
 	}
 }
 

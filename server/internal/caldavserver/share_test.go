@@ -422,7 +422,7 @@ func TestSharedCalendar_CTagUnchangedForSharedAccess(t *testing.T) {
 // Rename/recolour are Owner-only management operations (ADR-0034) that stay
 // unavailable to an Editor over CalDAV, consistent with ADR-0032 already
 // keeping them out of PROPPATCH for a Subscribed Calendar.
-func TestSharedCalendar_EditorCannotRenameOrRecolor(t *testing.T) {
+func TestSharedCalendar_EditorCannotRename(t *testing.T) {
 	env := newTestCalDAVEnv(t)
 	editorID, editorSecret := env.addSharedUser(t, "editor", repository.RoleEditor)
 
@@ -430,8 +430,12 @@ func TestSharedCalendar_EditorCannotRenameOrRecolor(t *testing.T) {
 	resp := proppatch(t, env.srv, path, "editor", editorSecret, proppatchSetDisplayName("Renamed by editor"))
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusForbidden {
-		t.Fatalf("expected an Editor's rename attempt to be refused with 403 (Owner-only, ADR-0034), got %d", resp.StatusCode)
+	if resp.StatusCode != http.StatusMultiStatus {
+		t.Fatalf("expected 207, got %d", resp.StatusCode)
+	}
+	body := readBody(t, resp)
+	if !strings.Contains(body, "403 Forbidden") {
+		t.Fatalf("expected an Editor's rename attempt to be refused with a 403 Forbidden propstat (Owner-only, ADR-0034), got:\n%s", body)
 	}
 
 	cal, err := env.calendarService.Get(context.Background(), env.userID, env.calendarID)
@@ -440,5 +444,42 @@ func TestSharedCalendar_EditorCannotRenameOrRecolor(t *testing.T) {
 	}
 	if cal.Name == "Renamed by editor" {
 		t.Fatalf("expected the rename to not have taken effect")
+	}
+}
+
+// An Editor's (or Viewer's) recolour attempt no longer means "rename or
+// recolour, Owner-only" as one rule (ADR-0038 amends ADR-0034 here): it
+// succeeds, but writes the Editor's own colour override rather than the
+// Calendar's own colour, which stays the Owner's.
+func TestSharedCalendar_EditorRecolor_WritesOwnOverride_NotTheCalendarsColor(t *testing.T) {
+	env := newTestCalDAVEnv(t)
+	editorID, editorSecret := env.addSharedUser(t, "editor", repository.RoleEditor)
+
+	path := calendarPath(editorID, env.calendarID)
+	resp := proppatch(t, env.srv, path, "editor", editorSecret, proppatchSetCalendarColor("#654321"))
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusMultiStatus {
+		t.Fatalf("expected 207, got %d", resp.StatusCode)
+	}
+	body := readBody(t, resp)
+	if !strings.Contains(body, "200 OK") {
+		t.Fatalf("expected the Editor's colour override to succeed with a 200 OK propstat, got:\n%s", body)
+	}
+
+	ownerCal, err := env.calendarService.Get(context.Background(), env.userID, env.calendarID)
+	if err != nil {
+		t.Fatalf("get calendar: %v", err)
+	}
+	if ownerCal.Color != "#12809CFF" {
+		t.Fatalf("expected the Owner's own colour to stay unchanged, got %q", ownerCal.Color)
+	}
+
+	editorView, err := env.calendarService.AccessWithColor(context.Background(), editorID, env.calendarID)
+	if err != nil {
+		t.Fatalf("resolve editor's access: %v", err)
+	}
+	if editorView.Color != "#654321FF" {
+		t.Fatalf("expected the Editor's resolved colour to reflect their override, got %q", editorView.Color)
 	}
 }

@@ -5,11 +5,19 @@
 // package doc). This backend recognizes two settable properties —
 // Apple/DAVx⁵'s calendar-color (validated by service.NormalizeColor,
 // ADR-0029) and DAV:displayname (the Calendar rename case) — staged
-// together per RFC 4918 §9.2's atomicity rule (see applyPropPatch). Any
-// other named property, and any <remove> of either settable property (both
-// backing columns are NOT NULL — there is no "unset"), is reported 403
-// Forbidden per property rather than silently ignored, so a client can tell
-// its update didn't fully apply.
+// together per RFC 4918 §9.2's atomicity rule (see applyPropPatch).
+// DAV:displayname stays Owner-only (ADR-0034): rename is Calendar
+// management, and no Role grants it. calendar-color is different since
+// ADR-0038: the Owner's <set> still writes the Calendar's own colour (and
+// is still refused while a Subscription governs it, ADR-0032), but any
+// other principal with at least Viewer Access gets their own colour
+// override written instead, and always succeeds — no client's colour
+// picker ever lies (ADR-0028). Any other named property, and any <remove>
+// of displayname or of the Owner's own calendar-color (both backing columns
+// are NOT NULL — there is no "unset"), is reported 403 Forbidden per
+// property rather than silently ignored. A non-owner's <remove> of
+// calendar-color instead clears their override, since there's a real
+// "unset" for a row that may simply not exist.
 package caldavserver
 
 import (
@@ -104,24 +112,13 @@ func (h *dispatchHandler) handlePropPatch(w http.ResponseWriter, r *http.Request
 		http.Error(w, "failed to load calendar", http.StatusInternalServerError)
 		return
 	}
-	// A Subscribed Calendar's collection is advertised as read-only via its
-	// current-user-privilege-set (propfind.go's applyPrivilegeSetPatch,
-	// ADR-0032) — renaming or recoloring one over CalDAV would be incoherent
-	// with that, so PROPPATCH is refused outright rather than staged
-	// per-property. Renaming and recoloring stay web-app actions.
-	if existing.SourceURL != nil {
-		http.Error(w, "calendar is subscribed and read-only", http.StatusForbidden)
-		return
-	}
-	// Renaming and recoloring are Owner-only management operations no Role
-	// grants (ADR-0034) — a Share, however permissive, only covers Events.
-	// h.backend.calendars.Get resolved existing via Access, which admits an
-	// Editor too, so ownership needs its own check here rather than being
-	// implied by having reached this far.
-	if existing.UserID != userID {
-		http.Error(w, "calendar not owned by this principal", http.StatusForbidden)
-		return
-	}
+	// h.backend.calendars.Get resolved existing via Access, which admits a
+	// Viewer or Editor too (ADR-0034) — not just the Owner. Whether that's
+	// enough to act on any given property, and whether a Subscription
+	// (ADR-0032) blocks it, is now decided per-property inside
+	// applyPropPatch: displayname and the Owner's own calendar-color stay
+	// gated exactly as before, but a non-owner's calendar-color override
+	// (ADR-0038) is neither Owner-only nor blocked by a Subscription.
 
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
@@ -181,14 +178,25 @@ type stagedProp struct {
 // service.NormalizeColor's canonical form — uppercase, alpha widened to FF
 // for a 3- or 6-digit input — so an 8-digit client value still round-trips
 // byte-identical up to case (ADR-0029); an unparseable value stages 409
-// Conflict. A <set> of displayname with a non-empty value stages that
-// value; an empty value
-// stages 409 Conflict — the Name column is NOT NULL, the same constraint
-// the REST API enforces as ErrInvalidName (there, surfaced as 400, since
-// PROPPATCH and the REST API report property/field errors differently). A
-// <remove> of either, and any <set>/<remove> of any other property name,
-// stages 403 Forbidden.
+// Conflict regardless of who's asking. Who the write actually lands on
+// differs (ADR-0038): the Owner's stages against calendars.color and is
+// still 403 while a Subscription governs it (ADR-0032); any other
+// principal's stages as their own colour override instead, unaffected by
+// the Subscription clamp, since an override never touches the tracked
+// column. A <set> of displayname is Owner-only regardless of Subscription —
+// a non-owner's is 403 Forbidden; the Owner's stages the trimmed value, an
+// empty one stages 409 Conflict (the Name column is NOT NULL, the same
+// constraint the REST API enforces as ErrInvalidName, surfaced as 400
+// there since PROPPATCH and the REST API report property/field errors
+// differently), and a Subscribed Calendar's is 403 Forbidden (renaming
+// stays a web-app action). A <remove> of displayname, or of the Owner's own
+// calendar-color, is 403 Forbidden (both backing columns are NOT NULL —
+// there is no "unset"); a non-owner's <remove> of calendar-color instead
+// clears their override and stages 200 OK. Any <set>/<remove> of any other
+// property name stages 403 Forbidden.
 func (h *dispatchHandler) applyPropPatch(ctx context.Context, userID int64, calendarID string, existing repository.Calendar, req proppatchRequestBody) ([]proppatchPropResult, error) {
+	isOwner := existing.UserID == userID
+
 	var order []xml.Name
 	staged := map[xml.Name]stagedProp{}
 
@@ -208,11 +216,23 @@ func (h *dispatchHandler) applyPropPatch(ctx context.Context, userID int64, cale
 					stage(calendarColorPropName, proppatchStatusConflict, false, "")
 					continue
 				}
+				if isOwner && existing.SourceURL != nil {
+					stage(calendarColorPropName, proppatchStatusForbidden, false, "")
+					continue
+				}
 				stage(calendarColorPropName, proppatchStatusOK, true, color)
 			case displayNameLocalName:
+				if !isOwner {
+					stage(displayNamePropName, proppatchStatusForbidden, false, "")
+					continue
+				}
 				name := strings.TrimSpace(prop.Content)
 				if name == "" {
 					stage(displayNamePropName, proppatchStatusConflict, false, "")
+					continue
+				}
+				if existing.SourceURL != nil {
+					stage(displayNamePropName, proppatchStatusForbidden, false, "")
 					continue
 				}
 				stage(displayNamePropName, proppatchStatusOK, true, name)
@@ -226,7 +246,14 @@ func (h *dispatchHandler) applyPropPatch(ctx context.Context, userID int64, cale
 		for _, prop := range remove.Prop.Props {
 			switch prop.XMLName.Local {
 			case calendarColorLocalName:
-				stage(calendarColorPropName, proppatchStatusForbidden, false, "")
+				if isOwner {
+					stage(calendarColorPropName, proppatchStatusForbidden, false, "")
+					continue
+				}
+				// A non-owner's colour override has a real "unset" — the
+				// row may simply not exist — unlike the Owner's NOT NULL
+				// column (ADR-0038).
+				stage(calendarColorPropName, proppatchStatusOK, true, "")
 			case displayNameLocalName:
 				stage(displayNamePropName, proppatchStatusForbidden, false, "")
 			default:
@@ -244,7 +271,9 @@ func (h *dispatchHandler) applyPropPatch(ctx context.Context, userID int64, cale
 	}
 
 	newName, newColor := existing.Name, existing.Color
-	changed := false
+	nameChanged, colorChanged := false, false
+	overrideColor := ""
+	overrideSet, overrideCleared := false, false
 	results := make([]proppatchPropResult, 0, len(order))
 	for _, name := range order {
 		p := staged[name]
@@ -255,18 +284,36 @@ func (h *dispatchHandler) applyPropPatch(ctx context.Context, userID int64, cale
 		results = append(results, proppatchPropResult{Name: p.name, Status: status})
 
 		if !anyFailed && p.ok {
-			changed = true
 			switch name {
 			case calendarColorPropName:
-				newColor = p.newValue
+				if isOwner {
+					newColor = p.newValue
+					colorChanged = true
+				} else if p.newValue == "" {
+					overrideCleared = true
+				} else {
+					overrideColor = p.newValue
+					overrideSet = true
+				}
 			case displayNamePropName:
 				newName = p.newValue
+				nameChanged = true
 			}
 		}
 	}
 
-	if changed {
+	if nameChanged || colorChanged {
 		if _, err := h.backend.calendars.Update(ctx, userID, calendarID, service.CalendarWrite{Name: newName, Color: newColor}); err != nil {
+			return nil, err
+		}
+	}
+	if overrideSet {
+		if _, err := h.backend.calendars.SetColorOverride(ctx, userID, calendarID, overrideColor); err != nil {
+			return nil, err
+		}
+	}
+	if overrideCleared {
+		if err := h.backend.calendars.ClearColorOverride(ctx, userID, calendarID); err != nil {
 			return nil, err
 		}
 	}

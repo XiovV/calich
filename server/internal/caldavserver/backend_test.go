@@ -48,7 +48,7 @@ func newTestCalDAVEnv(t *testing.T) testCalDAVEnv {
 		t.Fatalf("bootstrap: %v", err)
 	}
 
-	calendarService := service.NewCalendarService(repository.NewCalendarRepository(sqlDB), repository.NewCalendarShareRepository(sqlDB), users, repository.NewReminderOverrideRepository(sqlDB))
+	calendarService := service.NewCalendarService(repository.NewCalendarRepository(sqlDB), repository.NewCalendarShareRepository(sqlDB), users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB))
 	const calendarID = "cal-1"
 	if _, err := calendarService.Create(context.Background(), user.ID, calendarID, service.CalendarWrite{Name: "Personal", Color: "#12809CFF"}); err != nil {
 		t.Fatalf("create calendar: %v", err)

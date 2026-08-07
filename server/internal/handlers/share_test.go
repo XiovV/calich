@@ -22,6 +22,8 @@ type shareTestServer struct {
 	baseURL                string
 	ownerToken, otherToken string
 	calendarID             string
+	otherUserID            int64
+	calendars              *service.CalendarService
 }
 
 func newShareTestServer(t *testing.T) shareTestServer {
@@ -49,7 +51,7 @@ func newShareTestServer(t *testing.T) shareTestServer {
 	// through an Admin-issued temporary password instead.
 	calendarRepo := repository.NewCalendarRepository(sqlDB)
 	shareRepo := repository.NewCalendarShareRepository(sqlDB)
-	calendars := service.NewCalendarService(calendarRepo, shareRepo, users, repository.NewReminderOverrideRepository(sqlDB))
+	calendars := service.NewCalendarService(calendarRepo, shareRepo, users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB))
 	accounts := service.NewAccountService(sqlDB, users, sessions, calendarRepo, shareRepo, calendars)
 	other, err := accounts.ResetPassword(ctx, 2, "temp-password")
 	if err != nil {
@@ -98,7 +100,7 @@ func newShareTestServer(t *testing.T) shareTestServer {
 	}
 	resp.Body.Close()
 
-	return shareTestServer{baseURL: srv.URL, ownerToken: ownerLogin.AccessToken, otherToken: otherLogin.AccessToken, calendarID: created.ID}
+	return shareTestServer{baseURL: srv.URL, ownerToken: ownerLogin.AccessToken, otherToken: otherLogin.AccessToken, calendarID: created.ID, otherUserID: other.ID, calendars: calendars}
 }
 
 func doJSON(t *testing.T, method, url, accessToken string, body any) *http.Response {
@@ -182,6 +184,63 @@ func TestCalendarHandler_List_CarriesAccess(t *testing.T) {
 	}
 	if len(otherCalendars) != 1 || otherCalendars[0].Access != "viewer" {
 		t.Fatalf("unexpected shared-with list: %+v", otherCalendars)
+	}
+}
+
+// TestCalendarHandler_List_And_Get_ResolveColorPerCaller covers ADR-0038's
+// "effective colour returned with every Calendar": a User's own colour
+// override — set here directly through the service, since the REST API
+// exposes no dedicated endpoint for it; the override exists to serve
+// CalDAV's native-client colour picker (ADR-0038) — is what List and Get
+// report back to that User, while the Owner's own response stays the
+// Calendar's own stored colour.
+func TestCalendarHandler_List_And_Get_ResolveColorPerCaller(t *testing.T) {
+	s := newShareTestServer(t)
+
+	shareResp := doJSON(t, http.MethodPost, s.baseURL+"/api/calendars/"+s.calendarID+"/shares", s.ownerToken, shareRequest{Username: "other", Role: repository.RoleEditor})
+	shareResp.Body.Close()
+
+	if _, err := s.calendars.SetColorOverride(context.Background(), s.otherUserID, s.calendarID, "#654321"); err != nil {
+		t.Fatalf("set color override: %v", err)
+	}
+
+	otherGet, err := authenticatedGet(s.baseURL+"/api/calendars/"+s.calendarID, s.otherToken)
+	if err != nil {
+		t.Fatalf("other get: %v", err)
+	}
+	defer otherGet.Body.Close()
+	var otherCalendar calendarResponse
+	if err := json.NewDecoder(otherGet.Body).Decode(&otherCalendar); err != nil {
+		t.Fatalf("decode other get: %v", err)
+	}
+	if otherCalendar.Color != "#654321FF" {
+		t.Fatalf("expected other's resolved colour to be their override, got %q", otherCalendar.Color)
+	}
+
+	otherList, err := authenticatedGet(s.baseURL+"/api/calendars/", s.otherToken)
+	if err != nil {
+		t.Fatalf("other list: %v", err)
+	}
+	defer otherList.Body.Close()
+	var otherCalendars []calendarResponse
+	if err := json.NewDecoder(otherList.Body).Decode(&otherCalendars); err != nil {
+		t.Fatalf("decode other list: %v", err)
+	}
+	if len(otherCalendars) != 1 || otherCalendars[0].Color != "#654321FF" {
+		t.Fatalf("expected other's resolved colour in the list to be their override, got %+v", otherCalendars)
+	}
+
+	ownerGet, err := authenticatedGet(s.baseURL+"/api/calendars/"+s.calendarID, s.ownerToken)
+	if err != nil {
+		t.Fatalf("owner get: %v", err)
+	}
+	defer ownerGet.Body.Close()
+	var ownerCalendar calendarResponse
+	if err := json.NewDecoder(ownerGet.Body).Decode(&ownerCalendar); err != nil {
+		t.Fatalf("decode owner get: %v", err)
+	}
+	if ownerCalendar.Color != "#12809CFF" {
+		t.Fatalf("expected the owner's resolved colour to stay the calendar's own, got %q", ownerCalendar.Color)
 	}
 }
 
