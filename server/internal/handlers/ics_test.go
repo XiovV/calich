@@ -58,13 +58,13 @@ func newICSTestEnv(t *testing.T) icsTestEnv {
 	}
 
 	calendarRepo := repository.NewCalendarRepository(sqlDB)
-	calendars := service.NewCalendarService(calendarRepo, repository.NewCalendarShareRepository(sqlDB), users)
+	calendars := service.NewCalendarService(calendarRepo, repository.NewCalendarShareRepository(sqlDB), users, repository.NewReminderOverrideRepository(sqlDB))
 	cal, err := calendars.Create(context.Background(), userID, "11111111-1111-1111-1111-111111111111", service.CalendarWrite{Name: "Personal", Color: "#12809CFF"})
 	if err != nil {
 		t.Fatalf("create calendar: %v", err)
 	}
 
-	events := service.NewEventService(sqlDB, repository.NewEventRepository(sqlDB), repository.NewEventExceptionRepository(sqlDB), repository.NewEventReminderRepository(sqlDB), repository.NewSyncRepository(sqlDB), calendars)
+	events := service.NewEventService(sqlDB, repository.NewEventRepository(sqlDB), repository.NewEventExceptionRepository(sqlDB), repository.NewEventReminderRepository(sqlDB), repository.NewReminderOverrideRepository(sqlDB), repository.NewSyncRepository(sqlDB), calendars)
 	eventHandler := NewEventHandler(events)
 	calendarHandler := NewCalendarHandler(calendars, events, service.NewImportService(events, calendars), service.NewSubscribeService(events, calendars, 0))
 

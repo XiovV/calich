@@ -26,7 +26,7 @@ func newTestCalendarService(t *testing.T) (svc *CalendarService, userID int64) {
 		t.Fatalf("create user: %v", err)
 	}
 
-	return NewCalendarService(repository.NewCalendarRepository(sqlDB), repository.NewCalendarShareRepository(sqlDB), users), user.ID
+	return NewCalendarService(repository.NewCalendarRepository(sqlDB), repository.NewCalendarShareRepository(sqlDB), users, repository.NewReminderOverrideRepository(sqlDB)), user.ID
 }
 
 func TestCalendarService_Create(t *testing.T) {

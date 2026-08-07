@@ -50,43 +50,66 @@ func anchor(event repository.Event, occurrenceStart time.Time) time.Time {
 const occurrenceSearchPad = 24 * time.Hour
 
 // Due returns one DueReminder per (Reminder, recipient) pair on event whose
-// trigger — its Occurrence's anchor, minus the Reminder's own offset — falls
-// in the half-open window (from, to], matching the scheduler's
-// "just-elapsed tick" semantics (ADR-0021). A recurring Event's RRULE is
-// expanded (skipping any Exdated Occurrence); a non-recurring Event is
-// checked as a series of one. Every User in event.RecipientUserIDs — the
-// Calendar's Owner and every Shared Editor and Viewer — gets its own
-// DueReminder, so a shared Calendar's Reminder fans out to everyone with
-// Access (ADR-0036).
+// trigger — its Occurrence's anchor, minus the effective offset — falls in
+// the half-open window (from, to], matching the scheduler's "just-elapsed
+// tick" semantics (ADR-0021). A recurring Event's RRULE is expanded
+// (skipping any Exdated Occurrence); a non-recurring Event is checked as a
+// series of one. Every User in event.RecipientUserIDs — the Calendar's Owner
+// and every Shared Editor and Viewer — gets its own DueReminder, so a shared
+// Calendar's Reminder fans out to everyone with Access (ADR-0036).
+//
+// A recipient's own entry in event.Overrides (ADR-0036) changes what
+// "effective" means for them alone: a muted override drops them from every
+// Reminder on this Event entirely; a non-muted override substitutes its own
+// OffsetMinutes and/or Channel for the Reminder's, wherever it sets one.
+// Because the effective offset can differ per recipient, the trigger window
+// and its Occurrence search are computed once per (Reminder, recipient)
+// pair rather than once per Reminder.
 func Due(event repository.EventWithOwner, from, to time.Time) ([]DueReminder, error) {
 	var due []DueReminder
 
 	for _, reminder := range event.Reminders {
-		offset := time.Duration(reminder.OffsetMinutes) * time.Minute
-		triggerFrom := from.Add(offset)
-		triggerTo := to.Add(offset)
+		for _, userID := range event.RecipientUserIDs {
+			override, hasOverride := event.Overrides[userID]
+			if hasOverride && override.Muted {
+				continue
+			}
 
-		starts, err := occurrenceStarts(
-			event.Event,
-			triggerFrom.Add(-occurrenceSearchPad),
-			triggerTo.Add(occurrenceSearchPad),
-		)
-		if err != nil {
-			return nil, err
-		}
+			offsetMinutes := reminder.OffsetMinutes
+			channel := reminder.Channel
+			if hasOverride {
+				if override.OffsetMinutes != nil {
+					offsetMinutes = *override.OffsetMinutes
+				}
+				if override.Channel != nil {
+					channel = *override.Channel
+				}
+			}
 
-		for _, start := range starts {
-			at := anchor(event.Event, start)
-			if at.After(triggerFrom) && !at.After(triggerTo) {
-				for _, userID := range event.RecipientUserIDs {
+			offset := time.Duration(offsetMinutes) * time.Minute
+			triggerFrom := from.Add(offset)
+			triggerTo := to.Add(offset)
+
+			starts, err := occurrenceStarts(
+				event.Event,
+				triggerFrom.Add(-occurrenceSearchPad),
+				triggerTo.Add(occurrenceSearchPad),
+			)
+			if err != nil {
+				return nil, err
+			}
+
+			for _, start := range starts {
+				at := anchor(event.Event, start)
+				if at.After(triggerFrom) && !at.After(triggerTo) {
 					due = append(due, DueReminder{
 						EventID:         event.ID,
 						UserID:          userID,
 						Title:           event.Title,
 						ReminderID:      reminder.ID,
 						OccurrenceStart: start,
-						OffsetMinutes:   reminder.OffsetMinutes,
-						Channel:         reminder.Channel,
+						OffsetMinutes:   offsetMinutes,
+						Channel:         channel,
 					})
 				}
 			}

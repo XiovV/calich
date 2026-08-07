@@ -137,7 +137,7 @@ func TestCalendarService_Access(t *testing.T) {
 		t.Fatalf("create stranger: %v", err)
 	}
 
-	svc := NewCalendarService(repository.NewCalendarRepository(sqlDB), repository.NewCalendarShareRepository(sqlDB), users)
+	svc := NewCalendarService(repository.NewCalendarRepository(sqlDB), repository.NewCalendarShareRepository(sqlDB), users, repository.NewReminderOverrideRepository(sqlDB))
 	ctx := context.Background()
 	calendar, err := svc.Create(ctx, owner.ID, "cal-1", CalendarWrite{Name: "Personal", Color: "#12809CFF"})
 	if err != nil {

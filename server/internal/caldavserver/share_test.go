@@ -283,6 +283,68 @@ func TestSharedCalendar_ObjectBytesIdenticalForOwnerAndEditor(t *testing.T) {
 	}
 }
 
+// TestSharedCalendar_ObjectBytesUnchangedByReminderOverride is #105's CalDAV
+// guarantee (ADR-0036): a Reminder override is never projected into
+// iCalendar, so an Editor's own override on an Event leaves the Calendar
+// object CalDAV serves them byte-identical to the Owner's — and to what the
+// same Editor saw before setting the override at all.
+func TestSharedCalendar_ObjectBytesUnchangedByReminderOverride(t *testing.T) {
+	env := newTestCalDAVEnv(t)
+	editorID, editorSecret := env.addSharedUser(t, "editor", repository.RoleEditor)
+
+	created, err := env.eventService.Create(context.Background(), env.userID, "shared-evt", service.EventWrite{
+		CalendarID: env.calendarID, Title: "Bin day",
+		Start: time.Date(2026, 6, 1, 9, 0, 0, 0, time.UTC), End: time.Date(2026, 6, 1, 9, 30, 0, 0, time.UTC),
+		Reminders: []repository.Reminder{{OffsetMinutes: 10, Channel: "notification"}},
+	})
+	if err != nil {
+		t.Fatalf("create event: %v", err)
+	}
+
+	editorClient := newTestCalDAVClientAs(t, env, "editor", editorSecret)
+	before, err := editorClient.GetCalendarObject(context.Background(), calendarObjectPath(editorID, env.calendarID, created.ID))
+	if err != nil {
+		t.Fatalf("editor GetCalendarObject before override: %v", err)
+	}
+	var beforeBuf bytes.Buffer
+	if err := ical.NewEncoder(&beforeBuf).Encode(before.Data); err != nil {
+		t.Fatalf("encode object before override: %v", err)
+	}
+
+	offset := 120
+	if _, err := env.eventService.SetReminderOverride(context.Background(), editorID, created.ID, service.ReminderOverrideWrite{OffsetMinutes: &offset}); err != nil {
+		t.Fatalf("set reminder override: %v", err)
+	}
+
+	editorAfter, err := editorClient.GetCalendarObject(context.Background(), calendarObjectPath(editorID, env.calendarID, created.ID))
+	if err != nil {
+		t.Fatalf("editor GetCalendarObject after override: %v", err)
+	}
+	var editorAfterBuf bytes.Buffer
+	if err := ical.NewEncoder(&editorAfterBuf).Encode(editorAfter.Data); err != nil {
+		t.Fatalf("encode editor object after override: %v", err)
+	}
+	if beforeBuf.String() != editorAfterBuf.String() {
+		t.Fatalf("expected the editor's own override not to change their object bytes, got:\nbefore:\n%s\nafter:\n%s", beforeBuf.String(), editorAfterBuf.String())
+	}
+	if before.ETag != editorAfter.ETag {
+		t.Fatalf("expected the editor's own override not to change the ETag, got %q vs %q", before.ETag, editorAfter.ETag)
+	}
+
+	ownerClient := newTestCalDAVClient(t, env)
+	ownerObj, err := ownerClient.GetCalendarObject(context.Background(), calendarObjectPath(env.userID, env.calendarID, created.ID))
+	if err != nil {
+		t.Fatalf("owner GetCalendarObject: %v", err)
+	}
+	var ownerBuf bytes.Buffer
+	if err := ical.NewEncoder(&ownerBuf).Encode(ownerObj.Data); err != nil {
+		t.Fatalf("encode owner object: %v", err)
+	}
+	if ownerBuf.String() != editorAfterBuf.String() {
+		t.Fatalf("expected the owner's object to stay byte-identical to the overriding editor's, got:\nowner:\n%s\neditor:\n%s", ownerBuf.String(), editorAfterBuf.String())
+	}
+}
+
 // A User with Access to a shared Calendar still cannot address it under
 // another principal's path (ADR-0035's prefix-check isolation guarantee) —
 // only their own path resolves it, even though they can read the Calendar

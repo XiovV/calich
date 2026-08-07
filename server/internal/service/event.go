@@ -76,16 +76,17 @@ func validateReminders(reminders []repository.Reminder) error {
 }
 
 type EventService struct {
-	db         *sql.DB
-	events     *repository.EventRepository
-	exceptions *repository.EventExceptionRepository
-	reminders  *repository.EventReminderRepository
-	sync       *repository.SyncRepository
-	calendars  *CalendarService
+	db                *sql.DB
+	events            *repository.EventRepository
+	exceptions        *repository.EventExceptionRepository
+	reminders         *repository.EventReminderRepository
+	reminderOverrides *repository.ReminderOverrideRepository
+	sync              *repository.SyncRepository
+	calendars         *CalendarService
 }
 
-func NewEventService(db *sql.DB, events *repository.EventRepository, exceptions *repository.EventExceptionRepository, reminders *repository.EventReminderRepository, sync *repository.SyncRepository, calendars *CalendarService) *EventService {
-	return &EventService{db: db, events: events, exceptions: exceptions, reminders: reminders, sync: sync, calendars: calendars}
+func NewEventService(db *sql.DB, events *repository.EventRepository, exceptions *repository.EventExceptionRepository, reminders *repository.EventReminderRepository, reminderOverrides *repository.ReminderOverrideRepository, sync *repository.SyncRepository, calendars *CalendarService) *EventService {
+	return &EventService{db: db, events: events, exceptions: exceptions, reminders: reminders, reminderOverrides: reminderOverrides, sync: sync, calendars: calendars}
 }
 
 // calendarByID resolves calendarID via s.calendars.Get, translating
@@ -155,6 +156,73 @@ func (s *EventService) getOwnedEvent(ctx context.Context, userID int64, id strin
 		return repository.Event{}, err
 	}
 	return event, nil
+}
+
+// ReminderOverrideWrite is a Reminder override's writable fields (ADR-0036):
+// OffsetMinutes and Channel are independently nil to leave the Event's own
+// value in effect for that dimension; Muted, when true, silences every
+// Reminder on the Event for the caller regardless of the other two.
+type ReminderOverrideWrite struct {
+	OffsetMinutes *int
+	Channel       *string
+	Muted         bool
+}
+
+// GetReminderOverride returns userID's own Reminder override on eventID.
+// found is false when userID has never set one — the fallback case where the
+// Event's own Reminders apply unchanged — which is a normal outcome here,
+// not an error; only a missing/inaccessible eventID returns an error
+// (ADR-0036). Lets a client read the current override back before changing
+// just one of its fields, since SetReminderOverride replaces it wholesale.
+func (s *EventService) GetReminderOverride(ctx context.Context, userID int64, eventID string) (override repository.ReminderOverride, found bool, err error) {
+	if _, err := s.getOwnedEvent(ctx, userID, eventID); err != nil {
+		return repository.ReminderOverride{}, false, err
+	}
+
+	override, err = s.reminderOverrides.Get(ctx, userID, eventID)
+	if errors.Is(err, repository.ErrNotFound) {
+		return repository.ReminderOverride{}, false, nil
+	}
+	if err != nil {
+		return repository.ReminderOverride{}, false, fmt.Errorf("get reminder override: %w", err)
+	}
+	return override, true, nil
+}
+
+// SetReminderOverride sets userID's own Reminder override on eventID —
+// retuning the offset, the Channel, or both, or muting the Event's Reminders
+// entirely, for userID alone (ADR-0036). Any User with at least Viewer
+// Access to eventID's Calendar may call this — getOwnedEvent's CanRead
+// check, not requireWritableCalendar's CanWrite one, since an override is a
+// personal delivery preference rather than a write to the Event itself. It
+// never touches the Event, its Reminders, or its change sequence.
+func (s *EventService) SetReminderOverride(ctx context.Context, userID int64, eventID string, write ReminderOverrideWrite) (repository.ReminderOverride, error) {
+	if write.Channel != nil && !isValidReminderChannel(*write.Channel) {
+		return repository.ReminderOverride{}, ErrInvalidReminderChannel
+	}
+	if _, err := s.getOwnedEvent(ctx, userID, eventID); err != nil {
+		return repository.ReminderOverride{}, err
+	}
+
+	override, err := s.reminderOverrides.Upsert(ctx, userID, eventID, repository.ReminderOverride{
+		OffsetMinutes: write.OffsetMinutes,
+		Channel:       write.Channel,
+		Muted:         write.Muted,
+	})
+	if err != nil {
+		return repository.ReminderOverride{}, fmt.Errorf("set reminder override: %w", err)
+	}
+	return override, nil
+}
+
+// ClearReminderOverride removes userID's own Reminder override on eventID,
+// falling back to the Event's own Reminders (ADR-0036). A no-op, not an
+// error, if userID never set one.
+func (s *EventService) ClearReminderOverride(ctx context.Context, userID int64, eventID string) error {
+	if _, err := s.getOwnedEvent(ctx, userID, eventID); err != nil {
+		return err
+	}
+	return s.reminderOverrides.Delete(ctx, userID, eventID)
 }
 
 // txRepos is the set of transaction-bound repositories a withTx body writes

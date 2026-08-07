@@ -244,6 +244,11 @@ type EventWithOwner struct {
 	// the Calendar's Owner plus every Shared Editor and Viewer. Always
 	// includes CalendarOwnerID.
 	RecipientUserIDs []int64
+	// Overrides is this Event's Reminder overrides (ADR-0036), keyed by the
+	// User who set them — a recipient absent from this map gets the
+	// Event's own Reminders unchanged. Populated alongside
+	// RecipientUserIDs by ListAllWithReminders.
+	Overrides map[int64]ReminderOverride
 }
 
 // ListAllWithReminders returns every Event across every Calendar that
@@ -280,8 +285,19 @@ func (r *EventRepository) ListAllWithReminders(ctx context.Context) ([]EventWith
 	if err != nil {
 		return nil, err
 	}
+
+	ids := make([]string, len(events))
+	for i, e := range events {
+		ids[i] = e.ID
+	}
+	overridesByEvent, err := bindReminderOverrideRepository(r.db).ListByEventIDs(ctx, ids)
+	if err != nil {
+		return nil, fmt.Errorf("list reminder overrides: %w", err)
+	}
+
 	for i := range events {
 		events[i].RecipientUserIDs = append([]int64{events[i].CalendarOwnerID}, sharedByCalendar[events[i].CalendarID]...)
+		events[i].Overrides = overridesByEvent[events[i].ID]
 	}
 
 	return events, nil

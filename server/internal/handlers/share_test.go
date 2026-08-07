@@ -49,7 +49,7 @@ func newShareTestServer(t *testing.T) shareTestServer {
 	// through an Admin-issued temporary password instead.
 	calendarRepo := repository.NewCalendarRepository(sqlDB)
 	shareRepo := repository.NewCalendarShareRepository(sqlDB)
-	calendars := service.NewCalendarService(calendarRepo, shareRepo, users)
+	calendars := service.NewCalendarService(calendarRepo, shareRepo, users, repository.NewReminderOverrideRepository(sqlDB))
 	accounts := service.NewAccountService(sqlDB, users, sessions, calendarRepo, shareRepo, calendars)
 	other, err := accounts.ResetPassword(ctx, 2, "temp-password")
 	if err != nil {
@@ -68,7 +68,7 @@ func newShareTestServer(t *testing.T) shareTestServer {
 		t.Fatalf("other login: %v", err)
 	}
 
-	events := service.NewEventService(sqlDB, repository.NewEventRepository(sqlDB), repository.NewEventExceptionRepository(sqlDB), repository.NewEventReminderRepository(sqlDB), repository.NewSyncRepository(sqlDB), calendars)
+	events := service.NewEventService(sqlDB, repository.NewEventRepository(sqlDB), repository.NewEventExceptionRepository(sqlDB), repository.NewEventReminderRepository(sqlDB), repository.NewReminderOverrideRepository(sqlDB), repository.NewSyncRepository(sqlDB), calendars)
 	imports := service.NewImportService(events, calendars)
 	subscriptions := service.NewSubscribeService(events, calendars, 0, service.WithHTTPClient(&http.Client{}))
 	calendarHandler := NewCalendarHandler(calendars, events, imports, subscriptions)

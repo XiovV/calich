@@ -30,13 +30,14 @@ var (
 )
 
 type CalendarService struct {
-	calendars *repository.CalendarRepository
-	shares    *repository.CalendarShareRepository
-	users     *repository.UserRepository
+	calendars         *repository.CalendarRepository
+	shares            *repository.CalendarShareRepository
+	users             *repository.UserRepository
+	reminderOverrides *repository.ReminderOverrideRepository
 }
 
-func NewCalendarService(calendars *repository.CalendarRepository, shares *repository.CalendarShareRepository, users *repository.UserRepository) *CalendarService {
-	return &CalendarService{calendars: calendars, shares: shares, users: users}
+func NewCalendarService(calendars *repository.CalendarRepository, shares *repository.CalendarShareRepository, users *repository.UserRepository, reminderOverrides *repository.ReminderOverrideRepository) *CalendarService {
+	return &CalendarService{calendars: calendars, shares: shares, users: users, reminderOverrides: reminderOverrides}
 }
 
 // CalendarWrite is a Calendar's writable fields, gathered into one value the
@@ -226,12 +227,21 @@ func (s *CalendarService) Share(ctx context.Context, ownerID int64, calendarID, 
 }
 
 // RevokeShare removes targetUserID's Share on calendarID. Only calendarID's
-// Owner may call this.
+// Owner may call this. targetUserID's Reminder overrides on calendarID's
+// Events are cleared with it — an override with no Access behind it would
+// otherwise linger, invisible, until targetUserID was ever shared with it
+// again (ADR-0036's acceptance criteria).
 func (s *CalendarService) RevokeShare(ctx context.Context, ownerID int64, calendarID string, targetUserID int64) error {
 	if _, err := s.requireOwner(ctx, ownerID, calendarID); err != nil {
 		return err
 	}
-	return s.shares.Delete(ctx, calendarID, targetUserID)
+	if err := s.shares.Delete(ctx, calendarID, targetUserID); err != nil {
+		return err
+	}
+	if err := s.reminderOverrides.DeleteByUserAndCalendar(ctx, targetUserID, calendarID); err != nil {
+		return fmt.Errorf("clear reminder overrides: %w", err)
+	}
+	return nil
 }
 
 // ListShares returns every Share on calendarID, each carrying the Username
@@ -249,9 +259,17 @@ func (s *CalendarService) ListShares(ctx context.Context, ownerID int64, calenda
 // this needs no ownership check: it only ever removes the caller's own
 // Share row, so there's nothing else to authorize. Returns
 // repository.ErrNotFound if userID holds no Share on calendarID (including
-// when userID is the Owner, who never has one).
+// when userID is the Owner, who never has one). userID's Reminder overrides
+// on calendarID's Events are cleared with it, mirroring RevokeShare
+// (ADR-0036).
 func (s *CalendarService) LeaveShare(ctx context.Context, userID int64, calendarID string) error {
-	return s.shares.Delete(ctx, calendarID, userID)
+	if err := s.shares.Delete(ctx, calendarID, userID); err != nil {
+		return err
+	}
+	if err := s.reminderOverrides.DeleteByUserAndCalendar(ctx, userID, calendarID); err != nil {
+		return fmt.Errorf("clear reminder overrides: %w", err)
+	}
+	return nil
 }
 
 // Get returns id if userID can read it. Callers that also need the resolved

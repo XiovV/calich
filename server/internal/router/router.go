@@ -75,6 +75,14 @@ func New(logger *slog.Logger, authHandler *handlers.AuthHandler, calendarHandler
 			r.Post("/{id}/exceptions", eventHandler.AddException)
 			r.Post("/{id}/reparent", eventHandler.Reparent)
 			r.Get("/{id}/ics", eventHandler.ICS)
+
+			// Per-User Reminder overrides (#105, ADR-0036): a personal
+			// delivery preference, open to any Access level (Viewer
+			// included), not gated by the write guard the rest of this
+			// group's mutating routes enforce.
+			r.Get("/{id}/reminder-override", eventHandler.GetReminderOverride)
+			r.Put("/{id}/reminder-override", eventHandler.SetReminderOverride)
+			r.Delete("/{id}/reminder-override", eventHandler.ClearReminderOverride)
 		})
 
 		r.Route("/notifications", func(r chi.Router) {

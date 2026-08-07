@@ -48,13 +48,13 @@ func newTestCalDAVEnv(t *testing.T) testCalDAVEnv {
 		t.Fatalf("bootstrap: %v", err)
 	}
 
-	calendarService := service.NewCalendarService(repository.NewCalendarRepository(sqlDB), repository.NewCalendarShareRepository(sqlDB), users)
+	calendarService := service.NewCalendarService(repository.NewCalendarRepository(sqlDB), repository.NewCalendarShareRepository(sqlDB), users, repository.NewReminderOverrideRepository(sqlDB))
 	const calendarID = "cal-1"
 	if _, err := calendarService.Create(context.Background(), user.ID, calendarID, service.CalendarWrite{Name: "Personal", Color: "#12809CFF"}); err != nil {
 		t.Fatalf("create calendar: %v", err)
 	}
 
-	eventService := service.NewEventService(sqlDB, repository.NewEventRepository(sqlDB), repository.NewEventExceptionRepository(sqlDB), repository.NewEventReminderRepository(sqlDB), repository.NewSyncRepository(sqlDB), calendarService)
+	eventService := service.NewEventService(sqlDB, repository.NewEventRepository(sqlDB), repository.NewEventExceptionRepository(sqlDB), repository.NewEventReminderRepository(sqlDB), repository.NewReminderOverrideRepository(sqlDB), repository.NewSyncRepository(sqlDB), calendarService)
 
 	appPasswordService := service.NewAppPasswordService(repository.NewAppPasswordRepository(sqlDB), users)
 	created, err := appPasswordService.Create(context.Background(), user.ID, "Test device")

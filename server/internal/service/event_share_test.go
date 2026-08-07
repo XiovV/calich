@@ -49,7 +49,7 @@ func newEventShareFixture(t *testing.T) eventShareFixture {
 		t.Fatalf("create stranger: %v", err)
 	}
 
-	calendars := NewCalendarService(repository.NewCalendarRepository(sqlDB), repository.NewCalendarShareRepository(sqlDB), users)
+	calendars := NewCalendarService(repository.NewCalendarRepository(sqlDB), repository.NewCalendarShareRepository(sqlDB), users, repository.NewReminderOverrideRepository(sqlDB))
 	cal, err := calendars.Create(ctx, owner.ID, "cal-1", CalendarWrite{Name: "Family", Color: "#12809CFF"})
 	if err != nil {
 		t.Fatalf("create calendar: %v", err)
@@ -61,7 +61,7 @@ func newEventShareFixture(t *testing.T) eventShareFixture {
 		t.Fatalf("share viewer: %v", err)
 	}
 
-	events := NewEventService(sqlDB, repository.NewEventRepository(sqlDB), repository.NewEventExceptionRepository(sqlDB), repository.NewEventReminderRepository(sqlDB), repository.NewSyncRepository(sqlDB), calendars)
+	events := NewEventService(sqlDB, repository.NewEventRepository(sqlDB), repository.NewEventExceptionRepository(sqlDB), repository.NewEventReminderRepository(sqlDB), repository.NewReminderOverrideRepository(sqlDB), repository.NewSyncRepository(sqlDB), calendars)
 
 	return eventShareFixture{
 		events: events, calendars: calendars,
