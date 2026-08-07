@@ -106,6 +106,8 @@ func New(logger *slog.Logger, authHandler *handlers.AuthHandler, calendarHandler
 			r.Post("/{id}/reset-password", accountHandler.ResetPassword)
 			r.Put("/{id}/admin", accountHandler.SetAdmin)
 			r.Put("/{id}/disabled", accountHandler.SetDisabled)
+			r.Get("/{id}/delete-impact", accountHandler.DeleteImpact)
+			r.Delete("/{id}", accountHandler.Delete)
 		})
 	})
 

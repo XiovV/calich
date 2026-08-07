@@ -444,6 +444,44 @@ func TestCalendarRepository_Delete_ScopedToUser(t *testing.T) {
 	}
 }
 
+func TestCalendarRepository_TransferOwnership(t *testing.T) {
+	repo, userID, otherUserID := newTestCalendarRepository(t)
+	ctx := context.Background()
+
+	if _, err := repo.Create(ctx, userID, "cal-1", CalendarFields{Name: "Personal", Color: "peacock"}); err != nil {
+		t.Fatalf("create cal-1: %v", err)
+	}
+	if _, err := repo.Create(ctx, userID, "cal-2", CalendarFields{Name: "Family", Color: "blue"}); err != nil {
+		t.Fatalf("create cal-2: %v", err)
+	}
+
+	if err := repo.TransferOwnership(ctx, userID, otherUserID); err != nil {
+		t.Fatalf("transfer ownership: %v", err)
+	}
+
+	if _, err := repo.GetByID(ctx, userID, "cal-1"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected cal-1 to no longer belong to the old owner, got %v", err)
+	}
+	transferred, err := repo.GetByID(ctx, otherUserID, "cal-1")
+	if err != nil {
+		t.Fatalf("expected cal-1 to belong to the new owner: %v", err)
+	}
+	if transferred.Name != "Personal" {
+		t.Fatalf("expected the calendar's other fields to survive the transfer, got %+v", transferred)
+	}
+	if _, err := repo.GetByID(ctx, otherUserID, "cal-2"); err != nil {
+		t.Fatalf("expected cal-2 to also transfer: %v", err)
+	}
+}
+
+func TestCalendarRepository_TransferOwnership_NoopWhenOwnerHasNoCalendars(t *testing.T) {
+	repo, userID, otherUserID := newTestCalendarRepository(t)
+
+	if err := repo.TransferOwnership(context.Background(), userID, otherUserID); err != nil {
+		t.Fatalf("expected no error transferring an empty set of calendars, got %v", err)
+	}
+}
+
 func TestCalendarRepository_ListSharedWithUser(t *testing.T) {
 	ctx := context.Background()
 

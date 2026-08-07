@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"strings"
@@ -9,6 +10,14 @@ import (
 	"golang.org/x/crypto/bcrypt"
 
 	"github.com/XiovV/calendar/server/internal/repository"
+)
+
+// Delete dispositions for a deleted User's owned Calendars (ADR-0037) —
+// there is no default, since guessing wrong either silently destroys a
+// shared Calendar or hands its data to someone with no business holding it.
+const (
+	DispositionTransfer = "transfer"
+	DispositionDelete   = "delete"
 )
 
 var (
@@ -21,21 +30,38 @@ var (
 	// ErrLastAdmin is returned when an operation would leave the instance
 	// with no Admin at all (ADR-0037).
 	ErrLastAdmin = errors.New("cannot remove the last remaining admin")
+	// ErrInvalidDisposition is returned when Delete is called with neither
+	// DispositionTransfer nor DispositionDelete — Delete has no default
+	// (ADR-0037).
+	ErrInvalidDisposition = errors.New(`owned_calendars must be "transfer" or "delete"`)
+	// ErrTransferTargetRequired is returned when Delete is called with
+	// DispositionTransfer but no transferTo.
+	ErrTransferTargetRequired = errors.New("transfer_to is required when owned_calendars is \"transfer\"")
+	// ErrTransferTargetNotFound is returned when transferTo doesn't name an
+	// existing User.
+	ErrTransferTargetNotFound = errors.New("transfer target not found")
+	// ErrCannotTransferToSelf is returned when transferTo names the User
+	// being deleted — their Calendars can't be reassigned to themselves,
+	// since they're about to stop existing.
+	ErrCannotTransferToSelf = errors.New("cannot transfer calendars to the user being deleted")
 )
 
 // AccountService is account administration (ADR-0037): creating accounts,
-// listing them, resetting a password, and granting or revoking Admin. It is
-// deliberately separate from data access — an Admin's authority here never
-// extends to another User's Calendars or Events, which stay behind the
-// Access resolver (ADR-0034) like everyone else's.
+// listing them, resetting a password, granting or revoking Admin, disabling,
+// and deleting. It is deliberately separate from data access — an Admin's
+// authority here never extends to another User's Calendars or Events, which
+// stay behind the Access resolver (ADR-0034) like everyone else's.
 type AccountService struct {
-	users     *repository.UserRepository
-	sessions  *repository.SessionRepository
-	calendars *CalendarService
+	db           *sql.DB
+	users        *repository.UserRepository
+	sessions     *repository.SessionRepository
+	calendarRepo *repository.CalendarRepository
+	shareRepo    *repository.CalendarShareRepository
+	calendars    *CalendarService
 }
 
-func NewAccountService(users *repository.UserRepository, sessions *repository.SessionRepository, calendars *CalendarService) *AccountService {
-	return &AccountService{users: users, sessions: sessions, calendars: calendars}
+func NewAccountService(db *sql.DB, users *repository.UserRepository, sessions *repository.SessionRepository, calendarRepo *repository.CalendarRepository, shareRepo *repository.CalendarShareRepository, calendars *CalendarService) *AccountService {
+	return &AccountService{db: db, users: users, sessions: sessions, calendarRepo: calendarRepo, shareRepo: shareRepo, calendars: calendars}
 }
 
 // Create makes a new account with username and a temporary password
@@ -171,4 +197,115 @@ func (s *AccountService) SetDisabled(ctx context.Context, userID int64, isDisabl
 	}
 
 	return user, nil
+}
+
+// CalendarImpact is one owned Calendar's exposure to a Delete — how many
+// Users hold a Share on it, and would therefore lose Access the moment its
+// Owner's account (and, under DispositionDelete, the Calendar itself) is
+// gone.
+type CalendarImpact struct {
+	ID         string
+	Name       string
+	ShareCount int
+}
+
+// DeleteImpact is what DeleteImpact reports before an Admin commits to
+// deleting userID's account (ADR-0037): every Calendar they own, and how
+// many distinct Users, across all of them, hold a Share and would lose
+// Access.
+type DeleteImpact struct {
+	Calendars         []CalendarImpact
+	AffectedUserCount int
+}
+
+// DeleteImpact reports what deleting userID's account would affect, without
+// writing anything — the Admin-facing preview ADR-0037 asks for so "which
+// Calendars have Shares and how many Users would lose Access" is known
+// before the irreversible DispositionDelete is chosen.
+func (s *AccountService) DeleteImpact(ctx context.Context, userID int64) (DeleteImpact, error) {
+	calendars, err := s.calendarRepo.ListByUser(ctx, userID)
+	if err != nil {
+		return DeleteImpact{}, fmt.Errorf("list owned calendars: %w", err)
+	}
+
+	impact := DeleteImpact{Calendars: make([]CalendarImpact, 0, len(calendars))}
+	affected := map[int64]struct{}{}
+	for _, c := range calendars {
+		shares, err := s.shareRepo.ListByCalendarWithUsername(ctx, c.ID)
+		if err != nil {
+			return DeleteImpact{}, fmt.Errorf("list shares for calendar %s: %w", c.ID, err)
+		}
+		impact.Calendars = append(impact.Calendars, CalendarImpact{ID: c.ID, Name: c.Name, ShareCount: len(shares)})
+		for _, share := range shares {
+			affected[share.UserID] = struct{}{}
+		}
+	}
+	impact.AffectedUserCount = len(affected)
+
+	return impact, nil
+}
+
+// Delete removes userID's account outright, requiring an explicit
+// disposition for the Calendars they own (ADR-0037) — there is no default,
+// since today's cascade would otherwise take a shared Calendar, including
+// Events other people wrote, out from under everyone with a Share, silently,
+// at the exact moment nobody is paying attention:
+//
+//   - DispositionTransfer reassigns every Calendar userID owned to
+//     transferTo, keeping their Events (including ones other people wrote)
+//     and existing Shares exactly as they were.
+//   - DispositionDelete removes userID's Calendars, and with them their
+//     Events, via the existing cascade.
+//
+// Either way, Shares granted *to* userID are removed (cascade on
+// calendar_shares.user_id), and deleting the last remaining Admin is
+// refused, exactly like disabling one.
+func (s *AccountService) Delete(ctx context.Context, userID int64, disposition string, transferTo *int64) error {
+	if disposition != DispositionTransfer && disposition != DispositionDelete {
+		return ErrInvalidDisposition
+	}
+
+	if disposition == DispositionTransfer {
+		if transferTo == nil {
+			return ErrTransferTargetRequired
+		}
+		if *transferTo == userID {
+			return ErrCannotTransferToSelf
+		}
+		if _, err := s.users.GetByID(ctx, *transferTo); err != nil {
+			if errors.Is(err, repository.ErrNotFound) {
+				return ErrTransferTargetNotFound
+			}
+			return fmt.Errorf("get transfer target: %w", err)
+		}
+	}
+
+	user, err := s.users.GetByID(ctx, userID)
+	if err != nil {
+		return fmt.Errorf("get user: %w", err)
+	}
+
+	if user.IsAdmin {
+		count, err := s.users.CountEnabledAdmins(ctx)
+		if err != nil {
+			return fmt.Errorf("count enabled admins: %w", err)
+		}
+		if count <= 1 {
+			return ErrLastAdmin
+		}
+	}
+
+	return repository.WithTx(ctx, s.db, func(tx *sql.Tx) error {
+		if disposition == DispositionTransfer {
+			if err := s.calendarRepo.WithTx(tx).TransferOwnership(ctx, userID, *transferTo); err != nil {
+				return fmt.Errorf("transfer calendars: %w", err)
+			}
+		}
+
+		if err := s.users.WithTx(tx).Delete(ctx, userID); err != nil {
+			return fmt.Errorf("delete user: %w", err)
+		}
+
+		return nil
+	})
 }

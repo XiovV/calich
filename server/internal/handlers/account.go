@@ -65,6 +65,19 @@ var setDisabledErrors = []errorCase{
 	{repository.ErrNotFound, notFound("account not found")},
 }
 
+var deleteImpactErrors = []errorCase{
+	{repository.ErrNotFound, notFound("account not found")},
+}
+
+var deleteAccountErrors = []errorCase{
+	{service.ErrInvalidDisposition, badRequest(service.ErrInvalidDisposition.Error())},
+	{service.ErrTransferTargetRequired, badRequest(service.ErrTransferTargetRequired.Error())},
+	{service.ErrCannotTransferToSelf, badRequest(service.ErrCannotTransferToSelf.Error())},
+	{service.ErrTransferTargetNotFound, badRequest(service.ErrTransferTargetNotFound.Error())},
+	{service.ErrLastAdmin, conflict("last_admin", "cannot delete the last remaining admin")},
+	{repository.ErrNotFound, notFound("account not found")},
+}
+
 type createAccountRequest struct {
 	Username string `json:"username"`
 	Password string `json:"password"`
@@ -173,4 +186,68 @@ func (h *AccountHandler) SetDisabled(w http.ResponseWriter, r *http.Request) {
 	}
 
 	httpresponse.JSON(w, http.StatusOK, toAccountResponse(user))
+}
+
+type calendarImpactResponse struct {
+	ID         string `json:"id"`
+	Name       string `json:"name"`
+	ShareCount int    `json:"share_count"`
+}
+
+type deleteImpactResponse struct {
+	Calendars         []calendarImpactResponse `json:"calendars"`
+	AffectedUserCount int                       `json:"affected_user_count"`
+}
+
+// DeleteImpact reports what deleting id's account would affect (ADR-0037):
+// which of its Calendars have Shares, and how many Users would lose Access
+// — so an Admin can see the impact before committing to DispositionDelete.
+func (h *AccountHandler) DeleteImpact(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		httpresponse.Error(w, http.StatusBadRequest, "invalid_request", "id must be a number")
+		return
+	}
+
+	impact, err := h.accounts.DeleteImpact(r.Context(), id)
+	if respondError(w, err, deleteImpactErrors, "failed to compute delete impact") {
+		return
+	}
+
+	calendars := make([]calendarImpactResponse, len(impact.Calendars))
+	for i, c := range impact.Calendars {
+		calendars[i] = calendarImpactResponse{ID: c.ID, Name: c.Name, ShareCount: c.ShareCount}
+	}
+
+	httpresponse.JSON(w, http.StatusOK, deleteImpactResponse{Calendars: calendars, AffectedUserCount: impact.AffectedUserCount})
+}
+
+type deleteAccountRequest struct {
+	// OwnedCalendars is the disposition for id's owned Calendars — "transfer"
+	// or "delete" (ADR-0037). There is no default: an empty or unrecognized
+	// value is rejected.
+	OwnedCalendars string `json:"owned_calendars"`
+	// TransferTo is required when OwnedCalendars is "transfer" — the User
+	// every Calendar id owned is reassigned to.
+	TransferTo *int64 `json:"transfer_to,omitempty"`
+}
+
+func (h *AccountHandler) Delete(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		httpresponse.Error(w, http.StatusBadRequest, "invalid_request", "id must be a number")
+		return
+	}
+
+	var req deleteAccountRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httpresponse.Error(w, http.StatusBadRequest, "invalid_request", "request body must be valid JSON")
+		return
+	}
+
+	if err := h.accounts.Delete(r.Context(), id, req.OwnedCalendars, req.TransferTo); respondError(w, err, deleteAccountErrors, "failed to delete account") {
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
 }

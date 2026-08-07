@@ -341,6 +341,127 @@ func TestUserRepository_CountEnabledAdmins(t *testing.T) {
 	}
 }
 
+func TestUserRepository_Delete(t *testing.T) {
+	repo := newTestUserRepository(t)
+	ctx := context.Background()
+
+	created, err := repo.Create(ctx, "alice", "hash", true)
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+
+	if err := repo.Delete(ctx, created.ID); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+
+	if _, err := repo.GetByID(ctx, created.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected ErrNotFound after delete, got %v", err)
+	}
+}
+
+func TestUserRepository_Delete_NotFound(t *testing.T) {
+	repo := newTestUserRepository(t)
+
+	if err := repo.Delete(context.Background(), 999); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected ErrNotFound, got %v", err)
+	}
+}
+
+// TestUserRepository_Delete_CascadesOwnedCalendarsAndSharesGrantedToThem
+// covers ADR-0037's DispositionDelete: deleting a User removes the
+// Calendars they owned (via calendars.user_id ON DELETE CASCADE) and, with
+// them, the Shares granted on those Calendars — and separately, the Shares
+// granted *to* the deleted User themselves (calendar_shares.user_id ON
+// DELETE CASCADE), regardless of disposition.
+func TestUserRepository_Delete_CascadesOwnedCalendarsAndSharesGrantedToThem(t *testing.T) {
+	sqlDB, err := db.OpenInMemory()
+	if err != nil {
+		t.Fatalf("open in-memory db: %v", err)
+	}
+	t.Cleanup(func() { sqlDB.Close() })
+	ctx := context.Background()
+
+	users := NewUserRepository(sqlDB)
+	owner, err := users.Create(ctx, "owner", "hash", false)
+	if err != nil {
+		t.Fatalf("create owner: %v", err)
+	}
+	other, err := users.Create(ctx, "other", "hash", false)
+	if err != nil {
+		t.Fatalf("create other: %v", err)
+	}
+
+	calendars := NewCalendarRepository(sqlDB)
+	if _, err := calendars.Create(ctx, owner.ID, "cal-1", CalendarFields{Name: "Family", Color: "blue"}); err != nil {
+		t.Fatalf("create calendar: %v", err)
+	}
+
+	shares := NewCalendarShareRepository(sqlDB)
+	// "other" holds a Share both on the owner's Calendar (should vanish when
+	// the Calendar cascades away) and, separately, is the recipient of a
+	// Share granted to them directly that has nothing to do with owner's
+	// deletion.
+	if _, err := shares.Upsert(ctx, "cal-1", other.ID, RoleEditor); err != nil {
+		t.Fatalf("share cal-1 with other: %v", err)
+	}
+
+	if err := users.Delete(ctx, owner.ID); err != nil {
+		t.Fatalf("delete owner: %v", err)
+	}
+
+	if _, err := calendars.GetByIDAny(ctx, "cal-1"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected cal-1 to cascade-delete with its owner, got %v", err)
+	}
+	if _, err := shares.Get(ctx, "cal-1", other.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected other's share on the deleted calendar to cascade away, got %v", err)
+	}
+}
+
+// TestUserRepository_Delete_CascadesSharesGrantedToTheDeletedUser proves the
+// other direction of ADR-0037's "Shares granted to the deleted User are
+// removed": a Share held on someone else's Calendar disappears when the
+// holder is deleted, even though that Calendar isn't theirs and is
+// untouched otherwise.
+func TestUserRepository_Delete_CascadesSharesGrantedToTheDeletedUser(t *testing.T) {
+	sqlDB, err := db.OpenInMemory()
+	if err != nil {
+		t.Fatalf("open in-memory db: %v", err)
+	}
+	t.Cleanup(func() { sqlDB.Close() })
+	ctx := context.Background()
+
+	users := NewUserRepository(sqlDB)
+	owner, err := users.Create(ctx, "owner", "hash", false)
+	if err != nil {
+		t.Fatalf("create owner: %v", err)
+	}
+	holder, err := users.Create(ctx, "holder", "hash", false)
+	if err != nil {
+		t.Fatalf("create holder: %v", err)
+	}
+
+	calendars := NewCalendarRepository(sqlDB)
+	if _, err := calendars.Create(ctx, owner.ID, "cal-1", CalendarFields{Name: "Family", Color: "blue"}); err != nil {
+		t.Fatalf("create calendar: %v", err)
+	}
+
+	shares := NewCalendarShareRepository(sqlDB)
+	if _, err := shares.Upsert(ctx, "cal-1", holder.ID, RoleEditor); err != nil {
+		t.Fatalf("share cal-1 with holder: %v", err)
+	}
+
+	if err := users.Delete(ctx, holder.ID); err != nil {
+		t.Fatalf("delete holder: %v", err)
+	}
+
+	if _, err := shares.Get(ctx, "cal-1", holder.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected holder's share to be removed, got %v", err)
+	}
+	if _, err := calendars.GetByIDAny(ctx, "cal-1"); err != nil {
+		t.Fatalf("expected the owner's calendar to survive, got %v", err)
+	}
+}
+
 func TestUserRepository_ResetPassword_SetsMustChangePassword(t *testing.T) {
 	repo := newTestUserRepository(t)
 	ctx := context.Background()

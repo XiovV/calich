@@ -36,11 +36,19 @@ type User struct {
 }
 
 type UserRepository struct {
-	db *sql.DB
+	db DBTX
 }
 
 func NewUserRepository(db *sql.DB) *UserRepository {
 	return &UserRepository{db: db}
+}
+
+// WithTx returns a copy of the repository bound to tx, for use inside
+// repository.WithTx to make a multi-table write atomic (ADR-0018) — Delete
+// needs this to pair with CalendarRepository.TransferOwnership under the
+// "transfer" disposition (ADR-0037).
+func (r *UserRepository) WithTx(tx *sql.Tx) *UserRepository {
+	return &UserRepository{db: tx}
 }
 
 // ErrUsernameTaken is returned by Create when the username is already in
@@ -195,6 +203,22 @@ func (r *UserRepository) SetDisabled(ctx context.Context, userID int64, isDisabl
 		return User{}, fmt.Errorf("set disabled: %w", err)
 	}
 	return r.GetByID(ctx, userID)
+}
+
+// Delete removes userID's account outright (ADR-0037). Everything that
+// references it either cascades — Sessions, App passwords, Shares granted
+// to userID, and, unless the caller has already reassigned them away via
+// CalendarRepository.TransferOwnership, the Calendars userID owned (whose
+// own cascade takes their Events and Shares with them) — or clears via ON
+// DELETE SET NULL (an Event's created_by attribution). Callers are
+// responsible for the last-Admin guard and for the disposition of owned
+// Calendars; this method applies whatever it's told.
+func (r *UserRepository) Delete(ctx context.Context, userID int64) error {
+	res, err := r.db.ExecContext(ctx, `DELETE FROM users WHERE id = ?`, userID)
+	if err != nil {
+		return fmt.Errorf("delete user: %w", err)
+	}
+	return requireAffected(res)
 }
 
 // ResetPassword sets a new password hash and, unlike UpdatePassword, sets

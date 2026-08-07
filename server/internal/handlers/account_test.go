@@ -33,8 +33,10 @@ func newAccountTestServer(t *testing.T) (*httptest.Server, string) {
 		t.Fatalf("bootstrap: %v", err)
 	}
 
-	calendars := service.NewCalendarService(repository.NewCalendarRepository(sqlDB), repository.NewCalendarShareRepository(sqlDB), users)
-	accounts := service.NewAccountService(users, sessions, calendars)
+	calendarRepo := repository.NewCalendarRepository(sqlDB)
+	shareRepo := repository.NewCalendarShareRepository(sqlDB)
+	calendars := service.NewCalendarService(calendarRepo, shareRepo, users)
+	accounts := service.NewAccountService(sqlDB, users, sessions, calendarRepo, shareRepo, calendars)
 	h := NewAccountHandler(accounts)
 	authHandler := NewAuthHandler(auth, false)
 
@@ -49,6 +51,8 @@ func newAccountTestServer(t *testing.T) (*httptest.Server, string) {
 		r.Post("/{id}/reset-password", h.ResetPassword)
 		r.Put("/{id}/admin", h.SetAdmin)
 		r.Put("/{id}/disabled", h.SetDisabled)
+		r.Get("/{id}/delete-impact", h.DeleteImpact)
+		r.Delete("/{id}", h.Delete)
 	})
 
 	srv := httptest.NewServer(r)
@@ -622,5 +626,242 @@ func TestAccountSetAdmin_RefusesToDemoteTheLastRemainingAdmin(t *testing.T) {
 
 	if resp.StatusCode != http.StatusConflict {
 		t.Fatalf("expected 409, got %d", resp.StatusCode)
+	}
+}
+
+func deleteAccount(t *testing.T, srv *httptest.Server, accessToken string, id int64, req deleteAccountRequest) *http.Response {
+	t.Helper()
+
+	body, err := json.Marshal(req)
+	if err != nil {
+		t.Fatalf("marshal delete account request: %v", err)
+	}
+	httpReq, err := http.NewRequest(http.MethodDelete, fmt.Sprintf("%s/api/accounts/%d", srv.URL, id), bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	httpReq.Header.Set("Authorization", "Bearer "+accessToken)
+	httpReq.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(httpReq)
+	if err != nil {
+		t.Fatalf("DELETE /api/accounts/%d: %v", id, err)
+	}
+	return resp
+}
+
+func TestAccountDelete_DispositionDelete_RemovesAccount(t *testing.T) {
+	srv, accessToken := newAccountTestServer(t)
+
+	createResp := createAccount(t, srv, accessToken, "alice", "temp-secret")
+	defer createResp.Body.Close()
+	var created accountResponse
+	if err := json.NewDecoder(createResp.Body).Decode(&created); err != nil {
+		t.Fatalf("decode create response: %v", err)
+	}
+
+	resp := deleteAccount(t, srv, accessToken, created.ID, deleteAccountRequest{OwnedCalendars: "delete"})
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("expected 204, got %d", resp.StatusCode)
+	}
+
+	loginResp := login(t, srv, "alice", "temp-secret")
+	defer loginResp.Body.Close()
+	if loginResp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected a deleted account to be refused login, got %d", loginResp.StatusCode)
+	}
+}
+
+func TestAccountDelete_DispositionTransfer_ReassignsCalendars(t *testing.T) {
+	srv, accessToken := newAccountTestServer(t)
+
+	createResp := createAccount(t, srv, accessToken, "alice", "temp-secret")
+	defer createResp.Body.Close()
+	var alice accountResponse
+	if err := json.NewDecoder(createResp.Body).Decode(&alice); err != nil {
+		t.Fatalf("decode create response: %v", err)
+	}
+	bobResp := createAccount(t, srv, accessToken, "bob", "temp-secret")
+	defer bobResp.Body.Close()
+	var bob accountResponse
+	if err := json.NewDecoder(bobResp.Body).Decode(&bob); err != nil {
+		t.Fatalf("decode bob create response: %v", err)
+	}
+
+	resp := deleteAccount(t, srv, accessToken, alice.ID, deleteAccountRequest{OwnedCalendars: "transfer", TransferTo: &bob.ID})
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("expected 204, got %d", resp.StatusCode)
+	}
+}
+
+func TestAccountDelete_MissingDisposition_Returns400(t *testing.T) {
+	srv, accessToken := newAccountTestServer(t)
+
+	createResp := createAccount(t, srv, accessToken, "alice", "temp-secret")
+	defer createResp.Body.Close()
+	var created accountResponse
+	if err := json.NewDecoder(createResp.Body).Decode(&created); err != nil {
+		t.Fatalf("decode create response: %v", err)
+	}
+
+	resp := deleteAccount(t, srv, accessToken, created.ID, deleteAccountRequest{})
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", resp.StatusCode)
+	}
+}
+
+func TestAccountDelete_TransferWithoutTransferTo_Returns400(t *testing.T) {
+	srv, accessToken := newAccountTestServer(t)
+
+	createResp := createAccount(t, srv, accessToken, "alice", "temp-secret")
+	defer createResp.Body.Close()
+	var created accountResponse
+	if err := json.NewDecoder(createResp.Body).Decode(&created); err != nil {
+		t.Fatalf("decode create response: %v", err)
+	}
+
+	resp := deleteAccount(t, srv, accessToken, created.ID, deleteAccountRequest{OwnedCalendars: "transfer"})
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", resp.StatusCode)
+	}
+}
+
+func TestAccountDelete_TransferToUnknownUser_Returns400(t *testing.T) {
+	srv, accessToken := newAccountTestServer(t)
+
+	createResp := createAccount(t, srv, accessToken, "alice", "temp-secret")
+	defer createResp.Body.Close()
+	var created accountResponse
+	if err := json.NewDecoder(createResp.Body).Decode(&created); err != nil {
+		t.Fatalf("decode create response: %v", err)
+	}
+
+	ghost := int64(9999)
+	resp := deleteAccount(t, srv, accessToken, created.ID, deleteAccountRequest{OwnedCalendars: "transfer", TransferTo: &ghost})
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", resp.StatusCode)
+	}
+}
+
+func TestAccountDelete_TransferToSelf_Returns400(t *testing.T) {
+	srv, accessToken := newAccountTestServer(t)
+
+	createResp := createAccount(t, srv, accessToken, "alice", "temp-secret")
+	defer createResp.Body.Close()
+	var created accountResponse
+	if err := json.NewDecoder(createResp.Body).Decode(&created); err != nil {
+		t.Fatalf("decode create response: %v", err)
+	}
+
+	resp := deleteAccount(t, srv, accessToken, created.ID, deleteAccountRequest{OwnedCalendars: "transfer", TransferTo: &created.ID})
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", resp.StatusCode)
+	}
+}
+
+func TestAccountDelete_RefusesToDeleteTheLastRemainingAdmin(t *testing.T) {
+	srv, accessToken := newAccountTestServer(t)
+
+	// The bootstrapped admin has id 1 and is the sole admin — deleting it
+	// must be refused (ADR-0037).
+	resp := deleteAccount(t, srv, accessToken, 1, deleteAccountRequest{OwnedCalendars: "delete"})
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("expected 409, got %d", resp.StatusCode)
+	}
+}
+
+func TestAccountDelete_UnknownID_Returns404(t *testing.T) {
+	srv, accessToken := newAccountTestServer(t)
+
+	resp := deleteAccount(t, srv, accessToken, 999, deleteAccountRequest{OwnedCalendars: "delete"})
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d", resp.StatusCode)
+	}
+}
+
+func TestAccountDelete_NonAdmin_Returns403(t *testing.T) {
+	srv, accessToken := newAccountTestServer(t)
+	aliceToken := nonAdminAccessToken(t, srv, accessToken)
+
+	resp := deleteAccount(t, srv, aliceToken, 1, deleteAccountRequest{OwnedCalendars: "delete"})
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d", resp.StatusCode)
+	}
+}
+
+func TestAccountDeleteImpact_ReportsShareCounts(t *testing.T) {
+	srv, accessToken := newAccountTestServer(t)
+
+	createResp := createAccount(t, srv, accessToken, "alice", "temp-secret")
+	defer createResp.Body.Close()
+	var alice accountResponse
+	if err := json.NewDecoder(createResp.Body).Decode(&alice); err != nil {
+		t.Fatalf("decode create response: %v", err)
+	}
+
+	req, err := http.NewRequest(http.MethodGet, fmt.Sprintf("%s/api/accounts/%d/delete-impact", srv.URL, alice.ID), nil)
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET delete-impact: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	var impact deleteImpactResponse
+	if err := json.NewDecoder(resp.Body).Decode(&impact); err != nil {
+		t.Fatalf("decode delete impact response: %v", err)
+	}
+	if len(impact.Calendars) == 0 {
+		t.Fatalf("expected alice's default calendars to appear in the impact report")
+	}
+	if impact.AffectedUserCount != 0 {
+		t.Fatalf("expected 0 affected users for an unshared account, got %d", impact.AffectedUserCount)
+	}
+}
+
+func TestAccountDeleteImpact_NonAdmin_Returns403(t *testing.T) {
+	srv, accessToken := newAccountTestServer(t)
+	aliceToken := nonAdminAccessToken(t, srv, accessToken)
+
+	req, err := http.NewRequest(http.MethodGet, srv.URL+"/api/accounts/1/delete-impact", nil)
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+aliceToken)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET delete-impact: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d", resp.StatusCode)
 	}
 }

@@ -47,8 +47,10 @@ func newShareTestServer(t *testing.T) shareTestServer {
 	// like the one above stores "hash" verbatim, which Login's
 	// bcrypt.CompareHashAndPassword would reject — so "other" logs in
 	// through an Admin-issued temporary password instead.
-	calendars := service.NewCalendarService(repository.NewCalendarRepository(sqlDB), repository.NewCalendarShareRepository(sqlDB), users)
-	accounts := service.NewAccountService(users, sessions, calendars)
+	calendarRepo := repository.NewCalendarRepository(sqlDB)
+	shareRepo := repository.NewCalendarShareRepository(sqlDB)
+	calendars := service.NewCalendarService(calendarRepo, shareRepo, users)
+	accounts := service.NewAccountService(sqlDB, users, sessions, calendarRepo, shareRepo, calendars)
 	other, err := accounts.ResetPassword(ctx, 2, "temp-password")
 	if err != nil {
 		t.Fatalf("reset other user's password: %v", err)
