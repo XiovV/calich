@@ -67,7 +67,7 @@ export function AppPasswordsSection() {
   }
 
   return (
-    <section className="mt-8">
+    <section>
       <h2 className="text-heading font-medium text-ink">App passwords</h2>
       <p className="mt-1 text-body text-ink-muted">
         Generate a password for a native calendar app to sync over CalDAV. Each one can be revoked
@@ -89,11 +89,9 @@ export function AppPasswordsSection() {
           </div>
           {nudgeReminderDelivery && (
             <p className="mt-2 text-label-sm text-ink-muted">
-              This device will show its own reminder pop-ups. Head to{" "}
-              <a href="#reminder-delivery" className="underline">
-                Reminder delivery
-              </a>{" "}
-              below to stop getting them twice.
+              This device will show its own reminder pop-ups. Copy the password above, then visit
+              Reminder delivery in the left-hand nav to stop getting them twice — leaving this
+              page means it won't be shown again.
             </p>
           )}
         </div>

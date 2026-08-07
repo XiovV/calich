@@ -130,7 +130,7 @@ export function ImportExportSection() {
   }
 
   return (
-    <section className="mt-8">
+    <section>
       <h2 className="text-heading font-medium text-ink">Import & export</h2>
       <p className="mt-1 text-body text-ink-muted">
         Download every calendar you own as a .zip of .ics files — Subscribed Calendars aren't

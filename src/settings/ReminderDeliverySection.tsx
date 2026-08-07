@@ -18,7 +18,7 @@ export function ReminderDeliverySection() {
   }
 
   return (
-    <section id="reminder-delivery" className="mt-8">
+    <section>
       <h2 className="text-heading font-medium text-ink">Reminder delivery</h2>
       <p className="mt-1 text-body text-ink-muted">
         A synced device fires its own pop-up for a reminder it already has. Turn this on once
