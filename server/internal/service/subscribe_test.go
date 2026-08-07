@@ -19,7 +19,11 @@ import (
 // newTestImportService uses. The outbound feed side is a real
 // httptest.Server per test, not a mocked fetcher, per #83's acceptance
 // criteria.
-func newTestSubscribeService(t *testing.T) (svc *SubscribeService, events *EventService, calendars *CalendarService, userID int64) {
+// opts is applied after the default WithHTTPClient override below, so a
+// caller wanting the real address guard (#97, ADR-0032) back — as the
+// blocked-address tests do — passes WithHTTPClient(subscribeHTTPClient)
+// itself; NewSubscribeService applies options in order, so it wins.
+func newTestSubscribeService(t *testing.T, opts ...SubscribeOption) (svc *SubscribeService, events *EventService, calendars *CalendarService, userID int64) {
 	t.Helper()
 
 	sqlDB, err := db.OpenInMemory()
@@ -36,7 +40,11 @@ func newTestSubscribeService(t *testing.T) (svc *SubscribeService, events *Event
 	calendarSvc := NewCalendarService(repository.NewCalendarRepository(sqlDB))
 	eventSvc := NewEventService(sqlDB, repository.NewEventRepository(sqlDB), repository.NewEventExceptionRepository(sqlDB), repository.NewEventReminderRepository(sqlDB), repository.NewSyncRepository(sqlDB), calendarSvc)
 
-	return NewSubscribeService(eventSvc, calendarSvc, 0), eventSvc, calendarSvc, user.ID
+	// The address guard (#97, ADR-0032) would otherwise refuse every fetch
+	// here: icsServer/redirect servers below are httptest.Server instances on
+	// 127.0.0.1, a loopback address the guard exists to block.
+	allOpts := append([]SubscribeOption{WithHTTPClient(&http.Client{})}, opts...)
+	return NewSubscribeService(eventSvc, calendarSvc, 0, allOpts...), eventSvc, calendarSvc, user.ID
 }
 
 // subscribeFeedICS carries the feed's own name/color, a recurring timed
@@ -328,6 +336,66 @@ func TestSubscribeService_Subscribe_InvalidURL(t *testing.T) {
 	}
 }
 
+// TestSubscribeService_Subscribe_BlocksPrivateAddress is an end-to-end
+// check of #97/ADR-0032 using the real, unguarded-by-test-override client:
+// a SubscribeService built via NewSubscribeService with no WithHTTPClient
+// override must refuse a URL that resolves to loopback, the same way it
+// would refuse any other private/link-local address, and must not create a
+// Calendar in the process.
+func TestSubscribeService_Subscribe_BlocksPrivateAddress(t *testing.T) {
+	svc, _, calendars, userID := newTestSubscribeService(t, WithHTTPClient(subscribeHTTPClient))
+	srv := icsServer(t, subscribeFeedICS)
+	ctx := context.Background()
+
+	_, err := svc.Subscribe(ctx, userID, "http://user:s3cret@127.0.0.1:"+srv.URL[len("http://127.0.0.1:"):]+"/feed.ics", "Name", "#8E44ADFF", false)
+	if !errors.Is(err, ErrSubscribeURLBlocked) {
+		t.Fatalf("expected ErrSubscribeURLBlocked, got %v", err)
+	}
+	if strings.Contains(err.Error(), "s3cret") {
+		t.Fatalf("expected the password to be masked in the blocked-URL error, got %q", err.Error())
+	}
+
+	cals, err := calendars.List(ctx, userID)
+	if err != nil {
+		t.Fatalf("list calendars: %v", err)
+	}
+	if len(cals) != 0 {
+		t.Fatalf("expected no calendar to be created when the URL is blocked, got %+v", cals)
+	}
+}
+
+// TestSubscribeService_Refresh_BlocksPrivateAddress covers the "same check
+// on every Refresh, not only on create" acceptance criterion: a Calendar
+// that already carries a loopback SourceURL (as if its feed moved there, or
+// as if the guard were added after it was created) must have its Refresh
+// rejected the same way Subscribe would reject it, classified
+// needs_attention rather than retrying since no amount of retrying fixes it.
+func TestSubscribeService_Refresh_BlocksPrivateAddress(t *testing.T) {
+	svc, _, calendars, userID := newTestSubscribeService(t, WithHTTPClient(subscribeHTTPClient))
+	ctx := context.Background()
+
+	sourceURL := "http://127.0.0.1:9999/feed.ics"
+	cal, err := calendars.Create(ctx, userID, "cal-private", CalendarWrite{
+		Name: "Private", Color: "#12809CFF", SourceURL: &sourceURL,
+	})
+	if err != nil {
+		t.Fatalf("create calendar: %v", err)
+	}
+
+	_, err = svc.Refresh(ctx, userID, cal.ID, true)
+	if !errors.Is(err, ErrSubscribeURLBlocked) {
+		t.Fatalf("expected ErrSubscribeURLBlocked, got %v", err)
+	}
+
+	got, err := calendars.Get(ctx, userID, cal.ID)
+	if err != nil {
+		t.Fatalf("get calendar: %v", err)
+	}
+	if got.ErrorClass == nil || *got.ErrorClass != ErrorClassNeedsAttention {
+		t.Fatalf("expected ErrorClassNeedsAttention, got %+v", got.ErrorClass)
+	}
+}
+
 func TestNormalizeSubscribeURL_WebcalToHTTPS(t *testing.T) {
 	got, err := normalizeSubscribeURL("webcal://example.com/feed.ics")
 	if err != nil {
@@ -541,7 +609,7 @@ func TestSubscribeService_Refresh_ChangedSeriesUpdatedInPlaceUnchangedLeftAlone(
 		t.Fatalf("subscribe: %v", err)
 	}
 
-	before, err := events.events.ListMastersByCalendar(ctx, userID, cal.ID)
+	before, err := events.events.ListMastersByCalendar(ctx, cal.ID)
 	if err != nil {
 		t.Fatalf("list masters: %v", err)
 	}
@@ -567,7 +635,7 @@ func TestSubscribeService_Refresh_ChangedSeriesUpdatedInPlaceUnchangedLeftAlone(
 		t.Fatalf("expected the untouched series to count as a no-op, got %+v", result)
 	}
 
-	updated, err := events.events.GetByID(ctx, userID, standupID)
+	updated, err := events.events.GetByID(ctx, standupID)
 	if err != nil {
 		t.Fatalf("get updated master: %v", err)
 	}
@@ -596,7 +664,7 @@ func TestSubscribeService_Refresh_AbsentSeriesTombstoned(t *testing.T) {
 		t.Fatalf("subscribe: %v", err)
 	}
 
-	before, err := events.events.ListMastersByCalendar(ctx, userID, cal.ID)
+	before, err := events.events.ListMastersByCalendar(ctx, cal.ID)
 	if err != nil {
 		t.Fatalf("list masters: %v", err)
 	}
@@ -619,7 +687,7 @@ func TestSubscribeService_Refresh_AbsentSeriesTombstoned(t *testing.T) {
 		t.Fatalf("expected 1 tombstoned series, got %+v", result)
 	}
 
-	if _, err := events.events.GetByID(ctx, userID, retroID); !errors.Is(err, repository.ErrNotFound) {
+	if _, err := events.events.GetByID(ctx, retroID); !errors.Is(err, repository.ErrNotFound) {
 		t.Fatalf("expected the removed series' row to be gone, got %v", err)
 	}
 
@@ -867,7 +935,7 @@ func TestSubscribeService_Refresh_UnparseableSeriesLeftAloneNotTombstoned(t *tes
 		t.Fatalf("subscribe: %v", err)
 	}
 
-	before, err := events.events.ListMastersByCalendar(ctx, userID, cal.ID)
+	before, err := events.events.ListMastersByCalendar(ctx, cal.ID)
 	if err != nil {
 		t.Fatalf("list masters: %v", err)
 	}
@@ -895,7 +963,7 @@ func TestSubscribeService_Refresh_UnparseableSeriesLeftAloneNotTombstoned(t *tes
 		t.Fatalf("expected the unparseable series to survive, not be tombstoned, got %+v", result)
 	}
 
-	still, err := events.events.GetByID(ctx, userID, standupID)
+	still, err := events.events.GetByID(ctx, standupID)
 	if err != nil {
 		t.Fatalf("expected the unparseable series' existing row to survive: %v", err)
 	}

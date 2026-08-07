@@ -47,7 +47,7 @@ func newNotificationTestServer(t *testing.T) (baseURL, accessToken string, userI
 	events := repository.NewEventRepository(sqlDB)
 	start, _ := time.Parse(time.RFC3339, "2026-01-01T09:00:00Z")
 	end, _ := time.Parse(time.RFC3339, "2026-01-01T10:00:00Z")
-	if _, err := events.Create(context.Background(), "evt-1", user.ID, repository.EventFields{CalendarID: cal.ID, Title: "Standup", Start: start, End: end}, 0); err != nil {
+	if _, err := events.Create(context.Background(), "evt-1", &user.ID, repository.EventFields{CalendarID: cal.ID, Title: "Standup", Start: start, End: end}, 0); err != nil {
 		t.Fatalf("create event: %v", err)
 	}
 

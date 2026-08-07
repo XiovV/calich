@@ -339,6 +339,95 @@ func TestEventService_Delete_NotFound(t *testing.T) {
 	}
 }
 
+// Under ADR-0034, an Event's authorization resolves through its Calendar
+// rather than a user_id column of its own — Get, Update, and Delete on an
+// id that names a real Event, but one in a Calendar the caller doesn't own,
+// must report the same repository.ErrNotFound a nonexistent id would, not
+// leak that the Event exists.
+func TestEventService_Get_AnotherUsersEventIsNotFound(t *testing.T) {
+	svc, userID, calendarID := newTestEventService(t)
+	ctx := context.Background()
+	start := time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC)
+	end := time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC)
+
+	if _, err := svc.Create(ctx, userID, "evt-1", EventWrite{CalendarID: calendarID, Title: "Standup", Start: start, End: end}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	if _, err := svc.Get(ctx, 99999, "evt-1"); !errors.Is(err, repository.ErrNotFound) {
+		t.Fatalf("expected ErrNotFound reading another user's event, got %v", err)
+	}
+}
+
+func TestEventService_Update_AnotherUsersEventIsNotFound(t *testing.T) {
+	svc, userID, calendarID := newTestEventService(t)
+	ctx := context.Background()
+	start := time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC)
+	end := time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC)
+
+	if _, err := svc.Create(ctx, userID, "evt-1", EventWrite{CalendarID: calendarID, Title: "Standup", Start: start, End: end}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	// The attacker owns a real Calendar of their own (so write.CalendarID
+	// resolves and passes the writability guard), and tries to "move" the
+	// victim's event id into it. Update still has to resolve id itself before
+	// touching it, and that lookup finds it in the victim's Calendar, which
+	// the attacker has no Access to — exercising getOwnedEvent's guard
+	// specifically, distinct from Update_RejectsAnotherUsersCalendar's
+	// earlier write.CalendarID check.
+	attacker, err := repository.NewUserRepository(svc.db).Create(ctx, "attacker", "hash", false)
+	if err != nil {
+		t.Fatalf("create attacker: %v", err)
+	}
+	attackerCalendar, err := repository.NewCalendarRepository(svc.db).Create(ctx, attacker.ID, "attacker-cal", repository.CalendarFields{Name: "Mine", Color: "peacock"})
+	if err != nil {
+		t.Fatalf("create attacker calendar: %v", err)
+	}
+
+	if _, err := svc.Update(ctx, attacker.ID, "evt-1", EventWrite{CalendarID: attackerCalendar.ID, Title: "Renamed", Start: start, End: end}); !errors.Is(err, repository.ErrNotFound) {
+		t.Fatalf("expected ErrNotFound updating another user's event, got %v", err)
+	}
+}
+
+// CalendarCTag is the one EventService method that never took a userID
+// before ADR-0034 — calendarID was an unguessable UUID belonging to the
+// only user, so nothing else checked it either. It must refuse another
+// user's Calendar now, the same way every other method does.
+func TestEventService_CalendarCTag_RejectsAnotherUsersCalendar(t *testing.T) {
+	svc, userID, calendarID := newTestEventService(t)
+	ctx := context.Background()
+	start := time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC)
+	end := time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC)
+
+	if _, err := svc.Create(ctx, userID, "evt-1", EventWrite{CalendarID: calendarID, Title: "Standup", Start: start, End: end}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	if _, err := svc.CalendarCTag(ctx, 99999, calendarID); !errors.Is(err, ErrCalendarNotFound) {
+		t.Fatalf("expected ErrCalendarNotFound for another user's calendar, got %v", err)
+	}
+}
+
+func TestEventService_Delete_AnotherUsersEventIsNotFound(t *testing.T) {
+	svc, userID, calendarID := newTestEventService(t)
+	ctx := context.Background()
+	start := time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC)
+	end := time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC)
+
+	if _, err := svc.Create(ctx, userID, "evt-1", EventWrite{CalendarID: calendarID, Title: "Standup", Start: start, End: end}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	if err := svc.Delete(ctx, 99999, "evt-1"); !errors.Is(err, repository.ErrNotFound) {
+		t.Fatalf("expected ErrNotFound deleting another user's event, got %v", err)
+	}
+
+	if _, err := svc.Get(ctx, userID, "evt-1"); err != nil {
+		t.Fatalf("expected the event to still exist for its real owner, got %v", err)
+	}
+}
+
 func TestEventService_CreateOverride(t *testing.T) {
 	svc, userID, calendarID := newTestEventService(t)
 	ctx := context.Background()
@@ -1113,7 +1202,7 @@ func TestEventService_SeriesReadPaths_AttachRemindersPerRow(t *testing.T) {
 // service layer's Get (which doesn't expose it).
 func masterChangeSeq(t *testing.T, svc *EventService, userID int64, masterID string) int64 {
 	t.Helper()
-	e, err := svc.events.GetByID(context.Background(), userID, masterID)
+	e, err := svc.events.GetByID(context.Background(), masterID)
 	if err != nil {
 		t.Fatalf("get master %q: %v", masterID, err)
 	}
@@ -1204,7 +1293,7 @@ func TestEventService_Delete_Master_WritesTombstoneInsteadOfBumpingItself(t *tes
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	beforeCTag, err := svc.CalendarCTag(ctx, calendarID)
+	beforeCTag, err := svc.CalendarCTag(ctx, userID, calendarID)
 	if err != nil {
 		t.Fatalf("ctag: %v", err)
 	}
@@ -1213,7 +1302,7 @@ func TestEventService_Delete_Master_WritesTombstoneInsteadOfBumpingItself(t *tes
 		t.Fatalf("delete: %v", err)
 	}
 
-	afterCTag, err := svc.CalendarCTag(ctx, calendarID)
+	afterCTag, err := svc.CalendarCTag(ctx, userID, calendarID)
 	if err != nil {
 		t.Fatalf("ctag: %v", err)
 	}
@@ -1802,7 +1891,7 @@ func seedSubscribedEvent(t *testing.T, svc *EventService, userID int64, subCalen
 	if _, err := svc.ImportSubscribedSeries(ctx, userID, subCalendarID, []SeriesWrite{write}); err != nil {
 		t.Fatalf("seed subscribed event: %v", err)
 	}
-	events, err := svc.events.ListMastersByCalendar(ctx, userID, subCalendarID)
+	events, err := svc.events.ListMastersByCalendar(ctx, subCalendarID)
 	if err != nil {
 		t.Fatalf("list masters: %v", err)
 	}
@@ -2036,7 +2125,7 @@ func TestEventService_ReconcileSubscribedSeries_CreatesNewSeries(t *testing.T) {
 		t.Fatalf("expected summary {1,0,0}, got %+v", summary)
 	}
 
-	masters, err := svc.events.ListMastersByCalendar(ctx, userID, subCalendarID)
+	masters, err := svc.events.ListMastersByCalendar(ctx, subCalendarID)
 	if err != nil {
 		t.Fatalf("list masters: %v", err)
 	}
@@ -2072,7 +2161,7 @@ func TestEventService_ReconcileSubscribedSeries_UpdatesInPlaceKeepingMasterIDAnd
 		t.Fatalf("expected summary {0,1,0}, got %+v", summary)
 	}
 
-	master, err := svc.events.GetByID(ctx, userID, masterID)
+	master, err := svc.events.GetByID(ctx, masterID)
 	if err != nil {
 		t.Fatalf("get by id: %v", err)
 	}
@@ -2107,7 +2196,7 @@ func TestEventService_ReconcileSubscribedSeries_TombstonesAbsentSeries(t *testin
 		t.Fatalf("expected summary {0,0,1}, got %+v", summary)
 	}
 
-	if _, err := svc.events.GetByID(ctx, userID, masterID); !errors.Is(err, repository.ErrNotFound) {
+	if _, err := svc.events.GetByID(ctx, masterID); !errors.Is(err, repository.ErrNotFound) {
 		t.Fatalf("expected the tombstoned master to be gone, got %v", err)
 	}
 

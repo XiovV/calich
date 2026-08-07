@@ -13,7 +13,7 @@ import (
 // that carries at least one Reminder (ADR-0021). Satisfied by
 // *service.EventService.
 type EventLister interface {
-	ListAllWithReminders(ctx context.Context) ([]repository.Event, error)
+	ListAllWithReminders(ctx context.Context) ([]repository.EventWithOwner, error)
 }
 
 // Ledger is the scheduler's exactly-once seam. Satisfied by

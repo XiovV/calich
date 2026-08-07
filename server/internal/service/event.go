@@ -125,6 +125,28 @@ func (s *EventService) requireWritableCalendar(ctx context.Context, userID int64
 	return requireWritable(calendar)
 }
 
+// getOwnedEvent resolves id and checks the caller's Access to its Calendar,
+// in one call — the single seam every method that reads or writes one
+// Event by id funnels through, now that an Event has no owner of its own
+// and Access resolves through CalendarID instead (ADR-0034). Returns
+// repository.ErrNotFound both when id doesn't exist and when it does but
+// the caller has no Access to its Calendar — the same sentinel the old
+// user_id-filtered query returned in both cases, so no caller's error
+// handling changes.
+func (s *EventService) getOwnedEvent(ctx context.Context, userID int64, id string) (repository.Event, error) {
+	event, err := s.events.GetByID(ctx, id)
+	if err != nil {
+		return repository.Event{}, err
+	}
+	if _, err := s.calendarByID(ctx, userID, event.CalendarID); err != nil {
+		if errors.Is(err, ErrCalendarNotFound) {
+			return repository.Event{}, repository.ErrNotFound
+		}
+		return repository.Event{}, err
+	}
+	return event, nil
+}
+
 // txRepos is the set of transaction-bound repositories a withTx body writes
 // through. Grouped into one struct so a body names only what it needs — most
 // use two or three of the four.
@@ -205,7 +227,7 @@ func (s *EventService) Create(ctx context.Context, userID int64, id string, writ
 		if overrideCarriesOwnRrule(write.ParentID, write.Rrule) || write.RecurrenceID == nil {
 			return repository.Event{}, ErrInvalidOverride
 		}
-		parent, err := s.events.GetByID(ctx, userID, *write.ParentID)
+		parent, err := s.getOwnedEvent(ctx, userID, *write.ParentID)
 		if err != nil {
 			if errors.Is(err, repository.ErrNotFound) {
 				return repository.Event{}, ErrParentNotFound
@@ -229,7 +251,7 @@ func (s *EventService) Create(ctx context.Context, userID int64, id string, writ
 		if err != nil {
 			return err
 		}
-		e, err := repos.events.Create(ctx, id, userID, write.fields(), seq)
+		e, err := repos.events.Create(ctx, id, &userID, write.fields(), seq)
 		if err != nil {
 			return err
 		}
@@ -240,7 +262,7 @@ func (s *EventService) Create(ctx context.Context, userID int64, id string, writ
 		// VEVENT joins the series), so the Master's own change_seq must bump
 		// too — it, not the Override, is what CalDAV reports (ADR-0025).
 		if write.ParentID != nil {
-			if err := repos.events.SetChangeSeq(ctx, userID, *write.ParentID, seq); err != nil {
+			if err := repos.events.SetChangeSeq(ctx, *write.ParentID, seq); err != nil {
 				return fmt.Errorf("bump parent change_seq: %w", err)
 			}
 		}
@@ -299,7 +321,16 @@ func stripEndCondition(rrule string) string {
 // Exceptions (ADR-0016), and each event's Reminders populated from
 // event_reminders (ADR-0020). Overrides always have an empty Exdates.
 func (s *EventService) List(ctx context.Context, userID int64, from, to *time.Time) ([]repository.Event, error) {
-	events, err := s.events.ListByUser(ctx, userID, from, to)
+	calendars, err := s.calendars.List(ctx, userID)
+	if err != nil {
+		return nil, fmt.Errorf("list calendars: %w", err)
+	}
+	calendarIDs := make([]string, len(calendars))
+	for i, c := range calendars {
+		calendarIDs[i] = c.ID
+	}
+
+	events, err := s.events.ListByCalendarIDs(ctx, calendarIDs, from, to)
 	if err != nil {
 		return nil, fmt.Errorf("list events: %w", err)
 	}
@@ -312,19 +343,25 @@ func (s *EventService) List(ctx context.Context, userID int64, from, to *time.Ti
 	return events, nil
 }
 
-// ListAllWithReminders returns every user's Event that carries at least one
-// Reminder, across all users — the firing engine's read path (ADR-0021). A
-// Master's Reminders come with their own row's ID (needed for the fired
-// ledger's exactly-once key) via attachReminders.
-func (s *EventService) ListAllWithReminders(ctx context.Context) ([]repository.Event, error) {
+// ListAllWithReminders returns every Event that carries at least one
+// Reminder, across every Calendar, alongside its Calendar's Owner — the
+// firing engine's read path (ADR-0021). A Master's Reminders come with
+// their own row's ID (needed for the fired ledger's exactly-once key) via
+// attachReminders.
+func (s *EventService) ListAllWithReminders(ctx context.Context) ([]repository.EventWithOwner, error) {
 	events, err := s.events.ListAllWithReminders(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("list events with reminders: %w", err)
 	}
-	if err := s.attachExdates(ctx, events); err != nil {
+
+	pointers := make([]*repository.Event, len(events))
+	for i := range events {
+		pointers[i] = &events[i].Event
+	}
+	if err := s.attachExdatesTo(ctx, pointers); err != nil {
 		return nil, err
 	}
-	if err := s.attachReminders(ctx, events); err != nil {
+	if err := s.attachRemindersTo(ctx, pointers); err != nil {
 		return nil, err
 	}
 	return events, nil
@@ -341,13 +378,28 @@ func eventIDs(events []repository.Event) []string {
 }
 
 func (s *EventService) attachExdates(ctx context.Context, events []repository.Event) error {
-	exceptionsByParent, err := s.exceptions.ListByParentIDs(ctx, eventIDs(events))
+	pointers := make([]*repository.Event, len(events))
+	for i := range events {
+		pointers[i] = &events[i]
+	}
+	return s.attachExdatesTo(ctx, pointers)
+}
+
+// attachExdatesTo fills in Exdates on rows that need not be contiguous in
+// memory, mirroring attachRemindersTo.
+func (s *EventService) attachExdatesTo(ctx context.Context, events []*repository.Event) error {
+	ids := make([]string, len(events))
+	for i, e := range events {
+		ids[i] = e.ID
+	}
+
+	exceptionsByParent, err := s.exceptions.ListByParentIDs(ctx, ids)
 	if err != nil {
 		return fmt.Errorf("list exceptions: %w", err)
 	}
 
-	for i := range events {
-		events[i].Exdates = exceptionsByParent[events[i].ID]
+	for _, e := range events {
+		e.Exdates = exceptionsByParent[e.ID]
 	}
 	return nil
 }
@@ -381,7 +433,7 @@ func (s *EventService) attachRemindersTo(ctx context.Context, events []*reposito
 }
 
 func (s *EventService) Get(ctx context.Context, userID int64, id string) (repository.Event, error) {
-	event, err := s.events.GetByID(ctx, userID, id)
+	event, err := s.getOwnedEvent(ctx, userID, id)
 	if err != nil {
 		return repository.Event{}, err
 	}
@@ -415,7 +467,7 @@ func (s *EventService) Update(ctx context.Context, userID int64, id string, writ
 		return repository.Event{}, err
 	}
 
-	existing, err := s.events.GetByID(ctx, userID, id)
+	existing, err := s.getOwnedEvent(ctx, userID, id)
 	if err != nil {
 		return repository.Event{}, err
 	}
@@ -446,14 +498,14 @@ func (s *EventService) Update(ctx context.Context, userID int64, id string, writ
 		if err != nil {
 			return err
 		}
-		u, err := repos.events.Update(ctx, userID, id, write.fields(), seq)
+		u, err := repos.events.Update(ctx, id, write.fields(), seq)
 		if err != nil {
 			return err
 		}
 		updated = u
 
 		if discardChildren {
-			if err := repos.events.DeleteChildrenOf(ctx, userID, id); err != nil {
+			if err := repos.events.DeleteChildrenOf(ctx, id); err != nil {
 				return fmt.Errorf("discard overrides: %w", err)
 			}
 			if err := repos.exceptions.DeleteByParentID(ctx, id); err != nil {
@@ -468,7 +520,7 @@ func (s *EventService) Update(ctx context.Context, userID int64, id string, writ
 		// Updating an Override changes its Master's calendar object, so the
 		// Master's own change_seq must bump too (ADR-0025).
 		if existing.ParentID != nil {
-			if err := repos.events.SetChangeSeq(ctx, userID, *existing.ParentID, seq); err != nil {
+			if err := repos.events.SetChangeSeq(ctx, *existing.ParentID, seq); err != nil {
 				return fmt.Errorf("bump parent change_seq: %w", err)
 			}
 		}
@@ -560,7 +612,7 @@ func (s *EventService) writeSeries(ctx context.Context, userID int64, calendarID
 				Location:    w.Location,
 				ExternalUID: nonEmptyPtr(w.ExternalUID),
 			}
-			if _, err := repos.events.Create(ctx, masterID, userID, master, seq); err != nil {
+			if _, err := repos.events.Create(ctx, masterID, &userID, master, seq); err != nil {
 				return fmt.Errorf("create master: %w", err)
 			}
 			if err := repos.reminders.ReplaceByEventID(ctx, masterID, w.Reminders); err != nil {
@@ -587,7 +639,7 @@ func (s *EventService) writeSeries(ctx context.Context, userID int64, calendarID
 					ExternalUID:  nonEmptyPtr(o.ExternalUID),
 				}
 				overrideID := uuid.NewString()
-				if _, err := repos.events.Create(ctx, overrideID, userID, override, seq); err != nil {
+				if _, err := repos.events.Create(ctx, overrideID, &userID, override, seq); err != nil {
 					return fmt.Errorf("create override: %w", err)
 				}
 				if err := repos.reminders.ReplaceByEventID(ctx, overrideID, o.Reminders); err != nil {
@@ -672,7 +724,7 @@ func (s *EventService) ReconcileSubscribedSeries(ctx context.Context, userID int
 		}
 
 		for _, masterID := range result.Tombstones {
-			if err := s.tombstoneSubscribedSeries(ctx, repos, userID, calendarID, masterID); err != nil {
+			if err := s.tombstoneSubscribedSeries(ctx, repos, calendarID, masterID); err != nil {
 				return err
 			}
 			summary.Tombstoned++
@@ -708,7 +760,7 @@ func (s *EventService) createSubscribedSeries(ctx context.Context, repos txRepos
 		Location:    write.Location,
 		ExternalUID: nonEmptyPtr(write.ExternalUID),
 	}
-	if _, err := repos.events.Create(ctx, masterID, userID, master, seq); err != nil {
+	if _, err := repos.events.Create(ctx, masterID, &userID, master, seq); err != nil {
 		return fmt.Errorf("create master: %w", err)
 	}
 	if err := repos.reminders.ReplaceByEventID(ctx, masterID, write.Reminders); err != nil {
@@ -735,7 +787,7 @@ func (s *EventService) createSubscribedSeries(ctx context.Context, repos txRepos
 			ExternalUID:  nonEmptyPtr(o.ExternalUID),
 		}
 		overrideID := uuid.NewString()
-		if _, err := repos.events.Create(ctx, overrideID, userID, override, seq); err != nil {
+		if _, err := repos.events.Create(ctx, overrideID, &userID, override, seq); err != nil {
 			return fmt.Errorf("create override: %w", err)
 		}
 		if err := repos.reminders.ReplaceByEventID(ctx, overrideID, o.Reminders); err != nil {
@@ -752,7 +804,7 @@ func (s *EventService) createSubscribedSeries(ctx context.Context, repos txRepos
 // insert only); Overrides created here inherit it from write.ExternalUID,
 // exactly as createSubscribedSeries does.
 func (s *EventService) updateSubscribedSeries(ctx context.Context, repos txRepos, userID int64, calendarID, masterID string, write SeriesWrite) error {
-	existingOverrides, err := repos.events.ListChildrenByParentIDs(ctx, userID, []string{masterID})
+	existingOverrides, err := repos.events.ListChildrenByParentIDs(ctx, []string{masterID})
 	if err != nil {
 		return fmt.Errorf("list existing overrides: %w", err)
 	}
@@ -777,7 +829,7 @@ func (s *EventService) updateSubscribedSeries(ctx context.Context, repos txRepos
 		Description: write.Description,
 		Location:    write.Location,
 	}
-	if _, err := repos.events.Update(ctx, userID, masterID, master, seq); err != nil {
+	if _, err := repos.events.Update(ctx, masterID, master, seq); err != nil {
 		return fmt.Errorf("update master: %w", err)
 	}
 	if err := repos.reminders.ReplaceByEventID(ctx, masterID, write.Reminders); err != nil {
@@ -810,7 +862,7 @@ func (s *EventService) updateSubscribedSeries(ctx context.Context, repos txRepos
 		}
 
 		if existing, ok := existingByRecurrenceID[key]; ok {
-			if _, err := repos.events.Update(ctx, userID, existing.ID, override, seq); err != nil {
+			if _, err := repos.events.Update(ctx, existing.ID, override, seq); err != nil {
 				return fmt.Errorf("update override: %w", err)
 			}
 			if err := repos.reminders.ReplaceByEventID(ctx, existing.ID, o.Reminders); err != nil {
@@ -824,7 +876,7 @@ func (s *EventService) updateSubscribedSeries(ctx context.Context, repos txRepos
 		override.ExternalUID = nonEmptyPtr(o.ExternalUID)
 
 		overrideID := uuid.NewString()
-		if _, err := repos.events.Create(ctx, overrideID, userID, override, seq); err != nil {
+		if _, err := repos.events.Create(ctx, overrideID, &userID, override, seq); err != nil {
 			return fmt.Errorf("create override: %w", err)
 		}
 		if err := repos.reminders.ReplaceByEventID(ctx, overrideID, o.Reminders); err != nil {
@@ -836,7 +888,7 @@ func (s *EventService) updateSubscribedSeries(ctx context.Context, repos txRepos
 		if seen[key] {
 			continue
 		}
-		if err := repos.events.Delete(ctx, userID, existing.ID); err != nil {
+		if err := repos.events.Delete(ctx, existing.ID); err != nil {
 			return fmt.Errorf("delete removed override: %w", err)
 		}
 	}
@@ -849,8 +901,8 @@ func (s *EventService) updateSubscribedSeries(ctx context.Context, repos txRepos
 // a tombstone under calendarID, one change_seq bump — mirroring Delete's
 // Master case, but bypassing the Subscribed Calendar write guard the way
 // every Refresh write does (ADR-0032).
-func (s *EventService) tombstoneSubscribedSeries(ctx context.Context, repos txRepos, userID int64, calendarID, masterID string) error {
-	if err := repos.events.Delete(ctx, userID, masterID); err != nil {
+func (s *EventService) tombstoneSubscribedSeries(ctx context.Context, repos txRepos, calendarID, masterID string) error {
+	if err := repos.events.Delete(ctx, masterID); err != nil {
 		return fmt.Errorf("delete tombstoned series: %w", err)
 	}
 
@@ -897,7 +949,7 @@ func (s *EventService) ClearSubscribedCalendarReminders(ctx context.Context, use
 					return fmt.Errorf("clear override reminders: %w", err)
 				}
 			}
-			if err := repos.events.SetChangeSeq(ctx, userID, m.ID, seq); err != nil {
+			if err := repos.events.SetChangeSeq(ctx, m.ID, seq); err != nil {
 				return fmt.Errorf("bump master change_seq: %w", err)
 			}
 		}
@@ -910,7 +962,7 @@ func (s *EventService) ClearSubscribedCalendarReminders(ctx context.Context, use
 // {masterId}.ics resource (ADR-0025). Only a Master is independently
 // addressable, so masterID naming an Override returns ErrParentIsOverride.
 func (s *EventService) GetSeries(ctx context.Context, userID int64, masterID string) (repository.Event, []repository.Event, error) {
-	master, err := s.events.GetByID(ctx, userID, masterID)
+	master, err := s.getOwnedEvent(ctx, userID, masterID)
 	if err != nil {
 		return repository.Event{}, nil, err
 	}
@@ -923,7 +975,7 @@ func (s *EventService) GetSeries(ctx context.Context, userID int64, masterID str
 		return repository.Event{}, nil, err
 	}
 
-	overridesByParent, err := s.events.ListChildrenByParentIDs(ctx, userID, []string{masterID})
+	overridesByParent, err := s.events.ListChildrenByParentIDs(ctx, []string{masterID})
 	if err != nil {
 		return repository.Event{}, nil, fmt.Errorf("list overrides: %w", err)
 	}
@@ -942,7 +994,7 @@ func (s *EventService) GetSeries(ctx context.Context, userID int64, masterID str
 // caller addressing an Occurrence often only knows the Override id it fired
 // against, not its parent's (#76).
 func (s *EventService) GetSeriesForEvent(ctx context.Context, userID int64, id string) (repository.Event, []repository.Event, error) {
-	event, err := s.events.GetByID(ctx, userID, id)
+	event, err := s.getOwnedEvent(ctx, userID, id)
 	if err != nil {
 		return repository.Event{}, nil, err
 	}
@@ -1030,7 +1082,14 @@ func isOccurrenceStart(master repository.Event, occurrenceStart time.Time) (bool
 // Overrides (each with its own Reminders attached) — CalDAV's per-calendar
 // object listing (ADR-0025).
 func (s *EventService) ListSeriesByCalendar(ctx context.Context, userID int64, calendarID string) ([]repository.Event, map[string][]repository.Event, error) {
-	masters, err := s.events.ListMastersByCalendar(ctx, userID, calendarID)
+	if _, err := s.calendarByID(ctx, userID, calendarID); err != nil {
+		if errors.Is(err, ErrCalendarNotFound) {
+			return []repository.Event{}, map[string][]repository.Event{}, nil
+		}
+		return nil, nil, err
+	}
+
+	masters, err := s.events.ListMastersByCalendar(ctx, calendarID)
 	if err != nil {
 		return nil, nil, fmt.Errorf("list masters: %w", err)
 	}
@@ -1038,7 +1097,7 @@ func (s *EventService) ListSeriesByCalendar(ctx context.Context, userID int64, c
 		return nil, nil, err
 	}
 
-	overridesByParent, err := s.attachOverridesAndReminders(ctx, userID, masters)
+	overridesByParent, err := s.attachOverridesAndReminders(ctx, masters)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -1049,9 +1108,11 @@ func (s *EventService) ListSeriesByCalendar(ctx context.Context, userID int64, c
 // Reminders to both masters and their Overrides in place, returning a
 // parentID-keyed map of the Overrides. Shared by every read path that
 // recomposes whole series — ListSeriesByCalendar and SyncSince (ADR-0025).
-func (s *EventService) attachOverridesAndReminders(ctx context.Context, userID int64, masters []repository.Event) (map[string][]repository.Event, error) {
+// Callers have already checked the caller's Access to masters' Calendar, so
+// this needs no userID of its own.
+func (s *EventService) attachOverridesAndReminders(ctx context.Context, masters []repository.Event) (map[string][]repository.Event, error) {
 	masterIDs := eventIDs(masters)
-	overridesByParent, err := s.events.ListChildrenByParentIDs(ctx, userID, masterIDs)
+	overridesByParent, err := s.events.ListChildrenByParentIDs(ctx, masterIDs)
 	if err != nil {
 		return nil, fmt.Errorf("list overrides: %w", err)
 	}
@@ -1091,7 +1152,14 @@ type SyncResult struct {
 // and the calendar's current CTag as the new sync-token. sinceToken of 0
 // returns every live series, matching an initial sync (ADR-0025, #65).
 func (s *EventService) SyncSince(ctx context.Context, userID int64, calendarID string, sinceToken int64) (SyncResult, error) {
-	masters, err := s.events.ListMastersChangedSince(ctx, userID, calendarID, sinceToken)
+	if _, err := s.calendarByID(ctx, userID, calendarID); err != nil {
+		if errors.Is(err, ErrCalendarNotFound) {
+			return SyncResult{}, nil
+		}
+		return SyncResult{}, err
+	}
+
+	masters, err := s.events.ListMastersChangedSince(ctx, calendarID, sinceToken)
 	if err != nil {
 		return SyncResult{}, fmt.Errorf("list changed masters: %w", err)
 	}
@@ -1099,7 +1167,7 @@ func (s *EventService) SyncSince(ctx context.Context, userID int64, calendarID s
 		return SyncResult{}, err
 	}
 
-	overridesByParent, err := s.attachOverridesAndReminders(ctx, userID, masters)
+	overridesByParent, err := s.attachOverridesAndReminders(ctx, masters)
 	if err != nil {
 		return SyncResult{}, err
 	}
@@ -1128,8 +1196,14 @@ func (s *EventService) SyncSince(ctx context.Context, userID int64, calendarID s
 
 // CalendarCTag returns calendarID's CTag — the highest change_seq among its
 // live series and its tombstones — for CalDAV's getctag property
-// (ADR-0025).
-func (s *EventService) CalendarCTag(ctx context.Context, calendarID string) (int64, error) {
+// (ADR-0025). Unlike every other EventService method, this never took a
+// userID before ADR-0034 — calendarID was an unguessable UUID belonging to
+// the only user, so nothing else checked it either. Access now applies here
+// too.
+func (s *EventService) CalendarCTag(ctx context.Context, userID int64, calendarID string) (int64, error) {
+	if _, err := s.calendarByID(ctx, userID, calendarID); err != nil {
+		return 0, err
+	}
 	return s.sync.CTag(ctx, calendarID)
 }
 
@@ -1139,7 +1213,7 @@ func (s *EventService) CalendarCTag(ctx context.Context, calendarID string) (int
 // Master's calendar object changed, so the Master's change_seq bumps
 // instead (ADR-0025).
 func (s *EventService) Delete(ctx context.Context, userID int64, id string) error {
-	existing, err := s.events.GetByID(ctx, userID, id)
+	existing, err := s.getOwnedEvent(ctx, userID, id)
 	if err != nil {
 		return err
 	}
@@ -1148,7 +1222,7 @@ func (s *EventService) Delete(ctx context.Context, userID int64, id string) erro
 	}
 
 	return s.withTx(ctx, func(repos txRepos) error {
-		if err := repos.events.Delete(ctx, userID, id); err != nil {
+		if err := repos.events.Delete(ctx, id); err != nil {
 			return err
 		}
 
@@ -1160,7 +1234,7 @@ func (s *EventService) Delete(ctx context.Context, userID int64, id string) erro
 		if existing.ParentID == nil {
 			return repos.sync.Tombstone(ctx, existing.CalendarID, id, seq)
 		}
-		if err := repos.events.SetChangeSeq(ctx, userID, *existing.ParentID, seq); err != nil {
+		if err := repos.events.SetChangeSeq(ctx, *existing.ParentID, seq); err != nil {
 			return fmt.Errorf("bump parent change_seq: %w", err)
 		}
 		return nil
@@ -1171,7 +1245,7 @@ func (s *EventService) Delete(ctx context.Context, userID int64, id string) erro
 // "this event"): the rule still generates that slot, but it is suppressed
 // from expansion (ADR-0016).
 func (s *EventService) AddException(ctx context.Context, userID int64, parentID string, occurrenceStart time.Time) error {
-	parent, err := s.events.GetByID(ctx, userID, parentID)
+	parent, err := s.getOwnedEvent(ctx, userID, parentID)
 	if err != nil {
 		if errors.Is(err, repository.ErrNotFound) {
 			return ErrParentNotFound
@@ -1196,7 +1270,7 @@ func (s *EventService) AddException(ctx context.Context, userID int64, parentID 
 		if err != nil {
 			return err
 		}
-		if err := repos.events.SetChangeSeq(ctx, userID, parentID, seq); err != nil {
+		if err := repos.events.SetChangeSeq(ctx, parentID, seq); err != nil {
 			return fmt.Errorf("bump parent change_seq: %w", err)
 		}
 		return nil
@@ -1208,14 +1282,14 @@ func (s *EventService) AddException(ctx context.Context, userID int64, parentID 
 // reparenting at the boundary (ADR-0016). Both events must already exist and
 // belong to the caller.
 func (s *EventService) ReparentFrom(ctx context.Context, userID int64, oldParentID, newParentID string, fromStart time.Time) error {
-	oldParent, err := s.events.GetByID(ctx, userID, oldParentID)
+	oldParent, err := s.getOwnedEvent(ctx, userID, oldParentID)
 	if err != nil {
 		if errors.Is(err, repository.ErrNotFound) {
 			return ErrParentNotFound
 		}
 		return err
 	}
-	newParent, err := s.events.GetByID(ctx, userID, newParentID)
+	newParent, err := s.getOwnedEvent(ctx, userID, newParentID)
 	if err != nil {
 		if errors.Is(err, repository.ErrNotFound) {
 			return ErrParentNotFound
@@ -1233,7 +1307,7 @@ func (s *EventService) ReparentFrom(ctx context.Context, userID int64, oldParent
 	}
 
 	return s.withTx(ctx, func(repos txRepos) error {
-		if err := repos.events.ReparentOverridesFrom(ctx, userID, oldParentID, newParentID, fromStart); err != nil {
+		if err := repos.events.ReparentOverridesFrom(ctx, oldParentID, newParentID, fromStart); err != nil {
 			return fmt.Errorf("reparent overrides: %w", err)
 		}
 		if err := repos.exceptions.ReparentFrom(ctx, oldParentID, newParentID, fromStart); err != nil {
@@ -1247,10 +1321,10 @@ func (s *EventService) ReparentFrom(ctx context.Context, userID int64, oldParent
 		if err != nil {
 			return err
 		}
-		if err := repos.events.SetChangeSeq(ctx, userID, oldParentID, seq); err != nil {
+		if err := repos.events.SetChangeSeq(ctx, oldParentID, seq); err != nil {
 			return fmt.Errorf("bump old parent change_seq: %w", err)
 		}
-		if err := repos.events.SetChangeSeq(ctx, userID, newParentID, seq); err != nil {
+		if err := repos.events.SetChangeSeq(ctx, newParentID, seq); err != nil {
 			return fmt.Errorf("bump new parent change_seq: %w", err)
 		}
 		return nil
@@ -1361,7 +1435,7 @@ func (s *EventService) PutSeries(ctx context.Context, userID int64, calendarID, 
 		return repository.Event{}, nil, err
 	}
 
-	existingMaster, err := s.events.GetByID(ctx, userID, masterID)
+	existingMaster, err := s.getOwnedEvent(ctx, userID, masterID)
 	masterExists := err == nil
 	if err != nil && !errors.Is(err, repository.ErrNotFound) {
 		return repository.Event{}, nil, err
@@ -1375,7 +1449,7 @@ func (s *EventService) PutSeries(ctx context.Context, userID int64, calendarID, 
 
 	var existingOverrides []repository.Event
 	if masterExists {
-		overridesByParent, err := s.events.ListChildrenByParentIDs(ctx, userID, []string{masterID})
+		overridesByParent, err := s.events.ListChildrenByParentIDs(ctx, []string{masterID})
 		if err != nil {
 			return repository.Event{}, nil, fmt.Errorf("list existing overrides: %w", err)
 		}
@@ -1404,11 +1478,11 @@ func (s *EventService) PutSeries(ctx context.Context, userID int64, calendarID, 
 			Location:    write.Location,
 		}
 		if masterExists {
-			if _, err := repos.events.Update(ctx, userID, masterID, master, seq); err != nil {
+			if _, err := repos.events.Update(ctx, masterID, master, seq); err != nil {
 				return fmt.Errorf("update master: %w", err)
 			}
 		} else {
-			if _, err := repos.events.Create(ctx, masterID, userID, master, seq); err != nil {
+			if _, err := repos.events.Create(ctx, masterID, &userID, master, seq); err != nil {
 				return fmt.Errorf("create master: %w", err)
 			}
 		}
@@ -1445,7 +1519,7 @@ func (s *EventService) PutSeries(ctx context.Context, userID int64, calendarID, 
 			}
 
 			if existing, ok := existingByRecurrenceID[key]; ok {
-				if _, err := repos.events.Update(ctx, userID, existing.ID, override, seq); err != nil {
+				if _, err := repos.events.Update(ctx, existing.ID, override, seq); err != nil {
 					return fmt.Errorf("update override: %w", err)
 				}
 				if err := repos.reminders.ReplaceByEventID(ctx, existing.ID, o.Reminders); err != nil {
@@ -1458,7 +1532,7 @@ func (s *EventService) PutSeries(ctx context.Context, userID int64, calendarID, 
 			override.RecurrenceID = &o.RecurrenceID
 
 			overrideID := uuid.NewString()
-			if _, err := repos.events.Create(ctx, overrideID, userID, override, seq); err != nil {
+			if _, err := repos.events.Create(ctx, overrideID, &userID, override, seq); err != nil {
 				return fmt.Errorf("create override: %w", err)
 			}
 			if err := repos.reminders.ReplaceByEventID(ctx, overrideID, o.Reminders); err != nil {
@@ -1470,7 +1544,7 @@ func (s *EventService) PutSeries(ctx context.Context, userID int64, calendarID, 
 			if seen[key] {
 				continue
 			}
-			if err := repos.events.Delete(ctx, userID, existing.ID); err != nil {
+			if err := repos.events.Delete(ctx, existing.ID); err != nil {
 				return fmt.Errorf("delete removed override: %w", err)
 			}
 		}

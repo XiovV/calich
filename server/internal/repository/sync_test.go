@@ -61,7 +61,7 @@ func TestSyncRepository_CTag_ReflectsLatestWriteAcrossLiveAndTombstoned(t *testi
 	if err != nil {
 		t.Fatalf("next change seq: %v", err)
 	}
-	if _, err := events.Create(ctx, "evt-1", userID, EventFields{CalendarID: calendarID, Title: "Standup", Start: time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC), End: time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC)}, seq1); err != nil {
+	if _, err := events.Create(ctx, "evt-1", &userID, EventFields{CalendarID: calendarID, Title: "Standup", Start: time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC), End: time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC)}, seq1); err != nil {
 		t.Fatalf("create event: %v", err)
 	}
 	if ctag, err := sync.CTag(ctx, calendarID); err != nil || ctag != seq1 {
@@ -107,14 +107,14 @@ func TestEventRepository_ListMastersChangedSince_OnlyReturnsMastersPastToken(t *
 	start := time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC)
 	end := time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC)
 
-	if _, err := events.Create(ctx, "evt-old", userID, EventFields{CalendarID: calendarID, Title: "Old", Start: start, End: end}, 1); err != nil {
+	if _, err := events.Create(ctx, "evt-old", &userID, EventFields{CalendarID: calendarID, Title: "Old", Start: start, End: end}, 1); err != nil {
 		t.Fatalf("create old event: %v", err)
 	}
-	if _, err := events.Create(ctx, "evt-new", userID, EventFields{CalendarID: calendarID, Title: "New", Start: start, End: end}, 2); err != nil {
+	if _, err := events.Create(ctx, "evt-new", &userID, EventFields{CalendarID: calendarID, Title: "New", Start: start, End: end}, 2); err != nil {
 		t.Fatalf("create new event: %v", err)
 	}
 
-	changed, err := events.ListMastersChangedSince(ctx, userID, calendarID, 1)
+	changed, err := events.ListMastersChangedSince(ctx, calendarID, 1)
 	if err != nil {
 		t.Fatalf("list changed masters: %v", err)
 	}
@@ -129,15 +129,15 @@ func TestEventRepository_SetChangeSeq(t *testing.T) {
 
 	start := time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC)
 	end := time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC)
-	if _, err := events.Create(ctx, "evt-1", userID, EventFields{CalendarID: calendarID, Title: "Standup", Start: start, End: end}, 1); err != nil {
+	if _, err := events.Create(ctx, "evt-1", &userID, EventFields{CalendarID: calendarID, Title: "Standup", Start: start, End: end}, 1); err != nil {
 		t.Fatalf("create event: %v", err)
 	}
 
-	if err := events.SetChangeSeq(ctx, userID, "evt-1", 7); err != nil {
+	if err := events.SetChangeSeq(ctx, "evt-1", 7); err != nil {
 		t.Fatalf("set change seq: %v", err)
 	}
 
-	got, err := events.GetByID(ctx, userID, "evt-1")
+	got, err := events.GetByID(ctx, "evt-1")
 	if err != nil {
 		t.Fatalf("get by id: %v", err)
 	}
@@ -145,7 +145,7 @@ func TestEventRepository_SetChangeSeq(t *testing.T) {
 		t.Fatalf("expected change_seq 7, got %d", got.ChangeSeq)
 	}
 
-	if err := events.SetChangeSeq(ctx, userID, "does-not-exist", 1); err != ErrNotFound {
+	if err := events.SetChangeSeq(ctx, "does-not-exist", 1); err != ErrNotFound {
 		t.Fatalf("expected ErrNotFound, got %v", err)
 	}
 }

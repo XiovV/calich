@@ -129,7 +129,7 @@ func TestEventExceptionRepository_CascadeDeletesWhenParentDeleted(t *testing.T) 
 		t.Fatalf("add exception: %v", err)
 	}
 
-	if err := repo.Delete(ctx, userID, "master"); err != nil {
+	if err := repo.Delete(ctx, "master"); err != nil {
 		t.Fatalf("delete master: %v", err)
 	}
 

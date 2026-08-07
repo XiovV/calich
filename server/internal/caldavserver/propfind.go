@@ -54,7 +54,7 @@ func collectionValueFunc(userID int64, lookup func(ctx context.Context, calendar
 
 func applyGetCTagPatch(ctx context.Context, h *dispatchHandler, userID int64, body []byte) []byte {
 	return injectGetCTag(ctx, body, collectionValueFunc(userID, func(ctx context.Context, calendarID string) (string, bool) {
-		ctag, err := h.backend.events.CalendarCTag(ctx, calendarID)
+		ctag, err := h.backend.events.CalendarCTag(ctx, userID, calendarID)
 		if err != nil {
 			return "", false
 		}

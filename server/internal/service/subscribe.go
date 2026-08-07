@@ -57,6 +57,13 @@ var (
 	// Calendar that carries no SourceURL — there is no feed to refresh
 	// against (#85, ADR-0033).
 	ErrRefreshNotSubscribed = errors.New("calendar is not a subscribed calendar")
+	// ErrSubscribeURLBlocked is returned when a Subscription URL resolves to
+	// a private, loopback, link-local, or otherwise non-public address,
+	// either as typed or after following a redirect. Distinct from
+	// ErrSubscribeFetchFailed so the sidebar and API can tell "the operator
+	// refused this address" apart from "the feed is temporarily
+	// unreachable" (#97, ADR-0032).
+	ErrSubscribeURLBlocked = errors.New("subscription URL resolves to a non-public address")
 )
 
 const (
@@ -91,13 +98,34 @@ type SubscribeService struct {
 	// when unset.
 	defaultRefreshInterval time.Duration
 	now                    func() time.Time
+	// httpClient fetches every feed. Defaults to subscribeHTTPClient, whose
+	// Transport blocks private/loopback/link-local addresses (#97,
+	// ADR-0032); overridable via WithHTTPClient, which tests use to point at
+	// an httptest.Server standing in for a feed on loopback.
+	httpClient *http.Client
 }
 
-func NewSubscribeService(events *EventService, calendars *CalendarService, defaultRefreshInterval time.Duration) *SubscribeService {
+// SubscribeOption configures a SubscribeService beyond NewSubscribeService's
+// required arguments.
+type SubscribeOption func(*SubscribeService)
+
+// WithHTTPClient overrides the client used to fetch feeds, in place of the
+// default address-guarded one. Production has no reason to call this — it
+// exists for tests that fetch from an httptest.Server, whose loopback
+// address the default client would otherwise refuse to connect to.
+func WithHTTPClient(client *http.Client) SubscribeOption {
+	return func(s *SubscribeService) { s.httpClient = client }
+}
+
+func NewSubscribeService(events *EventService, calendars *CalendarService, defaultRefreshInterval time.Duration, opts ...SubscribeOption) *SubscribeService {
 	if defaultRefreshInterval <= 0 {
 		defaultRefreshInterval = DefaultRefreshInterval
 	}
-	return &SubscribeService{events: events, calendars: calendars, defaultRefreshInterval: defaultRefreshInterval, now: time.Now}
+	s := &SubscribeService{events: events, calendars: calendars, defaultRefreshInterval: defaultRefreshInterval, now: time.Now, httpClient: subscribeHTTPClient}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s
 }
 
 // Preview normalizes and fetches rawURL, parses it, and proposes a name and
@@ -374,7 +402,7 @@ func (s *SubscribeService) doRefresh(ctx context.Context, userID int64, calendar
 		etag, lastModified = calendar.ETag, calendar.LastModified
 	}
 
-	fetched, err := fetchICSConditional(ctx, *calendar.SourceURL, etag, lastModified)
+	fetched, err := s.fetchICSConditional(ctx, *calendar.SourceURL, etag, lastModified)
 	if err != nil {
 		return RefreshResult{}, refreshSyncOutcome{}, err
 	}
@@ -526,7 +554,7 @@ func (s *SubscribeService) fetchAndParse(ctx context.Context, rawURL string, kee
 		return nil, nil, "", err
 	}
 
-	data, err := fetchICS(ctx, normalized)
+	data, err := s.fetchICS(ctx, normalized)
 	if err != nil {
 		return nil, nil, "", err
 	}
@@ -583,8 +611,8 @@ type fetchResult struct {
 // fetchICS performs the one synchronous, unconditional GET a Preview or
 // Subscribe call makes — Subscribe has no prior state to compare against,
 // so there is nothing to send a conditional header for.
-func fetchICS(ctx context.Context, rawURL string) ([]byte, error) {
-	result, err := fetchICSConditional(ctx, rawURL, nil, nil)
+func (s *SubscribeService) fetchICS(ctx context.Context, rawURL string) ([]byte, error) {
+	result, err := s.fetchICSConditional(ctx, rawURL, nil, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -602,7 +630,7 @@ func fetchICS(ctx context.Context, rawURL string) ([]byte, error) {
 // short-circuits to fetchResult.NotModified with no body read beyond
 // draining it. Passing both nil (Preview/Subscribe's case) never asks the
 // server to compare anything, so it can't come back 304.
-func fetchICSConditional(ctx context.Context, rawURL string, etag, lastModified *string) (fetchResult, error) {
+func (s *SubscribeService) fetchICSConditional(ctx context.Context, rawURL string, etag, lastModified *string) (fetchResult, error) {
 	parsed, err := url.Parse(rawURL)
 	if err != nil {
 		return fetchResult{}, ErrSubscribeInvalidURL
@@ -627,9 +655,11 @@ func fetchICSConditional(ctx context.Context, rawURL string, etag, lastModified 
 		req.Header.Set("If-Modified-Since", *lastModified)
 	}
 
-	client := &http.Client{}
-	resp, err := client.Do(req)
+	resp, err := s.httpClient.Do(req)
 	if err != nil {
+		if errors.Is(err, ErrSubscribeURLBlocked) {
+			return fetchResult{}, fmt.Errorf("%w: %s", ErrSubscribeURLBlocked, MaskURL(rawURL))
+		}
 		return fetchResult{}, fmt.Errorf("%w: %s", ErrSubscribeFetchFailed, MaskURL(rawURL))
 	}
 	defer resp.Body.Close()

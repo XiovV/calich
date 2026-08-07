@@ -41,7 +41,10 @@ func newCalendarTestServer(t *testing.T) (baseURL string, accessToken string) {
 	calendars := service.NewCalendarService(repository.NewCalendarRepository(sqlDB))
 	events := service.NewEventService(sqlDB, repository.NewEventRepository(sqlDB), repository.NewEventExceptionRepository(sqlDB), repository.NewEventReminderRepository(sqlDB), repository.NewSyncRepository(sqlDB), calendars)
 	imports := service.NewImportService(events, calendars)
-	subscriptions := service.NewSubscribeService(events, calendars, 0)
+	// The address guard (#97, ADR-0032) would otherwise refuse every fetch in
+	// this package's tests: the feed servers below are httptest.Server
+	// instances on loopback, exactly what the guard exists to block.
+	subscriptions := service.NewSubscribeService(events, calendars, 0, service.WithHTTPClient(&http.Client{}))
 	calendarHandler := NewCalendarHandler(calendars, events, imports, subscriptions)
 
 	r := chi.NewRouter()

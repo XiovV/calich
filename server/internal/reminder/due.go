@@ -52,7 +52,7 @@ const occurrenceSearchPad = 24 * time.Hour
 // (from, to], matching the scheduler's "just-elapsed tick" semantics
 // (ADR-0021). A recurring Event's RRULE is expanded (skipping any Exdated
 // Occurrence); a non-recurring Event is checked as a series of one.
-func Due(event repository.Event, from, to time.Time) ([]DueReminder, error) {
+func Due(event repository.EventWithOwner, from, to time.Time) ([]DueReminder, error) {
 	var due []DueReminder
 
 	for _, reminder := range event.Reminders {
@@ -61,7 +61,7 @@ func Due(event repository.Event, from, to time.Time) ([]DueReminder, error) {
 		triggerTo := to.Add(offset)
 
 		starts, err := occurrenceStarts(
-			event,
+			event.Event,
 			triggerFrom.Add(-occurrenceSearchPad),
 			triggerTo.Add(occurrenceSearchPad),
 		)
@@ -70,11 +70,11 @@ func Due(event repository.Event, from, to time.Time) ([]DueReminder, error) {
 		}
 
 		for _, start := range starts {
-			at := anchor(event, start)
+			at := anchor(event.Event, start)
 			if at.After(triggerFrom) && !at.After(triggerTo) {
 				due = append(due, DueReminder{
 					EventID:         event.ID,
-					UserID:          event.UserID,
+					UserID:          event.CalendarOwnerID,
 					Title:           event.Title,
 					ReminderID:      reminder.ID,
 					OccurrenceStart: start,
@@ -91,7 +91,7 @@ func Due(event repository.Event, from, to time.Time) ([]DueReminder, error) {
 // overriddenRecurrenceIDs indexes every Override's recurrence id by its
 // parent's id, so DueAll can keep a Master from firing a stale Reminder for
 // an Occurrence that's since been overridden.
-func overriddenRecurrenceIDs(events []repository.Event) map[string][]time.Time {
+func overriddenRecurrenceIDs(events []repository.EventWithOwner) map[string][]time.Time {
 	byParent := make(map[string][]time.Time)
 	for _, event := range events {
 		if event.ParentID != nil && event.RecurrenceID != nil {
@@ -113,7 +113,7 @@ func overriddenRecurrenceIDs(events []repository.Event) map[string][]time.Time {
 // Event (found elsewhere in events, with its own Reminders and its own,
 // possibly-moved start) fires for that Occurrence — mirroring the frontend's
 // expandOccurrences.ts substitution (ADR-0016).
-func DueAll(events []repository.Event, from, to time.Time) ([]DueReminder, error) {
+func DueAll(events []repository.EventWithOwner, from, to time.Time) ([]DueReminder, error) {
 	overriddenByParent := overriddenRecurrenceIDs(events)
 
 	var due []DueReminder

@@ -13,10 +13,10 @@ import (
 // EventService's real (DB-backed) ListAllWithReminders in scheduler tests
 // that don't need real event persistence.
 type fakeEventLister struct {
-	events []repository.Event
+	events []repository.EventWithOwner
 }
 
-func (f fakeEventLister) ListAllWithReminders(context.Context) ([]repository.Event, error) {
+func (f fakeEventLister) ListAllWithReminders(context.Context) ([]repository.EventWithOwner, error) {
 	return f.events, nil
 }
 
@@ -55,7 +55,7 @@ func newTestLedger(t *testing.T) (ledger *repository.FiredReminderRepository, re
 		t.Fatalf("create calendar: %v", err)
 	}
 	events := repository.NewEventRepository(sqlDB)
-	if _, err := events.Create(ctx, "evt-1", user.ID, repository.EventFields{CalendarID: cal.ID, Title: "Standup", Start: at(2026, 1, 1, 9, 0), End: at(2026, 1, 1, 9, 30)}, 0); err != nil {
+	if _, err := events.Create(ctx, "evt-1", &user.ID, repository.EventFields{CalendarID: cal.ID, Title: "Standup", Start: at(2026, 1, 1, 9, 0), End: at(2026, 1, 1, 9, 30)}, 0); err != nil {
 		t.Fatalf("create event: %v", err)
 	}
 
@@ -89,7 +89,7 @@ func TestScheduler_Tick_DispatchesAReminderThatBecomesDueInTheWindow(t *testing.
 	}
 	dispatcher := &fakeDispatcher{}
 	c := &clock{t: at(2026, 1, 1, 8, 40)}
-	scheduler := NewScheduler(fakeEventLister{events: []repository.Event{event}}, ledger, dispatcher, c.now)
+	scheduler := NewScheduler(fakeEventLister{events: []repository.EventWithOwner{withOwner(event)}}, ledger, dispatcher, c.now)
 
 	// The trigger (08:50) falls in this tick's window.
 	c.set(at(2026, 1, 1, 8, 55))
@@ -114,7 +114,7 @@ func TestScheduler_Tick_DoesNotDispatchATriggerOutsideTheWindow(t *testing.T) {
 	}
 	dispatcher := &fakeDispatcher{}
 	c := &clock{t: at(2026, 1, 1, 6, 0)}
-	scheduler := NewScheduler(fakeEventLister{events: []repository.Event{event}}, ledger, dispatcher, c.now)
+	scheduler := NewScheduler(fakeEventLister{events: []repository.EventWithOwner{withOwner(event)}}, ledger, dispatcher, c.now)
 
 	c.set(at(2026, 1, 1, 6, 5))
 	if err := scheduler.Tick(context.Background()); err != nil {
@@ -142,7 +142,7 @@ func TestScheduler_Tick_ExactlyOnceAcrossRepeatedTicks(t *testing.T) {
 	}
 	dispatcher := &fakeDispatcher{}
 	c := &clock{t: at(2026, 1, 1, 8, 40)}
-	scheduler := NewScheduler(fakeEventLister{events: []repository.Event{event}}, ledger, dispatcher, c.now)
+	scheduler := NewScheduler(fakeEventLister{events: []repository.EventWithOwner{withOwner(event)}}, ledger, dispatcher, c.now)
 
 	c.set(at(2026, 1, 1, 8, 55))
 	if err := scheduler.Tick(context.Background()); err != nil {
@@ -153,7 +153,7 @@ func TestScheduler_Tick_ExactlyOnceAcrossRepeatedTicks(t *testing.T) {
 	// whose window covers the same trigger again, backed by the same ledger.
 	dispatcher2 := &fakeDispatcher{}
 	c2 := &clock{t: at(2026, 1, 1, 8, 40)}
-	scheduler2 := NewScheduler(fakeEventLister{events: []repository.Event{event}}, ledger, dispatcher2, c2.now)
+	scheduler2 := NewScheduler(fakeEventLister{events: []repository.EventWithOwner{withOwner(event)}}, ledger, dispatcher2, c2.now)
 	c2.set(at(2026, 1, 1, 8, 55))
 	if err := scheduler2.Tick(context.Background()); err != nil {
 		t.Fatalf("second tick: %v", err)
@@ -185,13 +185,13 @@ func TestScheduler_Restart_NeverCatchesUpAMissedTrigger(t *testing.T) {
 	// The old process's last tick was well before the trigger; it then went
 	// down and never ticked again.
 	c := &clock{t: at(2026, 1, 1, 6, 0)}
-	oldScheduler := NewScheduler(fakeEventLister{events: []repository.Event{event}}, ledger, dispatcher, c.now)
+	oldScheduler := NewScheduler(fakeEventLister{events: []repository.EventWithOwner{withOwner(event)}}, ledger, dispatcher, c.now)
 	_ = oldScheduler // downtime starts here; no further Tick call.
 
 	// The new process starts long after the trigger passed.
 	restartDispatcher := &fakeDispatcher{}
 	restartClock := &clock{t: at(2026, 1, 2, 0, 0)}
-	restarted := NewScheduler(fakeEventLister{events: []repository.Event{event}}, ledger, restartDispatcher, restartClock.now)
+	restarted := NewScheduler(fakeEventLister{events: []repository.EventWithOwner{withOwner(event)}}, ledger, restartDispatcher, restartClock.now)
 
 	restartClock.set(at(2026, 1, 2, 0, 1))
 	if err := restarted.Tick(context.Background()); err != nil {

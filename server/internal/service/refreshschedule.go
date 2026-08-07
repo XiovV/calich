@@ -106,18 +106,20 @@ func durationSecondsPtr(d *time.Duration) *int {
 }
 
 // classifyRefreshError sorts a failed Refresh's error into the sidebar's
-// two classes (#86, ADR-0033): needs-attention (auth failure, not found,
-// an unparseable or oversized feed — something a human must fix) or
-// retrying (everything else fetchICSConditional reports: timeout, DNS,
-// 5xx, other non-2xx). message is err's own text, which already carries a
-// masked URL via MaskURL everywhere these sentinels are wrapped.
+// two classes (#86, ADR-0033): needs-attention (auth failure, not found, an
+// unparseable or oversized feed, or a URL blocked as non-public (#97) —
+// something a human must fix) or retrying (everything else
+// fetchICSConditional reports: timeout, DNS, 5xx, other non-2xx). message is
+// err's own text, which already carries a masked URL via MaskURL everywhere
+// these sentinels are wrapped.
 func classifyRefreshError(err error) (class, message string) {
 	switch {
 	case errors.Is(err, ErrSubscribeAuthFailed),
 		errors.Is(err, ErrSubscribeNotFound),
 		errors.Is(err, ErrSubscribeUnparseable),
 		errors.Is(err, ErrSubscribeTooLarge),
-		errors.Is(err, ErrSubscribeInvalidURL):
+		errors.Is(err, ErrSubscribeInvalidURL),
+		errors.Is(err, ErrSubscribeURLBlocked):
 		return ErrorClassNeedsAttention, err.Error()
 	default:
 		return ErrorClassRetrying, err.Error()

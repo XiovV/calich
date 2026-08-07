@@ -17,14 +17,14 @@ func TestWithTx_CommitsOnSuccess(t *testing.T) {
 	end := time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC)
 
 	err := WithTx(ctx, sqlDB, func(tx *sql.Tx) error {
-		_, err := repo.WithTx(tx).Create(ctx, "evt-1", userID, EventFields{CalendarID: calendarID, Title: "Standup", Start: start, End: end}, 0)
+		_, err := repo.WithTx(tx).Create(ctx, "evt-1", &userID, EventFields{CalendarID: calendarID, Title: "Standup", Start: start, End: end}, 0)
 		return err
 	})
 	if err != nil {
 		t.Fatalf("WithTx: %v", err)
 	}
 
-	if _, err := repo.GetByID(ctx, userID, "evt-1"); err != nil {
+	if _, err := repo.GetByID(ctx, "evt-1"); err != nil {
 		t.Fatalf("expected event visible after commit, got: %v", err)
 	}
 }
@@ -39,7 +39,7 @@ func TestWithTx_RollsBackOnError(t *testing.T) {
 	sentinel := errors.New("boom")
 
 	err := WithTx(ctx, sqlDB, func(tx *sql.Tx) error {
-		if _, err := repo.WithTx(tx).Create(ctx, "evt-1", userID, EventFields{CalendarID: calendarID, Title: "Standup", Start: start, End: end}, 0); err != nil {
+		if _, err := repo.WithTx(tx).Create(ctx, "evt-1", &userID, EventFields{CalendarID: calendarID, Title: "Standup", Start: start, End: end}, 0); err != nil {
 			return err
 		}
 		return sentinel
@@ -48,7 +48,7 @@ func TestWithTx_RollsBackOnError(t *testing.T) {
 		t.Fatalf("expected sentinel error, got: %v", err)
 	}
 
-	if _, err := repo.GetByID(ctx, userID, "evt-1"); !errors.Is(err, ErrNotFound) {
+	if _, err := repo.GetByID(ctx, "evt-1"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("expected event absent after rollback, got: %v", err)
 	}
 }

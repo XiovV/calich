@@ -155,7 +155,7 @@ func TestEventReminderRepository_CascadeDeletesWhenEventDeleted(t *testing.T) {
 		t.Fatalf("replace by event id: %v", err)
 	}
 
-	if err := repo.Delete(ctx, userID, "evt-1"); err != nil {
+	if err := repo.Delete(ctx, "evt-1"); err != nil {
 		t.Fatalf("delete event: %v", err)
 	}
 

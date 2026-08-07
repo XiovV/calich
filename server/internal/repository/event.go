@@ -12,7 +12,6 @@ import (
 
 type Event struct {
 	ID         string
-	UserID     int64
 	CalendarID string
 	Title      string
 	// Description and Location are free-text fields on an Event, viewable
@@ -60,6 +59,12 @@ type Event struct {
 	// separate column, not an alternate id. Unique per Calendar among
 	// Masters; an Override shares its Master's value.
 	ExternalUID *string
+	// CreatedBy is who created this Event, for attribution only — never
+	// consulted for authorization, which resolves through CalendarID
+	// instead (ADR-0034). Nil when the creating User has since been
+	// deleted (ON DELETE SET NULL), or for rows written before this column
+	// existed.
+	CreatedBy *int64
 }
 
 type EventRepository struct {
@@ -99,27 +104,29 @@ type EventFields struct {
 	ExternalUID *string
 }
 
-func (r *EventRepository) Create(ctx context.Context, id string, userID int64, f EventFields, changeSeq int64) (Event, error) {
+func (r *EventRepository) Create(ctx context.Context, id string, createdBy *int64, f EventFields, changeSeq int64) (Event, error) {
 	if _, err := r.db.ExecContext(ctx,
-		`INSERT INTO events (id, user_id, calendar_id, title, "start", "end", all_day, rrule, parent_id, recurrence_id, tzid, description, location, external_uid, change_seq) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		id, userID, f.CalendarID, f.Title, f.Start, f.End, f.AllDay, f.Rrule, f.ParentID, f.RecurrenceID, f.Tzid, f.Description, f.Location, f.ExternalUID, changeSeq,
+		`INSERT INTO events (id, calendar_id, title, "start", "end", all_day, rrule, parent_id, recurrence_id, tzid, description, location, external_uid, created_by, change_seq) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		id, f.CalendarID, f.Title, f.Start, f.End, f.AllDay, f.Rrule, f.ParentID, f.RecurrenceID, f.Tzid, f.Description, f.Location, f.ExternalUID, createdBy, changeSeq,
 	); err != nil {
 		return Event{}, fmt.Errorf("insert event: %w", err)
 	}
 
-	return r.GetByID(ctx, userID, id)
+	return r.GetByID(ctx, id)
 }
 
-func (r *EventRepository) GetByID(ctx context.Context, userID int64, id string) (Event, error) {
+func (r *EventRepository) GetByID(ctx context.Context, id string) (Event, error) {
 	return scanEvent(r.db.QueryRowContext(ctx,
-		`SELECT id, user_id, calendar_id, title, "start", "end", all_day, rrule, parent_id, recurrence_id, tzid, description, location, external_uid, created_at, change_seq FROM events WHERE user_id = ? AND id = ?`,
-		userID, id,
+		`SELECT id, calendar_id, title, "start", "end", all_day, rrule, parent_id, recurrence_id, tzid, description, location, external_uid, created_by, created_at, change_seq FROM events WHERE id = ?`,
+		id,
 	))
 }
 
-// ListByUser returns a user's events ordered by start time. When from/to are
-// non-nil, only events overlapping that half-open range are returned; either
-// may be nil to leave that side of the range unbounded.
+// ListByCalendarIDs returns every Event in any of calendarIDs, ordered by
+// start time. When from/to are non-nil, only events overlapping that
+// half-open range are returned; either may be nil to leave that side of the
+// range unbounded. Returns no rows (not an error) for an empty calendarIDs —
+// the caller has access to no Calendar.
 //
 // A recurring Master's own start/end columns are just its first Occurrence —
 // windowing on those directly would wrongly exclude e.g. a 2009 Master with
@@ -134,9 +141,16 @@ func (r *EventRepository) GetByID(ctx context.Context, userID int64, id string) 
 // query still excludes a Master whose rule ended before from. A plain Event
 // or an Override (both rrule == "") has no such ambiguity: its stored
 // start/end IS the Occurrence, so the SQL column filter alone is exact.
-func (r *EventRepository) ListByUser(ctx context.Context, userID int64, from, to *time.Time) ([]Event, error) {
-	query := `SELECT id, user_id, calendar_id, title, "start", "end", all_day, rrule, parent_id, recurrence_id, tzid, description, location, external_uid, created_at, change_seq FROM events WHERE user_id = ?`
-	args := []any{userID}
+func (r *EventRepository) ListByCalendarIDs(ctx context.Context, calendarIDs []string, from, to *time.Time) ([]Event, error) {
+	if len(calendarIDs) == 0 {
+		return []Event{}, nil
+	}
+
+	query := `SELECT id, calendar_id, title, "start", "end", all_day, rrule, parent_id, recurrence_id, tzid, description, location, external_uid, created_by, created_at, change_seq FROM events WHERE calendar_id IN (` + placeholders(len(calendarIDs)) + `)`
+	args := make([]any, 0, len(calendarIDs)+2)
+	for _, id := range calendarIDs {
+		args = append(args, id)
+	}
 
 	switch {
 	case from != nil && to != nil:
@@ -217,26 +231,36 @@ func filterRecurringByWindow(events []Event, from, to time.Time) ([]Event, error
 	return filtered, nil
 }
 
-// ListAllWithReminders returns every Event across every user that carries at
-// least one Reminder — the firing engine's read path (ADR-0021), which runs
-// as a single background process serving every account, unlike ListByUser's
-// per-caller scoping.
-func (r *EventRepository) ListAllWithReminders(ctx context.Context) ([]Event, error) {
+// EventWithOwner pairs an Event with its Calendar's Owner — the reminder
+// firing engine's recipient (ADR-0021) until Access grows beyond a single
+// Owner (ADR-0036). Not a repository.Event field: an Event has no owner of
+// its own (ADR-0034), this is purely ListAllWithReminders' join result.
+type EventWithOwner struct {
+	Event
+	CalendarOwnerID int64
+}
+
+// ListAllWithReminders returns every Event across every Calendar that
+// carries at least one Reminder, alongside its Calendar's Owner — the firing
+// engine's read path (ADR-0021), which runs as a single background process
+// serving every account, unlike ListByCalendarIDs' per-caller scoping.
+func (r *EventRepository) ListAllWithReminders(ctx context.Context) ([]EventWithOwner, error) {
 	rows, err := r.db.QueryContext(ctx,
-		`SELECT id, user_id, calendar_id, title, "start", "end", all_day, rrule, parent_id, recurrence_id, tzid, description, location, external_uid, created_at, change_seq
+		`SELECT events.id, events.calendar_id, events.title, events."start", events."end", events.all_day, events.rrule, events.parent_id, events.recurrence_id, events.tzid, events.description, events.location, events.external_uid, events.created_by, events.created_at, events.change_seq, calendars.user_id
 		 FROM events
+		 JOIN calendars ON calendars.id = events.calendar_id
 		 WHERE EXISTS (SELECT 1 FROM event_reminders WHERE event_reminders.event_id = events.id)
-		 ORDER BY id`,
+		 ORDER BY events.id`,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("list events with reminders: %w", err)
 	}
 	defer rows.Close()
 
-	events := []Event{}
+	events := []EventWithOwner{}
 	for rows.Next() {
-		e, err := scanEvent(rows)
-		if err != nil {
+		var e EventWithOwner
+		if err := scanEventWithOwner(rows, &e); err != nil {
 			return nil, fmt.Errorf("scan event: %w", err)
 		}
 		events = append(events, e)
@@ -250,10 +274,10 @@ func (r *EventRepository) ListAllWithReminders(ctx context.Context) ([]Event, er
 
 // Update rewrites id's columns from f. f.ParentID and f.RecurrenceID are
 // ignored — see EventFields.
-func (r *EventRepository) Update(ctx context.Context, userID int64, id string, f EventFields, changeSeq int64) (Event, error) {
+func (r *EventRepository) Update(ctx context.Context, id string, f EventFields, changeSeq int64) (Event, error) {
 	res, err := r.db.ExecContext(ctx,
-		`UPDATE events SET calendar_id = ?, title = ?, "start" = ?, "end" = ?, all_day = ?, rrule = ?, tzid = ?, description = ?, location = ?, change_seq = ? WHERE user_id = ? AND id = ?`,
-		f.CalendarID, f.Title, f.Start, f.End, f.AllDay, f.Rrule, f.Tzid, f.Description, f.Location, changeSeq, userID, id,
+		`UPDATE events SET calendar_id = ?, title = ?, "start" = ?, "end" = ?, all_day = ?, rrule = ?, tzid = ?, description = ?, location = ?, change_seq = ? WHERE id = ?`,
+		f.CalendarID, f.Title, f.Start, f.End, f.AllDay, f.Rrule, f.Tzid, f.Description, f.Location, changeSeq, id,
 	)
 	if err != nil {
 		return Event{}, fmt.Errorf("update event: %w", err)
@@ -263,7 +287,7 @@ func (r *EventRepository) Update(ctx context.Context, userID int64, id string, f
 		return Event{}, err
 	}
 
-	return r.GetByID(ctx, userID, id)
+	return r.GetByID(ctx, id)
 }
 
 // SetChangeSeq stamps id's row with changeSeq directly, without touching any
@@ -271,10 +295,10 @@ func (r *EventRepository) Update(ctx context.Context, userID int64, id string, f
 // create/update/delete, an Exception, a reparent) still changes id's series
 // object as CalDAV sees it, so id — always a Master — must record the bump
 // too (ADR-0025).
-func (r *EventRepository) SetChangeSeq(ctx context.Context, userID int64, id string, changeSeq int64) error {
+func (r *EventRepository) SetChangeSeq(ctx context.Context, id string, changeSeq int64) error {
 	res, err := r.db.ExecContext(ctx,
-		`UPDATE events SET change_seq = ? WHERE user_id = ? AND id = ?`,
-		changeSeq, userID, id,
+		`UPDATE events SET change_seq = ? WHERE id = ?`,
+		changeSeq, id,
 	)
 	if err != nil {
 		return fmt.Errorf("set change_seq: %w", err)
@@ -282,8 +306,8 @@ func (r *EventRepository) SetChangeSeq(ctx context.Context, userID int64, id str
 	return requireAffected(res)
 }
 
-func (r *EventRepository) Delete(ctx context.Context, userID int64, id string) error {
-	res, err := r.db.ExecContext(ctx, `DELETE FROM events WHERE user_id = ? AND id = ?`, userID, id)
+func (r *EventRepository) Delete(ctx context.Context, id string) error {
+	res, err := r.db.ExecContext(ctx, `DELETE FROM events WHERE id = ?`, id)
 	if err != nil {
 		return fmt.Errorf("delete event: %w", err)
 	}
@@ -295,10 +319,10 @@ func (r *EventRepository) Delete(ctx context.Context, userID int64, id string) e
 // recurrence_id is at-or-after fromStart to belong to newParentID instead —
 // the "this and following" split reparenting overrides at the boundary
 // (ADR-0016).
-func (r *EventRepository) ReparentOverridesFrom(ctx context.Context, userID int64, oldParentID, newParentID string, fromStart time.Time) error {
+func (r *EventRepository) ReparentOverridesFrom(ctx context.Context, oldParentID, newParentID string, fromStart time.Time) error {
 	_, err := r.db.ExecContext(ctx,
-		`UPDATE events SET parent_id = ? WHERE user_id = ? AND parent_id = ? AND recurrence_id >= ?`,
-		newParentID, userID, oldParentID, fromStart,
+		`UPDATE events SET parent_id = ? WHERE parent_id = ? AND recurrence_id >= ?`,
+		newParentID, oldParentID, fromStart,
 	)
 	if err != nil {
 		return fmt.Errorf("reparent overrides: %w", err)
@@ -309,8 +333,8 @@ func (r *EventRepository) ReparentOverridesFrom(ctx context.Context, userID int6
 // DeleteChildrenOf deletes every Override belonging to parentID (the master
 // keeps its own row). Used when a rule change forces the "All events" scope
 // and discards per-Occurrence edits (ADR-0016).
-func (r *EventRepository) DeleteChildrenOf(ctx context.Context, userID int64, parentID string) error {
-	_, err := r.db.ExecContext(ctx, `DELETE FROM events WHERE user_id = ? AND parent_id = ?`, userID, parentID)
+func (r *EventRepository) DeleteChildrenOf(ctx context.Context, parentID string) error {
+	_, err := r.db.ExecContext(ctx, `DELETE FROM events WHERE parent_id = ?`, parentID)
 	if err != nil {
 		return fmt.Errorf("delete children: %w", err)
 	}
@@ -321,16 +345,15 @@ func (r *EventRepository) DeleteChildrenOf(ctx context.Context, userID int64, pa
 // parent_id and ordered by recurrence_id. Parents with no Overrides are
 // simply absent from the map. Used to recompose a series' calendar object
 // over CalDAV (ADR-0025).
-func (r *EventRepository) ListChildrenByParentIDs(ctx context.Context, userID int64, parentIDs []string) (map[string][]Event, error) {
+func (r *EventRepository) ListChildrenByParentIDs(ctx context.Context, parentIDs []string) (map[string][]Event, error) {
 	result := map[string][]Event{}
 	if len(parentIDs) == 0 {
 		return result, nil
 	}
 
-	query := `SELECT id, user_id, calendar_id, title, "start", "end", all_day, rrule, parent_id, recurrence_id, tzid, description, location, external_uid, created_at, change_seq
-		 FROM events WHERE user_id = ? AND parent_id IN (` + placeholders(len(parentIDs)) + `) ORDER BY recurrence_id`
-	args := make([]any, 0, len(parentIDs)+1)
-	args = append(args, userID)
+	query := `SELECT id, calendar_id, title, "start", "end", all_day, rrule, parent_id, recurrence_id, tzid, description, location, external_uid, created_by, created_at, change_seq
+		 FROM events WHERE parent_id IN (` + placeholders(len(parentIDs)) + `) ORDER BY recurrence_id`
+	args := make([]any, 0, len(parentIDs))
 	for _, id := range parentIDs {
 		args = append(args, id)
 	}
@@ -358,11 +381,11 @@ func (r *EventRepository) ListChildrenByParentIDs(ctx context.Context, userID in
 // ListMastersByCalendar returns every Master Event (parent_id IS NULL) in
 // calendarID, ordered by id — CalDAV's per-calendar object listing
 // (ADR-0025).
-func (r *EventRepository) ListMastersByCalendar(ctx context.Context, userID int64, calendarID string) ([]Event, error) {
+func (r *EventRepository) ListMastersByCalendar(ctx context.Context, calendarID string) ([]Event, error) {
 	rows, err := r.db.QueryContext(ctx,
-		`SELECT id, user_id, calendar_id, title, "start", "end", all_day, rrule, parent_id, recurrence_id, tzid, description, location, external_uid, created_at, change_seq
-		 FROM events WHERE user_id = ? AND calendar_id = ? AND parent_id IS NULL ORDER BY id`,
-		userID, calendarID,
+		`SELECT id, calendar_id, title, "start", "end", all_day, rrule, parent_id, recurrence_id, tzid, description, location, external_uid, created_by, created_at, change_seq
+		 FROM events WHERE calendar_id = ? AND parent_id IS NULL ORDER BY id`,
+		calendarID,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("list masters: %w", err)
@@ -387,11 +410,11 @@ func (r *EventRepository) ListMastersByCalendar(ctx context.Context, userID int6
 // ListMastersChangedSince returns calendarID's Master Events whose
 // change_seq is greater than since, ordered by change_seq — the changed
 // half of a sync-collection REPORT's diff (ADR-0025).
-func (r *EventRepository) ListMastersChangedSince(ctx context.Context, userID int64, calendarID string, since int64) ([]Event, error) {
+func (r *EventRepository) ListMastersChangedSince(ctx context.Context, calendarID string, since int64) ([]Event, error) {
 	rows, err := r.db.QueryContext(ctx,
-		`SELECT id, user_id, calendar_id, title, "start", "end", all_day, rrule, parent_id, recurrence_id, tzid, description, location, external_uid, created_at, change_seq
-		 FROM events WHERE user_id = ? AND calendar_id = ? AND parent_id IS NULL AND change_seq > ? ORDER BY change_seq`,
-		userID, calendarID, since,
+		`SELECT id, calendar_id, title, "start", "end", all_day, rrule, parent_id, recurrence_id, tzid, description, location, external_uid, created_by, created_at, change_seq
+		 FROM events WHERE calendar_id = ? AND parent_id IS NULL AND change_seq > ? ORDER BY change_seq`,
+		calendarID, since,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("list changed masters: %w", err)
@@ -419,20 +442,21 @@ type scanner interface {
 	Scan(dest ...any) error
 }
 
-func scanEvent(row scanner) (Event, error) {
-	var e Event
+// scanEventRow scans an Event's columns into e, plus any extraDest appended
+// after them — ListAllWithReminders' join uses this to also capture
+// calendars.user_id into EventWithOwner.CalendarOwnerID without duplicating
+// every column and its null-handling a second time.
+func scanEventRow(row scanner, e *Event, extraDest ...any) error {
 	var parentID sql.NullString
 	var recurrenceID sql.NullTime
 	var tzid sql.NullString
 	var description sql.NullString
 	var location sql.NullString
 	var externalUID sql.NullString
-	err := row.Scan(&e.ID, &e.UserID, &e.CalendarID, &e.Title, &e.Start, &e.End, &e.AllDay, &e.Rrule, &parentID, &recurrenceID, &tzid, &description, &location, &externalUID, &e.CreatedAt, &e.ChangeSeq)
-	if errors.Is(err, sql.ErrNoRows) {
-		return Event{}, ErrNotFound
-	}
-	if err != nil {
-		return Event{}, fmt.Errorf("scan event: %w", err)
+	var createdBy sql.NullInt64
+	dest := append([]any{&e.ID, &e.CalendarID, &e.Title, &e.Start, &e.End, &e.AllDay, &e.Rrule, &parentID, &recurrenceID, &tzid, &description, &location, &externalUID, &createdBy, &e.CreatedAt, &e.ChangeSeq}, extraDest...)
+	if err := row.Scan(dest...); err != nil {
+		return err
 	}
 	if externalUID.Valid {
 		e.ExternalUID = &externalUID.String
@@ -446,7 +470,26 @@ func scanEvent(row scanner) (Event, error) {
 	if tzid.Valid {
 		e.Tzid = &tzid.String
 	}
+	if createdBy.Valid {
+		e.CreatedBy = &createdBy.Int64
+	}
 	e.Description = description.String
 	e.Location = location.String
+	return nil
+}
+
+func scanEvent(row scanner) (Event, error) {
+	var e Event
+	err := scanEventRow(row, &e)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Event{}, ErrNotFound
+	}
+	if err != nil {
+		return Event{}, fmt.Errorf("scan event: %w", err)
+	}
 	return e, nil
+}
+
+func scanEventWithOwner(row scanner, e *EventWithOwner) error {
+	return scanEventRow(row, &e.Event, &e.CalendarOwnerID)
 }
