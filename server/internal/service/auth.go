@@ -33,6 +33,10 @@ var (
 	ErrInvalidSession     = errors.New("invalid session")
 	ErrInvalidPassword    = errors.New("password must not be empty")
 	ErrInvalidEmail       = errors.New("email is not a valid address")
+	// ErrAccountDisabled is returned by Login and Refresh for a Disabled
+	// User (ADR-0037) — two of the three points Disable must be enforced at,
+	// the third being CalDAV Basic auth (AppPasswordService.Authenticate).
+	ErrAccountDisabled = errors.New("account is disabled")
 )
 
 type AuthService struct {
@@ -124,6 +128,10 @@ func (s *AuthService) Login(ctx context.Context, username, password string) (Log
 		return LoginResult{}, ErrInvalidCredentials
 	}
 
+	if user.IsDisabled {
+		return LoginResult{}, ErrAccountDisabled
+	}
+
 	accessToken, err := s.newAccessToken(user.ID)
 	if err != nil {
 		return LoginResult{}, fmt.Errorf("issue access token: %w", err)
@@ -150,6 +158,13 @@ func (s *AuthService) Login(ctx context.Context, username, password string) (Log
 // Authenticate validates an access token and returns the user id it was
 // issued for. It never touches the database — the token's signature and
 // expiry are all that's checked.
+//
+// This is a knowingly accepted gap in Disable (ADR-0037): a Disabled User
+// keeps a working access token for up to its accessTokenTTL (15 minutes),
+// since closing it would mean a database read on every authenticated
+// request. Login, Refresh, and CalDAV Basic auth are the three points that
+// do check — see AuthService.Login, AuthService.Refresh, and
+// AppPasswordService.Authenticate.
 func (s *AuthService) Authenticate(ctx context.Context, accessToken string) (int64, error) {
 	claims := &jwt.RegisteredClaims{}
 
@@ -302,6 +317,14 @@ func (s *AuthService) Refresh(ctx context.Context, refreshToken string) (string,
 
 	if time.Now().After(session.RefreshTokenExpiresAt) {
 		return "", ErrInvalidSession
+	}
+
+	user, err := s.users.GetByID(ctx, session.UserID)
+	if err != nil {
+		return "", fmt.Errorf("get user: %w", err)
+	}
+	if user.IsDisabled {
+		return "", ErrAccountDisabled
 	}
 
 	accessToken, err := s.newAccessToken(session.UserID)

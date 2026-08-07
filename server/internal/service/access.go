@@ -44,17 +44,22 @@ func (a Access) CanWrite() bool { return a >= AccessEditor }
 func (a Access) IsOwner() bool { return a == AccessOwner }
 
 // ResolveAccess computes Access(user, calendar) (ADR-0034): Owner if userID
-// owns calendar, None otherwise — there is no Share yet, so no Role can
-// resolve Viewer or Editor until #99 teaches this function about
-// calendar_shares — and then clamped to Viewer if calendar carries a
-// Subscription, since a Subscribed Calendar is read-only for its Owner too
-// (ADR-0032). The clamp is applied here, at resolution time, rather than
-// when a Share is granted, because a source URL can be attached to an
-// already-shared Calendar after the fact (ADR-0034).
-func ResolveAccess(userID int64, calendar repository.Calendar) Access {
+// owns calendar, else shareRole's Access if a Share grants one, else None —
+// then clamped to Viewer if calendar carries a Subscription, since a
+// Subscribed Calendar is read-only for its Owner and every Editor alike
+// (ADR-0032). shareRole is nil when no Share row exists for userID; the
+// caller (CalendarService.Access) looks it up, since only it knows whether
+// userID is the Owner and can skip the lookup entirely in that case. The
+// clamp is applied here, at resolution time, rather than when a Share is
+// granted, because a source URL can be attached to an already-shared
+// Calendar after the fact (ADR-0034).
+func ResolveAccess(userID int64, calendar repository.Calendar, shareRole *string) Access {
 	base := AccessNone
-	if calendar.UserID == userID {
+	switch {
+	case calendar.UserID == userID:
 		base = AccessOwner
+	case shareRole != nil:
+		base = roleAccess(*shareRole)
 	}
 
 	if calendar.SourceURL != nil && base > AccessViewer {
@@ -62,4 +67,19 @@ func ResolveAccess(userID int64, calendar repository.Calendar) Access {
 	}
 
 	return base
+}
+
+// roleAccess maps a Share's stored Role to its Access value. Any role other
+// than the two calendar_shares' CHECK constraint allows resolves to None,
+// so a row this function can't recognize never grants more than a stranger
+// would get.
+func roleAccess(role string) Access {
+	switch role {
+	case repository.RoleEditor:
+		return AccessEditor
+	case repository.RoleViewer:
+		return AccessViewer
+	default:
+		return AccessNone
+	}
 }

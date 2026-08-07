@@ -182,6 +182,24 @@ func TestAppPasswordService_Authenticate_RejectsUnknownUsername(t *testing.T) {
 	}
 }
 
+func TestAppPasswordService_Authenticate_RejectsDisabledAccount(t *testing.T) {
+	svc, userID, username := newTestAppPasswordServiceWithUsername(t)
+	ctx := context.Background()
+
+	created, err := svc.Create(ctx, userID, "iPhone")
+	if err != nil {
+		t.Fatalf("create app password: %v", err)
+	}
+	if _, err := svc.users.SetDisabled(ctx, userID, true); err != nil {
+		t.Fatalf("disable account: %v", err)
+	}
+
+	_, err = svc.Authenticate(ctx, username, created.Secret)
+	if !errors.Is(err, ErrInvalidAppPasswordCredentials) {
+		t.Fatalf("expected ErrInvalidAppPasswordCredentials, got %v", err)
+	}
+}
+
 func TestAppPasswordService_Authenticate_RejectsRevokedAppPassword(t *testing.T) {
 	svc, userID, username := newTestAppPasswordServiceWithUsername(t)
 	ctx := context.Background()

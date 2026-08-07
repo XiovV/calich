@@ -19,7 +19,7 @@ type EventLister interface {
 // Ledger is the scheduler's exactly-once seam. Satisfied by
 // *repository.FiredReminderRepository.
 type Ledger interface {
-	MarkFired(ctx context.Context, reminderID int64, occurrenceStart, firedAt time.Time) (bool, error)
+	MarkFired(ctx context.Context, reminderID, userID int64, occurrenceStart, firedAt time.Time) (bool, error)
 }
 
 // Scheduler is the background ticker that fires due Reminders (ADR-0021). A
@@ -75,7 +75,7 @@ func (s *Scheduler) Tick(ctx context.Context) error {
 	}
 
 	for _, d := range due {
-		isNew, err := s.ledger.MarkFired(ctx, d.ReminderID, d.OccurrenceStart, to)
+		isNew, err := s.ledger.MarkFired(ctx, d.ReminderID, d.UserID, d.OccurrenceStart, to)
 		if err != nil {
 			// lastTick deliberately hasn't advanced yet: the next tick
 			// retries this whole window. MarkFired is idempotent for

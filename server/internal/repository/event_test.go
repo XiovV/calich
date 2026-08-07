@@ -605,6 +605,89 @@ func TestEventRepository_ListAllWithReminders(t *testing.T) {
 	}
 }
 
+// RecipientUserIDs must carry the Calendar's Owner plus every User holding
+// a Share on it, Editor and Viewer alike — the fan-out a shared Calendar's
+// Reminder needs (ADR-0036). A Calendar with no Shares still resolves to
+// just its Owner, so an unshared Calendar's Reminders behave exactly as
+// before.
+func TestEventRepository_ListAllWithReminders_RecipientUserIDsIncludeOwnerAndEverySharedUser(t *testing.T) {
+	sqlDB, err := db.OpenInMemory()
+	if err != nil {
+		t.Fatalf("open in-memory db: %v", err)
+	}
+	t.Cleanup(func() { sqlDB.Close() })
+	ctx := context.Background()
+
+	users := NewUserRepository(sqlDB)
+	owner, err := users.Create(ctx, "owner", "hash", false)
+	if err != nil {
+		t.Fatalf("create owner: %v", err)
+	}
+	editor, err := users.Create(ctx, "editor", "hash", false)
+	if err != nil {
+		t.Fatalf("create editor: %v", err)
+	}
+	viewer, err := users.Create(ctx, "viewer", "hash", false)
+	if err != nil {
+		t.Fatalf("create viewer: %v", err)
+	}
+	solo, err := users.Create(ctx, "solo", "hash", false)
+	if err != nil {
+		t.Fatalf("create solo: %v", err)
+	}
+
+	calendars := NewCalendarRepository(sqlDB)
+	shared, err := calendars.Create(ctx, owner.ID, "cal-shared", CalendarFields{Name: "Family", Color: "peacock"})
+	if err != nil {
+		t.Fatalf("create shared calendar: %v", err)
+	}
+	unshared, err := calendars.Create(ctx, solo.ID, "cal-unshared", CalendarFields{Name: "Solo", Color: "tomato"})
+	if err != nil {
+		t.Fatalf("create unshared calendar: %v", err)
+	}
+
+	shares := NewCalendarShareRepository(sqlDB)
+	if _, err := shares.Upsert(ctx, shared.ID, editor.ID, RoleEditor); err != nil {
+		t.Fatalf("share with editor: %v", err)
+	}
+	if _, err := shares.Upsert(ctx, shared.ID, viewer.ID, RoleViewer); err != nil {
+		t.Fatalf("share with viewer: %v", err)
+	}
+
+	repo := NewEventRepository(sqlDB)
+	reminders := NewEventReminderRepository(sqlDB)
+	mustCreateEvent(t, repo, "shared-event", owner.ID, shared.ID, "2026-01-01T09:00:00Z", "2026-01-01T10:00:00Z")
+	mustCreateEvent(t, repo, "solo-event", solo.ID, unshared.ID, "2026-01-02T09:00:00Z", "2026-01-02T10:00:00Z")
+	if err := reminders.ReplaceByEventID(ctx, "shared-event", []Reminder{{OffsetMinutes: 10, Channel: "notification"}}); err != nil {
+		t.Fatalf("replace by event id: %v", err)
+	}
+	if err := reminders.ReplaceByEventID(ctx, "solo-event", []Reminder{{OffsetMinutes: 10, Channel: "notification"}}); err != nil {
+		t.Fatalf("replace by event id: %v", err)
+	}
+
+	events, err := repo.ListAllWithReminders(ctx)
+	if err != nil {
+		t.Fatalf("list all with reminders: %v", err)
+	}
+
+	recipientsByID := make(map[string][]int64, len(events))
+	for _, e := range events {
+		recipientsByID[e.ID] = e.RecipientUserIDs
+	}
+
+	sharedRecipients := map[int64]bool{}
+	for _, id := range recipientsByID["shared-event"] {
+		sharedRecipients[id] = true
+	}
+	if len(sharedRecipients) != 3 || !sharedRecipients[owner.ID] || !sharedRecipients[editor.ID] || !sharedRecipients[viewer.ID] {
+		t.Fatalf("expected shared-event's recipients to be owner, editor and viewer, got %v", recipientsByID["shared-event"])
+	}
+
+	if got := recipientsByID["solo-event"]; len(got) != 1 || got[0] != solo.ID {
+		t.Fatalf("expected an unshared Calendar's Event to only fire for its owner, got %v", got)
+	}
+}
+
 func mustCreateEvent(t *testing.T, repo *EventRepository, id string, userID int64, calendarID, start, end string) {
 	t.Helper()
 	if _, err := repo.Create(context.Background(), id, &userID, EventFields{CalendarID: calendarID, Title: id, Start: mustParseTime(t, start), End: mustParseTime(t, end)}, 0); err != nil {

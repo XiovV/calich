@@ -21,7 +21,9 @@ type DueReminder struct {
 	// record without a second lookup (ADR-0021).
 	Title string
 	// ReminderID identifies the fired Reminder's own row — the ledger's
-	// exactly-once key is (ReminderID, OccurrenceStart), ADR-0021.
+	// exactly-once key is (ReminderID, UserID, OccurrenceStart), since a
+	// shared Calendar's Reminder fires independently per recipient
+	// (ADR-0021, ADR-0036).
 	ReminderID      int64
 	OccurrenceStart time.Time
 	OffsetMinutes   int
@@ -47,11 +49,15 @@ func anchor(event repository.Event, occurrenceStart time.Time) time.Time {
 // below, so this only needs to be wide enough to not miss a candidate.
 const occurrenceSearchPad = 24 * time.Hour
 
-// Due returns every Reminder on event whose trigger — its Occurrence's
-// anchor, minus the Reminder's own offset — falls in the half-open window
-// (from, to], matching the scheduler's "just-elapsed tick" semantics
-// (ADR-0021). A recurring Event's RRULE is expanded (skipping any Exdated
-// Occurrence); a non-recurring Event is checked as a series of one.
+// Due returns one DueReminder per (Reminder, recipient) pair on event whose
+// trigger — its Occurrence's anchor, minus the Reminder's own offset — falls
+// in the half-open window (from, to], matching the scheduler's
+// "just-elapsed tick" semantics (ADR-0021). A recurring Event's RRULE is
+// expanded (skipping any Exdated Occurrence); a non-recurring Event is
+// checked as a series of one. Every User in event.RecipientUserIDs — the
+// Calendar's Owner and every Shared Editor and Viewer — gets its own
+// DueReminder, so a shared Calendar's Reminder fans out to everyone with
+// Access (ADR-0036).
 func Due(event repository.EventWithOwner, from, to time.Time) ([]DueReminder, error) {
 	var due []DueReminder
 
@@ -72,15 +78,17 @@ func Due(event repository.EventWithOwner, from, to time.Time) ([]DueReminder, er
 		for _, start := range starts {
 			at := anchor(event.Event, start)
 			if at.After(triggerFrom) && !at.After(triggerTo) {
-				due = append(due, DueReminder{
-					EventID:         event.ID,
-					UserID:          event.CalendarOwnerID,
-					Title:           event.Title,
-					ReminderID:      reminder.ID,
-					OccurrenceStart: start,
-					OffsetMinutes:   reminder.OffsetMinutes,
-					Channel:         reminder.Channel,
-				})
+				for _, userID := range event.RecipientUserIDs {
+					due = append(due, DueReminder{
+						EventID:         event.ID,
+						UserID:          userID,
+						Title:           event.Title,
+						ReminderID:      reminder.ID,
+						OccurrenceStart: start,
+						OffsetMinutes:   reminder.OffsetMinutes,
+						Channel:         reminder.Channel,
+					})
+				}
 			}
 		}
 	}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -15,14 +16,27 @@ import (
 var (
 	ErrInvalidColor = errors.New("invalid calendar color")
 	ErrInvalidName  = errors.New("calendar name must not be empty")
+	// ErrInvalidRole is returned when a Share is granted with a Role other
+	// than Viewer or Editor (ADR-0034).
+	ErrInvalidRole = errors.New("role must be \"viewer\" or \"editor\"")
+	// ErrUserNotFound is returned when Share names a username that doesn't
+	// exist on the instance — a Share can only be granted to a User who
+	// exists (#100's acceptance criteria).
+	ErrUserNotFound = errors.New("user not found")
+	// ErrCannotShareWithSelf is returned when Share names the Calendar's
+	// own Owner — ownership already grants everything a Share could, and
+	// an Owner can never hold a Share row of their own (ADR-0034).
+	ErrCannotShareWithSelf = errors.New("cannot share a calendar with its owner")
 )
 
 type CalendarService struct {
 	calendars *repository.CalendarRepository
+	shares    *repository.CalendarShareRepository
+	users     *repository.UserRepository
 }
 
-func NewCalendarService(calendars *repository.CalendarRepository) *CalendarService {
-	return &CalendarService{calendars: calendars}
+func NewCalendarService(calendars *repository.CalendarRepository, shares *repository.CalendarShareRepository, users *repository.UserRepository) *CalendarService {
+	return &CalendarService{calendars: calendars, shares: shares, users: users}
 }
 
 // CalendarWrite is a Calendar's writable fields, gathered into one value the
@@ -75,12 +89,58 @@ func (s *CalendarService) Create(ctx context.Context, userID int64, id string, w
 	return calendar, nil
 }
 
+// List returns userID's owned Calendars only — for callers that name
+// Calendars purely by ownership (Owner-only management, ADR-0034). A caller
+// that wants everything userID has any Access to — owned and shared alike,
+// including CalDAV's home-set (ADR-0035) — should call ListAccessible
+// instead.
 func (s *CalendarService) List(ctx context.Context, userID int64) ([]repository.Calendar, error) {
 	calendars, err := s.calendars.ListByUser(ctx, userID)
 	if err != nil {
 		return nil, fmt.Errorf("list calendars: %w", err)
 	}
 	return calendars, nil
+}
+
+// CalendarWithAccess pairs a Calendar with the caller's resolved Access to
+// it (ADR-0034) — what ListAccessible returns, so a caller doesn't have to
+// resolve Access a second time per row.
+type CalendarWithAccess struct {
+	repository.Calendar
+	Access Access
+}
+
+// ListAccessible returns every Calendar userID has any Access to — owned
+// and shared alike (ADR-0034) — each paired with its resolved Access,
+// ordered by creation time. This is what a caller showing "everything I can
+// see" — the Calendar list endpoint, Event listing — should call, unlike
+// List's owned-only view.
+func (s *CalendarService) ListAccessible(ctx context.Context, userID int64) ([]CalendarWithAccess, error) {
+	owned, err := s.calendars.ListByUser(ctx, userID)
+	if err != nil {
+		return nil, fmt.Errorf("list owned calendars: %w", err)
+	}
+	shared, err := s.calendars.ListSharedWithUser(ctx, userID)
+	if err != nil {
+		return nil, fmt.Errorf("list shared calendars: %w", err)
+	}
+
+	result := make([]CalendarWithAccess, 0, len(owned)+len(shared))
+	for _, c := range owned {
+		result = append(result, CalendarWithAccess{Calendar: c, Access: ResolveAccess(userID, c, nil)})
+	}
+	for _, c := range shared {
+		role := c.Role
+		result = append(result, CalendarWithAccess{Calendar: c.Calendar, Access: ResolveAccess(userID, c.Calendar, &role)})
+	}
+
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].CreatedAt.Equal(result[j].CreatedAt) {
+			return result[i].ID < result[j].ID
+		}
+		return result[i].CreatedAt.Before(result[j].CreatedAt)
+	})
+	return result, nil
 }
 
 // Access resolves userID's Access to id's Calendar (ADR-0034) — the single
@@ -92,7 +152,106 @@ func (s *CalendarService) Access(ctx context.Context, userID int64, id string) (
 	if err != nil {
 		return AccessNone, repository.Calendar{}, err
 	}
-	return ResolveAccess(userID, calendar), calendar, nil
+
+	var role *string
+	if calendar.UserID != userID {
+		share, err := s.shares.Get(ctx, id, userID)
+		if err != nil && !errors.Is(err, repository.ErrNotFound) {
+			return AccessNone, repository.Calendar{}, fmt.Errorf("get calendar share: %w", err)
+		}
+		if err == nil {
+			role = &share.Role
+		}
+	}
+
+	return ResolveAccess(userID, calendar, role), calendar, nil
+}
+
+// requireOwner resolves id and refuses it unless userID owns it —
+// re-sharing, revoking, and listing who has Access are Owner-only
+// management operations no Role, however permissive, grants (ADR-0034,
+// CONTEXT.md's Owner entry), mirroring the not-found-not-forbidden
+// convention Update and Delete already apply via their own
+// ownership-filtered queries.
+func (s *CalendarService) requireOwner(ctx context.Context, userID int64, id string) (repository.Calendar, error) {
+	calendar, err := s.calendars.GetByIDAny(ctx, id)
+	if err != nil {
+		return repository.Calendar{}, err
+	}
+	if calendar.UserID != userID {
+		return repository.Calendar{}, repository.ErrNotFound
+	}
+	return calendar, nil
+}
+
+func isValidRole(role string) bool {
+	return role == repository.RoleViewer || role == repository.RoleEditor
+}
+
+// Share grants calendarID a Share to username with role, or changes an
+// existing Share's role if username already has one (ADR-0034). Only
+// calendarID's Owner may call this.
+func (s *CalendarService) Share(ctx context.Context, ownerID int64, calendarID, username, role string) (repository.CalendarShare, error) {
+	if !isValidRole(role) {
+		return repository.CalendarShare{}, ErrInvalidRole
+	}
+
+	calendar, err := s.requireOwner(ctx, ownerID, calendarID)
+	if err != nil {
+		return repository.CalendarShare{}, err
+	}
+
+	target, err := s.users.GetByUsername(ctx, username)
+	if err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			return repository.CalendarShare{}, ErrUserNotFound
+		}
+		return repository.CalendarShare{}, fmt.Errorf("look up user: %w", err)
+	}
+	// A Disabled User is hidden from the share picker (ADR-0037) — from the
+	// Owner's perspective they don't exist to share with, same as a username
+	// that was never registered.
+	if target.IsDisabled {
+		return repository.CalendarShare{}, ErrUserNotFound
+	}
+	if target.ID == calendar.UserID {
+		return repository.CalendarShare{}, ErrCannotShareWithSelf
+	}
+
+	share, err := s.shares.Upsert(ctx, calendarID, target.ID, role)
+	if err != nil {
+		return repository.CalendarShare{}, fmt.Errorf("upsert share: %w", err)
+	}
+	return share, nil
+}
+
+// RevokeShare removes targetUserID's Share on calendarID. Only calendarID's
+// Owner may call this.
+func (s *CalendarService) RevokeShare(ctx context.Context, ownerID int64, calendarID string, targetUserID int64) error {
+	if _, err := s.requireOwner(ctx, ownerID, calendarID); err != nil {
+		return err
+	}
+	return s.shares.Delete(ctx, calendarID, targetUserID)
+}
+
+// ListShares returns every Share on calendarID, each carrying the Username
+// it was granted to — an Owner's "who has Access to my Calendar, and with
+// what Role" listing (ADR-0034). Only calendarID's Owner may call this.
+func (s *CalendarService) ListShares(ctx context.Context, ownerID int64, calendarID string) ([]repository.CalendarShareWithUsername, error) {
+	if _, err := s.requireOwner(ctx, ownerID, calendarID); err != nil {
+		return nil, err
+	}
+	return s.shares.ListByCalendarWithUsername(ctx, calendarID)
+}
+
+// LeaveShare removes userID's own Share on calendarID — a User renouncing
+// their Access without involving the Owner (ADR-0034). Unlike RevokeShare,
+// this needs no ownership check: it only ever removes the caller's own
+// Share row, so there's nothing else to authorize. Returns
+// repository.ErrNotFound if userID holds no Share on calendarID (including
+// when userID is the Owner, who never has one).
+func (s *CalendarService) LeaveShare(ctx context.Context, userID int64, calendarID string) error {
+	return s.shares.Delete(ctx, calendarID, userID)
 }
 
 // Get returns id if userID can read it. Callers that also need the resolved

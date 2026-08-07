@@ -63,6 +63,12 @@ func (d NotificationDispatcher) Dispatch(ctx context.Context, due DueReminder) e
 	if err != nil {
 		return fmt.Errorf("get user: %w", err)
 	}
+	// A Disabled User receives no Reminders on any Channel (ADR-0037) — not
+	// even the LogDispatcher fallback, since that's still a delivery in
+	// spirit for a device that would otherwise show it.
+	if user.IsDisabled {
+		return nil
+	}
 	if user.SyncedDeviceRemindersEnabled {
 		return d.Fallback.Dispatch(ctx, due)
 	}
@@ -103,6 +109,10 @@ func (d EmailDispatcher) Dispatch(ctx context.Context, due DueReminder) error {
 	user, err := d.Users.GetByID(ctx, due.UserID)
 	if err != nil {
 		return fmt.Errorf("get user: %w", err)
+	}
+	// A Disabled User receives no Reminders on any Channel (ADR-0037).
+	if user.IsDisabled {
+		return nil
 	}
 	if user.Email == nil {
 		// No destination configured (e.g. the user cleared their account

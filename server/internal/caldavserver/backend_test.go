@@ -28,6 +28,7 @@ type testCalDAVEnv struct {
 	appPasswordService *service.AppPasswordService
 	eventService       *service.EventService
 	calendarService    *service.CalendarService
+	users              *repository.UserRepository
 }
 
 func newTestCalDAVEnv(t *testing.T) testCalDAVEnv {
@@ -47,7 +48,7 @@ func newTestCalDAVEnv(t *testing.T) testCalDAVEnv {
 		t.Fatalf("bootstrap: %v", err)
 	}
 
-	calendarService := service.NewCalendarService(repository.NewCalendarRepository(sqlDB))
+	calendarService := service.NewCalendarService(repository.NewCalendarRepository(sqlDB), repository.NewCalendarShareRepository(sqlDB), users)
 	const calendarID = "cal-1"
 	if _, err := calendarService.Create(context.Background(), user.ID, calendarID, service.CalendarWrite{Name: "Personal", Color: "#12809CFF"}); err != nil {
 		t.Fatalf("create calendar: %v", err)
@@ -83,7 +84,32 @@ func newTestCalDAVEnv(t *testing.T) testCalDAVEnv {
 		appPasswordService: appPasswordService,
 		eventService:       eventService,
 		calendarService:    calendarService,
+		users:              users,
 	}
+}
+
+// addSharedUser mints a second User, grants them role on env.calendarID
+// (env.userID stays the Owner), and gives them an app password — #101's
+// fixture for exercising a shared Calendar's CalDAV surface from the
+// accessor's side.
+func (env testCalDAVEnv) addSharedUser(t *testing.T, username, role string) (userID int64, appPasswordSecret string) {
+	t.Helper()
+
+	other, err := env.users.Create(context.Background(), username, "hash", false)
+	if err != nil {
+		t.Fatalf("create user %q: %v", username, err)
+	}
+
+	if _, err := env.calendarService.Share(context.Background(), env.userID, env.calendarID, username, role); err != nil {
+		t.Fatalf("share calendar with %q as %q: %v", username, role, err)
+	}
+
+	created, err := env.appPasswordService.Create(context.Background(), other.ID, "Test device")
+	if err != nil {
+		t.Fatalf("create app password for %q: %v", username, err)
+	}
+
+	return other.ID, created.Secret
 }
 
 // newTestCalDAVServer wires the real repository/service stack against an

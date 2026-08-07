@@ -37,6 +37,7 @@ type loginResponse struct {
 
 var loginErrors = []errorCase{
 	{service.ErrInvalidCredentials, unauthorized("invalid_credentials", "invalid username or password")},
+	{service.ErrAccountDisabled, unauthorized("account_disabled", "this account has been disabled")},
 }
 
 var updateEmailErrors = []errorCase{
@@ -45,6 +46,7 @@ var updateEmailErrors = []errorCase{
 
 var refreshErrors = []errorCase{
 	{service.ErrInvalidSession, unauthorized("unauthorized", "invalid or expired refresh token")},
+	{service.ErrAccountDisabled, unauthorized("account_disabled", "this account has been disabled")},
 }
 
 // ErrInvalidCredentials renders differently here than on login: it means the

@@ -231,19 +231,26 @@ func filterRecurringByWindow(events []Event, from, to time.Time) ([]Event, error
 	return filtered, nil
 }
 
-// EventWithOwner pairs an Event with its Calendar's Owner — the reminder
-// firing engine's recipient (ADR-0021) until Access grows beyond a single
-// Owner (ADR-0036). Not a repository.Event field: an Event has no owner of
-// its own (ADR-0034), this is purely ListAllWithReminders' join result.
+// EventWithOwner pairs an Event with its Calendar's Owner and every other
+// User with Access to that Calendar — the reminder firing engine's
+// recipients (ADR-0021, ADR-0036): a Reminder fans out to the Owner and
+// every Editor and Viewer alike. Not a repository.Event field: an Event has
+// no owner of its own (ADR-0034), this is purely ListAllWithReminders' join
+// result.
 type EventWithOwner struct {
 	Event
 	CalendarOwnerID int64
+	// RecipientUserIDs is every User a Reminder on this Event fires for:
+	// the Calendar's Owner plus every Shared Editor and Viewer. Always
+	// includes CalendarOwnerID.
+	RecipientUserIDs []int64
 }
 
 // ListAllWithReminders returns every Event across every Calendar that
-// carries at least one Reminder, alongside its Calendar's Owner — the firing
-// engine's read path (ADR-0021), which runs as a single background process
-// serving every account, unlike ListByCalendarIDs' per-caller scoping.
+// carries at least one Reminder, alongside its Calendar's Owner and every
+// other User with Access via a Share — the firing engine's read path
+// (ADR-0021, ADR-0036), which runs as a single background process serving
+// every account, unlike ListByCalendarIDs' per-caller scoping.
 func (r *EventRepository) ListAllWithReminders(ctx context.Context) ([]EventWithOwner, error) {
 	rows, err := r.db.QueryContext(ctx,
 		`SELECT events.id, events.calendar_id, events.title, events."start", events."end", events.all_day, events.rrule, events.parent_id, events.recurrence_id, events.tzid, events.description, events.location, events.external_uid, events.created_by, events.created_at, events.change_seq, calendars.user_id
@@ -269,7 +276,61 @@ func (r *EventRepository) ListAllWithReminders(ctx context.Context) ([]EventWith
 		return nil, fmt.Errorf("iterate events: %w", err)
 	}
 
+	sharedByCalendar, err := r.sharedUserIDsByCalendar(ctx, events)
+	if err != nil {
+		return nil, err
+	}
+	for i := range events {
+		events[i].RecipientUserIDs = append([]int64{events[i].CalendarOwnerID}, sharedByCalendar[events[i].CalendarID]...)
+	}
+
 	return events, nil
+}
+
+// sharedUserIDsByCalendar returns, for every distinct Calendar among
+// events, the User ids holding a Share on it (Editor or Viewer alike) —
+// ListAllWithReminders' fan-out beyond the Owner (ADR-0036).
+func (r *EventRepository) sharedUserIDsByCalendar(ctx context.Context, events []EventWithOwner) (map[string][]int64, error) {
+	result := map[string][]int64{}
+
+	seen := map[string]bool{}
+	calendarIDs := make([]string, 0, len(events))
+	for _, e := range events {
+		if !seen[e.CalendarID] {
+			seen[e.CalendarID] = true
+			calendarIDs = append(calendarIDs, e.CalendarID)
+		}
+	}
+	if len(calendarIDs) == 0 {
+		return result, nil
+	}
+
+	args := make([]any, len(calendarIDs))
+	for i, id := range calendarIDs {
+		args[i] = id
+	}
+	rows, err := r.db.QueryContext(ctx,
+		`SELECT calendar_id, user_id FROM calendar_shares WHERE calendar_id IN (`+placeholders(len(calendarIDs))+`)`,
+		args...,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list calendar shares: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var calendarID string
+		var userID int64
+		if err := rows.Scan(&calendarID, &userID); err != nil {
+			return nil, fmt.Errorf("scan calendar share: %w", err)
+		}
+		result[calendarID] = append(result[calendarID], userID)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate calendar shares: %w", err)
+	}
+
+	return result, nil
 }
 
 // Update rewrites id's columns from f. f.ParentID and f.RecurrenceID are

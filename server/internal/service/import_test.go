@@ -24,13 +24,14 @@ func newTestImportService(t *testing.T) (svc *ImportService, events *EventServic
 	}
 	t.Cleanup(func() { sqlDB.Close() })
 
-	user, err := repository.NewUserRepository(sqlDB).Create(context.Background(), "user-a", "hash", false)
+	users := repository.NewUserRepository(sqlDB)
+	user, err := users.Create(context.Background(), "user-a", "hash", false)
 	if err != nil {
 		t.Fatalf("create user: %v", err)
 	}
 
 	calendarRepo := repository.NewCalendarRepository(sqlDB)
-	calendarSvc := NewCalendarService(calendarRepo)
+	calendarSvc := NewCalendarService(calendarRepo, repository.NewCalendarShareRepository(sqlDB), users)
 	cal, err := calendarRepo.Create(context.Background(), user.ID, "cal-1", repository.CalendarFields{Name: "Existing", Color: "#12809CFF"})
 	if err != nil {
 		t.Fatalf("create calendar: %v", err)

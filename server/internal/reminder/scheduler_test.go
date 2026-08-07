@@ -71,6 +71,54 @@ func newTestLedger(t *testing.T) (ledger *repository.FiredReminderRepository, re
 	return repository.NewFiredReminderRepository(sqlDB), byEvent["evt-1"][0].ID
 }
 
+// newTestLedgerWithSecondUser is newTestLedger plus a second real User in
+// the same database, for tests proving a Reminder fans out to every
+// recipient and fires independently per User (ADR-0036).
+func newTestLedgerWithSecondUser(t *testing.T) (ledger *repository.FiredReminderRepository, reminderID, ownerID, otherUserID int64) {
+	t.Helper()
+
+	sqlDB, err := db.OpenInMemory()
+	if err != nil {
+		t.Fatalf("open in-memory db: %v", err)
+	}
+	t.Cleanup(func() { sqlDB.Close() })
+	ctx := context.Background()
+
+	users := repository.NewUserRepository(sqlDB)
+	owner, err := users.Create(ctx, "user-a", "hash", false)
+	if err != nil {
+		t.Fatalf("create owner: %v", err)
+	}
+	other, err := users.Create(ctx, "user-b", "hash", false)
+	if err != nil {
+		t.Fatalf("create other user: %v", err)
+	}
+	calendars := repository.NewCalendarRepository(sqlDB)
+	cal, err := calendars.Create(ctx, owner.ID, "cal-1", repository.CalendarFields{Name: "Family", Color: "peacock"})
+	if err != nil {
+		t.Fatalf("create calendar: %v", err)
+	}
+	shares := repository.NewCalendarShareRepository(sqlDB)
+	if _, err := shares.Upsert(ctx, cal.ID, other.ID, repository.RoleEditor); err != nil {
+		t.Fatalf("share calendar: %v", err)
+	}
+	events := repository.NewEventRepository(sqlDB)
+	if _, err := events.Create(ctx, "evt-1", &owner.ID, repository.EventFields{CalendarID: cal.ID, Title: "Bin day", Start: at(2026, 1, 1, 9, 0), End: at(2026, 1, 1, 9, 30)}, 0); err != nil {
+		t.Fatalf("create event: %v", err)
+	}
+
+	remindersRepo := repository.NewEventReminderRepository(sqlDB)
+	if err := remindersRepo.ReplaceByEventID(ctx, "evt-1", []repository.Reminder{{OffsetMinutes: 10, Channel: "notification"}}); err != nil {
+		t.Fatalf("replace by event id: %v", err)
+	}
+	byEvent, err := remindersRepo.ListByEventIDs(ctx, []string{"evt-1"})
+	if err != nil {
+		t.Fatalf("list by event ids: %v", err)
+	}
+
+	return repository.NewFiredReminderRepository(sqlDB), byEvent["evt-1"][0].ID, owner.ID, other.ID
+}
+
 // clock is a manually-advanceable time source for deterministic scheduler tests.
 type clock struct{ t time.Time }
 
@@ -200,5 +248,80 @@ func TestScheduler_Restart_NeverCatchesUpAMissedTrigger(t *testing.T) {
 
 	if len(restartDispatcher.dispatched) != 0 {
 		t.Fatalf("expected the missed-while-down trigger to not fire after restart, got %+v", restartDispatcher.dispatched)
+	}
+}
+
+// A Reminder on a shared Calendar's Event fires for every User with Access
+// to it — the Owner and every Editor and Viewer alike, not just whoever
+// owns the Calendar (ADR-0036).
+func TestScheduler_Tick_FiresForEveryUserWithAccessToTheCalendar(t *testing.T) {
+	ledger, reminderID, ownerID, otherUserID := newTestLedgerWithSecondUser(t)
+	event := repository.Event{
+		ID:    "evt-1",
+		Start: at(2026, 1, 1, 9, 0),
+		End:   at(2026, 1, 1, 9, 30),
+		Reminders: []repository.Reminder{
+			{ID: reminderID, OffsetMinutes: 10, Channel: "notification"},
+		},
+	}
+	dispatcher := &fakeDispatcher{}
+	c := &clock{t: at(2026, 1, 1, 8, 40)}
+	scheduler := NewScheduler(
+		fakeEventLister{events: []repository.EventWithOwner{withRecipients(event, ownerID, ownerID, otherUserID)}},
+		ledger, dispatcher, c.now,
+	)
+
+	c.set(at(2026, 1, 1, 8, 55))
+	if err := scheduler.Tick(context.Background()); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+
+	if len(dispatcher.dispatched) != 2 {
+		t.Fatalf("expected 2 dispatched reminders (one per recipient), got %+v", dispatcher.dispatched)
+	}
+	gotUsers := map[int64]bool{dispatcher.dispatched[0].UserID: true, dispatcher.dispatched[1].UserID: true}
+	if !gotUsers[ownerID] || !gotUsers[otherUserID] {
+		t.Fatalf("expected one dispatch per recipient (%d, %d), got %+v", ownerID, otherUserID, dispatcher.dispatched)
+	}
+}
+
+// The ledger's per-User uniqueness (ADR-0036) means a repeated tick
+// suppresses a fire for one recipient without suppressing the other's — the
+// ledger, not the scheduler, decides exactly-once, and it decides it per
+// User.
+func TestScheduler_Tick_ExactlyOncePerUser_OneRecipientAlreadyFiredDoesNotSuppressTheOther(t *testing.T) {
+	ledger, reminderID, ownerID, otherUserID := newTestLedgerWithSecondUser(t)
+	occurrenceStart := at(2026, 1, 1, 9, 0)
+
+	// The owner already fired on some earlier tick.
+	if _, err := ledger.MarkFired(context.Background(), reminderID, ownerID, occurrenceStart, at(2026, 1, 1, 8, 55)); err != nil {
+		t.Fatalf("pre-mark owner fired: %v", err)
+	}
+
+	event := repository.Event{
+		ID:    "evt-1",
+		Start: occurrenceStart,
+		End:   at(2026, 1, 1, 9, 30),
+		Reminders: []repository.Reminder{
+			{ID: reminderID, OffsetMinutes: 10, Channel: "notification"},
+		},
+	}
+	dispatcher := &fakeDispatcher{}
+	c := &clock{t: at(2026, 1, 1, 8, 40)}
+	scheduler := NewScheduler(
+		fakeEventLister{events: []repository.EventWithOwner{withRecipients(event, ownerID, ownerID, otherUserID)}},
+		ledger, dispatcher, c.now,
+	)
+
+	c.set(at(2026, 1, 1, 8, 55))
+	if err := scheduler.Tick(context.Background()); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+
+	if len(dispatcher.dispatched) != 1 {
+		t.Fatalf("expected only the other recipient to dispatch, got %+v", dispatcher.dispatched)
+	}
+	if dispatcher.dispatched[0].UserID != otherUserID {
+		t.Fatalf("expected the dispatched reminder to be for user %d, got %d", otherUserID, dispatcher.dispatched[0].UserID)
 	}
 }

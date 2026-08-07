@@ -183,6 +183,26 @@ func TestLogin_UnknownUsername(t *testing.T) {
 	}
 }
 
+func TestLogin_RejectsDisabledAccount(t *testing.T) {
+	svc := newTestAuthService(t, "", "")
+	ctx := context.Background()
+	if _, _, err := svc.Bootstrap(ctx); err != nil {
+		t.Fatalf("bootstrap: %v", err)
+	}
+
+	user, err := svc.users.GetByUsername(ctx, "admin")
+	if err != nil {
+		t.Fatalf("get user: %v", err)
+	}
+	if _, err := svc.users.SetDisabled(ctx, user.ID, true); err != nil {
+		t.Fatalf("disable user: %v", err)
+	}
+
+	if _, err := svc.Login(ctx, "admin", "admin"); !errors.Is(err, ErrAccountDisabled) {
+		t.Fatalf("expected ErrAccountDisabled, got %v", err)
+	}
+}
+
 func TestAuthenticate_RejectsWrongSigningSecret(t *testing.T) {
 	svc := newTestAuthService(t, "", "")
 	ctx := context.Background()
@@ -500,6 +520,31 @@ func TestRefresh_RejectsExpiredSession(t *testing.T) {
 
 	if _, err := svc.Refresh(ctx, refreshToken); !errors.Is(err, ErrInvalidSession) {
 		t.Fatalf("expected ErrInvalidSession, got %v", err)
+	}
+}
+
+func TestRefresh_RejectsDisabledAccount(t *testing.T) {
+	svc := newTestAuthService(t, "", "")
+	ctx := context.Background()
+	if _, _, err := svc.Bootstrap(ctx); err != nil {
+		t.Fatalf("bootstrap: %v", err)
+	}
+
+	login, err := svc.Login(ctx, "admin", "admin")
+	if err != nil {
+		t.Fatalf("login: %v", err)
+	}
+
+	user, err := svc.users.GetByUsername(ctx, "admin")
+	if err != nil {
+		t.Fatalf("get user: %v", err)
+	}
+	if _, err := svc.users.SetDisabled(ctx, user.ID, true); err != nil {
+		t.Fatalf("disable user: %v", err)
+	}
+
+	if _, err := svc.Refresh(ctx, login.RefreshToken); !errors.Is(err, ErrAccountDisabled) {
+		t.Fatalf("expected ErrAccountDisabled, got %v", err)
 	}
 }
 

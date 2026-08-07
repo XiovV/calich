@@ -48,13 +48,15 @@ var (
 	// real Occurrence of the series: it isn't dtstart nor a start the rrule
 	// generates, or it's excluded by an Exdate (#76).
 	ErrOccurrenceNotFound = errors.New("occurrence not found")
-	// ErrSubscribedCalendarReadOnly is returned by every mutating method
-	// (Create, Update, Delete, AddException, ReparentFrom, ImportSeries,
-	// PutSeries) when the Calendar a write targets carries a SourceURL — a
-	// Subscribed Calendar's Events are written only by Refresh's bypass,
-	// ImportSubscribedSeries (ADR-0032). The guard lives here rather than at
-	// the REST/CalDAV edges so every entry point is covered by construction.
-	ErrSubscribedCalendarReadOnly = errors.New("subscribed calendar is read-only")
+	// ErrCalendarReadOnly is returned by every mutating method (Create,
+	// Update, Delete, AddException, ReparentFrom, ImportSeries, PutSeries)
+	// when the caller's Access to the Calendar a write targets doesn't
+	// clear CanWrite — a Viewer Share (ADR-0034), or a Calendar carrying a
+	// SourceURL, whose Events are written only by Refresh's bypass,
+	// ImportSubscribedSeries, for Owner and Editor alike (ADR-0032). The
+	// guard lives here rather than at the REST/CalDAV edges so every entry
+	// point is covered by construction.
+	ErrCalendarReadOnly = errors.New("calendar is read-only")
 )
 
 // isValidReminderChannel reports whether channel is one of the Channels
@@ -112,13 +114,13 @@ func (s *EventService) calendarByID(ctx context.Context, userID int64, calendarI
 }
 
 // requireWritableCalendar resolves the caller's Access to calendarID and
-// refuses it unless that Access can write — false for a stranger (None) and,
-// per ADR-0032's clamp, for a Subscribed Calendar's Owner too (Viewer) — in
-// one call: the guard every mutating method except ImportSubscribedSeries
-// applies to every Calendar its write touches. This is the Subscribed
-// Calendar write guard expressed through the Access resolver (ADR-0034)
-// rather than beside it: ResolveAccess is what now decides it's read-only,
-// not a SourceURL check made here.
+// refuses it unless that Access can write — false for a stranger (None), a
+// Viewer Share (ADR-0034), and, per ADR-0032's clamp, for a Subscribed
+// Calendar's Owner and Editor alike (Viewer) — in one call: the guard every
+// mutating method except ImportSubscribedSeries applies to every Calendar
+// its write touches. This is the Subscribed Calendar write guard expressed
+// through the Access resolver rather than beside it: ResolveAccess is what
+// now decides it's read-only, not a SourceURL check made here.
 func (s *EventService) requireWritableCalendar(ctx context.Context, userID int64, calendarID string) error {
 	access, _, err := s.calendars.Access(ctx, userID, calendarID)
 	if err != nil {
@@ -128,7 +130,7 @@ func (s *EventService) requireWritableCalendar(ctx context.Context, userID int64
 		return ErrCalendarNotFound
 	}
 	if !access.CanWrite() {
-		return ErrSubscribedCalendarReadOnly
+		return ErrCalendarReadOnly
 	}
 	return nil
 }
@@ -329,7 +331,7 @@ func stripEndCondition(rrule string) string {
 // Exceptions (ADR-0016), and each event's Reminders populated from
 // event_reminders (ADR-0020). Overrides always have an empty Exdates.
 func (s *EventService) List(ctx context.Context, userID int64, from, to *time.Time) ([]repository.Event, error) {
-	calendars, err := s.calendars.List(ctx, userID)
+	calendars, err := s.calendars.ListAccessible(ctx, userID)
 	if err != nil {
 		return nil, fmt.Errorf("list calendars: %w", err)
 	}

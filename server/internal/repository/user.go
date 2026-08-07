@@ -27,8 +27,12 @@ type User struct {
 	// listing, and administering other Users — and never over what they can
 	// see: an Admin still needs a Share to read another User's Calendars
 	// (ADR-0037).
-	IsAdmin   bool
-	CreatedAt time.Time
+	IsAdmin bool
+	// IsDisabled blocks Login, Refresh, and CalDAV Basic auth while leaving
+	// everything the User owns untouched (ADR-0037). It is a property of the
+	// account, never of the data.
+	IsDisabled bool
+	CreatedAt  time.Time
 }
 
 type UserRepository struct {
@@ -65,13 +69,13 @@ func (r *UserRepository) Create(ctx context.Context, username, passwordHash stri
 
 func (r *UserRepository) GetByID(ctx context.Context, id int64) (User, error) {
 	return r.scanUser(r.db.QueryRowContext(ctx,
-		`SELECT id, username, password_hash, must_change_password, email, synced_device_reminders_enabled, is_admin, created_at FROM users WHERE id = ?`, id,
+		`SELECT id, username, password_hash, must_change_password, email, synced_device_reminders_enabled, is_admin, is_disabled, created_at FROM users WHERE id = ?`, id,
 	))
 }
 
 func (r *UserRepository) GetByUsername(ctx context.Context, username string) (User, error) {
 	return r.scanUser(r.db.QueryRowContext(ctx,
-		`SELECT id, username, password_hash, must_change_password, email, synced_device_reminders_enabled, is_admin, created_at FROM users WHERE username = ?`, username,
+		`SELECT id, username, password_hash, must_change_password, email, synced_device_reminders_enabled, is_admin, is_disabled, created_at FROM users WHERE username = ?`, username,
 	))
 }
 
@@ -79,7 +83,7 @@ func (r *UserRepository) GetByUsername(ctx context.Context, username string) (Us
 // order) so the bootstrapped Admin always leads the list.
 func (r *UserRepository) List(ctx context.Context) ([]User, error) {
 	rows, err := r.db.QueryContext(ctx,
-		`SELECT id, username, password_hash, must_change_password, email, synced_device_reminders_enabled, is_admin, created_at FROM users ORDER BY id`,
+		`SELECT id, username, password_hash, must_change_password, email, synced_device_reminders_enabled, is_admin, is_disabled, created_at FROM users ORDER BY id`,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("query users: %w", err)
@@ -140,7 +144,7 @@ func (r *UserRepository) UpdatePassword(ctx context.Context, userID int64, passw
 // single-user instance (ADR-0010).
 func (r *UserRepository) First(ctx context.Context) (User, error) {
 	return r.scanUser(r.db.QueryRowContext(ctx,
-		`SELECT id, username, password_hash, must_change_password, email, synced_device_reminders_enabled, is_admin, created_at FROM users ORDER BY id LIMIT 1`,
+		`SELECT id, username, password_hash, must_change_password, email, synced_device_reminders_enabled, is_admin, is_disabled, created_at FROM users ORDER BY id LIMIT 1`,
 	))
 }
 
@@ -167,6 +171,28 @@ func (r *UserRepository) CountAdmins(ctx context.Context) (int, error) {
 func (r *UserRepository) SetAdmin(ctx context.Context, userID int64, isAdmin bool) (User, error) {
 	if _, err := r.db.ExecContext(ctx, `UPDATE users SET is_admin = ? WHERE id = ?`, isAdmin, userID); err != nil {
 		return User{}, fmt.Errorf("set admin: %w", err)
+	}
+	return r.GetByID(ctx, userID)
+}
+
+// CountEnabledAdmins reports how many non-Disabled accounts currently hold
+// Admin — used to guard the last remaining Admin against being disabled
+// (ADR-0037): a Disabled Admin can no longer administer the instance, so it
+// must not count as one still can.
+func (r *UserRepository) CountEnabledAdmins(ctx context.Context) (int, error) {
+	var count int
+	if err := r.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM users WHERE is_admin = 1 AND is_disabled = 0`).Scan(&count); err != nil {
+		return 0, fmt.Errorf("count enabled admins: %w", err)
+	}
+	return count, nil
+}
+
+// SetDisabled disables or re-enables userID's account (ADR-0037). Callers
+// are responsible for the last-Admin guard and for tearing down live
+// Sessions — this method applies whatever it's told.
+func (r *UserRepository) SetDisabled(ctx context.Context, userID int64, isDisabled bool) (User, error) {
+	if _, err := r.db.ExecContext(ctx, `UPDATE users SET is_disabled = ? WHERE id = ?`, isDisabled, userID); err != nil {
+		return User{}, fmt.Errorf("set disabled: %w", err)
 	}
 	return r.GetByID(ctx, userID)
 }
@@ -213,7 +239,7 @@ func scanUserFields(scan func(dest ...any) error) (User, error) {
 	var email sql.NullString
 	// modernc.org/sqlite converts the TIMESTAMP column straight into time.Time
 	// based on the declared column type — no manual parsing needed here.
-	err := scan(&u.ID, &u.Username, &u.PasswordHash, &u.MustChangePassword, &email, &u.SyncedDeviceRemindersEnabled, &u.IsAdmin, &u.CreatedAt)
+	err := scan(&u.ID, &u.Username, &u.PasswordHash, &u.MustChangePassword, &email, &u.SyncedDeviceRemindersEnabled, &u.IsAdmin, &u.IsDisabled, &u.CreatedAt)
 	if err != nil {
 		return User{}, err
 	}

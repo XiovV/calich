@@ -150,14 +150,14 @@ func (b *Backend) ListCalendars(ctx context.Context) ([]caldav.Calendar, error) 
 		return nil, err
 	}
 
-	calendars, err := b.calendars.List(ctx, userID)
+	calendars, err := b.calendars.ListAccessible(ctx, userID)
 	if err != nil {
 		return nil, fmt.Errorf("list calendars: %w", err)
 	}
 
 	result := make([]caldav.Calendar, len(calendars))
 	for i, c := range calendars {
-		result[i] = toCalDAVCalendar(userID, c)
+		result[i] = toCalDAVCalendar(userID, c.Calendar)
 	}
 	return result, nil
 }
@@ -502,7 +502,7 @@ func seriesWriteFromParsed(parsed *icalendar.ParsedSeries) service.SeriesWrite {
 // is visible, the write is simply refused.
 func mapPutSeriesError(err error) error {
 	switch {
-	case errors.Is(err, service.ErrSubscribedCalendarReadOnly):
+	case errors.Is(err, service.ErrCalendarReadOnly):
 		return webdav.NewHTTPError(http.StatusForbidden, err)
 	case errors.Is(err, service.ErrCalendarNotFound), errors.Is(err, service.ErrParentIsOverride), errors.Is(err, repository.ErrNotFound):
 		return webdav.NewHTTPError(http.StatusNotFound, err)
@@ -551,7 +551,7 @@ func (b *Backend) DeleteCalendarObject(ctx context.Context, path string) error {
 	}
 
 	if err := b.events.Delete(ctx, userID, masterID); err != nil {
-		if errors.Is(err, service.ErrSubscribedCalendarReadOnly) {
+		if errors.Is(err, service.ErrCalendarReadOnly) {
 			return webdav.NewHTTPError(http.StatusForbidden, err)
 		}
 		return fmt.Errorf("delete calendar object: %w", err)

@@ -137,7 +137,7 @@ var eventWriteErrors = []errorCase{
 	{service.ErrInvalidRecurrenceRule, badRequest("recurrence rule is invalid")},
 	{service.ErrInvalidReminderChannel, badRequest("reminder channel must be \"notification\" or \"email\"")},
 	{service.ErrCalendarNotFound, badRequest("calendar not found")},
-	{service.ErrSubscribedCalendarReadOnly, forbidden("subscribed calendar is read-only")},
+	{service.ErrCalendarReadOnly, forbidden("calendar is read-only")},
 }
 
 // On create, a missing parent is named as such — parentId is a body field the
@@ -158,17 +158,17 @@ var addExceptionErrors = []errorCase{
 	{service.ErrParentNotFound, notFound("event not found")},
 	{service.ErrParentIsOverride, badRequest("parent event must be a master, not an override")},
 	{service.ErrParentNotRecurring, badRequest("parent event does not recur")},
-	{service.ErrSubscribedCalendarReadOnly, forbidden("subscribed calendar is read-only")},
+	{service.ErrCalendarReadOnly, forbidden("calendar is read-only")},
 }
 
 var reparentErrors = []errorCase{
 	{service.ErrParentNotFound, notFound("event not found")},
-	{service.ErrSubscribedCalendarReadOnly, forbidden("subscribed calendar is read-only")},
+	{service.ErrCalendarReadOnly, forbidden("calendar is read-only")},
 }
 
 var eventNotFoundErrors = []errorCase{
 	{repository.ErrNotFound, notFound("event not found")},
-	{service.ErrSubscribedCalendarReadOnly, forbidden("subscribed calendar is read-only")},
+	{service.ErrCalendarReadOnly, forbidden("calendar is read-only")},
 }
 
 func (h *EventHandler) List(w http.ResponseWriter, r *http.Request) {

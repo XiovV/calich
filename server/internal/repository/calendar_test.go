@@ -443,3 +443,57 @@ func TestCalendarRepository_Delete_ScopedToUser(t *testing.T) {
 		t.Fatalf("expected calendar to still exist, got %v", err)
 	}
 }
+
+func TestCalendarRepository_ListSharedWithUser(t *testing.T) {
+	ctx := context.Background()
+
+	sqlDB, err := db.OpenInMemory()
+	if err != nil {
+		t.Fatalf("open in-memory db: %v", err)
+	}
+	t.Cleanup(func() { sqlDB.Close() })
+
+	users := NewUserRepository(sqlDB)
+	owner, err := users.Create(ctx, "owner", "hash", false)
+	if err != nil {
+		t.Fatalf("create owner: %v", err)
+	}
+	other, err := users.Create(ctx, "other", "hash", false)
+	if err != nil {
+		t.Fatalf("create other user: %v", err)
+	}
+
+	repo := NewCalendarRepository(sqlDB)
+	owned, err := repo.Create(ctx, owner.ID, "cal-owned", CalendarFields{Name: "Personal", Color: "peacock"})
+	if err != nil {
+		t.Fatalf("create owned calendar: %v", err)
+	}
+	shared, err := repo.Create(ctx, owner.ID, "cal-shared", CalendarFields{Name: "Family", Color: "sage"})
+	if err != nil {
+		t.Fatalf("create shared calendar: %v", err)
+	}
+
+	shares := NewCalendarShareRepository(sqlDB)
+	if _, err := shares.Upsert(ctx, shared.ID, other.ID, RoleEditor); err != nil {
+		t.Fatalf("upsert share: %v", err)
+	}
+
+	result, err := repo.ListSharedWithUser(ctx, other.ID)
+	if err != nil {
+		t.Fatalf("list shared with user: %v", err)
+	}
+	if len(result) != 1 {
+		t.Fatalf("expected exactly one shared calendar, got %d: %+v", len(result), result)
+	}
+	if result[0].ID != shared.ID || result[0].Role != RoleEditor {
+		t.Fatalf("unexpected result: %+v", result[0])
+	}
+
+	// owned isn't otherUserID's own and carries no Share, so it must not
+	// appear — sanity-checking the join doesn't leak every Calendar.
+	for _, c := range result {
+		if c.ID == owned.ID {
+			t.Fatalf("owner-only calendar %q leaked into another user's shared list", owned.ID)
+		}
+	}
+}

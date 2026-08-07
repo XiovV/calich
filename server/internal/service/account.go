@@ -135,3 +135,40 @@ func (s *AccountService) SetAdmin(ctx context.Context, userID int64, isAdmin boo
 	}
 	return user, nil
 }
+
+// SetDisabled disables or re-enables userID's account (ADR-0037). Disabling
+// the last remaining Admin is refused, exactly like revoking their Admin —
+// otherwise the instance becomes unadministrable. Disabling deletes every
+// live Session so the change takes effect immediately rather than waiting
+// out an existing session; everything the User owns — Calendars, Events,
+// Shares — is left untouched, since Disable is a property of the account,
+// never of the data.
+func (s *AccountService) SetDisabled(ctx context.Context, userID int64, isDisabled bool) (repository.User, error) {
+	user, err := s.users.GetByID(ctx, userID)
+	if err != nil {
+		return repository.User{}, fmt.Errorf("get user: %w", err)
+	}
+
+	if isDisabled && user.IsAdmin {
+		count, err := s.users.CountEnabledAdmins(ctx)
+		if err != nil {
+			return repository.User{}, fmt.Errorf("count enabled admins: %w", err)
+		}
+		if count <= 1 {
+			return repository.User{}, ErrLastAdmin
+		}
+	}
+
+	user, err = s.users.SetDisabled(ctx, userID, isDisabled)
+	if err != nil {
+		return repository.User{}, fmt.Errorf("set disabled: %w", err)
+	}
+
+	if isDisabled {
+		if err := s.sessions.DeleteAllForUser(ctx, userID); err != nil {
+			return repository.User{}, fmt.Errorf("invalidate sessions: %w", err)
+		}
+	}
+
+	return user, nil
+}

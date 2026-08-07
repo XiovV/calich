@@ -21,7 +21,7 @@ func newTestAccountService(t *testing.T) *AccountService {
 
 	users := repository.NewUserRepository(sqlDB)
 	sessions := repository.NewSessionRepository(sqlDB)
-	calendars := NewCalendarService(repository.NewCalendarRepository(sqlDB))
+	calendars := NewCalendarService(repository.NewCalendarRepository(sqlDB), repository.NewCalendarShareRepository(sqlDB), users)
 
 	return NewAccountService(users, sessions, calendars)
 }
@@ -113,7 +113,7 @@ func TestAccountService_ResetPassword_ForcesPasswordChangeAndInvalidatesSessions
 
 	users := repository.NewUserRepository(sqlDB)
 	sessions := repository.NewSessionRepository(sqlDB)
-	calendars := NewCalendarService(repository.NewCalendarRepository(sqlDB))
+	calendars := NewCalendarService(repository.NewCalendarRepository(sqlDB), repository.NewCalendarShareRepository(sqlDB), users)
 	accounts := NewAccountService(users, sessions, calendars)
 	ctx := context.Background()
 
@@ -205,6 +205,161 @@ func TestAccountService_SetAdmin_RefusesToDemoteTheLastRemainingAdmin(t *testing
 
 	if _, err := accounts.SetAdmin(ctx, alice.ID, false); !errors.Is(err, ErrLastAdmin) {
 		t.Fatalf("expected ErrLastAdmin, got %v", err)
+	}
+}
+
+func TestAccountService_SetDisabled_DisablesAndReenables(t *testing.T) {
+	accounts := newTestAccountService(t)
+	ctx := context.Background()
+
+	alice, err := accounts.Create(ctx, "alice", "temp-secret")
+	if err != nil {
+		t.Fatalf("create alice: %v", err)
+	}
+
+	disabled, err := accounts.SetDisabled(ctx, alice.ID, true)
+	if err != nil {
+		t.Fatalf("disable alice: %v", err)
+	}
+	if !disabled.IsDisabled {
+		t.Fatalf("expected alice to be disabled")
+	}
+
+	enabled, err := accounts.SetDisabled(ctx, alice.ID, false)
+	if err != nil {
+		t.Fatalf("re-enable alice: %v", err)
+	}
+	if enabled.IsDisabled {
+		t.Fatalf("expected alice to no longer be disabled")
+	}
+}
+
+func TestAccountService_SetDisabled_DeletesLiveSessions(t *testing.T) {
+	sqlDB, err := db.OpenInMemory()
+	if err != nil {
+		t.Fatalf("open in-memory db: %v", err)
+	}
+	t.Cleanup(func() { sqlDB.Close() })
+
+	users := repository.NewUserRepository(sqlDB)
+	sessions := repository.NewSessionRepository(sqlDB)
+	calendars := NewCalendarService(repository.NewCalendarRepository(sqlDB), repository.NewCalendarShareRepository(sqlDB), users)
+	accounts := NewAccountService(users, sessions, calendars)
+	ctx := context.Background()
+
+	alice, err := accounts.Create(ctx, "alice", "temp-secret")
+	if err != nil {
+		t.Fatalf("create account: %v", err)
+	}
+	if _, err := sessions.Create(ctx, alice.ID, "refresh-token-hash", time.Now().Add(24*time.Hour)); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	if _, err := accounts.SetDisabled(ctx, alice.ID, true); err != nil {
+		t.Fatalf("disable alice: %v", err)
+	}
+
+	if _, err := sessions.GetByRefreshTokenHash(ctx, "refresh-token-hash"); !errors.Is(err, repository.ErrNotFound) {
+		t.Fatalf("expected the existing session to be invalidated, got %v", err)
+	}
+}
+
+func TestAccountService_SetDisabled_RefusesToDisableTheLastRemainingAdmin(t *testing.T) {
+	accounts := newTestAccountService(t)
+	ctx := context.Background()
+
+	alice, err := accounts.Create(ctx, "alice", "temp-secret")
+	if err != nil {
+		t.Fatalf("create alice: %v", err)
+	}
+	if _, err := accounts.SetAdmin(ctx, alice.ID, true); err != nil {
+		t.Fatalf("grant alice admin: %v", err)
+	}
+
+	if _, err := accounts.SetDisabled(ctx, alice.ID, true); !errors.Is(err, ErrLastAdmin) {
+		t.Fatalf("expected ErrLastAdmin, got %v", err)
+	}
+}
+
+func TestAccountService_SetDisabled_AllowsDisablingAnAdminWhenAnotherAdminRemains(t *testing.T) {
+	accounts := newTestAccountService(t)
+	ctx := context.Background()
+
+	alice, err := accounts.Create(ctx, "alice", "temp-secret")
+	if err != nil {
+		t.Fatalf("create alice: %v", err)
+	}
+	if _, err := accounts.SetAdmin(ctx, alice.ID, true); err != nil {
+		t.Fatalf("grant alice admin: %v", err)
+	}
+
+	bob, err := accounts.Create(ctx, "bob", "temp-secret")
+	if err != nil {
+		t.Fatalf("create bob: %v", err)
+	}
+	if _, err := accounts.SetAdmin(ctx, bob.ID, true); err != nil {
+		t.Fatalf("grant bob admin: %v", err)
+	}
+
+	disabled, err := accounts.SetDisabled(ctx, alice.ID, true)
+	if err != nil {
+		t.Fatalf("disable alice: %v", err)
+	}
+	if !disabled.IsDisabled {
+		t.Fatalf("expected alice to be disabled")
+	}
+}
+
+func TestAccountService_SetDisabled_DisablingANonAdminNeverTripsTheLastAdminGuard(t *testing.T) {
+	accounts := newTestAccountService(t)
+	ctx := context.Background()
+
+	alice, err := accounts.Create(ctx, "alice", "temp-secret")
+	if err != nil {
+		t.Fatalf("create alice: %v", err)
+	}
+
+	disabled, err := accounts.SetDisabled(ctx, alice.ID, true)
+	if err != nil {
+		t.Fatalf("expected no error disabling a non-admin, got %v", err)
+	}
+	if !disabled.IsDisabled {
+		t.Fatalf("expected alice to be disabled")
+	}
+}
+
+func TestAccountService_SetDisabled_DemotedAdminCanBeReenabledOnceAnotherAdminExists(t *testing.T) {
+	accounts := newTestAccountService(t)
+	ctx := context.Background()
+
+	// Re-enabling a disabled admin must never be blocked by the last-admin
+	// guard — that guard only protects against losing the last one, and
+	// enabling never removes an admin.
+	alice, err := accounts.Create(ctx, "alice", "temp-secret")
+	if err != nil {
+		t.Fatalf("create alice: %v", err)
+	}
+	if _, err := accounts.SetAdmin(ctx, alice.ID, true); err != nil {
+		t.Fatalf("grant alice admin: %v", err)
+	}
+
+	bob, err := accounts.Create(ctx, "bob", "temp-secret")
+	if err != nil {
+		t.Fatalf("create bob: %v", err)
+	}
+	if _, err := accounts.SetAdmin(ctx, bob.ID, true); err != nil {
+		t.Fatalf("grant bob admin: %v", err)
+	}
+	if _, err := accounts.SetDisabled(ctx, alice.ID, true); err != nil {
+		t.Fatalf("disable alice: %v", err)
+	}
+
+	enabled, err := accounts.SetDisabled(ctx, alice.ID, false)
+	if err != nil {
+		t.Fatalf("re-enable alice: %v", err)
+	}
+	if enabled.IsDisabled {
+		t.Fatalf("expected alice to no longer be disabled")
 	}
 }
 

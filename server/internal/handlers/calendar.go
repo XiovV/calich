@@ -54,14 +54,25 @@ type calendarResponse struct {
 	// VALARMs on both Channels, off by default and meaningless on an
 	// ordinary Calendar (#87, ADR-0032).
 	KeepAlarms bool `json:"keepAlarms"`
+	// Access is the caller's resolved Access to this Calendar (ADR-0034):
+	// "owner", "editor", or "viewer" — never "none", since a Calendar the
+	// caller has no Access to is never listed at all. Drives what the web
+	// app lets the caller do with a Calendar it did not create.
+	Access string `json:"access"`
 }
 
 func toCalendarResponse(c repository.Calendar) calendarResponse {
-	response := calendarResponse{ID: c.ID, Name: c.Name, Color: c.Color, LastSyncedAt: c.LastSyncedAt, ErrorClass: c.ErrorClass, ErrorMessage: c.ErrorMessage, KeepAlarms: c.KeepAlarms}
+	response := calendarResponse{ID: c.ID, Name: c.Name, Color: c.Color, LastSyncedAt: c.LastSyncedAt, ErrorClass: c.ErrorClass, ErrorMessage: c.ErrorMessage, KeepAlarms: c.KeepAlarms, Access: service.AccessOwner.String()}
 	if c.SourceURL != nil {
 		masked := service.MaskURL(*c.SourceURL)
 		response.SourceURL = &masked
 	}
+	return response
+}
+
+func toCalendarWithAccessResponse(c service.CalendarWithAccess) calendarResponse {
+	response := toCalendarResponse(c.Calendar)
+	response.Access = c.Access.String()
 	return response
 }
 
@@ -85,7 +96,7 @@ func (h *CalendarHandler) List(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	calendars, err := h.calendars.List(r.Context(), userID)
+	calendars, err := h.calendars.ListAccessible(r.Context(), userID)
 	if err != nil {
 		httpresponse.Error(w, http.StatusInternalServerError, "internal_error", "failed to list calendars")
 		return
@@ -93,7 +104,7 @@ func (h *CalendarHandler) List(w http.ResponseWriter, r *http.Request) {
 
 	response := make([]calendarResponse, len(calendars))
 	for i, c := range calendars {
-		response[i] = toCalendarResponse(c)
+		response[i] = toCalendarWithAccessResponse(c)
 	}
 
 	httpresponse.JSON(w, http.StatusOK, response)
@@ -140,12 +151,16 @@ func (h *CalendarHandler) Get(w http.ResponseWriter, r *http.Request) {
 
 	id := chi.URLParam(r, "id")
 
-	calendar, err := h.calendars.Get(r.Context(), userID, id)
+	access, calendar, err := h.calendars.Access(r.Context(), userID, id)
 	if respondError(w, err, calendarNotFoundErrors, "failed to load calendar") {
 		return
 	}
+	if !access.CanRead() {
+		httpresponse.Error(w, http.StatusNotFound, "not_found", "calendar not found")
+		return
+	}
 
-	httpresponse.JSON(w, http.StatusOK, toCalendarResponse(calendar))
+	httpresponse.JSON(w, http.StatusOK, toCalendarWithAccessResponse(service.CalendarWithAccess{Calendar: calendar, Access: access}))
 }
 
 type updateCalendarRequest struct {

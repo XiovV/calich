@@ -148,6 +148,52 @@ func (r *CalendarRepository) ListByUser(ctx context.Context, userID int64) ([]Ca
 	return calendars, nil
 }
 
+// CalendarWithRole pairs a Calendar with the Role a Share grants on it. Only
+// produced by ListSharedWithUser, whose rows are all Shares by construction
+// — there is no Owner case to represent, unlike ResolveAccess's role
+// parameter which is nil for an Owner.
+type CalendarWithRole struct {
+	Calendar
+	Role string
+}
+
+// ListSharedWithUser returns every Calendar a Share grants userID Access to
+// — the other half of "which Calendars can this User see" alongside
+// ListByUser's owned Calendars (ADR-0034). Ordered by when each Calendar
+// was created, matching ListByUser, so CalendarService.ListAccessible can
+// merge the two without re-sorting by anything Share-specific.
+func (r *CalendarRepository) ListSharedWithUser(ctx context.Context, userID int64) ([]CalendarWithRole, error) {
+	rows, err := r.db.QueryContext(ctx,
+		`SELECT c.id, c.user_id, c.name, c.color, c.source_url, c.created_at, c.last_synced_at, c.etag, c.last_modified, c.content_hash,
+		        c.next_refresh_at, c.refresh_interval_seconds, c.failure_count, c.error_class, c.error_message, c.keep_alarms, c.feed_name, c.feed_color,
+		        s.role
+		 FROM calendars c
+		 JOIN calendar_shares s ON s.calendar_id = c.id
+		 WHERE s.user_id = ?
+		 ORDER BY c.created_at, c.id`,
+		userID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list shared calendars: %w", err)
+	}
+	defer rows.Close()
+
+	calendars := []CalendarWithRole{}
+	for rows.Next() {
+		var c CalendarWithRole
+		if err := rows.Scan(&c.ID, &c.UserID, &c.Name, &c.Color, &c.SourceURL, &c.CreatedAt, &c.LastSyncedAt, &c.ETag, &c.LastModified, &c.ContentHash,
+			&c.NextRefreshAt, &c.RefreshIntervalSeconds, &c.FailureCount, &c.ErrorClass, &c.ErrorMessage, &c.KeepAlarms, &c.FeedName, &c.FeedColor,
+			&c.Role); err != nil {
+			return nil, fmt.Errorf("scan shared calendar: %w", err)
+		}
+		calendars = append(calendars, c)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate shared calendars: %w", err)
+	}
+	return calendars, nil
+}
+
 // ListDueForRefresh returns every Subscribed Calendar (source_url set) whose
 // next_refresh_at has come due — the background poller's read path (#86,
 // ADR-0033). Ordinary Calendars (next_refresh_at NULL) never match.

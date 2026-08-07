@@ -32,12 +32,13 @@ func newTestSubscribeService(t *testing.T, opts ...SubscribeOption) (svc *Subscr
 	}
 	t.Cleanup(func() { sqlDB.Close() })
 
-	user, err := repository.NewUserRepository(sqlDB).Create(context.Background(), "user-a", "hash", false)
+	users := repository.NewUserRepository(sqlDB)
+	user, err := users.Create(context.Background(), "user-a", "hash", false)
 	if err != nil {
 		t.Fatalf("create user: %v", err)
 	}
 
-	calendarSvc := NewCalendarService(repository.NewCalendarRepository(sqlDB))
+	calendarSvc := NewCalendarService(repository.NewCalendarRepository(sqlDB), repository.NewCalendarShareRepository(sqlDB), users)
 	eventSvc := NewEventService(sqlDB, repository.NewEventRepository(sqlDB), repository.NewEventExceptionRepository(sqlDB), repository.NewEventReminderRepository(sqlDB), repository.NewSyncRepository(sqlDB), calendarSvc)
 
 	// The address guard (#97, ADR-0032) would otherwise refuse every fetch

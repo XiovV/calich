@@ -83,14 +83,14 @@ const subscribedReadOnlyPrivilegeSet = `<privilege><read/></privilege>`
 
 // applyPrivilegeSetPatch overrides go-webdav's hardcoded read+write
 // current-user-privilege-set (caldav/server.go's propFindCalendar) to read
-// without write, but only for a Subscribed Calendar's collection —
-// declining (ok=false) for every owned Calendar leaves the library's default
-// untouched, per ADR-0032's "Owned Calendars' advertised privileges are
-// unchanged".
+// without write whenever the caller's Access to the collection isn't
+// writable — a Subscribed Calendar (ADR-0032) or a Viewer Share (ADR-0034,
+// ADR-0035) alike — declining (ok=false) for anything writable leaves the
+// library's default untouched.
 func applyPrivilegeSetPatch(ctx context.Context, h *dispatchHandler, userID int64, body []byte) []byte {
 	return injectPropertyRaw(ctx, body, "current-user-privilege-set", davNamespace, collectionValueFunc(userID, func(ctx context.Context, calendarID string) (string, bool) {
-		cal, err := h.backend.calendars.Get(ctx, userID, calendarID)
-		if err != nil || cal.SourceURL == nil {
+		access, _, err := h.backend.calendars.Access(ctx, userID, calendarID)
+		if err != nil || access.CanWrite() {
 			return "", false
 		}
 		return subscribedReadOnlyPrivilegeSet, true

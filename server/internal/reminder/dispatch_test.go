@@ -146,6 +146,32 @@ func TestNotificationDispatcher_EmailChannelUnaffectedBySyncedDeviceRemindersTog
 	}
 }
 
+// TestNotificationDispatcher_SkipsDisabledUsersWithoutFallingBack covers
+// ADR-0037's "a Disabled User receives no Reminders on any Channel" — unlike
+// the synced-device toggle, this doesn't even fall back to LogDispatcher,
+// since that's still a delivery in spirit.
+func TestNotificationDispatcher_SkipsDisabledUsersWithoutFallingBack(t *testing.T) {
+	inserter := &fakeNotificationInserter{}
+	fallback := &fakeDispatcher{}
+	users := fakeUserLookup{usersByID: map[int64]repository.User{
+		7: {ID: 7, IsDisabled: true},
+	}}
+	dispatcher := NotificationDispatcher{Notifications: inserter, Users: users, Fallback: fallback, Now: time.Now}
+
+	due := DueReminder{EventID: "evt-1", UserID: 7, ReminderID: 100, Channel: "notification"}
+
+	if err := dispatcher.Dispatch(context.Background(), due); err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+
+	if len(inserter.inserts) != 0 {
+		t.Fatalf("expected no notification insert for a disabled user, got %+v", inserter.inserts)
+	}
+	if len(fallback.dispatched) != 0 {
+		t.Fatalf("expected no fallback dispatch for a disabled user, got %+v", fallback.dispatched)
+	}
+}
+
 // fakeUserLookup returns a fixed user by id, standing in for the real
 // UserRepository.
 type fakeUserLookup struct {
@@ -222,6 +248,27 @@ func TestEmailDispatcher_NonEmailChannelGoesToFallback(t *testing.T) {
 	}
 	if len(fallback.dispatched) != 1 || fallback.dispatched[0].EventID != "evt-1" {
 		t.Fatalf("expected the notification Reminder to reach the fallback, got %+v", fallback.dispatched)
+	}
+}
+
+// TestEmailDispatcher_SkipsDisabledUsers covers ADR-0037's "a Disabled User
+// receives no Reminders on any Channel".
+func TestEmailDispatcher_SkipsDisabledUsers(t *testing.T) {
+	users := fakeUserLookup{usersByID: map[int64]repository.User{
+		7: {ID: 7, IsDisabled: true, Email: emailPtr("alice@example.com")},
+	}}
+	mailer := &fakeMailer{}
+	fallback := &fakeDispatcher{}
+	dispatcher := EmailDispatcher{Users: users, Mailer: mailer, Fallback: fallback}
+
+	due := DueReminder{EventID: "evt-1", UserID: 7, ReminderID: 100, Channel: "email"}
+
+	if err := dispatcher.Dispatch(context.Background(), due); err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+
+	if len(mailer.sent) != 0 {
+		t.Fatalf("expected no email sent for a disabled user, got %+v", mailer.sent)
 	}
 }
 

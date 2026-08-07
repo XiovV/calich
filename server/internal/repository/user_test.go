@@ -271,6 +271,76 @@ func TestUserRepository_CountAdmins(t *testing.T) {
 	}
 }
 
+func TestUserRepository_SetDisabled(t *testing.T) {
+	repo := newTestUserRepository(t)
+	ctx := context.Background()
+
+	created, err := repo.Create(ctx, "alice", "hash", true)
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	if created.IsDisabled {
+		t.Fatalf("expected a freshly created user to not be disabled")
+	}
+
+	disabled, err := repo.SetDisabled(ctx, created.ID, true)
+	if err != nil {
+		t.Fatalf("set disabled: %v", err)
+	}
+	if !disabled.IsDisabled {
+		t.Fatalf("expected user to be disabled")
+	}
+
+	enabled, err := repo.SetDisabled(ctx, created.ID, false)
+	if err != nil {
+		t.Fatalf("re-enable: %v", err)
+	}
+	if enabled.IsDisabled {
+		t.Fatalf("expected user to no longer be disabled")
+	}
+}
+
+func TestUserRepository_CountEnabledAdmins(t *testing.T) {
+	repo := newTestUserRepository(t)
+	ctx := context.Background()
+
+	alice, err := repo.Create(ctx, "alice", "hash", true)
+	if err != nil {
+		t.Fatalf("create alice: %v", err)
+	}
+	bob, err := repo.Create(ctx, "bob", "hash", true)
+	if err != nil {
+		t.Fatalf("create bob: %v", err)
+	}
+	if _, err := repo.SetAdmin(ctx, alice.ID, true); err != nil {
+		t.Fatalf("grant alice admin: %v", err)
+	}
+	if _, err := repo.SetAdmin(ctx, bob.ID, true); err != nil {
+		t.Fatalf("grant bob admin: %v", err)
+	}
+
+	count, err := repo.CountEnabledAdmins(ctx)
+	if err != nil {
+		t.Fatalf("count enabled admins: %v", err)
+	}
+	if count != 2 {
+		t.Fatalf("expected 2 enabled admins, got %d", count)
+	}
+
+	// A disabled admin no longer counts toward "still administrable".
+	if _, err := repo.SetDisabled(ctx, alice.ID, true); err != nil {
+		t.Fatalf("disable alice: %v", err)
+	}
+
+	count, err = repo.CountEnabledAdmins(ctx)
+	if err != nil {
+		t.Fatalf("count enabled admins: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("expected 1 enabled admin after disabling alice, got %d", count)
+	}
+}
+
 func TestUserRepository_ResetPassword_SetsMustChangePassword(t *testing.T) {
 	repo := newTestUserRepository(t)
 	ctx := context.Background()

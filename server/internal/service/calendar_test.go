@@ -20,12 +20,13 @@ func newTestCalendarService(t *testing.T) (svc *CalendarService, userID int64) {
 	}
 	t.Cleanup(func() { sqlDB.Close() })
 
-	user, err := repository.NewUserRepository(sqlDB).Create(context.Background(), "user-a", "hash", false)
+	users := repository.NewUserRepository(sqlDB)
+	user, err := users.Create(context.Background(), "user-a", "hash", false)
 	if err != nil {
 		t.Fatalf("create user: %v", err)
 	}
 
-	return NewCalendarService(repository.NewCalendarRepository(sqlDB)), user.ID
+	return NewCalendarService(repository.NewCalendarRepository(sqlDB), repository.NewCalendarShareRepository(sqlDB), users), user.ID
 }
 
 func TestCalendarService_Create(t *testing.T) {

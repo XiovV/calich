@@ -23,7 +23,7 @@ func newTestCalendarServiceForUser(t *testing.T) (*CalendarService, int64) {
 		t.Fatalf("create user: %v", err)
 	}
 
-	return NewCalendarService(repository.NewCalendarRepository(sqlDB)), user.ID
+	return NewCalendarService(repository.NewCalendarRepository(sqlDB), repository.NewCalendarShareRepository(sqlDB), users), user.ID
 }
 
 func TestEnsureDefaultCalendars_SeedsPersonalWorkFamily(t *testing.T) {
@@ -116,8 +116,9 @@ func TestBootstrapCreatedFlag_GatesSeedingSoDeletedCalendarsStayDeleted(t *testi
 	}
 	t.Cleanup(func() { sqlDB.Close() })
 
-	authSvc := NewAuthService(repository.NewUserRepository(sqlDB), repository.NewSessionRepository(sqlDB), []byte("test-secret"), "", "")
-	calendarSvc := NewCalendarService(repository.NewCalendarRepository(sqlDB))
+	users := repository.NewUserRepository(sqlDB)
+	authSvc := NewAuthService(users, repository.NewSessionRepository(sqlDB), []byte("test-secret"), "", "")
+	calendarSvc := NewCalendarService(repository.NewCalendarRepository(sqlDB), repository.NewCalendarShareRepository(sqlDB), users)
 	ctx := context.Background()
 
 	user, created, err := authSvc.Bootstrap(ctx)

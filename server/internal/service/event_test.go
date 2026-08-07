@@ -21,7 +21,8 @@ func newTestEventService(t *testing.T) (svc *EventService, userID int64, calenda
 	}
 	t.Cleanup(func() { sqlDB.Close() })
 
-	user, err := repository.NewUserRepository(sqlDB).Create(context.Background(), "user-a", "hash", false)
+	users := repository.NewUserRepository(sqlDB)
+	user, err := users.Create(context.Background(), "user-a", "hash", false)
 	if err != nil {
 		t.Fatalf("create user: %v", err)
 	}
@@ -32,7 +33,7 @@ func newTestEventService(t *testing.T) (svc *EventService, userID int64, calenda
 		t.Fatalf("create calendar: %v", err)
 	}
 
-	return NewEventService(sqlDB, repository.NewEventRepository(sqlDB), repository.NewEventExceptionRepository(sqlDB), repository.NewEventReminderRepository(sqlDB), repository.NewSyncRepository(sqlDB), NewCalendarService(calendarRepo)), user.ID, cal.ID
+	return NewEventService(sqlDB, repository.NewEventRepository(sqlDB), repository.NewEventExceptionRepository(sqlDB), repository.NewEventReminderRepository(sqlDB), repository.NewSyncRepository(sqlDB), NewCalendarService(calendarRepo, repository.NewCalendarShareRepository(sqlDB), users)), user.ID, cal.ID
 }
 
 func TestEventService_Create(t *testing.T) {
@@ -1862,7 +1863,7 @@ func TestEventService_ImportSeries_UnknownCalendar(t *testing.T) {
 // --- Subscribed Calendar write guard (#84, ADR-0032) ---
 //
 // One test per mutating method proves it refuses a Subscribed Calendar with
-// ErrSubscribedCalendarReadOnly, and a further test proves
+// ErrCalendarReadOnly, and a further test proves
 // ImportSubscribedSeries — the sole bypass — writes successfully where
 // ImportSeries would now refuse.
 
@@ -1911,8 +1912,8 @@ func TestEventService_Create_RejectsSubscribedCalendar(t *testing.T) {
 	start := time.Date(2026, 6, 1, 9, 0, 0, 0, time.UTC)
 
 	_, err := svc.Create(ctx, userID, "evt-1", EventWrite{CalendarID: subCalendarID, Title: "Standup", Start: start, End: start.Add(time.Hour)})
-	if !errors.Is(err, ErrSubscribedCalendarReadOnly) {
-		t.Fatalf("expected ErrSubscribedCalendarReadOnly, got %v", err)
+	if !errors.Is(err, ErrCalendarReadOnly) {
+		t.Fatalf("expected ErrCalendarReadOnly, got %v", err)
 	}
 }
 
@@ -1926,8 +1927,8 @@ func TestEventService_Update_RejectsSubscribedCalendar(t *testing.T) {
 	masterID := seedSubscribedEvent(t, svc, userID, subCalendarID, SeriesWrite{Title: "Standup", Start: start, End: end})
 
 	_, err := svc.Update(ctx, userID, masterID, EventWrite{CalendarID: subCalendarID, Title: "Renamed", Start: start, End: end})
-	if !errors.Is(err, ErrSubscribedCalendarReadOnly) {
-		t.Fatalf("expected ErrSubscribedCalendarReadOnly, got %v", err)
+	if !errors.Is(err, ErrCalendarReadOnly) {
+		t.Fatalf("expected ErrCalendarReadOnly, got %v", err)
 	}
 }
 
@@ -1941,8 +1942,8 @@ func TestEventService_Update_RejectsMovingEventOutOfSubscribedCalendar(t *testin
 	masterID := seedSubscribedEvent(t, svc, userID, subCalendarID, SeriesWrite{Title: "Standup", Start: start, End: end})
 
 	_, err := svc.Update(ctx, userID, masterID, EventWrite{CalendarID: calendarID, Title: "Renamed", Start: start, End: end})
-	if !errors.Is(err, ErrSubscribedCalendarReadOnly) {
-		t.Fatalf("expected ErrSubscribedCalendarReadOnly, got %v", err)
+	if !errors.Is(err, ErrCalendarReadOnly) {
+		t.Fatalf("expected ErrCalendarReadOnly, got %v", err)
 	}
 }
 
@@ -1955,8 +1956,8 @@ func TestEventService_Delete_RejectsSubscribedCalendar(t *testing.T) {
 	masterID := seedSubscribedEvent(t, svc, userID, subCalendarID, SeriesWrite{Title: "Standup", Start: start, End: start.Add(time.Hour)})
 
 	err := svc.Delete(ctx, userID, masterID)
-	if !errors.Is(err, ErrSubscribedCalendarReadOnly) {
-		t.Fatalf("expected ErrSubscribedCalendarReadOnly, got %v", err)
+	if !errors.Is(err, ErrCalendarReadOnly) {
+		t.Fatalf("expected ErrCalendarReadOnly, got %v", err)
 	}
 }
 
@@ -1969,8 +1970,8 @@ func TestEventService_AddException_RejectsSubscribedCalendar(t *testing.T) {
 	masterID := seedSubscribedEvent(t, svc, userID, subCalendarID, SeriesWrite{Title: "Standup", Start: start, End: start.Add(time.Hour), Rrule: "FREQ=WEEKLY"})
 
 	err := svc.AddException(ctx, userID, masterID, start)
-	if !errors.Is(err, ErrSubscribedCalendarReadOnly) {
-		t.Fatalf("expected ErrSubscribedCalendarReadOnly, got %v", err)
+	if !errors.Is(err, ErrCalendarReadOnly) {
+		t.Fatalf("expected ErrCalendarReadOnly, got %v", err)
 	}
 }
 
@@ -1984,8 +1985,8 @@ func TestEventService_ReparentFrom_RejectsSubscribedCalendar(t *testing.T) {
 	newParentID := seedSubscribedEvent(t, svc, userID, subCalendarID, SeriesWrite{Title: "New", Start: start.AddDate(0, 0, 7), End: start.AddDate(0, 0, 7).Add(time.Hour)})
 
 	err := svc.ReparentFrom(ctx, userID, oldParentID, newParentID, start.AddDate(0, 0, 14))
-	if !errors.Is(err, ErrSubscribedCalendarReadOnly) {
-		t.Fatalf("expected ErrSubscribedCalendarReadOnly, got %v", err)
+	if !errors.Is(err, ErrCalendarReadOnly) {
+		t.Fatalf("expected ErrCalendarReadOnly, got %v", err)
 	}
 }
 
@@ -1996,8 +1997,8 @@ func TestEventService_ImportSeries_RejectsSubscribedCalendar(t *testing.T) {
 	start := time.Date(2026, 6, 1, 9, 0, 0, 0, time.UTC)
 
 	_, err := svc.ImportSeries(ctx, userID, subCalendarID, []SeriesWrite{{Title: "Standup", Start: start, End: start.Add(time.Hour)}})
-	if !errors.Is(err, ErrSubscribedCalendarReadOnly) {
-		t.Fatalf("expected ErrSubscribedCalendarReadOnly, got %v", err)
+	if !errors.Is(err, ErrCalendarReadOnly) {
+		t.Fatalf("expected ErrCalendarReadOnly, got %v", err)
 	}
 }
 
@@ -2008,8 +2009,8 @@ func TestEventService_PutSeries_RejectsSubscribedCalendar(t *testing.T) {
 	start := time.Date(2026, 6, 1, 9, 0, 0, 0, time.UTC)
 
 	_, _, err := svc.PutSeries(ctx, userID, subCalendarID, "evt-1", SeriesWrite{Title: "Standup", Start: start, End: start.Add(time.Hour)})
-	if !errors.Is(err, ErrSubscribedCalendarReadOnly) {
-		t.Fatalf("expected ErrSubscribedCalendarReadOnly, got %v", err)
+	if !errors.Is(err, ErrCalendarReadOnly) {
+		t.Fatalf("expected ErrCalendarReadOnly, got %v", err)
 	}
 }
 

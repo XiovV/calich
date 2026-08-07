@@ -98,6 +98,14 @@ func (s *AppPasswordService) Authenticate(ctx context.Context, username, passwor
 		return 0, fmt.Errorf("get user: %w", err)
 	}
 
+	// A Disabled User's App passwords stop working over CalDAV — otherwise a
+	// phone already syncing would keep syncing indefinitely (ADR-0037). App
+	// passwords are an entirely separate authenticator from the web login, so
+	// this check can't be shared with AuthService.Login/Refresh.
+	if user.IsDisabled {
+		return 0, ErrInvalidAppPasswordCredentials
+	}
+
 	appPasswords, err := s.appPasswords.ListForUser(ctx, user.ID)
 	if err != nil {
 		return 0, fmt.Errorf("list app passwords: %w", err)

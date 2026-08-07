@@ -12,12 +12,13 @@ import (
 // Resolve is tested directly here, not only through the operations that
 // call it, per #98's acceptance criteria.
 func TestResolveAccess(t *testing.T) {
-	const owner, stranger int64 = 1, 2
+	const owner, stranger, shared int64 = 1, 2, 3
 
 	cases := []struct {
 		name       string
 		userID     int64
 		sourceURL  *string
+		shareRole  *string
 		wantAccess Access
 	}{
 		{
@@ -44,14 +45,42 @@ func TestResolveAccess(t *testing.T) {
 			sourceURL:  strPtr("https://example.com/feed.ics"),
 			wantAccess: AccessNone,
 		},
+		{
+			name:       "editor share resolves to Editor",
+			userID:     shared,
+			sourceURL:  nil,
+			shareRole:  strPtr(repository.RoleEditor),
+			wantAccess: AccessEditor,
+		},
+		{
+			name:       "viewer share resolves to Viewer",
+			userID:     shared,
+			sourceURL:  nil,
+			shareRole:  strPtr(repository.RoleViewer),
+			wantAccess: AccessViewer,
+		},
+		{
+			name:       "editor share on a subscribed calendar clamps to Viewer",
+			userID:     shared,
+			sourceURL:  strPtr("https://example.com/feed.ics"),
+			shareRole:  strPtr(repository.RoleEditor),
+			wantAccess: AccessViewer,
+		},
+		{
+			name:       "the owner's own share row, if any, never overrides ownership",
+			userID:     owner,
+			sourceURL:  nil,
+			shareRole:  strPtr(repository.RoleViewer),
+			wantAccess: AccessOwner,
+		},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			calendar := repository.Calendar{UserID: owner, SourceURL: tc.sourceURL}
-			got := ResolveAccess(tc.userID, calendar)
+			got := ResolveAccess(tc.userID, calendar, tc.shareRole)
 			if got != tc.wantAccess {
-				t.Fatalf("ResolveAccess(%d, calendar) = %v, want %v", tc.userID, got, tc.wantAccess)
+				t.Fatalf("ResolveAccess(%d, calendar, %v) = %v, want %v", tc.userID, tc.shareRole, got, tc.wantAccess)
 			}
 		})
 	}
@@ -108,7 +137,7 @@ func TestCalendarService_Access(t *testing.T) {
 		t.Fatalf("create stranger: %v", err)
 	}
 
-	svc := NewCalendarService(repository.NewCalendarRepository(sqlDB))
+	svc := NewCalendarService(repository.NewCalendarRepository(sqlDB), repository.NewCalendarShareRepository(sqlDB), users)
 	ctx := context.Background()
 	calendar, err := svc.Create(ctx, owner.ID, "cal-1", CalendarWrite{Name: "Personal", Color: "#12809CFF"})
 	if err != nil {
@@ -128,5 +157,19 @@ func TestCalendarService_Access(t *testing.T) {
 	}
 	if access, _, err := svc.Access(ctx, owner.ID, subscribed.ID); err != nil || access != AccessViewer {
 		t.Fatalf("owner Access to subscribed calendar = %v, %v; want AccessViewer (clamped), nil err", access, err)
+	}
+
+	if _, err := svc.Share(ctx, owner.ID, calendar.ID, "stranger", repository.RoleEditor); err != nil {
+		t.Fatalf("share: %v", err)
+	}
+	if access, _, err := svc.Access(ctx, stranger.ID, calendar.ID); err != nil || access != AccessEditor {
+		t.Fatalf("editor Access = %v, %v; want AccessEditor, nil err", access, err)
+	}
+
+	if _, err := svc.Share(ctx, owner.ID, subscribed.ID, "stranger", repository.RoleEditor); err != nil {
+		t.Fatalf("share subscribed calendar: %v", err)
+	}
+	if access, _, err := svc.Access(ctx, stranger.ID, subscribed.ID); err != nil || access != AccessViewer {
+		t.Fatalf("editor Access to subscribed calendar = %v, %v; want AccessViewer (clamped), nil err", access, err)
 	}
 }

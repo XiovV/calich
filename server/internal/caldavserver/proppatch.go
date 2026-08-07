@@ -113,6 +113,15 @@ func (h *dispatchHandler) handlePropPatch(w http.ResponseWriter, r *http.Request
 		http.Error(w, "calendar is subscribed and read-only", http.StatusForbidden)
 		return
 	}
+	// Renaming and recoloring are Owner-only management operations no Role
+	// grants (ADR-0034) — a Share, however permissive, only covers Events.
+	// h.backend.calendars.Get resolved existing via Access, which admits an
+	// Editor too, so ownership needs its own check here rather than being
+	// implied by having reached this far.
+	if existing.UserID != userID {
+		http.Error(w, "calendar not owned by this principal", http.StatusForbidden)
+		return
+	}
 
 	body, err := io.ReadAll(r.Body)
 	if err != nil {

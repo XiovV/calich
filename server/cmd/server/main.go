@@ -53,7 +53,7 @@ func main() {
 	users := repository.NewUserRepository(sqlDB)
 	sessions := repository.NewSessionRepository(sqlDB)
 	authService := service.NewAuthService(users, sessions, jwtSecret, cfg.InitialUsername, cfg.InitialPassword)
-	calendarService := service.NewCalendarService(repository.NewCalendarRepository(sqlDB))
+	calendarService := service.NewCalendarService(repository.NewCalendarRepository(sqlDB), repository.NewCalendarShareRepository(sqlDB), users)
 	eventService := service.NewEventService(sqlDB, repository.NewEventRepository(sqlDB), repository.NewEventExceptionRepository(sqlDB), repository.NewEventReminderRepository(sqlDB), repository.NewSyncRepository(sqlDB), calendarService)
 	notificationRepo := repository.NewNotificationRepository(sqlDB)
 	notificationService := service.NewNotificationService(notificationRepo)

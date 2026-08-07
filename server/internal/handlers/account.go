@@ -28,6 +28,7 @@ type accountResponse struct {
 	ID                 int64     `json:"id"`
 	Username           string    `json:"username"`
 	IsAdmin            bool      `json:"is_admin"`
+	IsDisabled         bool      `json:"is_disabled"`
 	MustChangePassword bool      `json:"must_change_password"`
 	CreatedAt          time.Time `json:"created_at"`
 }
@@ -37,6 +38,7 @@ func toAccountResponse(u repository.User) accountResponse {
 		ID:                 u.ID,
 		Username:           u.Username,
 		IsAdmin:            u.IsAdmin,
+		IsDisabled:         u.IsDisabled,
 		MustChangePassword: u.MustChangePassword,
 		CreatedAt:          u.CreatedAt,
 	}
@@ -55,6 +57,11 @@ var resetPasswordErrors = []errorCase{
 
 var setAdminErrors = []errorCase{
 	{service.ErrLastAdmin, conflict("last_admin", "cannot remove the last remaining admin")},
+	{repository.ErrNotFound, notFound("account not found")},
+}
+
+var setDisabledErrors = []errorCase{
+	{service.ErrLastAdmin, conflict("last_admin", "cannot disable the last remaining admin")},
 	{repository.ErrNotFound, notFound("account not found")},
 }
 
@@ -137,6 +144,31 @@ func (h *AccountHandler) SetAdmin(w http.ResponseWriter, r *http.Request) {
 
 	user, err := h.accounts.SetAdmin(r.Context(), id, req.IsAdmin)
 	if respondError(w, err, setAdminErrors, "failed to update admin status") {
+		return
+	}
+
+	httpresponse.JSON(w, http.StatusOK, toAccountResponse(user))
+}
+
+type setDisabledRequest struct {
+	IsDisabled bool `json:"is_disabled"`
+}
+
+func (h *AccountHandler) SetDisabled(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		httpresponse.Error(w, http.StatusBadRequest, "invalid_request", "id must be a number")
+		return
+	}
+
+	var req setDisabledRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httpresponse.Error(w, http.StatusBadRequest, "invalid_request", "request body must be valid JSON")
+		return
+	}
+
+	user, err := h.accounts.SetDisabled(r.Context(), id, req.IsDisabled)
+	if respondError(w, err, setDisabledErrors, "failed to update account status") {
 		return
 	}
 

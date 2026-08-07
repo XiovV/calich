@@ -33,7 +33,7 @@ func newAccountTestServer(t *testing.T) (*httptest.Server, string) {
 		t.Fatalf("bootstrap: %v", err)
 	}
 
-	calendars := service.NewCalendarService(repository.NewCalendarRepository(sqlDB))
+	calendars := service.NewCalendarService(repository.NewCalendarRepository(sqlDB), repository.NewCalendarShareRepository(sqlDB), users)
 	accounts := service.NewAccountService(users, sessions, calendars)
 	h := NewAccountHandler(accounts)
 	authHandler := NewAuthHandler(auth, false)
@@ -48,6 +48,7 @@ func newAccountTestServer(t *testing.T) (*httptest.Server, string) {
 		r.Post("/", h.Create)
 		r.Post("/{id}/reset-password", h.ResetPassword)
 		r.Put("/{id}/admin", h.SetAdmin)
+		r.Put("/{id}/disabled", h.SetDisabled)
 	})
 
 	srv := httptest.NewServer(r)
@@ -277,6 +278,157 @@ func TestAccountSetAdmin_NonAdmin_Returns403(t *testing.T) {
 
 	if resp.StatusCode != http.StatusForbidden {
 		t.Fatalf("expected 403, got %d", resp.StatusCode)
+	}
+}
+
+func TestAccountSetDisabled_NonAdmin_Returns403(t *testing.T) {
+	srv, accessToken := newAccountTestServer(t)
+	aliceToken := nonAdminAccessToken(t, srv, accessToken)
+
+	body, err := json.Marshal(setDisabledRequest{IsDisabled: true})
+	if err != nil {
+		t.Fatalf("marshal set disabled request: %v", err)
+	}
+	req, err := http.NewRequest(http.MethodPut, srv.URL+"/api/accounts/1/disabled", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+aliceToken)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("PUT disabled: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d", resp.StatusCode)
+	}
+}
+
+func TestAccountSetDisabled_UnknownID_Returns404(t *testing.T) {
+	srv, accessToken := newAccountTestServer(t)
+
+	body, err := json.Marshal(setDisabledRequest{IsDisabled: true})
+	if err != nil {
+		t.Fatalf("marshal set disabled request: %v", err)
+	}
+	req, err := http.NewRequest(http.MethodPut, srv.URL+"/api/accounts/999/disabled", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("PUT disabled: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d", resp.StatusCode)
+	}
+}
+
+func TestAccountSetDisabled_RefusesToDisableTheLastRemainingAdmin(t *testing.T) {
+	srv, accessToken := newAccountTestServer(t)
+
+	body, err := json.Marshal(setDisabledRequest{IsDisabled: true})
+	if err != nil {
+		t.Fatalf("marshal set disabled request: %v", err)
+	}
+	req, err := http.NewRequest(http.MethodPut, srv.URL+"/api/accounts/1/disabled", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("PUT disabled: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("expected 409, got %d", resp.StatusCode)
+	}
+}
+
+// TestAccountSetDisabled_DisablesAccountAndBlocksLogin is an end-to-end
+// check of ADR-0037's central guarantee: disabling an account makes it
+// unable to log in, and re-enabling restores it.
+func TestAccountSetDisabled_DisablesAccountAndBlocksLogin(t *testing.T) {
+	srv, accessToken := newAccountTestServer(t)
+
+	createResp := createAccount(t, srv, accessToken, "alice", "temp-secret")
+	defer createResp.Body.Close()
+	var created accountResponse
+	if err := json.NewDecoder(createResp.Body).Decode(&created); err != nil {
+		t.Fatalf("decode create response: %v", err)
+	}
+
+	disableBody, err := json.Marshal(setDisabledRequest{IsDisabled: true})
+	if err != nil {
+		t.Fatalf("marshal set disabled request: %v", err)
+	}
+	disableReq, err := http.NewRequest(http.MethodPut, fmt.Sprintf("%s/api/accounts/%d/disabled", srv.URL, created.ID), bytes.NewReader(disableBody))
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	disableReq.Header.Set("Authorization", "Bearer "+accessToken)
+	disableReq.Header.Set("Content-Type", "application/json")
+
+	disableResp, err := http.DefaultClient.Do(disableReq)
+	if err != nil {
+		t.Fatalf("PUT disabled: %v", err)
+	}
+	defer disableResp.Body.Close()
+
+	if disableResp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", disableResp.StatusCode)
+	}
+	var disabled accountResponse
+	if err := json.NewDecoder(disableResp.Body).Decode(&disabled); err != nil {
+		t.Fatalf("decode disable response: %v", err)
+	}
+	if !disabled.IsDisabled {
+		t.Fatalf("expected alice to be disabled")
+	}
+
+	loginResp := login(t, srv, "alice", "temp-secret")
+	defer loginResp.Body.Close()
+	if loginResp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected a disabled account to be refused login with 401, got %d", loginResp.StatusCode)
+	}
+
+	enableBody, err := json.Marshal(setDisabledRequest{IsDisabled: false})
+	if err != nil {
+		t.Fatalf("marshal set disabled request: %v", err)
+	}
+	enableReq, err := http.NewRequest(http.MethodPut, fmt.Sprintf("%s/api/accounts/%d/disabled", srv.URL, created.ID), bytes.NewReader(enableBody))
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	enableReq.Header.Set("Authorization", "Bearer "+accessToken)
+	enableReq.Header.Set("Content-Type", "application/json")
+
+	enableResp, err := http.DefaultClient.Do(enableReq)
+	if err != nil {
+		t.Fatalf("PUT disabled: %v", err)
+	}
+	defer enableResp.Body.Close()
+
+	if enableResp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", enableResp.StatusCode)
+	}
+
+	reenabledLoginResp := login(t, srv, "alice", "temp-secret")
+	defer reenabledLoginResp.Body.Close()
+	if reenabledLoginResp.StatusCode != http.StatusOK {
+		t.Fatalf("expected re-enabled account to log in again, got %d", reenabledLoginResp.StatusCode)
 	}
 }
 

@@ -53,6 +53,14 @@ func New(logger *slog.Logger, authHandler *handlers.AuthHandler, calendarHandler
 			r.Delete("/{id}", calendarHandler.Delete)
 			r.Get("/{id}/ics", calendarHandler.ICS)
 			r.Post("/{id}/refresh", calendarHandler.Refresh)
+
+			// Sharing (ADR-0034): grant/revoke/list are Owner-only,
+			// enforced by CalendarService rather than here; leave needs no
+			// such check.
+			r.Get("/{id}/shares", calendarHandler.ListShares)
+			r.Post("/{id}/shares", calendarHandler.Share)
+			r.Delete("/{id}/shares/{userId}", calendarHandler.RevokeShare)
+			r.Post("/{id}/leave", calendarHandler.LeaveShare)
 		})
 
 		r.Route("/events", func(r chi.Router) {
@@ -97,6 +105,7 @@ func New(logger *slog.Logger, authHandler *handlers.AuthHandler, calendarHandler
 			r.Post("/", accountHandler.Create)
 			r.Post("/{id}/reset-password", accountHandler.ResetPassword)
 			r.Put("/{id}/admin", accountHandler.SetAdmin)
+			r.Put("/{id}/disabled", accountHandler.SetDisabled)
 		})
 	})
 

@@ -11,11 +11,17 @@ func at(year int, month time.Month, day, hour, minute int) time.Time {
 	return time.Date(year, month, day, hour, minute, 0, 0, time.UTC)
 }
 
-// withOwner pairs event with an arbitrary Calendar Owner id — Due itself
-// doesn't care which User it is, only that DueReminder carries it through
-// (ADR-0034, ADR-0021).
+// withOwner pairs event with an arbitrary Calendar Owner id and no other
+// recipients — Due itself doesn't care which User it is, only that
+// DueReminder carries it through (ADR-0034, ADR-0021).
 func withOwner(event repository.Event) repository.EventWithOwner {
-	return repository.EventWithOwner{Event: event, CalendarOwnerID: 1}
+	return repository.EventWithOwner{Event: event, CalendarOwnerID: 1, RecipientUserIDs: []int64{1}}
+}
+
+// withRecipients pairs event with an explicit Calendar Owner id and a full
+// recipient list — the fan-out beyond a single Owner (ADR-0036).
+func withRecipients(event repository.Event, ownerID int64, recipientUserIDs ...int64) repository.EventWithOwner {
+	return repository.EventWithOwner{Event: event, CalendarOwnerID: ownerID, RecipientUserIDs: recipientUserIDs}
 }
 
 func withOwners(events []repository.Event) []repository.EventWithOwner {
@@ -212,6 +218,38 @@ func TestDue_MultipleRemindersOnOneEvent_EachEvaluatedIndependently(t *testing.T
 	}
 	if len(due) != 1 || due[0].ReminderID != 101 || due[0].Channel != "email" {
 		t.Fatalf("unexpected due reminders: %+v", due)
+	}
+}
+
+// A due Reminder fans out to every recipient on the Event's Calendar — the
+// Owner and every Shared Editor and Viewer — as one DueReminder each
+// (ADR-0036).
+func TestDue_FansOutOneDueReminderPerRecipient(t *testing.T) {
+	event := repository.Event{
+		ID:    "evt-1",
+		Title: "Bin day",
+		Start: at(2026, 1, 1, 9, 0),
+		End:   at(2026, 1, 1, 9, 30),
+		Reminders: []repository.Reminder{
+			{ID: 100, OffsetMinutes: 10, Channel: "notification"},
+		},
+	}
+
+	due, err := Due(withRecipients(event, 1, 1, 2, 3), at(2026, 1, 1, 8, 45), at(2026, 1, 1, 8, 55))
+	if err != nil {
+		t.Fatalf("due: %v", err)
+	}
+	if len(due) != 3 {
+		t.Fatalf("expected 1 due reminder per recipient (3), got %+v", due)
+	}
+	gotUsers := map[int64]bool{}
+	for _, d := range due {
+		gotUsers[d.UserID] = true
+	}
+	for _, want := range []int64{1, 2, 3} {
+		if !gotUsers[want] {
+			t.Fatalf("expected a due reminder for recipient %d, got %+v", want, due)
+		}
 	}
 }
 
