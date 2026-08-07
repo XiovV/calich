@@ -125,6 +125,69 @@ func TestCalendarToICal_SharedTzidAcrossSeriesEmitsOneVTimezone(t *testing.T) {
 	}
 }
 
+func TestCalendarToICal_EmptyCalendarHasNoChildren(t *testing.T) {
+	cal, err := CalendarToICal("Work", "#12809CFF", nil, nil)
+	if err != nil {
+		t.Fatalf("CalendarToICal: %v", err)
+	}
+
+	if len(cal.Children) != 0 {
+		t.Fatalf("expected no children for an empty calendar, got %d", len(cal.Children))
+	}
+
+	if _, err := Encode(cal); err == nil {
+		t.Fatalf("expected go-ical's Encode to reject an empty calendar")
+	}
+}
+
+func TestEncodeEmpty_RendersNameAndColorWithNoVEvents(t *testing.T) {
+	cal, err := CalendarToICal("Work", "#12809CFF", nil, nil)
+	if err != nil {
+		t.Fatalf("CalendarToICal: %v", err)
+	}
+
+	body, err := EncodeEmpty(cal)
+	if err != nil {
+		t.Fatalf("EncodeEmpty: %v", err)
+	}
+
+	got := string(body)
+	if !strings.Contains(got, "X-WR-CALNAME:Work") {
+		t.Fatalf("expected X-WR-CALNAME:Work, got:\n%s", got)
+	}
+	if !strings.Contains(got, "X-APPLE-CALENDAR-COLOR:#12809CFF") {
+		t.Fatalf("expected X-APPLE-CALENDAR-COLOR:#12809CFF, got:\n%s", got)
+	}
+	if !strings.Contains(got, "PRODID:"+ProdID) {
+		t.Fatalf("expected the unchanged PRODID, got:\n%s", got)
+	}
+	if strings.Contains(got, "BEGIN:VEVENT") {
+		t.Fatalf("expected no VEVENTs, got:\n%s", got)
+	}
+	if !strings.HasPrefix(got, "BEGIN:VCALENDAR\r\n") || !strings.HasSuffix(got, "END:VCALENDAR\r\n") {
+		t.Fatalf("expected a well-formed BEGIN/END VCALENDAR envelope, got:\n%s", got)
+	}
+}
+
+func TestEncodeEmpty_RejectsCalendarWithChildren(t *testing.T) {
+	master := repository.Event{
+		ID:        "evt-1",
+		Title:     "Standup",
+		Start:     time.Date(2026, 6, 1, 9, 0, 0, 0, time.UTC),
+		End:       time.Date(2026, 6, 1, 9, 30, 0, 0, time.UTC),
+		CreatedAt: time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC),
+	}
+
+	cal, err := CalendarToICal("Work", "#12809CFF", []repository.Event{master}, nil)
+	if err != nil {
+		t.Fatalf("CalendarToICal: %v", err)
+	}
+
+	if _, err := EncodeEmpty(cal); err == nil {
+		t.Fatalf("expected EncodeEmpty to reject a calendar with children")
+	}
+}
+
 func TestOccurrenceToICal_FreshUIDNoRRuleNoRecurrenceID(t *testing.T) {
 	master := repository.Event{
 		ID:        "evt-1",

@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/XiovV/calendar/server/internal/db"
 	"github.com/XiovV/calendar/server/internal/httpauth"
+	"github.com/XiovV/calendar/server/internal/icalendar"
 	"github.com/XiovV/calendar/server/internal/repository"
 	"github.com/XiovV/calendar/server/internal/service"
 )
@@ -366,6 +368,31 @@ func TestCalendarHandler_ICS_SubscribedCalendarIsForbidden(t *testing.T) {
 	}
 }
 
+// Downloading an empty owned Calendar is a rejection, not a 500: go-ical's
+// Encode refuses a childless VCALENDAR, and handing someone a file with
+// nothing in it isn't useful anyway (#92).
+func TestCalendarHandler_ICS_EmptyCalendar_ReturnsCalendarEmpty(t *testing.T) {
+	env := newICSTestEnv(t)
+
+	resp := env.get(t, "/api/calendars/"+env.calendarID+"/ics")
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("expected 409, got %d", resp.StatusCode)
+	}
+
+	var body struct {
+		Error struct {
+			Code string `json:"code"`
+		} `json:"error"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode error body: %v", err)
+	}
+	if body.Error.Code != "calendar_empty" {
+		t.Fatalf("expected code %q, got %q", "calendar_empty", body.Error.Code)
+	}
+}
+
 func TestCalendarHandler_ICS_NotFound(t *testing.T) {
 	env := newICSTestEnv(t)
 
@@ -417,6 +444,78 @@ func TestCalendarHandler_ICSAll_ReturnsOneZipEntryPerCalendar(t *testing.T) {
 	}
 	if !names["Personal.ics"] || !names["Work.ics"] {
 		t.Fatalf("expected entries named after each calendar, got %v", names)
+	}
+}
+
+// An empty owned Calendar must never break the whole export: it still gets
+// its own .ics entry, carrying its name and color, and that entry is
+// re-importable by this app's own importer reporting 0 events (#92).
+func TestCalendarHandler_ICSAll_EmptyOwnedCalendar_StillGetsAnEntry(t *testing.T) {
+	env := newICSTestEnv(t)
+	ctx := context.Background()
+	start := time.Date(2026, 6, 2, 9, 0, 0, 0, time.UTC)
+	end := time.Date(2026, 6, 2, 9, 30, 0, 0, time.UTC)
+
+	// env.calendarID ("Personal") is left with no events.
+	secondCal, err := env.calendars.Create(ctx, 1, "22222222-2222-2222-2222-222222222222", service.CalendarWrite{Name: "Work", Color: "#E2483DFF"})
+	if err != nil {
+		t.Fatalf("create second calendar: %v", err)
+	}
+	if _, err := env.events.Create(ctx, 1, "evt-1", service.EventWrite{CalendarID: secondCal.ID, Title: "Retro", Start: start, End: end}); err != nil {
+		t.Fatalf("create event: %v", err)
+	}
+
+	resp := env.get(t, "/api/calendars/ics")
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	body, _ := io.ReadAll(resp.Body)
+	zr, err := zip.NewReader(bytes.NewReader(body), int64(len(body)))
+	if err != nil {
+		t.Fatalf("open zip: %v", err)
+	}
+	if len(zr.File) != 2 {
+		t.Fatalf("expected 2 entries, got %d", len(zr.File))
+	}
+
+	var personalEntry *zip.File
+	for _, f := range zr.File {
+		if f.Name == "Personal.ics" {
+			personalEntry = f
+		}
+	}
+	if personalEntry == nil {
+		t.Fatalf("expected a Personal.ics entry, got %v", zr.File)
+	}
+
+	rc, err := personalEntry.Open()
+	if err != nil {
+		t.Fatalf("open Personal.ics: %v", err)
+	}
+	defer rc.Close()
+	entryBytes, err := io.ReadAll(rc)
+	if err != nil {
+		t.Fatalf("read Personal.ics: %v", err)
+	}
+
+	if !containsAll(string(entryBytes), "X-WR-CALNAME:Personal", "X-APPLE-CALENDAR-COLOR:#12809CFF") {
+		t.Fatalf("expected name and color to survive export, got:\n%s", entryBytes)
+	}
+	if bytes.Contains(entryBytes, []byte("BEGIN:VEVENT")) {
+		t.Fatalf("expected no VEVENTs, got:\n%s", entryBytes)
+	}
+
+	parsed, err := icalendar.ParseImportFile(bytes.NewReader(entryBytes))
+	if err != nil {
+		t.Fatalf("ParseImportFile on the empty entry: %v", err)
+	}
+	if len(parsed.Series) != 0 {
+		t.Fatalf("expected 0 series, got %d", len(parsed.Series))
+	}
+	if parsed.CalendarName != "Personal" {
+		t.Fatalf("expected calendar name %q, got %q", "Personal", parsed.CalendarName)
 	}
 }
 

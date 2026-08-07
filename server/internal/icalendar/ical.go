@@ -11,6 +11,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/emersion/go-ical"
@@ -242,6 +243,84 @@ func Encode(cal *ical.Calendar) ([]byte, error) {
 		return nil, fmt.Errorf("encode calendar: %w", err)
 	}
 	return buf.Bytes(), nil
+}
+
+// EncodeEmpty renders cal — a VCALENDAR with no VEVENT/VTIMEZONE children —
+// as raw ICS bytes. go-ical's Encode refuses any VCALENDAR with zero
+// Children ("calendar is empty"), which is right for a CalDAV object but
+// wrong for a Calendar with no Events: the bulk export (#92) must still be
+// able to emit an entry for it, carrying PRODID/VERSION/X-WR-CALNAME/
+// X-APPLE-CALENDAR-COLOR so its name and color survive the round trip. This
+// replicates go-ical's own unexported property encoding (sorted names, one
+// line per value, no folding — go-ical does none either) without its
+// emptiness check, which only applies at the top level.
+func EncodeEmpty(cal *ical.Calendar) ([]byte, error) {
+	if len(cal.Children) != 0 {
+		return nil, fmt.Errorf("encode empty calendar: calendar has children")
+	}
+
+	var buf bytes.Buffer
+	buf.WriteString("BEGIN:VCALENDAR\r\n")
+
+	names := make([]string, 0, len(cal.Props))
+	for name := range cal.Props {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	for _, name := range names {
+		for _, prop := range cal.Props[name] {
+			if err := encodeEmptyCalendarProp(&buf, &prop); err != nil {
+				return nil, fmt.Errorf("encode calendar: %w", err)
+			}
+		}
+	}
+
+	buf.WriteString("END:VCALENDAR\r\n")
+	return buf.Bytes(), nil
+}
+
+// encodeEmptyCalendarProp writes one property line exactly as go-ical's
+// unexported Encoder.encodeProp does: sorted params, comma-joined values,
+// quoted when a value contains one of ;:, — the two encoders must stay
+// identical or EncodeEmpty's output would diverge from Encode's for the
+// same property shape.
+func encodeEmptyCalendarProp(buf *bytes.Buffer, prop *ical.Prop) error {
+	buf.WriteString(prop.Name)
+
+	paramNames := make([]string, 0, len(prop.Params))
+	for name := range prop.Params {
+		paramNames = append(paramNames, name)
+	}
+	sort.Strings(paramNames)
+
+	for _, name := range paramNames {
+		buf.WriteString(";")
+		buf.WriteString(name)
+		buf.WriteString("=")
+
+		for i, v := range prop.Params[name] {
+			if i > 0 {
+				buf.WriteString(",")
+			}
+			if strings.ContainsRune(v, '"') {
+				return fmt.Errorf("encode param value: contains a double-quote")
+			}
+			if strings.ContainsAny(v, ";:,") {
+				buf.WriteString(`"` + v + `"`)
+			} else {
+				buf.WriteString(v)
+			}
+		}
+	}
+
+	buf.WriteString(":")
+	if strings.ContainsAny(prop.Value, "\r\n") {
+		return fmt.Errorf("encode property value: contains a CR or LF")
+	}
+	buf.WriteString(prop.Value)
+	buf.WriteString("\r\n")
+	return nil
 }
 
 // propWRCalName and propAppleCalendarColor are non-standard but

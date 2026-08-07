@@ -34,6 +34,13 @@ func forbidden(message string) errorResponse {
 	return errorResponse{http.StatusForbidden, "forbidden", message}
 }
 
+// conflict takes an explicit code, mirroring unauthorized — a 409 covers
+// more than one kind of "the request conflicts with the resource's current
+// state", so callers still need to say which.
+func conflict(code, message string) errorResponse {
+	return errorResponse{http.StatusConflict, code, message}
+}
+
 // unauthorized takes an explicit code because the auth paths distinguish
 // "invalid_credentials" from a plain "unauthorized".
 func unauthorized(code, message string) errorResponse {

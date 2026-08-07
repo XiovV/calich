@@ -11,6 +11,7 @@ import { useEventsStore } from "../../lib/eventsStore";
 import { useShellStore } from "../../lib/shellStore";
 import { deleteCalendarCascade } from "../../lib/deleteCalendarCascade";
 import { icsApi } from "../../lib/icsApi";
+import { ApiError } from "../../lib/apiClient";
 import { toast } from "../../lib/toast";
 import { CalendarModal } from "./CalendarModal";
 import { SubscribeCalendarModal } from "./SubscribeCalendarModal";
@@ -64,8 +65,12 @@ export function CalendarList() {
     if (!accessToken) return;
     try {
       await icsApi.downloadCalendar(accessToken, calendar.id, calendar.name);
-    } catch {
-      toast.error("Failed to download calendar.");
+    } catch (error) {
+      if (error instanceof ApiError && error.code === "calendar_empty") {
+        toast.error(`"${calendar.name}" has no events to download yet.`);
+      } else {
+        toast.error("Failed to download calendar.");
+      }
     }
   }
 

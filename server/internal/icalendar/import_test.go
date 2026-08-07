@@ -52,6 +52,35 @@ END:VCALENDAR
 	}
 }
 
+// TestParseImportFile_RoundTripsEmptyCalendar confirms the archive entry
+// ICSAll emits for an empty owned Calendar (#92) is importable by this
+// app's own importer, reporting 0 events while its name and color survive.
+func TestParseImportFile_RoundTripsEmptyCalendar(t *testing.T) {
+	cal, err := CalendarToICal("Work", "#12809CFF", nil, nil)
+	if err != nil {
+		t.Fatalf("CalendarToICal: %v", err)
+	}
+	body, err := EncodeEmpty(cal)
+	if err != nil {
+		t.Fatalf("EncodeEmpty: %v", err)
+	}
+
+	f, err := ParseImportFile(strings.NewReader(string(body)))
+	if err != nil {
+		t.Fatalf("ParseImportFile: %v", err)
+	}
+
+	if len(f.Series) != 0 {
+		t.Fatalf("expected 0 series, got %d: %+v", len(f.Series), f.Series)
+	}
+	if f.CalendarName != "Work" {
+		t.Fatalf("expected calendar name %q, got %q", "Work", f.CalendarName)
+	}
+	if f.Color != "#12809CFF" {
+		t.Fatalf("expected color %q, got %q", "#12809CFF", f.Color)
+	}
+}
+
 func TestParseImportFile_GroupsMasterAndOverrideByUID(t *testing.T) {
 	ics := `BEGIN:VCALENDAR
 VERSION:2.0

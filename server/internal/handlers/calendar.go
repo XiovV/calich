@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"time"
@@ -230,9 +231,20 @@ func (h *CalendarHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// ErrCalendarEmpty means a Calendar holds no Events, so CalendarToICal built
+// a VCALENDAR with no VEVENT/VTIMEZONE children — go-ical's Encode refuses
+// to render that. The per-Calendar download (ICS) treats it as a rejection;
+// the bulk export (ICSAll) passes allowEmpty so it still gets an entry, via
+// icalendar.EncodeEmpty (#92).
+var ErrCalendarEmpty = errors.New("calendar has no events")
+
 // icsForCalendar builds one Calendar's whole export VCALENDAR: every series
-// it holds, unbounded window (#76).
-func (h *CalendarHandler) icsForCalendar(ctx context.Context, userID int64, calendar repository.Calendar) ([]byte, error) {
+// it holds, unbounded window (#76). allowEmpty distinguishes the two
+// callers: ICS rejects an empty Calendar (ErrCalendarEmpty) since handing
+// someone a file with nothing in it isn't useful, while ICSAll must never
+// fail a whole export over one empty owned Calendar and so asks for the
+// childless entry instead (#92).
+func (h *CalendarHandler) icsForCalendar(ctx context.Context, userID int64, calendar repository.Calendar, allowEmpty bool) ([]byte, error) {
 	masters, overridesByParent, err := h.events.ListSeriesByCalendar(ctx, userID, calendar.ID)
 	if err != nil {
 		return nil, err
@@ -242,7 +254,21 @@ func (h *CalendarHandler) icsForCalendar(ctx context.Context, userID int64, cale
 	if err != nil {
 		return nil, err
 	}
+
+	if len(cal.Children) == 0 {
+		if !allowEmpty {
+			return nil, ErrCalendarEmpty
+		}
+		return icalendar.EncodeEmpty(cal)
+	}
+
 	return icalendar.Encode(cal)
+}
+
+// icsErrors renders ICS's own failure beyond the calendarNotFoundErrors and
+// SourceURL checks it does inline.
+var icsErrors = []errorCase{
+	{ErrCalendarEmpty, conflict("calendar_empty", "calendar has no events to download")},
 }
 
 // ICS serves GET /api/calendars/{id}/ics: every series in the Calendar,
@@ -270,9 +296,8 @@ func (h *CalendarHandler) ICS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	body, err := h.icsForCalendar(r.Context(), userID, calendar)
-	if err != nil {
-		httpresponse.Error(w, http.StatusInternalServerError, "internal_error", "failed to build calendar object")
+	body, err := h.icsForCalendar(r.Context(), userID, calendar, false)
+	if respondError(w, err, icsErrors, "failed to build calendar object") {
 		return
 	}
 
@@ -342,7 +367,7 @@ func (h *CalendarHandler) ICSAll(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		body, err := h.icsForCalendar(r.Context(), userID, calendar)
+		body, err := h.icsForCalendar(r.Context(), userID, calendar, true)
 		if err != nil {
 			httpresponse.Error(w, http.StatusInternalServerError, "internal_error", "failed to build calendar object")
 			return
