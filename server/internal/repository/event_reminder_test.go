@@ -26,7 +26,7 @@ func newTestEventReminderRepository(t *testing.T) (repo *EventRepository, remind
 	}
 
 	calendars := NewCalendarRepository(sqlDB)
-	cal, err := calendars.Create(context.Background(), user.ID, "cal-1", "Personal", "peacock")
+	cal, err := calendars.Create(context.Background(), user.ID, "cal-1", CalendarFields{Name: "Personal", Color: "peacock"})
 	if err != nil {
 		t.Fatalf("create calendar: %v", err)
 	}

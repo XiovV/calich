@@ -1,4 +1,6 @@
 import { useCallback, useMemo, useState } from "react";
+import { getCalendarById, isSubscribedCalendar } from "../lib/calendar";
+import { useCalendarsStore } from "../lib/calendarsStore";
 import { useEventsStore } from "../lib/eventsStore";
 import { isRecurringOccurrence, seriesEditChanges, type Occurrence } from "../lib/occurrence";
 import type { EditScope } from "../lib/recurrenceScope";
@@ -24,10 +26,18 @@ interface PendingDragEdit {
 export function useOccurrenceDragCommit() {
   const updateEvent = useEventsStore((state) => state.updateEvent);
   const editOccurrence = useEventsStore((state) => state.editOccurrence);
+  const calendars = useCalendarsStore((state) => state.calendars);
   const [pending, setPending] = useState<PendingDragEdit | null>(null);
 
   const commit = useCallback(
     (occurrence: Occurrence, start: Date, end: Date) => {
+      // Belt-and-suspenders: every drag/resize gesture is already refused
+      // to start on a Subscribed Calendar's Occurrence (#84, ADR-0032), but
+      // this is the one place an actual write would happen if that ever
+      // slipped, so it's guarded here too.
+      const calendar = getCalendarById(calendars, occurrence.event.calendarId);
+      if (isSubscribedCalendar(calendar)) return;
+
       if (isRecurringOccurrence(occurrence)) {
         setPending({ occurrence, start, end });
         return;
@@ -37,7 +47,7 @@ export function useOccurrenceDragCommit() {
         seriesEditChanges(occurrence.event, occurrence, start, end),
       );
     },
-    [updateEvent],
+    [updateEvent, calendars],
   );
 
   const confirmScope = useCallback(

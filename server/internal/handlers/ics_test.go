@@ -57,14 +57,14 @@ func newICSTestEnv(t *testing.T) icsTestEnv {
 
 	calendarRepo := repository.NewCalendarRepository(sqlDB)
 	calendars := service.NewCalendarService(calendarRepo)
-	cal, err := calendars.Create(context.Background(), userID, "11111111-1111-1111-1111-111111111111", "Personal", "#12809CFF")
+	cal, err := calendars.Create(context.Background(), userID, "11111111-1111-1111-1111-111111111111", service.CalendarWrite{Name: "Personal", Color: "#12809CFF"})
 	if err != nil {
 		t.Fatalf("create calendar: %v", err)
 	}
 
 	events := service.NewEventService(sqlDB, repository.NewEventRepository(sqlDB), repository.NewEventExceptionRepository(sqlDB), repository.NewEventReminderRepository(sqlDB), repository.NewSyncRepository(sqlDB), calendars)
 	eventHandler := NewEventHandler(events)
-	calendarHandler := NewCalendarHandler(calendars, events, service.NewImportService(events, calendars))
+	calendarHandler := NewCalendarHandler(calendars, events, service.NewImportService(events, calendars), service.NewSubscribeService(events, calendars, 0))
 
 	r := chi.NewRouter()
 	r.Route("/api/events", func(r chi.Router) {
@@ -345,6 +345,27 @@ func TestCalendarHandler_ICS_EmitsNameColorAndEverySeries(t *testing.T) {
 	}
 }
 
+// A Subscribed Calendar offers no per-Calendar download (#90, ADR-0032): a
+// frozen snapshot is the wrong artifact for something a Refresh will
+// overwrite anyway.
+func TestCalendarHandler_ICS_SubscribedCalendarIsForbidden(t *testing.T) {
+	env := newICSTestEnv(t)
+
+	sourceURL := "https://user:hunter2@example.com/feed.ics"
+	subCalendar, err := env.calendars.Create(context.Background(), 1, "33333333-3333-3333-3333-333333333333", service.CalendarWrite{
+		Name: "Feed", Color: "#123456FF", SourceURL: &sourceURL,
+	})
+	if err != nil {
+		t.Fatalf("create subscribed calendar: %v", err)
+	}
+
+	resp := env.get(t, "/api/calendars/"+subCalendar.ID+"/ics")
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d", resp.StatusCode)
+	}
+}
+
 func TestCalendarHandler_ICS_NotFound(t *testing.T) {
 	env := newICSTestEnv(t)
 
@@ -364,7 +385,7 @@ func TestCalendarHandler_ICSAll_ReturnsOneZipEntryPerCalendar(t *testing.T) {
 	if _, err := env.events.Create(ctx, 1, "evt-1", service.EventWrite{CalendarID: env.calendarID, Title: "Standup", Start: start, End: end}); err != nil {
 		t.Fatalf("create event: %v", err)
 	}
-	secondCal, err := env.calendars.Create(ctx, 1, "22222222-2222-2222-2222-222222222222", "Work", "#E2483DFF")
+	secondCal, err := env.calendars.Create(ctx, 1, "22222222-2222-2222-2222-222222222222", service.CalendarWrite{Name: "Work", Color: "#E2483DFF"})
 	if err != nil {
 		t.Fatalf("create second calendar: %v", err)
 	}
@@ -396,6 +417,129 @@ func TestCalendarHandler_ICSAll_ReturnsOneZipEntryPerCalendar(t *testing.T) {
 	}
 	if !names["Personal.ics"] || !names["Work.ics"] {
 		t.Fatalf("expected entries named after each calendar, got %v", names)
+	}
+}
+
+// Bulk export contains no Subscribed Calendars (#90, ADR-0032): a frozen
+// snapshot is the wrong artifact for a Subscription, whose Events a Refresh
+// will overwrite anyway. Instead the archive lists its name and URL, with
+// the URL's password masked (ADR-0032's "every surface that renders a
+// Subscription URL must mask the password" carried to the export surface).
+func TestCalendarHandler_ICSAll_ExcludesSubscribedCalendarsAndListsThemInsteadWithMaskedURL(t *testing.T) {
+	env := newICSTestEnv(t)
+	ctx := context.Background()
+	start := time.Date(2026, 6, 2, 9, 0, 0, 0, time.UTC)
+	end := time.Date(2026, 6, 2, 9, 30, 0, 0, time.UTC)
+
+	if _, err := env.events.Create(ctx, 1, "evt-1", service.EventWrite{CalendarID: env.calendarID, Title: "Standup", Start: start, End: end}); err != nil {
+		t.Fatalf("create event: %v", err)
+	}
+
+	sourceURL := "https://user:hunter2@example.com/feed.ics"
+	if _, err := env.calendars.Create(ctx, 1, "33333333-3333-3333-3333-333333333333", service.CalendarWrite{
+		Name: "Feed", Color: "#123456FF", SourceURL: &sourceURL,
+	}); err != nil {
+		t.Fatalf("create subscribed calendar: %v", err)
+	}
+
+	resp := env.get(t, "/api/calendars/ics")
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	body, _ := io.ReadAll(resp.Body)
+	zr, err := zip.NewReader(bytes.NewReader(body), int64(len(body)))
+	if err != nil {
+		t.Fatalf("open zip: %v", err)
+	}
+
+	names := map[string]*zip.File{}
+	for _, f := range zr.File {
+		names[f.Name] = f
+	}
+	if _, ok := names["Feed.ics"]; ok {
+		t.Fatalf("expected the subscribed calendar to have no .ics entry, got %v", names)
+	}
+	if _, ok := names["Personal.ics"]; !ok {
+		t.Fatalf("expected the owned calendar's .ics entry, got %v", names)
+	}
+
+	listingFile, ok := names[subscriptionsZipEntry]
+	if !ok {
+		t.Fatalf("expected a %s entry listing subscriptions, got %v", subscriptionsZipEntry, names)
+	}
+	rc, err := listingFile.Open()
+	if err != nil {
+		t.Fatalf("open subscriptions entry: %v", err)
+	}
+	defer rc.Close()
+	listing, _ := io.ReadAll(rc)
+
+	if !containsAll(string(listing), "Feed:", "example.com/feed.ics") {
+		t.Fatalf("expected the subscription's name and URL, got:\n%s", listing)
+	}
+	if bytes.Contains(listing, []byte("hunter2")) {
+		t.Fatalf("expected the password to be masked, got:\n%s", listing)
+	}
+}
+
+// No Subscriptions means no subscriptions.txt entry — the archive stays
+// exactly what it was before #90 for an account with only owned Calendars.
+func TestCalendarHandler_ICSAll_NoSubscriptions_OmitsListingEntry(t *testing.T) {
+	env := newICSTestEnv(t)
+	ctx := context.Background()
+	start := time.Date(2026, 6, 2, 9, 0, 0, 0, time.UTC)
+	end := time.Date(2026, 6, 2, 9, 30, 0, 0, time.UTC)
+	if _, err := env.events.Create(ctx, 1, "evt-1", service.EventWrite{CalendarID: env.calendarID, Title: "Standup", Start: start, End: end}); err != nil {
+		t.Fatalf("create event: %v", err)
+	}
+
+	resp := env.get(t, "/api/calendars/ics")
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	zr, err := zip.NewReader(bytes.NewReader(body), int64(len(body)))
+	if err != nil {
+		t.Fatalf("open zip: %v", err)
+	}
+	for _, f := range zr.File {
+		if f.Name == subscriptionsZipEntry {
+			t.Fatalf("expected no %s entry when there are no subscriptions", subscriptionsZipEntry)
+		}
+	}
+}
+
+// An instance with only Subscribed Calendars still produces a valid archive
+// (#90, ADR-0032) — zero .ics entries, just the subscriptions listing.
+func TestCalendarHandler_ICSAll_OnlySubscribedCalendars_StillProducesValidArchive(t *testing.T) {
+	env := newICSTestEnv(t)
+	ctx := context.Background()
+
+	if err := env.calendars.Delete(ctx, 1, env.calendarID); err != nil {
+		t.Fatalf("delete owned calendar: %v", err)
+	}
+
+	sourceURL := "https://example.com/feed.ics"
+	if _, err := env.calendars.Create(ctx, 1, "33333333-3333-3333-3333-333333333333", service.CalendarWrite{
+		Name: "Feed", Color: "#123456FF", SourceURL: &sourceURL,
+	}); err != nil {
+		t.Fatalf("create subscribed calendar: %v", err)
+	}
+
+	resp := env.get(t, "/api/calendars/ics")
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	body, _ := io.ReadAll(resp.Body)
+	zr, err := zip.NewReader(bytes.NewReader(body), int64(len(body)))
+	if err != nil {
+		t.Fatalf("expected a valid zip archive: %v", err)
+	}
+	if len(zr.File) != 1 || zr.File[0].Name != subscriptionsZipEntry {
+		t.Fatalf("expected exactly one %s entry, got %v", subscriptionsZipEntry, zr.File)
 	}
 }
 

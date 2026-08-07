@@ -1,12 +1,13 @@
 import { useState, type KeyboardEvent } from "react";
 import { Dialog } from "@base-ui/react/dialog";
-import type { Calendar } from "../../lib/calendar";
+import { isSubscribedCalendar, type Calendar } from "../../lib/calendar";
 import { getNextUnusedColor } from "../../lib/calendarColors";
 import { useCalendarsStore } from "../../lib/calendarsStore";
 import { useShellStore } from "../../lib/shellStore";
 import { ColorSwatchPicker } from "./ColorSwatchPicker";
 import { Button } from "../ui/Button";
 import { buttonClasses } from "../ui/buttonClasses";
+import { Checkbox } from "../ui/Checkbox";
 import { Input } from "../ui/Input";
 import { fieldLabelClass } from "../ui/fieldStyles";
 
@@ -30,14 +31,32 @@ export function CalendarModal(props: CalendarModalProps) {
       ? props.calendar.color
       : getNextUnusedColor(calendars.map((calendar) => calendar.color)),
   );
+  const [keepAlarms, setKeepAlarms] = useState(
+    mode === "edit" ? (props.calendar.keepAlarms ?? false) : false,
+  );
+  const isSubscribed = mode === "edit" && isSubscribedCalendar(props.calendar);
+  // initialUrl is the masked value the dialog opened with (#88, ADR-0032:
+  // a password in an edited URL is masked here, same as everywhere else a
+  // Subscription URL is shown) — captured once so Save can tell whether
+  // the User actually touched the field.
+  const initialUrl =
+    mode === "edit" ? (props.calendar.sourceUrl ?? "") : "";
+  const [url, setUrl] = useState(initialUrl);
 
-  const canSave = name.trim() !== "";
+  const canSave = name.trim() !== "" && (!isSubscribed || url.trim() !== "");
 
   function handleSave() {
     if (!canSave) return;
 
     if (mode === "edit") {
-      updateCalendar(props.calendar.id, { name: name.trim(), color });
+      updateCalendar(props.calendar.id, {
+        name: name.trim(),
+        color,
+        ...(isSubscribed ? { keepAlarms } : {}),
+        ...(isSubscribed && url.trim() !== initialUrl
+          ? { url: url.trim() }
+          : {}),
+      });
     } else {
       const id = crypto.randomUUID();
       addCalendar({ id, name: name.trim(), color });
@@ -73,7 +92,7 @@ export function CalendarModal(props: CalendarModalProps) {
         <Dialog.Backdrop className="fixed inset-0 z-40 bg-ink/20" />
         <Dialog.Popup
           onKeyDown={handleEnterToSave}
-          className="fixed top-1/2 left-1/2 z-50 w-80 -translate-x-1/2 -translate-y-1/2 rounded-shell-lg bg-surface p-5 shadow-elevation-3"
+          className={`fixed top-1/2 left-1/2 z-50 ${isSubscribed ? "w-96" : "w-80"} -translate-x-1/2 -translate-y-1/2 rounded-shell-lg bg-surface p-5 shadow-elevation-3`}
         >
           <Dialog.Title className="text-heading font-medium text-ink">
             {mode === "edit" ? "Edit calendar" : "New calendar"}
@@ -85,6 +104,16 @@ export function CalendarModal(props: CalendarModalProps) {
               handleSave();
             }}
           >
+          {isSubscribed && (
+            <Input
+              label="Subscription URL"
+              value={url}
+              onChange={(event) => setUrl(event.target.value)}
+              placeholder="https://example.com/calendar.ics"
+              className="mt-4"
+            />
+          )}
+
           <Input
             label="Name"
             value={name}
@@ -99,6 +128,20 @@ export function CalendarModal(props: CalendarModalProps) {
               <ColorSwatchPicker value={color} onValueChange={setColor} />
             </div>
           </div>
+
+          {isSubscribed && (
+            <label className="mt-4 flex items-start gap-2 text-label-sm text-ink">
+              <Checkbox
+                checked={keepAlarms}
+                onCheckedChange={setKeepAlarms}
+                aria-label="Keep this feed's reminders"
+              />
+              <span>
+                Keep this feed&apos;s reminders, including email reminders
+                this instance will send
+              </span>
+            </label>
+          )}
 
           <div className="mt-5 flex justify-end gap-2">
             <Dialog.Close

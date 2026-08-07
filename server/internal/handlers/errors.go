@@ -30,6 +30,10 @@ func notFound(message string) errorResponse {
 	return errorResponse{http.StatusNotFound, "not_found", message}
 }
 
+func forbidden(message string) errorResponse {
+	return errorResponse{http.StatusForbidden, "forbidden", message}
+}
+
 // unauthorized takes an explicit code because the auth paths distinguish
 // "invalid_credentials" from a plain "unauthorized".
 func unauthorized(code, message string) errorResponse {

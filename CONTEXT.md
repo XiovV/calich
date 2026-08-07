@@ -149,6 +149,24 @@ _Avoid_: ics file, export file, calendar export
 The counted account of what an import did to a Calendar file's contents — what was skipped (and why), what was imported but altered, and what was ignored as unmodelled. Shown before the import is confirmed and again after it runs. The user's only view of a deliberately lossy translation, so it is part of the feature rather than a diagnostic. See ADR-0030.
 _Avoid_: import report, import log, import result
 
+## Subscriptions
+
+**Subscription**:
+The binding of a Calendar to an external `.ics` URL, together with the state a Refresh needs and leaves behind — poll cadence, last success, last error, and whether the feed's alarms are kept. The thing a User adds and removes; the Calendar it binds is what they see. See ADR-0032.
+_Avoid_: feed (see Subscribed Calendar), subscribed URL, external source
+
+**Subscribed Calendar**:
+A Calendar carrying a Subscription. An ordinary Calendar in every respect a User can see — named, coloured, toggleable, rendered on the grid, exposed over CalDAV — except that it is read-only: its Events are written only by Refresh, never by the web app, the API, or a native client. Distinct from a Calendar whose Events merely arrived by import, which is an ordinary Calendar the User owns outright. See ADR-0032.
+_Avoid_: external calendar, remote calendar, read-only calendar, feed — "Calendar feed" meant the opposite direction (a feed this instance publishes) in the superseded ADR-0012, so the word points both ways in this repo and is best avoided entirely.
+
+**Refresh**:
+One fetch-and-reconcile cycle against a Subscription's URL: a conditional GET that usually ends in "unchanged", and otherwise a per-series reconciliation of the fetched Calendar file against the Events already stored. Deliberately not called sync — Sync in this repo means CalDAV's two-way, change-tracked exchange, and a Refresh is one-way, whole-document, and driven by a poller. See ADR-0033.
+_Avoid_: sync, poll, update, pull
+
+**External UID**:
+The foreign iCalendar `UID` a Refresh matches a series on, stored alongside the Event rather than as its id — the id stays a minted UUID, so a Subscribed Calendar's Calendar objects keep the `{masterId}.ics` shape ADR-0025 requires. The narrow reopening of ADR-0030's discard-the-foreign-UID rule, and the reason a Refresh can leave an unchanged series untouched instead of rewriting the whole Calendar. See ADR-0033.
+_Avoid_: source UID, foreign ID, original UID
+
 ## Deployment
 
 **Data directory**:

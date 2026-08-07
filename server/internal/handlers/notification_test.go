@@ -39,7 +39,7 @@ func newNotificationTestServer(t *testing.T) (baseURL, accessToken string, userI
 	}
 
 	calendars := repository.NewCalendarRepository(sqlDB)
-	cal, err := calendars.Create(context.Background(), user.ID, "cal-1", "Personal", "peacock")
+	cal, err := calendars.Create(context.Background(), user.ID, "cal-1", repository.CalendarFields{Name: "Personal", Color: "peacock"})
 	if err != nil {
 		t.Fatalf("create calendar: %v", err)
 	}

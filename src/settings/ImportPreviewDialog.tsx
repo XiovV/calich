@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { format } from "date-fns";
 import { Dialog } from "@base-ui/react/dialog";
-import type { Calendar } from "../lib/calendar";
+import { isSubscribedCalendar, type Calendar } from "../lib/calendar";
 import type { ImportFileSummary, ImportSummary, ImportTarget } from "../lib/importApi";
 import { formatImportSummaryLine, formatReminderLine, summarizeImport } from "../lib/importSummary";
 import { Button } from "../components/ui/Button";
@@ -71,6 +71,11 @@ export function ImportPreviewDialog({
   onClose,
 }: ImportPreviewDialogProps) {
   const [drafts, setDrafts] = useState<EntryDraft[]>(() => initialDrafts(summary.files));
+
+  // A Subscribed Calendar's Events are written only by Refresh's bypass
+  // (#84, ADR-0032), so it's never a valid "existing calendar" import
+  // target.
+  const writableCalendars = calendars.filter((calendar) => !isSubscribedCalendar(calendar));
 
   const totals = summarizeImport(summary);
   const summaryLine = formatImportSummaryLine(totals);
@@ -205,7 +210,7 @@ export function ImportPreviewDialog({
                         }
                         options={[
                           { value: NEW_CALENDAR_VALUE, label: "New calendar" },
-                          ...calendars.map((calendar) => ({ value: calendar.id, label: calendar.name })),
+                          ...writableCalendars.map((calendar) => ({ value: calendar.id, label: calendar.name })),
                         ]}
                       />
                       {draft.action === "new" && (

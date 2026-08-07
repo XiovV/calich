@@ -104,6 +104,15 @@ func (h *dispatchHandler) handlePropPatch(w http.ResponseWriter, r *http.Request
 		http.Error(w, "failed to load calendar", http.StatusInternalServerError)
 		return
 	}
+	// A Subscribed Calendar's collection is advertised as read-only via its
+	// current-user-privilege-set (propfind.go's applyPrivilegeSetPatch,
+	// ADR-0032) — renaming or recoloring one over CalDAV would be incoherent
+	// with that, so PROPPATCH is refused outright rather than staged
+	// per-property. Renaming and recoloring stay web-app actions.
+	if existing.SourceURL != nil {
+		http.Error(w, "calendar is subscribed and read-only", http.StatusForbidden)
+		return
+	}
 
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
@@ -248,7 +257,7 @@ func (h *dispatchHandler) applyPropPatch(ctx context.Context, userID int64, cale
 	}
 
 	if changed {
-		if _, err := h.backend.calendars.Update(ctx, userID, calendarID, newName, newColor); err != nil {
+		if _, err := h.backend.calendars.Update(ctx, userID, calendarID, service.CalendarWrite{Name: newName, Color: newColor}); err != nil {
 			return nil, err
 		}
 	}

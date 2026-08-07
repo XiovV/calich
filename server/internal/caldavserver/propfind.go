@@ -27,6 +27,7 @@ type propfindPatch struct {
 var propfindPatches = []propfindPatch{
 	{trigger: "getctag", apply: applyGetCTagPatch},
 	{trigger: "calendar-color", apply: applyCalendarColorPatch},
+	{trigger: "current-user-privilege-set", apply: applyPrivilegeSetPatch},
 }
 
 // calendarColorNamespace is the Apple/DAVx⁵ calendar-color extension's
@@ -71,6 +72,28 @@ func applyCalendarColorPatch(ctx context.Context, h *dispatchHandler, userID int
 			return "", false
 		}
 		return cal.Color, true
+	}))
+}
+
+// subscribedReadOnlyPrivilegeSet is the current-user-privilege-set value
+// (RFC 3744 §5.4) advertised for a Subscribed Calendar's collection: read
+// without write, so a client whose privilege-set support is good enough to
+// act on it stops offering edits that can only be refused (ADR-0032, #89).
+const subscribedReadOnlyPrivilegeSet = `<privilege><read/></privilege>`
+
+// applyPrivilegeSetPatch overrides go-webdav's hardcoded read+write
+// current-user-privilege-set (caldav/server.go's propFindCalendar) to read
+// without write, but only for a Subscribed Calendar's collection —
+// declining (ok=false) for every owned Calendar leaves the library's default
+// untouched, per ADR-0032's "Owned Calendars' advertised privileges are
+// unchanged".
+func applyPrivilegeSetPatch(ctx context.Context, h *dispatchHandler, userID int64, body []byte) []byte {
+	return injectPropertyRaw(ctx, body, "current-user-privilege-set", davNamespace, collectionValueFunc(userID, func(ctx context.Context, calendarID string) (string, bool) {
+		cal, err := h.backend.calendars.Get(ctx, userID, calendarID)
+		if err != nil || cal.SourceURL == nil {
+			return "", false
+		}
+		return subscribedReadOnlyPrivilegeSet, true
 	}))
 }
 

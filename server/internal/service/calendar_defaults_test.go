@@ -63,7 +63,7 @@ func TestEnsureDefaultCalendars_NoOpWhenUserAlreadyHasCalendars(t *testing.T) {
 	calendars, userID := newTestCalendarServiceForUser(t)
 	ctx := context.Background()
 
-	if _, err := calendars.Create(ctx, userID, "existing-cal", "Existing", "#6B7280FF"); err != nil {
+	if _, err := calendars.Create(ctx, userID, "existing-cal", CalendarWrite{Name: "Existing", Color: "#6B7280FF"}); err != nil {
 		t.Fatalf("create existing calendar: %v", err)
 	}
 

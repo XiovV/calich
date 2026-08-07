@@ -28,9 +28,15 @@ function isSupportedFile(file: File): boolean {
 }
 
 /**
- * The Settings page's Import & export section (#79, ADR-0030): exports every
- * Calendar as a .zip, and imports a single .ics or .zip file through a
- * dryRun preview before writing anything.
+ * The Settings page's Import & export section (#79, ADR-0030): exports
+ * every owned Calendar as a .zip, and imports a single .ics or .zip file
+ * through a dryRun preview before writing anything. Subscribed Calendars
+ * are excluded from the export — a frozen snapshot is the wrong artifact
+ * for something a Refresh will overwrite anyway — so the button is labelled
+ * "Download my calendars" rather than "all calendars" to disclose that scope
+ * (#90, ADR-0032). Their Subscription URLs are listed in the archive's
+ * subscriptions.txt instead, since that's what actually restores them
+ * elsewhere.
  */
 export function ImportExportSection() {
   const accessToken = useAuthStore((state) => state.accessToken);
@@ -127,9 +133,11 @@ export function ImportExportSection() {
     <section className="mt-8">
       <h2 className="text-heading font-medium text-ink">Import & export</h2>
       <p className="mt-1 text-body text-ink-muted">
-        Export every calendar as a .zip of .ics files, or import a .ics or .zip export from
-        another app. Importing the same file twice creates duplicate events — if an import goes
-        wrong, undo it by deleting the calendar it created.
+        Download every calendar you own as a .zip of .ics files — Subscribed Calendars aren't
+        included, since re-subscribing elsewhere is what actually moves them; their URLs are
+        listed in the archive instead. Or import a .ics or .zip export from another app.
+        Importing the same file twice creates duplicate events — if an import goes wrong, undo it
+        by deleting the calendar it created.
       </p>
 
       <Button
@@ -139,7 +147,7 @@ export function ImportExportSection() {
         loading={isExporting}
         onClick={handleExportAll}
       >
-        Export all calendars (.zip)
+        Download my calendars (.zip)
       </Button>
 
       <div

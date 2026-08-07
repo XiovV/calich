@@ -50,7 +50,7 @@ func newTestLedger(t *testing.T) (ledger *repository.FiredReminderRepository, re
 		t.Fatalf("create user: %v", err)
 	}
 	calendars := repository.NewCalendarRepository(sqlDB)
-	cal, err := calendars.Create(ctx, user.ID, "cal-1", "Personal", "peacock")
+	cal, err := calendars.Create(ctx, user.ID, "cal-1", repository.CalendarFields{Name: "Personal", Color: "peacock"})
 	if err != nil {
 		t.Fatalf("create calendar: %v", err)
 	}

@@ -1,9 +1,12 @@
 // propertyinject.go generalizes the XML-patching technique ctag.go
 // introduced for getctag (ADR-0025, #65) so any PROPFIND property go-webdav
-// has no hook to inject — getctag, calendar-color (ADR-0028), and any future
-// one — can reuse the same "record via httptest.Recorder, then regex-patch
-// the empty/404 propstat into a real 200 one" mechanism instead of
-// duplicating it.
+// has no hook to inject or override — getctag, calendar-color (ADR-0028),
+// current-user-privilege-set (ADR-0032, #89), and any future one — can reuse
+// the same "record via httptest.Recorder, then regex-patch the existing
+// propstat into a new 200 one" mechanism instead of duplicating it.
+// injectProperty renders the replacement value as escaped text;
+// injectPropertyRaw splices it in as literal XML for a property, like
+// current-user-privilege-set, whose value is nested elements.
 package caldavserver
 
 import (
@@ -39,10 +42,33 @@ func emptyElementRe(localName string) *regexp.Regexp {
 
 // injectProperty rewrites every <response> block in body whose href
 // resolves via valueFor to replace its empty, 404 <localName/> with a 200
-// propstat in namespace xmlns carrying the real value. Blocks valueFor
-// declines (not a Calendar collection, or localName not present) are
-// returned unchanged.
+// propstat in namespace xmlns carrying the real value, escaped as text.
+// Blocks valueFor declines (not a Calendar collection, or localName not
+// present) are returned unchanged.
 func injectProperty(ctx context.Context, body []byte, localName, xmlns string, valueFor propertyValueFunc) []byte {
+	return injectPropertyValue(ctx, body, localName, xmlns, valueFor, func(value string) string {
+		var buf bytes.Buffer
+		xml.EscapeText(&buf, []byte(value))
+		return buf.String()
+	})
+}
+
+// injectPropertyRaw is injectProperty's counterpart for a property whose
+// value is nested elements rather than text — current-user-privilege-set
+// (ADR-0032, #89) needs literal <privilege><read/></privilege> children, and
+// xml.EscapeText would turn those angle brackets into inert text. valueFor
+// must return well-formed XML; it is spliced into the response unescaped.
+func injectPropertyRaw(ctx context.Context, body []byte, localName, xmlns string, valueFor propertyValueFunc) []byte {
+	return injectPropertyValue(ctx, body, localName, xmlns, valueFor, func(value string) string {
+		return value
+	})
+}
+
+// injectPropertyValue is injectProperty and injectPropertyRaw's shared core;
+// render turns valueFor's result into the bytes placed between <localName>
+// and </localName> — escaped text for injectProperty, verbatim XML for
+// injectPropertyRaw.
+func injectPropertyValue(ctx context.Context, body []byte, localName, xmlns string, valueFor propertyValueFunc, render func(string) string) []byte {
 	elementRe := emptyElementRe(localName)
 
 	return responseRe.ReplaceAllFunc(body, func(block []byte) []byte {
@@ -75,11 +101,9 @@ func injectProperty(ctx context.Context, body []byte, localName, xmlns string, v
 			return block
 		}
 
-		var buf bytes.Buffer
-		xml.EscapeText(&buf, []byte(value))
 		newPropstat := fmt.Sprintf(
 			`<propstat xmlns="DAV:"><prop xmlns="DAV:"><%s xmlns=%q>%s</%s></prop><status xmlns="DAV:">HTTP/1.1 200 OK</status></propstat>`,
-			localName, xmlns, buf.String(), localName,
+			localName, xmlns, render(value), localName,
 		)
 		return bytes.Replace(block, []byte("</response>"), []byte(newPropstat+"</response>"), 1)
 	})

@@ -27,7 +27,7 @@ func newTestEventService(t *testing.T) (svc *EventService, userID int64, calenda
 	}
 
 	calendarRepo := repository.NewCalendarRepository(sqlDB)
-	cal, err := calendarRepo.Create(context.Background(), user.ID, "cal-1", "Personal", "peacock")
+	cal, err := calendarRepo.Create(context.Background(), user.ID, "cal-1", repository.CalendarFields{Name: "Personal", Color: "peacock"})
 	if err != nil {
 		t.Fatalf("create calendar: %v", err)
 	}
@@ -1767,5 +1767,410 @@ func TestEventService_ImportSeries_UnknownCalendar(t *testing.T) {
 	_, err := svc.ImportSeries(ctx, userID, "does-not-exist", []SeriesWrite{{Title: "Standup", Start: start, End: end}})
 	if !errors.Is(err, ErrCalendarNotFound) {
 		t.Fatalf("expected ErrCalendarNotFound, got %v", err)
+	}
+}
+
+// --- Subscribed Calendar write guard (#84, ADR-0032) ---
+//
+// One test per mutating method proves it refuses a Subscribed Calendar with
+// ErrSubscribedCalendarReadOnly, and a further test proves
+// ImportSubscribedSeries — the sole bypass — writes successfully where
+// ImportSeries would now refuse.
+
+// newTestSubscribedCalendar creates a Calendar carrying a SourceURL — a
+// Subscribed Calendar (ADR-0032) — via svc's own CalendarService, reaching
+// into the unexported field since this test lives in package service.
+func newTestSubscribedCalendar(t *testing.T, svc *EventService, userID int64) string {
+	t.Helper()
+	sourceURL := "https://example.com/feed.ics"
+	cal, err := svc.calendars.Create(context.Background(), userID, "sub-cal-1", CalendarWrite{Name: "Feed", Color: "#123456FF", SourceURL: &sourceURL})
+	if err != nil {
+		t.Fatalf("create subscribed calendar: %v", err)
+	}
+	return cal.ID
+}
+
+// seedSubscribedEvent writes one series into subCalendarID via the bypass,
+// then returns the id of the Master matching write.Title — the only way to
+// get an Event into a Subscribed Calendar for the
+// Update/Delete/AddException/ReparentFrom refusal tests below, since every
+// other writer now refuses it. Looks up by title rather than assuming it's
+// the calendar's only Master, so a test can seed more than one.
+func seedSubscribedEvent(t *testing.T, svc *EventService, userID int64, subCalendarID string, write SeriesWrite) string {
+	t.Helper()
+	ctx := context.Background()
+	if _, err := svc.ImportSubscribedSeries(ctx, userID, subCalendarID, []SeriesWrite{write}); err != nil {
+		t.Fatalf("seed subscribed event: %v", err)
+	}
+	events, err := svc.events.ListMastersByCalendar(ctx, userID, subCalendarID)
+	if err != nil {
+		t.Fatalf("list masters: %v", err)
+	}
+	for _, e := range events {
+		if e.Title == write.Title {
+			return e.ID
+		}
+	}
+	t.Fatalf("expected a master titled %q, got %+v", write.Title, events)
+	return ""
+}
+
+func TestEventService_Create_RejectsSubscribedCalendar(t *testing.T) {
+	svc, userID, _ := newTestEventService(t)
+	subCalendarID := newTestSubscribedCalendar(t, svc, userID)
+	ctx := context.Background()
+	start := time.Date(2026, 6, 1, 9, 0, 0, 0, time.UTC)
+
+	_, err := svc.Create(ctx, userID, "evt-1", EventWrite{CalendarID: subCalendarID, Title: "Standup", Start: start, End: start.Add(time.Hour)})
+	if !errors.Is(err, ErrSubscribedCalendarReadOnly) {
+		t.Fatalf("expected ErrSubscribedCalendarReadOnly, got %v", err)
+	}
+}
+
+func TestEventService_Update_RejectsSubscribedCalendar(t *testing.T) {
+	svc, userID, _ := newTestEventService(t)
+	subCalendarID := newTestSubscribedCalendar(t, svc, userID)
+	ctx := context.Background()
+	start := time.Date(2026, 6, 1, 9, 0, 0, 0, time.UTC)
+	end := start.Add(time.Hour)
+
+	masterID := seedSubscribedEvent(t, svc, userID, subCalendarID, SeriesWrite{Title: "Standup", Start: start, End: end})
+
+	_, err := svc.Update(ctx, userID, masterID, EventWrite{CalendarID: subCalendarID, Title: "Renamed", Start: start, End: end})
+	if !errors.Is(err, ErrSubscribedCalendarReadOnly) {
+		t.Fatalf("expected ErrSubscribedCalendarReadOnly, got %v", err)
+	}
+}
+
+func TestEventService_Update_RejectsMovingEventOutOfSubscribedCalendar(t *testing.T) {
+	svc, userID, calendarID := newTestEventService(t)
+	subCalendarID := newTestSubscribedCalendar(t, svc, userID)
+	ctx := context.Background()
+	start := time.Date(2026, 6, 1, 9, 0, 0, 0, time.UTC)
+	end := start.Add(time.Hour)
+
+	masterID := seedSubscribedEvent(t, svc, userID, subCalendarID, SeriesWrite{Title: "Standup", Start: start, End: end})
+
+	_, err := svc.Update(ctx, userID, masterID, EventWrite{CalendarID: calendarID, Title: "Renamed", Start: start, End: end})
+	if !errors.Is(err, ErrSubscribedCalendarReadOnly) {
+		t.Fatalf("expected ErrSubscribedCalendarReadOnly, got %v", err)
+	}
+}
+
+func TestEventService_Delete_RejectsSubscribedCalendar(t *testing.T) {
+	svc, userID, _ := newTestEventService(t)
+	subCalendarID := newTestSubscribedCalendar(t, svc, userID)
+	ctx := context.Background()
+	start := time.Date(2026, 6, 1, 9, 0, 0, 0, time.UTC)
+
+	masterID := seedSubscribedEvent(t, svc, userID, subCalendarID, SeriesWrite{Title: "Standup", Start: start, End: start.Add(time.Hour)})
+
+	err := svc.Delete(ctx, userID, masterID)
+	if !errors.Is(err, ErrSubscribedCalendarReadOnly) {
+		t.Fatalf("expected ErrSubscribedCalendarReadOnly, got %v", err)
+	}
+}
+
+func TestEventService_AddException_RejectsSubscribedCalendar(t *testing.T) {
+	svc, userID, _ := newTestEventService(t)
+	subCalendarID := newTestSubscribedCalendar(t, svc, userID)
+	ctx := context.Background()
+	start := time.Date(2026, 6, 1, 9, 0, 0, 0, time.UTC)
+
+	masterID := seedSubscribedEvent(t, svc, userID, subCalendarID, SeriesWrite{Title: "Standup", Start: start, End: start.Add(time.Hour), Rrule: "FREQ=WEEKLY"})
+
+	err := svc.AddException(ctx, userID, masterID, start)
+	if !errors.Is(err, ErrSubscribedCalendarReadOnly) {
+		t.Fatalf("expected ErrSubscribedCalendarReadOnly, got %v", err)
+	}
+}
+
+func TestEventService_ReparentFrom_RejectsSubscribedCalendar(t *testing.T) {
+	svc, userID, _ := newTestEventService(t)
+	subCalendarID := newTestSubscribedCalendar(t, svc, userID)
+	ctx := context.Background()
+	start := time.Date(2026, 6, 1, 9, 0, 0, 0, time.UTC)
+
+	oldParentID := seedSubscribedEvent(t, svc, userID, subCalendarID, SeriesWrite{Title: "Old", Start: start, End: start.Add(time.Hour), Rrule: "FREQ=WEEKLY"})
+	newParentID := seedSubscribedEvent(t, svc, userID, subCalendarID, SeriesWrite{Title: "New", Start: start.AddDate(0, 0, 7), End: start.AddDate(0, 0, 7).Add(time.Hour)})
+
+	err := svc.ReparentFrom(ctx, userID, oldParentID, newParentID, start.AddDate(0, 0, 14))
+	if !errors.Is(err, ErrSubscribedCalendarReadOnly) {
+		t.Fatalf("expected ErrSubscribedCalendarReadOnly, got %v", err)
+	}
+}
+
+func TestEventService_ImportSeries_RejectsSubscribedCalendar(t *testing.T) {
+	svc, userID, _ := newTestEventService(t)
+	subCalendarID := newTestSubscribedCalendar(t, svc, userID)
+	ctx := context.Background()
+	start := time.Date(2026, 6, 1, 9, 0, 0, 0, time.UTC)
+
+	_, err := svc.ImportSeries(ctx, userID, subCalendarID, []SeriesWrite{{Title: "Standup", Start: start, End: start.Add(time.Hour)}})
+	if !errors.Is(err, ErrSubscribedCalendarReadOnly) {
+		t.Fatalf("expected ErrSubscribedCalendarReadOnly, got %v", err)
+	}
+}
+
+func TestEventService_PutSeries_RejectsSubscribedCalendar(t *testing.T) {
+	svc, userID, _ := newTestEventService(t)
+	subCalendarID := newTestSubscribedCalendar(t, svc, userID)
+	ctx := context.Background()
+	start := time.Date(2026, 6, 1, 9, 0, 0, 0, time.UTC)
+
+	_, _, err := svc.PutSeries(ctx, userID, subCalendarID, "evt-1", SeriesWrite{Title: "Standup", Start: start, End: start.Add(time.Hour)})
+	if !errors.Is(err, ErrSubscribedCalendarReadOnly) {
+		t.Fatalf("expected ErrSubscribedCalendarReadOnly, got %v", err)
+	}
+}
+
+// TestEventService_ImportSubscribedSeries_BypassesGuardAndWrites proves the
+// bypass ImportSeries' guard exists to force everything else through: the
+// exact write ImportSeries just refused above succeeds via
+// ImportSubscribedSeries.
+func TestEventService_ImportSubscribedSeries_BypassesGuardAndWrites(t *testing.T) {
+	svc, userID, _ := newTestEventService(t)
+	subCalendarID := newTestSubscribedCalendar(t, svc, userID)
+	ctx := context.Background()
+	start := time.Date(2026, 6, 1, 9, 0, 0, 0, time.UTC)
+
+	n, err := svc.ImportSubscribedSeries(ctx, userID, subCalendarID, []SeriesWrite{{Title: "Standup", Start: start, End: start.Add(time.Hour)}})
+	if err != nil {
+		t.Fatalf("import subscribed series: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("expected 1 series written, got %d", n)
+	}
+
+	events, err := svc.List(ctx, userID, nil, nil)
+	if err != nil {
+		t.Fatalf("list events: %v", err)
+	}
+	if len(events) != 1 || events[0].CalendarID != subCalendarID {
+		t.Fatalf("expected 1 event in the subscribed calendar, got %+v", events)
+	}
+}
+
+// TestEventService_ClearSubscribedCalendarReminders_RemovesAllAndBumpsChangeSeq
+// covers #87's immediate-turn-off behavior at the EventService layer: a
+// Master and an Override in the same series each carry a Reminder, and
+// clearing wipes both and bumps the Master's change_seq once so a CalDAV
+// client picks up the alarm-less object.
+func TestEventService_ClearSubscribedCalendarReminders_RemovesAllAndBumpsChangeSeq(t *testing.T) {
+	svc, userID, _ := newTestEventService(t)
+	subCalendarID := newTestSubscribedCalendar(t, svc, userID)
+	ctx := context.Background()
+	start := time.Date(2026, 6, 1, 9, 0, 0, 0, time.UTC)
+	rec := start.AddDate(0, 0, 7)
+
+	write := SeriesWrite{
+		Title: "Standup", Start: start, End: start.Add(time.Hour), Rrule: "FREQ=WEEKLY",
+		Reminders: []repository.Reminder{{OffsetMinutes: 10, Channel: "notification"}},
+		Overrides: []OverrideWrite{{
+			RecurrenceID: rec, Title: "Standup (moved)", Start: rec, End: rec.Add(time.Hour),
+			Reminders: []repository.Reminder{{OffsetMinutes: 15, Channel: "email"}},
+		}},
+	}
+	if _, err := svc.ImportSubscribedSeries(ctx, userID, subCalendarID, []SeriesWrite{write}); err != nil {
+		t.Fatalf("seed subscribed series: %v", err)
+	}
+
+	master, overridesByParent, err := svc.ListSeriesByCalendar(ctx, userID, subCalendarID)
+	if err != nil {
+		t.Fatalf("list series: %v", err)
+	}
+	if len(master) != 1 || len(master[0].Reminders) != 1 {
+		t.Fatalf("expected the seeded Master to carry 1 Reminder, got %+v", master)
+	}
+	override := overridesByParent[master[0].ID][0]
+	if len(override.Reminders) != 1 {
+		t.Fatalf("expected the seeded Override to carry 1 Reminder, got %+v", override)
+	}
+	changeSeqBefore := master[0].ChangeSeq
+
+	if err := svc.ClearSubscribedCalendarReminders(ctx, userID, subCalendarID); err != nil {
+		t.Fatalf("clear reminders: %v", err)
+	}
+
+	after, overridesAfter, err := svc.ListSeriesByCalendar(ctx, userID, subCalendarID)
+	if err != nil {
+		t.Fatalf("list series after clear: %v", err)
+	}
+	if len(after) != 1 || len(after[0].Reminders) != 0 {
+		t.Fatalf("expected the Master's Reminders cleared, got %+v", after)
+	}
+	if len(overridesAfter[after[0].ID][0].Reminders) != 0 {
+		t.Fatalf("expected the Override's Reminders cleared, got %+v", overridesAfter)
+	}
+	if after[0].ChangeSeq <= changeSeqBefore {
+		t.Fatalf("expected change_seq to bump (was %d, now %d)", changeSeqBefore, after[0].ChangeSeq)
+	}
+}
+
+func TestEventService_ClearSubscribedCalendarReminders_RejectsUnknownCalendar(t *testing.T) {
+	svc, userID, _ := newTestEventService(t)
+
+	err := svc.ClearSubscribedCalendarReminders(context.Background(), userID, "nope")
+	if !errors.Is(err, ErrCalendarNotFound) {
+		t.Fatalf("expected ErrCalendarNotFound, got %v", err)
+	}
+}
+
+func TestEventService_ReconcileSubscribedSeries_CreatesNewSeries(t *testing.T) {
+	svc, userID, _ := newTestEventService(t)
+	subCalendarID := newTestSubscribedCalendar(t, svc, userID)
+	ctx := context.Background()
+	start := time.Date(2026, 6, 1, 9, 0, 0, 0, time.UTC)
+
+	result := ReconcileResult{
+		Upserts: []SeriesUpsert{
+			{Write: SeriesWrite{Title: "Standup", Start: start, End: start.Add(time.Hour), ExternalUID: "uid-1"}},
+		},
+	}
+
+	summary, err := svc.ReconcileSubscribedSeries(ctx, userID, subCalendarID, result)
+	if err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if summary.Created != 1 || summary.Updated != 0 || summary.Tombstoned != 0 {
+		t.Fatalf("expected summary {1,0,0}, got %+v", summary)
+	}
+
+	masters, err := svc.events.ListMastersByCalendar(ctx, userID, subCalendarID)
+	if err != nil {
+		t.Fatalf("list masters: %v", err)
+	}
+	if len(masters) != 1 || masters[0].Title != "Standup" {
+		t.Fatalf("expected 1 created master, got %+v", masters)
+	}
+	if masters[0].ExternalUID == nil || *masters[0].ExternalUID != "uid-1" {
+		t.Fatalf("expected ExternalUID uid-1, got %v", masters[0].ExternalUID)
+	}
+}
+
+func TestEventService_ReconcileSubscribedSeries_UpdatesInPlaceKeepingMasterIDAndExternalUID(t *testing.T) {
+	svc, userID, _ := newTestEventService(t)
+	subCalendarID := newTestSubscribedCalendar(t, svc, userID)
+	ctx := context.Background()
+	start := time.Date(2026, 6, 1, 9, 0, 0, 0, time.UTC)
+
+	masterID := seedSubscribedEvent(t, svc, userID, subCalendarID, SeriesWrite{
+		Title: "Standup", Start: start, End: start.Add(time.Hour), ExternalUID: "uid-1",
+	})
+
+	result := ReconcileResult{
+		Upserts: []SeriesUpsert{
+			{MasterID: masterID, Write: SeriesWrite{Title: "Standup (renamed)", Start: start, End: start.Add(time.Hour), ExternalUID: "uid-1"}},
+		},
+	}
+
+	summary, err := svc.ReconcileSubscribedSeries(ctx, userID, subCalendarID, result)
+	if err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if summary.Updated != 1 || summary.Created != 0 {
+		t.Fatalf("expected summary {0,1,0}, got %+v", summary)
+	}
+
+	master, err := svc.events.GetByID(ctx, userID, masterID)
+	if err != nil {
+		t.Fatalf("get by id: %v", err)
+	}
+	if master.ID != masterID {
+		t.Fatalf("expected the same row id to be kept, got %q", master.ID)
+	}
+	if master.Title != "Standup (renamed)" {
+		t.Fatalf("expected the updated title, got %q", master.Title)
+	}
+	if master.ExternalUID == nil || *master.ExternalUID != "uid-1" {
+		t.Fatalf("expected ExternalUID to remain uid-1, got %v", master.ExternalUID)
+	}
+}
+
+func TestEventService_ReconcileSubscribedSeries_TombstonesAbsentSeries(t *testing.T) {
+	svc, userID, _ := newTestEventService(t)
+	subCalendarID := newTestSubscribedCalendar(t, svc, userID)
+	ctx := context.Background()
+	start := time.Date(2026, 6, 1, 9, 0, 0, 0, time.UTC)
+
+	masterID := seedSubscribedEvent(t, svc, userID, subCalendarID, SeriesWrite{
+		Title: "Standup", Start: start, End: start.Add(time.Hour), ExternalUID: "uid-1",
+	})
+
+	result := ReconcileResult{Tombstones: []string{masterID}}
+
+	summary, err := svc.ReconcileSubscribedSeries(ctx, userID, subCalendarID, result)
+	if err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if summary.Tombstoned != 1 {
+		t.Fatalf("expected summary {0,0,1}, got %+v", summary)
+	}
+
+	if _, err := svc.events.GetByID(ctx, userID, masterID); !errors.Is(err, repository.ErrNotFound) {
+		t.Fatalf("expected the tombstoned master to be gone, got %v", err)
+	}
+
+	deleted, err := svc.sync.DeletedSince(ctx, subCalendarID, 0)
+	if err != nil {
+		t.Fatalf("deleted since: %v", err)
+	}
+	if len(deleted) != 1 || deleted[0].UID != masterID {
+		t.Fatalf("expected a tombstone recording %q, got %+v", masterID, deleted)
+	}
+}
+
+func TestEventService_ReconcileSubscribedSeries_OverridesMatchedByRecurrenceID(t *testing.T) {
+	svc, userID, _ := newTestEventService(t)
+	subCalendarID := newTestSubscribedCalendar(t, svc, userID)
+	ctx := context.Background()
+	start := time.Date(2026, 6, 1, 9, 0, 0, 0, time.UTC)
+	rec := start.AddDate(0, 0, 7)
+
+	masterID := seedSubscribedEvent(t, svc, userID, subCalendarID, SeriesWrite{
+		Title: "Standup", Start: start, End: start.Add(time.Hour), Rrule: "FREQ=WEEKLY", ExternalUID: "uid-1",
+		Overrides: []OverrideWrite{
+			{RecurrenceID: rec, Title: "Standup (moved)", Start: rec.Add(time.Hour), End: rec.Add(2 * time.Hour), ExternalUID: "uid-1"},
+		},
+	})
+
+	result := ReconcileResult{
+		Upserts: []SeriesUpsert{{
+			MasterID: masterID,
+			Write: SeriesWrite{
+				Title: "Standup", Start: start, End: start.Add(time.Hour), Rrule: "FREQ=WEEKLY", ExternalUID: "uid-1",
+				Overrides: []OverrideWrite{
+					{RecurrenceID: rec, Title: "Standup (moved again)", Start: rec.Add(time.Hour), End: rec.Add(2 * time.Hour), ExternalUID: "uid-1"},
+				},
+			},
+		}},
+	}
+
+	if _, err := svc.ReconcileSubscribedSeries(ctx, userID, subCalendarID, result); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	_, overrides, err := svc.GetSeries(ctx, userID, masterID)
+	if err != nil {
+		t.Fatalf("get series: %v", err)
+	}
+	if len(overrides) != 1 || overrides[0].Title != "Standup (moved again)" {
+		t.Fatalf("expected the override updated in place, got %+v", overrides)
+	}
+}
+
+func TestEventService_ReconcileSubscribedSeries_RejectsInvalidTitle(t *testing.T) {
+	svc, userID, _ := newTestEventService(t)
+	subCalendarID := newTestSubscribedCalendar(t, svc, userID)
+	ctx := context.Background()
+	start := time.Date(2026, 6, 1, 9, 0, 0, 0, time.UTC)
+
+	result := ReconcileResult{
+		Upserts: []SeriesUpsert{{Write: SeriesWrite{Title: "  ", Start: start, End: start.Add(time.Hour), ExternalUID: "uid-1"}}},
+	}
+
+	_, err := svc.ReconcileSubscribedSeries(ctx, userID, subCalendarID, result)
+	if !errors.Is(err, ErrInvalidTitle) {
+		t.Fatalf("expected ErrInvalidTitle, got %v", err)
 	}
 }
