@@ -1,6 +1,6 @@
 # Calendar color is an arbitrary hex, not an enum; displayname joins it as settable
 
-Status: accepted — supersedes ADR-0028
+Status: accepted — supersedes ADR-0028; amended by ADR-0038 (colour gains a per-User override once Calendars can be shared)
 
 ADR-0028 exposed `calendar-color` over CalDAV but kept this app's fixed 8-value color enum as the domain type, snapping any client-supplied hex to the nearest enum member by RGB distance. It named the cost and deferred it: "Revisit if a client's exact color choice ever needs to survive unchanged."
 
