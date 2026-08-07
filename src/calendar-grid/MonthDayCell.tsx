@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { format } from "date-fns";
 import { occurrenceKey, type Occurrence } from "../lib/occurrence";
 import type { DraftBlock } from "../lib/gridTime";
-import { getCalendarById, isSubscribedCalendar } from "../lib/calendar";
+import { canWriteCalendarEvents, getCalendarById } from "../lib/calendar";
 import { getCalendarBlockStyle } from "../lib/calendarColors";
 import { useCalendarsStore } from "../lib/calendarsStore";
 import { useShellStore } from "../lib/shellStore";
@@ -101,17 +101,18 @@ export function MonthDayCell({
             occurrence.event.calendarId,
           );
           const blockStyle = getCalendarBlockStyle(calendar);
-          // A Subscribed Calendar's Occurrences don't drag (#84, ADR-0032) —
-          // the gesture below is never started for one, so its real mouse
-          // clicks fall through to the keyboard-only branch instead.
-          const isSubscribed = isSubscribedCalendar(calendar);
+          // An Occurrence on a Calendar the caller can't write doesn't drag
+          // (#111, ADR-0034) — the gesture below is never started for one,
+          // so its real mouse clicks fall through to the keyboard-only
+          // branch instead.
+          const isReadOnly = !canWriteCalendarEvents(calendar);
           return (
             <button
               key={occurrenceKey(occurrence)}
               type="button"
               onMouseDown={(domEvent) => {
                 domEvent.stopPropagation();
-                if (isSubscribed) return;
+                if (isReadOnly) return;
                 onOccurrenceDragStart(
                   occurrence,
                   domEvent.clientX,
@@ -123,7 +124,7 @@ export function MonthDayCell({
                 // Real mouse clicks are handled by the mousedown/mouseup
                 // drag-vs-click distance check started above; only keyboard
                 // activation (Enter/Space, event.detail === 0) reaches here.
-                if (domEvent.detail === 0 || isSubscribed) {
+                if (domEvent.detail === 0 || isReadOnly) {
                   onOccurrenceClick(occurrence);
                 }
               }}

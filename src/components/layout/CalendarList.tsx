@@ -3,7 +3,7 @@ import { formatDistanceToNow } from "date-fns";
 import { Download, Pencil, Plus, RefreshCw, Trash2, TriangleAlert } from "lucide-react";
 import { Checkbox } from "../ui/Checkbox";
 import { IconButton } from "../ui/IconButton";
-import type { Calendar } from "../../lib/calendar";
+import { canManageCalendar, type Calendar } from "../../lib/calendar";
 import { resolveCalendarFill, toOpaqueHex } from "../../lib/calendarColors";
 import { useAuthStore } from "../../lib/authStore";
 import { useCalendarsStore } from "../../lib/calendarsStore";
@@ -91,6 +91,11 @@ export function CalendarList() {
 
   function renderCalendarItem(calendar: Calendar) {
     const isSubscribed = Boolean(calendar.sourceUrl);
+    // Rename, recolour, download, refresh, and delete are Calendar
+    // management (#111, ADR-0034) — gated on ownership, un-clamped by the
+    // Subscription read-only rule, so the Owner of a Subscribed Calendar
+    // keeps every one of them.
+    const canManage = canManageCalendar(calendar);
     const isRefreshing = refreshingCalendarIds.has(calendar.id);
     const errorReason = subscriptionErrorReason(calendar);
     return (
@@ -123,7 +128,7 @@ export function CalendarList() {
             </span>
           )}
         </span>
-        {isSubscribed && (
+        {isSubscribed && canManage && (
           <IconButton
             size="tiny"
             onClick={() => handleRefresh(calendar)}
@@ -137,7 +142,7 @@ export function CalendarList() {
         {/* A Subscribed Calendar offers no per-Calendar download (#90,
             ADR-0032): its source URL is what actually carries it elsewhere,
             not a frozen snapshot a Refresh will overwrite anyway. */}
-        {!isSubscribed && (
+        {!isSubscribed && canManage && (
           <IconButton
             size="tiny"
             onClick={() => handleDownload(calendar)}
@@ -147,22 +152,26 @@ export function CalendarList() {
             <Download className="size-3.5" />
           </IconButton>
         )}
-        <IconButton
-          size="tiny"
-          onClick={() => setEditingCalendar(calendar)}
-          aria-label={`Edit ${calendar.name}`}
-          className="opacity-0 focus-visible:opacity-100 group-hover:opacity-100"
-        >
-          <Pencil className="size-3.5" />
-        </IconButton>
-        <IconButton
-          size="tiny"
-          onClick={() => setDeletingCalendarId(calendar.id)}
-          aria-label={isSubscribed ? `Unsubscribe from ${calendar.name}` : `Delete ${calendar.name}`}
-          className="opacity-0 focus-visible:opacity-100 group-hover:opacity-100"
-        >
-          <Trash2 className="size-3.5" />
-        </IconButton>
+        {canManage && (
+          <IconButton
+            size="tiny"
+            onClick={() => setEditingCalendar(calendar)}
+            aria-label={`Edit ${calendar.name}`}
+            className="opacity-0 focus-visible:opacity-100 group-hover:opacity-100"
+          >
+            <Pencil className="size-3.5" />
+          </IconButton>
+        )}
+        {canManage && (
+          <IconButton
+            size="tiny"
+            onClick={() => setDeletingCalendarId(calendar.id)}
+            aria-label={isSubscribed ? `Unsubscribe from ${calendar.name}` : `Delete ${calendar.name}`}
+            className="opacity-0 focus-visible:opacity-100 group-hover:opacity-100"
+          >
+            <Trash2 className="size-3.5" />
+          </IconButton>
+        )}
         <Checkbox
           checked={checkedCalendarIds.has(calendar.id)}
           onCheckedChange={() => toggleCalendarChecked(calendar.id)}

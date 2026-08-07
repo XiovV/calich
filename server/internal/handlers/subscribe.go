@@ -93,7 +93,7 @@ func (h *CalendarHandler) Subscribe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	httpresponse.JSON(w, http.StatusCreated, toCalendarResponse(calendar))
+	h.respondWithOwnership(w, r, http.StatusCreated, userID, calendar, "failed to subscribe to calendar")
 }
 
 var subscriptionRefreshErrors = []errorCase{

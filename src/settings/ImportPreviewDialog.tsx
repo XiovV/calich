@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { format } from "date-fns";
 import { Dialog } from "@base-ui/react/dialog";
-import { isSubscribedCalendar, type Calendar } from "../lib/calendar";
+import { canWriteCalendarEvents, type Calendar } from "../lib/calendar";
 import type { ImportFileSummary, ImportSummary, ImportTarget } from "../lib/importApi";
 import { formatImportSummaryLine, formatReminderLine, summarizeImport } from "../lib/importSummary";
 import { Button } from "../components/ui/Button";
@@ -72,10 +72,11 @@ export function ImportPreviewDialog({
 }: ImportPreviewDialogProps) {
   const [drafts, setDrafts] = useState<EntryDraft[]>(() => initialDrafts(summary.files));
 
-  // A Subscribed Calendar's Events are written only by Refresh's bypass
-  // (#84, ADR-0032), so it's never a valid "existing calendar" import
-  // target.
-  const writableCalendars = calendars.filter((calendar) => !isSubscribedCalendar(calendar));
+  // Only a Calendar the caller may write Events to is a valid "existing
+  // calendar" import target (#111, ADR-0034) — a Subscribed Calendar
+  // (written only by Refresh's bypass, #84, ADR-0032) and a Calendar the
+  // caller has no more than Viewer Access to both fall out of this.
+  const writableCalendars = calendars.filter((calendar) => canWriteCalendarEvents(calendar));
 
   const totals = summarizeImport(summary);
   const summaryLine = formatImportSummaryLine(totals);

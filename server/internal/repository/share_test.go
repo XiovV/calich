@@ -147,6 +147,31 @@ func TestCalendarShareRepository_ListByCalendarWithUsername(t *testing.T) {
 	}
 }
 
+func TestCalendarShareRepository_CountByCalendar(t *testing.T) {
+	repo, _, otherID, calendarID := newTestCalendarShareRepository(t)
+	ctx := context.Background()
+
+	count, err := repo.CountByCalendar(ctx, calendarID)
+	if err != nil {
+		t.Fatalf("count by calendar: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("count = %d, want 0 before any share", count)
+	}
+
+	if _, err := repo.Upsert(ctx, calendarID, otherID, RoleEditor); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+
+	count, err = repo.CountByCalendar(ctx, calendarID)
+	if err != nil {
+		t.Fatalf("count by calendar: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("count = %d, want 1 after one share", count)
+	}
+}
+
 func TestCalendarShareRepository_CascadesOnCalendarDelete(t *testing.T) {
 	ctx := context.Background()
 

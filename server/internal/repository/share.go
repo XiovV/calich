@@ -78,6 +78,20 @@ func (r *CalendarShareRepository) Delete(ctx context.Context, calendarID string,
 	return requireAffected(res)
 }
 
+// CountByCalendar returns how many Shares calendarID carries — the "would
+// more than one person be notified" question a Calendar response's
+// shareCount field answers (#111), independent of ListByCalendarWithUsername's
+// Owner-only listing.
+func (r *CalendarShareRepository) CountByCalendar(ctx context.Context, calendarID string) (int, error) {
+	var count int
+	if err := r.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM calendar_shares WHERE calendar_id = ?`, calendarID,
+	).Scan(&count); err != nil {
+		return 0, fmt.Errorf("count calendar shares: %w", err)
+	}
+	return count, nil
+}
+
 // CalendarShareWithUsername pairs a Share with the Username of the User it
 // grants Access to — ListByCalendarWithUsername's row, since an Owner
 // reviewing who has Access to their Calendar wants to see a Username, not

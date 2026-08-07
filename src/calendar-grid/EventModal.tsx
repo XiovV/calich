@@ -23,7 +23,12 @@ import {
   parseCustomRule,
   summarizeCustomRule,
 } from "../lib/customRecurrence";
-import { getCalendarById, getCheckedCalendars, isSubscribedCalendar } from "../lib/calendar";
+import {
+  calendarReadOnlyReason,
+  canWriteCalendarEvents,
+  getCalendarById,
+  getCheckedCalendars,
+} from "../lib/calendar";
 import { useShellStore } from "../lib/shellStore";
 import { useEventsStore } from "../lib/eventsStore";
 import { useCalendarsStore } from "../lib/calendarsStore";
@@ -146,10 +151,12 @@ export function EventModal(props: EventModalProps) {
       (master.exdates?.length ?? 0) > 0);
 
   const eventForOptions = mode === "edit" ? props.occurrence.event : undefined;
-  // A Subscribed Calendar is never a valid write target — Refresh is its
-  // only legitimate writer (#84, ADR-0032) — so it never appears as a
-  // Calendar picker option, whether checked or not.
-  const writableCalendars = calendars.filter((c) => !isSubscribedCalendar(c));
+  // Only a Calendar the caller may write Events to is a valid write target
+  // (#111, ADR-0034) — a Subscribed Calendar (Refresh is its only
+  // legitimate writer, #84, ADR-0032) and a Calendar the caller has no more
+  // than Viewer Access to both never appear as Calendar picker options,
+  // whether checked or not.
+  const writableCalendars = calendars.filter((c) => canWriteCalendarEvents(c));
   const checkedCalendars = getCheckedCalendars(writableCalendars, checkedCalendarIds);
   // An event's calendar may have been unchecked (hidden) since it was created —
   // still include it as an option so its current selection isn't silently lost.
@@ -161,13 +168,17 @@ export function EventModal(props: EventModalProps) {
         ]
       : checkedCalendars;
 
-  // An Occurrence whose own Calendar is Subscribed can't be saved or deleted
-  // — every write to it is refused server-side (#84, ADR-0032) — so the form
-  // offers neither affordance rather than letting Save/Delete fail.
+  // An Occurrence whose own Calendar the caller can't write can't be saved
+  // or deleted — every write to it is refused server-side (#111, ADR-0034)
+  // — so the form offers neither affordance rather than letting Save/Delete
+  // fail. readOnlyReason distinguishes why, for copy only (#111): a
+  // subscriber already knows their feed is read-only; a Viewer without an
+  // Owner's context does not (#109).
   const editedCalendar = eventForOptions
     ? getCalendarById(calendars, eventForOptions.calendarId)
     : undefined;
-  const isSubscribedEvent = isSubscribedCalendar(editedCalendar);
+  const isReadOnlyEvent = !canWriteCalendarEvents(editedCalendar);
+  const readOnlyReason = calendarReadOnlyReason(editedCalendar);
 
   const [initial] = useState(() =>
     deriveInitialFormState(props, master, checkedCalendars[0]?.id ?? ""),
@@ -255,7 +266,7 @@ export function EventModal(props: EventModalProps) {
   const isTimeRangeValid =
     allDay || timeStringToDate(day, endTime) > timeStringToDate(day, startTime);
   const canSave =
-    !isSubscribedEvent && title.trim() !== "" && calendarId !== "" && isTimeRangeValid;
+    !isReadOnlyEvent && title.trim() !== "" && calendarId !== "" && isTimeRangeValid;
 
   function handleSave() {
     if (!canSave) return;
@@ -438,7 +449,7 @@ export function EventModal(props: EventModalProps) {
               value={title}
               onChange={(event) => setTitle(event.target.value)}
               placeholder="Add title"
-              disabled={isSubscribedEvent}
+              disabled={isReadOnlyEvent}
               className="mt-4"
             />
 
@@ -447,7 +458,7 @@ export function EventModal(props: EventModalProps) {
               value={location}
               onChange={(event) => setLocation(event.target.value)}
               placeholder="Add location"
-              disabled={isSubscribedEvent}
+              disabled={isReadOnlyEvent}
               className="mt-4"
             />
 
@@ -456,7 +467,7 @@ export function EventModal(props: EventModalProps) {
               value={description}
               onChange={(event) => setDescription(event.target.value)}
               placeholder="Add description"
-              disabled={isSubscribedEvent}
+              disabled={isReadOnlyEvent}
               className="mt-4"
             />
 
@@ -465,7 +476,7 @@ export function EventModal(props: EventModalProps) {
                 checked={allDay}
                 onCheckedChange={setAllDay}
                 aria-label="All day"
-                disabled={isSubscribedEvent}
+                disabled={isReadOnlyEvent}
               />
               All day
             </label>
@@ -479,7 +490,7 @@ export function EventModal(props: EventModalProps) {
                     value={startTime}
                     onChange={(event) => setStartTime(event.target.value)}
                     invalid={!isTimeRangeValid}
-                    disabled={isSubscribedEvent}
+                    disabled={isReadOnlyEvent}
                     className="flex-1"
                   />
                   <Input
@@ -488,7 +499,7 @@ export function EventModal(props: EventModalProps) {
                     value={endTime}
                     onChange={(event) => setEndTime(event.target.value)}
                     invalid={!isTimeRangeValid}
-                    disabled={isSubscribedEvent}
+                    disabled={isReadOnlyEvent}
                     className="flex-1"
                   />
                 </div>
@@ -501,10 +512,11 @@ export function EventModal(props: EventModalProps) {
             )}
 
             <div className="mt-4">
-              {isSubscribedEvent && editedCalendar ? (
+              {isReadOnlyEvent && editedCalendar ? (
                 <p className="text-label-sm text-ink-muted">
-                  Calendar: {editedCalendar.name} (subscribed) — read-only;
-                  only Refresh can update it.
+                  {readOnlyReason === "subscription"
+                    ? `Calendar: ${editedCalendar.name} (subscribed) — read-only; only Refresh can update it.`
+                    : `Calendar: ${editedCalendar.name} — read-only; you have Viewer access.`}
                 </p>
               ) : (
                 <Select
@@ -525,9 +537,9 @@ export function EventModal(props: EventModalProps) {
                 value={repeat}
                 onValueChange={handleRepeatChange}
                 options={repeatOptions}
-                disabled={isSubscribedEvent}
+                disabled={isReadOnlyEvent}
               />
-              {repeat === "custom" && !isSubscribedEvent && (
+              {repeat === "custom" && !isReadOnlyEvent && (
                 <button
                   type="button"
                   onClick={() => setIsCustomDialogOpen(true)}
@@ -548,11 +560,11 @@ export function EventModal(props: EventModalProps) {
                     emailAvailable={emailAvailable}
                     onChange={(next) => handleReminderChange(reminder.draftId, next)}
                     onRemove={() => handleRemoveReminder(reminder.draftId)}
-                    disabled={isSubscribedEvent}
+                    disabled={isReadOnlyEvent}
                   />
                 ))}
               </div>
-              {!isSubscribedEvent && (
+              {!isReadOnlyEvent && (
                 <button
                   type="button"
                   onClick={handleAddReminder}
@@ -564,7 +576,7 @@ export function EventModal(props: EventModalProps) {
             </div>
 
             <div className="mt-5 flex items-center justify-between gap-2">
-              {mode === "edit" && !isSubscribedEvent ? (
+              {mode === "edit" && !isReadOnlyEvent ? (
                 <Button
                   variant="outline"
                   color="danger"
@@ -577,7 +589,7 @@ export function EventModal(props: EventModalProps) {
                 <span />
               )}
               <div className="flex gap-2">
-                {isSubscribedEvent ? (
+                {isReadOnlyEvent ? (
                   <Dialog.Close
                     className={buttonClasses({
                       variant: "outline",

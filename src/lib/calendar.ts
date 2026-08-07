@@ -2,6 +2,20 @@ export interface Calendar {
   id: string;
   name: string;
   color: string;
+  // access is the caller's resolved Access to this Calendar (ADR-0034):
+  // "owner", "editor", or "viewer". Gates Event writes — see
+  // canWriteCalendarEvents. Deliberately lossy about ownership: a
+  // Subscribed Calendar clamps its Owner's access to "viewer" too (#111).
+  access?: "owner" | "editor" | "viewer";
+  // isOwner is un-clamped ownership (#111) — true for the Owner even of a
+  // Subscribed Calendar, whose access above reads "viewer". The only
+  // correct basis for gating Calendar management — see canManageCalendar.
+  isOwner?: boolean;
+  // ownerUsername is the Calendar's Owner's username, for display (#111).
+  ownerUsername?: string;
+  // shareCount is how many Shares the Calendar carries — whether more than
+  // one person would be notified by a change to it (#111).
+  shareCount?: number;
   // sourceUrl is set only on a Subscribed Calendar (#83) — an ordinary
   // Calendar has none. Always masked when it carries a password.
   sourceUrl?: string;
@@ -48,4 +62,39 @@ export function getCheckedCalendars(
 // asking this.
 export function isSubscribedCalendar(calendar: Calendar | undefined): boolean {
   return Boolean(calendar?.sourceUrl);
+}
+
+// canWriteCalendarEvents reports whether the caller may create, edit, and
+// delete calendar's Events (#111, ADR-0034) — derived from access, never
+// from isSubscribedCalendar. A Subscribed Calendar's read-only-ness folds
+// in for free: the server already clamps its Access to "viewer" for Owner
+// and Editor alike (ADR-0032). Accepts undefined the same way
+// isSubscribedCalendar does, and treats a Calendar with no resolved access
+// as unwritable rather than assuming permissive defaults.
+export function canWriteCalendarEvents(calendar: Calendar | undefined): boolean {
+  return calendar?.access === "editor" || calendar?.access === "owner";
+}
+
+// canManageCalendar reports whether the caller may manage calendar itself —
+// rename, recolour, download, delete, Subscription editing, refresh, and
+// sharing (#111, ADR-0034). Derived from isOwner, never from access: a
+// Subscribed Calendar's Owner keeps every one of these even though their
+// access reads "viewer" — the trap this predicate exists to avoid.
+export function canManageCalendar(calendar: Calendar | undefined): boolean {
+  return Boolean(calendar?.isOwner);
+}
+
+// CalendarReadOnlyReason explains why an unwritable Calendar's Events can't
+// be written — for copy only (e.g. the Event dialog's explanation), never
+// for gating (#111). "subscription" wins over "viewer" when a Calendar is
+// both, since a subscriber already knows their feed is read-only in a way
+// a Viewer without an Owner's context does not (#109).
+export type CalendarReadOnlyReason = "subscription" | "viewer" | undefined;
+
+export function calendarReadOnlyReason(
+  calendar: Calendar | undefined,
+): CalendarReadOnlyReason {
+  if (canWriteCalendarEvents(calendar)) return undefined;
+  if (isSubscribedCalendar(calendar)) return "subscription";
+  return "viewer";
 }

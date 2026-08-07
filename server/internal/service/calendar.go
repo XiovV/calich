@@ -118,6 +118,20 @@ type CalendarWithAccess struct {
 	// sees"; c.Calendar.Color remains reachable for a caller that
 	// specifically wants the Owner's raw stored value.
 	Color string
+	// IsOwner is un-clamped ownership (calendar.UserID == caller), unlike
+	// Access.IsOwner() which is false for the Owner of a Subscribed
+	// Calendar once ResolveAccess clamps their Access to Viewer (#111,
+	// ADR-0034). It's the only correct basis for gating Calendar
+	// management — rename, recolour, delete, share, refresh, Subscription
+	// editing — so that clamp doesn't cost an Owner control of their own
+	// Calendar.
+	IsOwner bool
+	// OwnerUsername is the Calendar's Owner's Username, for display — a
+	// non-Owner may not call ListShares to derive it themselves (#111).
+	OwnerUsername string
+	// ShareCount is how many Shares the Calendar carries — what tells a
+	// caller whether more than one person would be notified (#111).
+	ShareCount int
 }
 
 // ListAccessible returns every Calendar userID has any Access to — owned
@@ -141,7 +155,11 @@ func (s *CalendarService) ListAccessible(ctx context.Context, userID int64) ([]C
 		if err != nil {
 			return nil, err
 		}
-		result = append(result, CalendarWithAccess{Calendar: c, Access: ResolveAccess(userID, c, nil), Color: color})
+		isOwner, ownerUsername, shareCount, err := s.OwnershipMeta(ctx, userID, c)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, CalendarWithAccess{Calendar: c, Access: ResolveAccess(userID, c, nil), Color: color, IsOwner: isOwner, OwnerUsername: ownerUsername, ShareCount: shareCount})
 	}
 	for _, c := range shared {
 		role := c.Role
@@ -149,7 +167,11 @@ func (s *CalendarService) ListAccessible(ctx context.Context, userID int64) ([]C
 		if err != nil {
 			return nil, err
 		}
-		result = append(result, CalendarWithAccess{Calendar: c.Calendar, Access: ResolveAccess(userID, c.Calendar, &role), Color: color})
+		isOwner, ownerUsername, shareCount, err := s.OwnershipMeta(ctx, userID, c.Calendar)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, CalendarWithAccess{Calendar: c.Calendar, Access: ResolveAccess(userID, c.Calendar, &role), Color: color, IsOwner: isOwner, OwnerUsername: ownerUsername, ShareCount: shareCount})
 	}
 
 	sort.Slice(result, func(i, j int) bool {
@@ -192,7 +214,29 @@ func (s *CalendarService) AccessWithColor(ctx context.Context, userID int64, id 
 	if err != nil {
 		return CalendarWithAccess{}, err
 	}
-	return CalendarWithAccess{Calendar: calendar, Access: access, Color: color}, nil
+	isOwner, ownerUsername, shareCount, err := s.OwnershipMeta(ctx, userID, calendar)
+	if err != nil {
+		return CalendarWithAccess{}, err
+	}
+	return CalendarWithAccess{Calendar: calendar, Access: access, Color: color, IsOwner: isOwner, OwnerUsername: ownerUsername, ShareCount: shareCount}, nil
+}
+
+// OwnershipMeta resolves calendar's un-clamped ownership answer for userID
+// (calendar.UserID == userID — never Access.IsOwner(), which a Subscription
+// clamps to false, #111), the Calendar's Owner's Username, and its Share
+// count. Every REST Calendar response resolves these here, so a caller
+// never has to re-derive ownership from Access, which is deliberately lossy
+// about it (ADR-0034).
+func (s *CalendarService) OwnershipMeta(ctx context.Context, userID int64, calendar repository.Calendar) (isOwner bool, ownerUsername string, shareCount int, err error) {
+	owner, err := s.users.GetByID(ctx, calendar.UserID)
+	if err != nil {
+		return false, "", 0, fmt.Errorf("get calendar owner: %w", err)
+	}
+	shareCount, err = s.shares.CountByCalendar(ctx, calendar.ID)
+	if err != nil {
+		return false, "", 0, fmt.Errorf("count calendar shares: %w", err)
+	}
+	return calendar.UserID == userID, owner.Username, shareCount, nil
 }
 
 // requireRead resolves calendarID and refuses it unless userID has at least

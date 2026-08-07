@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useState } from "react";
-import { getCalendarById, isSubscribedCalendar } from "../lib/calendar";
+import { canWriteCalendarEvents, getCalendarById } from "../lib/calendar";
 import { useCalendarsStore } from "../lib/calendarsStore";
 import { useEventsStore } from "../lib/eventsStore";
 import { isRecurringOccurrence, seriesEditChanges, type Occurrence } from "../lib/occurrence";
@@ -32,11 +32,11 @@ export function useOccurrenceDragCommit() {
   const commit = useCallback(
     (occurrence: Occurrence, start: Date, end: Date) => {
       // Belt-and-suspenders: every drag/resize gesture is already refused
-      // to start on a Subscribed Calendar's Occurrence (#84, ADR-0032), but
-      // this is the one place an actual write would happen if that ever
-      // slipped, so it's guarded here too.
+      // to start on an Occurrence whose Calendar the caller can't write
+      // (#111, ADR-0034), but this is the one place an actual write would
+      // happen if that ever slipped, so it's guarded here too.
       const calendar = getCalendarById(calendars, occurrence.event.calendarId);
-      if (isSubscribedCalendar(calendar)) return;
+      if (!canWriteCalendarEvents(calendar)) return;
 
       if (isRecurringOccurrence(occurrence)) {
         setPending({ occurrence, start, end });

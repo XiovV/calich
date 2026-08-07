@@ -25,8 +25,10 @@ interface ReminderRowProps {
   emailAvailable: boolean;
   onChange: (reminder: Reminder) => void;
   onRemove: () => void;
-  // A Subscribed Event's Reminders are still legible but not editable (#94,
-  // ADR-0032) — Refresh is the collection's only legitimate writer.
+  // A read-only Event's Reminders are still legible but not editable (#94,
+  // #111, ADR-0032, ADR-0034) — a Subscribed Calendar's Refresh is the
+  // collection's only legitimate writer, and a Calendar the caller has no
+  // more than Viewer Access to isn't theirs to edit either.
   disabled?: boolean;
 }
 

@@ -1,7 +1,7 @@
 import type { OccurrenceLayout } from "../lib/layoutOverlappingEvents";
 import type { Occurrence } from "../lib/occurrence";
 import { durationToHeight, timeToY } from "../lib/gridTime";
-import { getCalendarById, isSubscribedCalendar } from "../lib/calendar";
+import { canWriteCalendarEvents, getCalendarById } from "../lib/calendar";
 import { getCalendarBlockStyle } from "../lib/calendarColors";
 import { useCalendarsStore } from "../lib/calendarsStore";
 import { columnLayoutToBox } from "../lib/eventBlockGeometry";
@@ -35,11 +35,12 @@ export function EventBlock({
   const calendars = useCalendarsStore((state) => state.calendars);
   const calendar = getCalendarById(calendars, event.calendarId);
   const blockStyle = getCalendarBlockStyle(calendar);
-  // A Subscribed Calendar's Occurrences are read-only (#84, ADR-0032): no
-  // drag-to-move, no resize handles. The gesture is never started at all
-  // rather than started and silently discarded, so no drag preview flashes
-  // and snaps back.
-  const isSubscribed = isSubscribedCalendar(calendar);
+  // A Calendar's Occurrences are read-only unless the caller may write its
+  // Events (#111, ADR-0034) — Viewer Access or a Subscription both resolve
+  // here. No drag-to-move, no resize handles: the gesture is never started
+  // at all rather than started and silently discarded, so no drag preview
+  // flashes and snaps back.
+  const isReadOnly = !canWriteCalendarEvents(calendar);
 
   const top = timeToY(occurrence.start, pixelsPerHour);
   const height = durationToHeight(occurrence.start, occurrence.end, pixelsPerHour);
@@ -58,7 +59,7 @@ export function EventBlock({
       type="button"
       onMouseDown={(domEvent) => {
         domEvent.stopPropagation();
-        if (isSubscribed) return;
+        if (isReadOnly) return;
         onDragStart(occurrence, "move", domEvent.clientX, domEvent.clientY);
       }}
       onClick={(domEvent) => {
@@ -66,9 +67,9 @@ export function EventBlock({
         // and unset programmatic dispatches, but >=1 for real mouse clicks —
         // mouse clicks are already handled by the mousedown/mouseup drag-vs-click
         // distance check in TimeGrid, so only keyboard activation reaches here.
-        // A Subscribed Occurrence never starts that drag-vs-click gesture
+        // A read-only Occurrence never starts that drag-vs-click gesture
         // above, so its real mouse clicks fall through to here too.
-        if (domEvent.detail === 0 || isSubscribed) {
+        if (domEvent.detail === 0 || isReadOnly) {
           onOccurrenceClick(occurrence);
         }
       }}
@@ -80,7 +81,7 @@ export function EventBlock({
         width: `calc(${width}% - 2px)`,
       }}
     >
-      {!isSubscribed && (
+      {!isReadOnly && (
         <div
           onMouseDown={(domEvent) => handleEdgeMouseDown(domEvent, "resize-start")}
           className="absolute inset-x-0 top-0 z-10 h-1.5 cursor-ns-resize"
@@ -93,7 +94,7 @@ export function EventBlock({
         blockStyle={blockStyle}
         isPast={isPast}
       />
-      {!isSubscribed && (
+      {!isReadOnly && (
         <div
           onMouseDown={(domEvent) => handleEdgeMouseDown(domEvent, "resize-end")}
           className="absolute inset-x-0 bottom-0 z-10 h-1.5 cursor-ns-resize"

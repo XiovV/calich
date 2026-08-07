@@ -187,6 +187,56 @@ func TestCalendarHandler_List_CarriesAccess(t *testing.T) {
 	}
 }
 
+// TestCalendarHandler_List_CarriesOwnershipMeta covers #111's acceptance
+// criteria: List and Get responses carry isOwner, ownerUsername and
+// shareCount, and isOwner stays true for the Owner of a Subscribed Calendar
+// even though the Subscription clamps their Access to Viewer.
+func TestCalendarHandler_List_CarriesOwnershipMeta(t *testing.T) {
+	s := newShareTestServer(t)
+
+	shareResp := doJSON(t, http.MethodPost, s.baseURL+"/api/calendars/"+s.calendarID+"/shares", s.ownerToken, shareRequest{Username: "other", Role: repository.RoleViewer})
+	shareResp.Body.Close()
+
+	ownerList, err := authenticatedGet(s.baseURL+"/api/calendars/", s.ownerToken)
+	if err != nil {
+		t.Fatalf("owner list: %v", err)
+	}
+	defer ownerList.Body.Close()
+	var ownerCalendars []calendarResponse
+	if err := json.NewDecoder(ownerList.Body).Decode(&ownerCalendars); err != nil {
+		t.Fatalf("decode owner list: %v", err)
+	}
+	if len(ownerCalendars) != 1 || !ownerCalendars[0].IsOwner || ownerCalendars[0].OwnerUsername != "owner" || ownerCalendars[0].ShareCount != 1 {
+		t.Fatalf("unexpected owner list: %+v", ownerCalendars)
+	}
+
+	otherList, err := authenticatedGet(s.baseURL+"/api/calendars/", s.otherToken)
+	if err != nil {
+		t.Fatalf("other list: %v", err)
+	}
+	defer otherList.Body.Close()
+	var otherCalendars []calendarResponse
+	if err := json.NewDecoder(otherList.Body).Decode(&otherCalendars); err != nil {
+		t.Fatalf("decode other list: %v", err)
+	}
+	if len(otherCalendars) != 1 || otherCalendars[0].IsOwner || otherCalendars[0].OwnerUsername != "owner" || otherCalendars[0].ShareCount != 1 {
+		t.Fatalf("unexpected shared-with list: %+v", otherCalendars)
+	}
+
+	otherGet, err := authenticatedGet(s.baseURL+"/api/calendars/"+s.calendarID, s.otherToken)
+	if err != nil {
+		t.Fatalf("other get: %v", err)
+	}
+	defer otherGet.Body.Close()
+	var otherGetBody calendarResponse
+	if err := json.NewDecoder(otherGet.Body).Decode(&otherGetBody); err != nil {
+		t.Fatalf("decode other get: %v", err)
+	}
+	if otherGetBody.IsOwner || otherGetBody.OwnerUsername != "owner" {
+		t.Fatalf("unexpected single-calendar response for a Viewer: %+v", otherGetBody)
+	}
+}
+
 // TestCalendarHandler_List_And_Get_ResolveColorPerCaller covers ADR-0038's
 // "effective colour returned with every Calendar": a User's own colour
 // override — set here directly through the service, since the REST API
