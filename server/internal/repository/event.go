@@ -65,6 +65,10 @@ type Event struct {
 	// deleted (ON DELETE SET NULL), or for rows written before this column
 	// existed.
 	CreatedBy *int64
+	// CreatedByUsername is CreatedBy's Username, for display (#118). Not a
+	// column — populated by the service layer from users, mirroring how
+	// Exdates and Reminders are attached. Empty whenever CreatedBy is nil.
+	CreatedByUsername string
 }
 
 type EventRepository struct {

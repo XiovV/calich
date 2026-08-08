@@ -58,7 +58,7 @@ func main() {
 	colorOverrideRepo := repository.NewCalendarUserColorRepository(sqlDB)
 	authService := service.NewAuthService(users, sessions, jwtSecret, cfg.InitialUsername, cfg.InitialPassword)
 	calendarService := service.NewCalendarService(calendarRepo, shareRepo, users, reminderOverrideRepo, colorOverrideRepo)
-	eventService := service.NewEventService(sqlDB, repository.NewEventRepository(sqlDB), repository.NewEventExceptionRepository(sqlDB), repository.NewEventReminderRepository(sqlDB), reminderOverrideRepo, repository.NewSyncRepository(sqlDB), calendarService)
+	eventService := service.NewEventService(sqlDB, repository.NewEventRepository(sqlDB), repository.NewEventExceptionRepository(sqlDB), repository.NewEventReminderRepository(sqlDB), reminderOverrideRepo, repository.NewSyncRepository(sqlDB), calendarService, users)
 	notificationRepo := repository.NewNotificationRepository(sqlDB)
 	notificationService := service.NewNotificationService(notificationRepo)
 	appPasswordService := service.NewAppPasswordService(repository.NewAppPasswordRepository(sqlDB), users)

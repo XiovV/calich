@@ -26,20 +26,22 @@ import (
 // response — the server exclusively writes them. Keeping it here stops
 // handlers/event.go carrying a code path production never executes.
 type decodedEvent struct {
-	ID           string
-	CalendarID   string
-	Title        string
-	Start        time.Time
-	End          time.Time
-	AllDay       bool
-	Rrule        string
-	ParentID     *string
-	RecurrenceID *time.Time
-	Exdates      []time.Time
-	Tzid         *string
-	Reminders    []reminderWire
-	Description  string
-	Location     string
+	ID                string
+	CalendarID        string
+	Title             string
+	Start             time.Time
+	End               time.Time
+	AllDay            bool
+	Rrule             string
+	ParentID          *string
+	RecurrenceID      *time.Time
+	Exdates           []time.Time
+	Tzid              *string
+	Reminders         []reminderWire
+	Description       string
+	Location          string
+	CreatedBy         *int64
+	CreatedByUsername string
 }
 
 func (d *decodedEvent) UnmarshalJSON(data []byte) error {
@@ -56,20 +58,22 @@ func (d *decodedEvent) UnmarshalJSON(data []byte) error {
 		return fmt.Errorf("invalid end: %w", err)
 	}
 	*d = decodedEvent{
-		ID:           wire.ID,
-		CalendarID:   wire.CalendarID,
-		Title:        wire.Title,
-		Start:        start,
-		End:          end,
-		AllDay:       wire.AllDay,
-		Rrule:        wire.Rrule,
-		ParentID:     wire.ParentID,
-		RecurrenceID: wire.RecurrenceID,
-		Exdates:      wire.Exdates,
-		Tzid:         wire.Tzid,
-		Reminders:    wire.Reminders,
-		Description:  wire.Description,
-		Location:     wire.Location,
+		ID:                wire.ID,
+		CalendarID:        wire.CalendarID,
+		Title:             wire.Title,
+		Start:             start,
+		End:               end,
+		AllDay:            wire.AllDay,
+		Rrule:             wire.Rrule,
+		ParentID:          wire.ParentID,
+		RecurrenceID:      wire.RecurrenceID,
+		Exdates:           wire.Exdates,
+		Tzid:              wire.Tzid,
+		Reminders:         wire.Reminders,
+		Description:       wire.Description,
+		Location:          wire.Location,
+		CreatedBy:         wire.CreatedBy,
+		CreatedByUsername: wire.CreatedByUsername,
 	}
 	return nil
 }
@@ -116,7 +120,7 @@ func newEventTestServerWithServices(t *testing.T) (baseURL, accessToken, calenda
 		t.Fatalf("create calendar: %v", err)
 	}
 
-	events = service.NewEventService(sqlDB, repository.NewEventRepository(sqlDB), repository.NewEventExceptionRepository(sqlDB), repository.NewEventReminderRepository(sqlDB), repository.NewReminderOverrideRepository(sqlDB), repository.NewSyncRepository(sqlDB), calendars)
+	events = service.NewEventService(sqlDB, repository.NewEventRepository(sqlDB), repository.NewEventExceptionRepository(sqlDB), repository.NewEventReminderRepository(sqlDB), repository.NewReminderOverrideRepository(sqlDB), repository.NewSyncRepository(sqlDB), calendars, users)
 	eventHandler := NewEventHandler(events)
 
 	r := chi.NewRouter()
@@ -353,6 +357,49 @@ func TestEventHandler_RoundTripsDescriptionAndLocation(t *testing.T) {
 	json.NewDecoder(updateResp.Body).Decode(&updated)
 	if updated.Description != "Updated sync notes" || updated.Location != "Room 5" {
 		t.Fatalf("expected updated description/location to round-trip, got %+v", updated)
+	}
+}
+
+// TestEventHandler_RoundTripsCreatorAttribution is #118's REST-facing check:
+// create, get and list all carry the creator's id and username, resolved
+// from the accompanying repository.User rather than dropped by
+// toEventResponse.
+func TestEventHandler_RoundTripsCreatorAttribution(t *testing.T) {
+	baseURL, accessToken, calendarID, userID, _, _ := newEventTestServerWithServices(t)
+
+	createResp := postJSON(t, baseURL, accessToken, "/api/events/", createEventRequest{
+		ID:         "22222222-2222-2222-2222-222222222222",
+		CalendarID: calendarID,
+		Title:      "Standup",
+		Start:      "2026-01-01T09:00:00Z",
+		End:        "2026-01-01T10:00:00Z",
+	})
+	var created decodedEvent
+	json.NewDecoder(createResp.Body).Decode(&created)
+	if created.CreatedBy == nil || *created.CreatedBy != userID || created.CreatedByUsername != "alice" {
+		t.Fatalf("expected creator attribution to alice (%d), got %+v", userID, created)
+	}
+
+	getResp, err := authenticatedGet(baseURL+"/api/events/"+created.ID, accessToken)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	defer getResp.Body.Close()
+	var fetched decodedEvent
+	json.NewDecoder(getResp.Body).Decode(&fetched)
+	if fetched.CreatedBy == nil || *fetched.CreatedBy != userID || fetched.CreatedByUsername != "alice" {
+		t.Fatalf("expected fetched creator attribution to alice (%d), got %+v", userID, fetched)
+	}
+
+	listResp, err := authenticatedGet(baseURL+"/api/events/", accessToken)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	defer listResp.Body.Close()
+	var list []decodedEvent
+	json.NewDecoder(listResp.Body).Decode(&list)
+	if len(list) != 1 || list[0].CreatedBy == nil || *list[0].CreatedBy != userID || list[0].CreatedByUsername != "alice" {
+		t.Fatalf("expected listed creator attribution to alice (%d), got %+v", userID, list)
 	}
 }
 

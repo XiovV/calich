@@ -61,6 +61,21 @@ describe("eventsApi.list", () => {
       status: 401,
     });
   });
+
+  it("maps createdByUsername when present, and omits it when absent (#118)", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(200, [
+        { ...wireEvent, createdByUsername: "alice" },
+        { ...wireEvent, id: "evt-2" },
+      ]),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const events = await eventsApi.list("token-123");
+
+    expect(events[0].createdByUsername).toBe("alice");
+    expect(events[1].createdByUsername).toBeUndefined();
+  });
 });
 
 describe("eventsApi.create", () => {

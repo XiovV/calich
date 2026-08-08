@@ -83,10 +83,11 @@ type EventService struct {
 	reminderOverrides *repository.ReminderOverrideRepository
 	sync              *repository.SyncRepository
 	calendars         *CalendarService
+	users             *repository.UserRepository
 }
 
-func NewEventService(db *sql.DB, events *repository.EventRepository, exceptions *repository.EventExceptionRepository, reminders *repository.EventReminderRepository, reminderOverrides *repository.ReminderOverrideRepository, sync *repository.SyncRepository, calendars *CalendarService) *EventService {
-	return &EventService{db: db, events: events, exceptions: exceptions, reminders: reminders, reminderOverrides: reminderOverrides, sync: sync, calendars: calendars}
+func NewEventService(db *sql.DB, events *repository.EventRepository, exceptions *repository.EventExceptionRepository, reminders *repository.EventReminderRepository, reminderOverrides *repository.ReminderOverrideRepository, sync *repository.SyncRepository, calendars *CalendarService, users *repository.UserRepository) *EventService {
+	return &EventService{db: db, events: events, exceptions: exceptions, reminders: reminders, reminderOverrides: reminderOverrides, sync: sync, calendars: calendars, users: users}
 }
 
 // calendarByID resolves calendarID via s.calendars.Get, translating
@@ -351,7 +352,11 @@ func (s *EventService) Create(ctx context.Context, userID int64, id string, writ
 		return repository.Event{}, fmt.Errorf("create event: %w", err)
 	}
 	event.Reminders = write.Reminders
-	return event, nil
+	result := []repository.Event{event}
+	if err := s.attachCreatedByUsernames(ctx, result); err != nil {
+		return repository.Event{}, err
+	}
+	return result[0], nil
 }
 
 // overrideCarriesOwnRrule reports whether a write to parentID names an
@@ -418,6 +423,9 @@ func (s *EventService) List(ctx context.Context, userID int64, from, to *time.Ti
 	if err := s.attachReminders(ctx, events); err != nil {
 		return nil, err
 	}
+	if err := s.attachCreatedByUsernames(ctx, events); err != nil {
+		return nil, err
+	}
 	return events, nil
 }
 
@@ -482,6 +490,37 @@ func (s *EventService) attachExdatesTo(ctx context.Context, events []*repository
 	return nil
 }
 
+// attachCreatedByUsernames fills in CreatedByUsername on events whose
+// CreatedBy is set (#118), batching one query across every distinct creator
+// rather than one per Event — the same shape as attachReminders and
+// attachExdates. An Event whose creator has since been deleted, or with no
+// recorded creator at all, is simply left with an empty
+// CreatedByUsername.
+func (s *EventService) attachCreatedByUsernames(ctx context.Context, events []repository.Event) error {
+	ids := make([]int64, 0, len(events))
+	seen := make(map[int64]bool)
+	for _, e := range events {
+		if e.CreatedBy == nil || seen[*e.CreatedBy] {
+			continue
+		}
+		seen[*e.CreatedBy] = true
+		ids = append(ids, *e.CreatedBy)
+	}
+
+	users, err := s.users.GetByIDs(ctx, ids)
+	if err != nil {
+		return fmt.Errorf("list creators: %w", err)
+	}
+
+	for i := range events {
+		if events[i].CreatedBy == nil {
+			continue
+		}
+		events[i].CreatedByUsername = users[*events[i].CreatedBy].Username
+	}
+	return nil
+}
+
 func (s *EventService) attachReminders(ctx context.Context, events []repository.Event) error {
 	pointers := make([]*repository.Event, len(events))
 	for i := range events {
@@ -520,6 +559,9 @@ func (s *EventService) Get(ctx context.Context, userID int64, id string) (reposi
 		return repository.Event{}, err
 	}
 	if err := s.attachReminders(ctx, events); err != nil {
+		return repository.Event{}, err
+	}
+	if err := s.attachCreatedByUsernames(ctx, events); err != nil {
 		return repository.Event{}, err
 	}
 	return events[0], nil
@@ -613,6 +655,9 @@ func (s *EventService) Update(ctx context.Context, userID int64, id string, writ
 		return repository.Event{}, err
 	}
 	if err := s.attachReminders(ctx, result); err != nil {
+		return repository.Event{}, err
+	}
+	if err := s.attachCreatedByUsernames(ctx, result); err != nil {
 		return repository.Event{}, err
 	}
 	return result[0], nil

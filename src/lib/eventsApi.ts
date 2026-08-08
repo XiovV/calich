@@ -22,6 +22,9 @@ interface EventWire {
   reminders?: Reminder[];
   description?: string;
   location?: string;
+  // createdByUsername is absent when the creator's account has been
+  // deleted or the Event predates this column (#118).
+  createdByUsername?: string;
 }
 
 /**
@@ -65,6 +68,7 @@ function fromWire(wire: EventWire): Event {
     reminders: wire.reminders,
     description: wire.description || undefined,
     location: wire.location || undefined,
+    createdByUsername: wire.createdByUsername || undefined,
   };
 }
 

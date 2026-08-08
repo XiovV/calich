@@ -603,3 +603,44 @@ func TestUserRepository_UpdateSyncedDeviceReminders(t *testing.T) {
 		t.Fatalf("expected synced device reminders to be disabled again")
 	}
 }
+
+// TestUserRepository_GetByIDs is #118's batched lookup, backing Event
+// creator attribution: one query for every distinct id, with a deleted or
+// unknown id simply absent from the result rather than erroring.
+func TestUserRepository_GetByIDs(t *testing.T) {
+	repo := newTestUserRepository(t)
+	ctx := context.Background()
+
+	alice, err := repo.Create(ctx, "alice", "hash", false)
+	if err != nil {
+		t.Fatalf("create alice: %v", err)
+	}
+	bob, err := repo.Create(ctx, "bob", "hash", false)
+	if err != nil {
+		t.Fatalf("create bob: %v", err)
+	}
+
+	const deletedID = int64(999)
+	users, err := repo.GetByIDs(ctx, []int64{alice.ID, bob.ID, deletedID})
+	if err != nil {
+		t.Fatalf("get by ids: %v", err)
+	}
+	if len(users) != 2 || users[alice.ID] != alice || users[bob.ID] != bob {
+		t.Fatalf("expected alice and bob keyed by id, got %+v", users)
+	}
+	if _, ok := users[deletedID]; ok {
+		t.Fatalf("expected no entry for an id with no matching row")
+	}
+}
+
+func TestUserRepository_GetByIDs_Empty(t *testing.T) {
+	repo := newTestUserRepository(t)
+
+	users, err := repo.GetByIDs(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("get by ids: %v", err)
+	}
+	if len(users) != 0 {
+		t.Fatalf("expected no users, got %+v", users)
+	}
+}

@@ -37,7 +37,7 @@ func newTestImportService(t *testing.T) (svc *ImportService, events *EventServic
 		t.Fatalf("create calendar: %v", err)
 	}
 
-	eventSvc := NewEventService(sqlDB, repository.NewEventRepository(sqlDB), repository.NewEventExceptionRepository(sqlDB), repository.NewEventReminderRepository(sqlDB), repository.NewReminderOverrideRepository(sqlDB), repository.NewSyncRepository(sqlDB), calendarSvc)
+	eventSvc := NewEventService(sqlDB, repository.NewEventRepository(sqlDB), repository.NewEventExceptionRepository(sqlDB), repository.NewEventReminderRepository(sqlDB), repository.NewReminderOverrideRepository(sqlDB), repository.NewSyncRepository(sqlDB), calendarSvc, users)
 
 	return NewImportService(eventSvc, calendarSvc), eventSvc, calendarSvc, user.ID, cal.ID
 }

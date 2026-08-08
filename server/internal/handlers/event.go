@@ -108,24 +108,32 @@ type eventResponse struct {
 	// Description and Location are free-text fields on an Event (#61).
 	Description string `json:"description,omitempty"`
 	Location    string `json:"location,omitempty"`
+	// CreatedBy and CreatedByUsername are the Event's creator, for display
+	// only — never consulted for authorization, which resolves through
+	// CalendarID instead (ADR-0034, #118). Both absent when the creator's
+	// account has been deleted or the Event predates this column.
+	CreatedBy         *int64 `json:"createdBy,omitempty"`
+	CreatedByUsername string `json:"createdByUsername,omitempty"`
 }
 
 func toEventResponse(e repository.Event) eventResponse {
 	return eventResponse{
-		ID:           e.ID,
-		CalendarID:   e.CalendarID,
-		Title:        e.Title,
-		Start:        formatEventTime(e.Start, e.AllDay),
-		End:          formatEventTime(e.End, e.AllDay),
-		AllDay:       e.AllDay,
-		Rrule:        e.Rrule,
-		ParentID:     e.ParentID,
-		RecurrenceID: e.RecurrenceID,
-		Exdates:      e.Exdates,
-		Tzid:         e.Tzid,
-		Reminders:    toReminderWire(e.Reminders),
-		Description:  e.Description,
-		Location:     e.Location,
+		ID:                e.ID,
+		CalendarID:        e.CalendarID,
+		Title:             e.Title,
+		Start:             formatEventTime(e.Start, e.AllDay),
+		End:               formatEventTime(e.End, e.AllDay),
+		AllDay:            e.AllDay,
+		Rrule:             e.Rrule,
+		ParentID:          e.ParentID,
+		RecurrenceID:      e.RecurrenceID,
+		Exdates:           e.Exdates,
+		Tzid:              e.Tzid,
+		Reminders:         toReminderWire(e.Reminders),
+		Description:       e.Description,
+		Location:          e.Location,
+		CreatedBy:         e.CreatedBy,
+		CreatedByUsername: e.CreatedByUsername,
 	}
 }
 

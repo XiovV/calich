@@ -81,6 +81,42 @@ func (r *UserRepository) GetByID(ctx context.Context, id int64) (User, error) {
 	))
 }
 
+// GetByIDs returns the Users named by ids, keyed by id — a batched
+// counterpart to GetByID for callers resolving many ids at once (e.g. Event
+// attribution, #118), costing one query rather than one per id. An id with
+// no matching row (a deleted User) is simply absent from the map.
+func (r *UserRepository) GetByIDs(ctx context.Context, ids []int64) (map[int64]User, error) {
+	result := make(map[int64]User)
+	if len(ids) == 0 {
+		return result, nil
+	}
+
+	query := `SELECT id, username, password_hash, must_change_password, email, synced_device_reminders_enabled, is_admin, is_disabled, created_at FROM users WHERE id IN (` + placeholders(len(ids)) + `)`
+	args := make([]any, len(ids))
+	for i, id := range ids {
+		args[i] = id
+	}
+
+	rows, err := r.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query users: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		u, err := r.scanUserRow(rows)
+		if err != nil {
+			return nil, err
+		}
+		result[u.ID] = u
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate users: %w", err)
+	}
+
+	return result, nil
+}
+
 func (r *UserRepository) GetByUsername(ctx context.Context, username string) (User, error) {
 	return r.scanUser(r.db.QueryRowContext(ctx,
 		`SELECT id, username, password_hash, must_change_password, email, synced_device_reminders_enabled, is_admin, is_disabled, created_at FROM users WHERE username = ?`, username,

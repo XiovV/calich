@@ -17,6 +17,7 @@ import (
 type eventShareFixture struct {
 	events                                  *EventService
 	calendars                               *CalendarService
+	users                                   *repository.UserRepository
 	ownerID, editorID, viewerID, strangerID int64
 	calendarID                              string
 }
@@ -61,10 +62,10 @@ func newEventShareFixture(t *testing.T) eventShareFixture {
 		t.Fatalf("share viewer: %v", err)
 	}
 
-	events := NewEventService(sqlDB, repository.NewEventRepository(sqlDB), repository.NewEventExceptionRepository(sqlDB), repository.NewEventReminderRepository(sqlDB), repository.NewReminderOverrideRepository(sqlDB), repository.NewSyncRepository(sqlDB), calendars)
+	events := NewEventService(sqlDB, repository.NewEventRepository(sqlDB), repository.NewEventExceptionRepository(sqlDB), repository.NewEventReminderRepository(sqlDB), repository.NewReminderOverrideRepository(sqlDB), repository.NewSyncRepository(sqlDB), calendars, users)
 
 	return eventShareFixture{
-		events: events, calendars: calendars,
+		events: events, calendars: calendars, users: users,
 		ownerID: owner.ID, editorID: editor.ID, viewerID: viewer.ID, strangerID: stranger.ID,
 		calendarID: cal.ID,
 	}
@@ -105,6 +106,59 @@ func TestEventService_Editor_CanCreateUpdateDelete(t *testing.T) {
 	}
 	if _, err := f.events.Get(ctx, f.ownerID, event.ID); !errors.Is(err, repository.ErrNotFound) {
 		t.Fatalf("get after editor's delete = %v, want ErrNotFound", err)
+	}
+}
+
+// TestEventService_CreatorAttribution_ShowsWhoeverCreatedIt is #118's basic
+// case: an Editor's Event carries their id and username even when a
+// different User (the Owner) reads it — attribution follows whoever wrote
+// the row, not whoever is asking (ADR-0034).
+func TestEventService_CreatorAttribution_ShowsWhoeverCreatedIt(t *testing.T) {
+	f := newEventShareFixture(t)
+	ctx := context.Background()
+
+	created, err := f.events.Create(ctx, f.editorID, "evt-1", EventWrite{CalendarID: f.calendarID, Title: "Standup", Start: shareTestStart, End: shareTestEnd})
+	if err != nil {
+		t.Fatalf("editor create: %v", err)
+	}
+	if created.CreatedBy == nil || *created.CreatedBy != f.editorID || created.CreatedByUsername != "editor" {
+		t.Fatalf("expected create to attribute to editor (%d), got %+v", f.editorID, created)
+	}
+
+	fetched, err := f.events.Get(ctx, f.ownerID, created.ID)
+	if err != nil {
+		t.Fatalf("owner get: %v", err)
+	}
+	if fetched.CreatedBy == nil || *fetched.CreatedBy != f.editorID || fetched.CreatedByUsername != "editor" {
+		t.Fatalf("expected fetched attribution to editor (%d), got %+v", f.editorID, fetched)
+	}
+}
+
+// TestEventService_CreatorAttribution_OmittedWhenCreatorAccountDeleted is
+// #118's "renders without attribution rather than breaking" acceptance
+// criterion at the service layer: created_by is cleared to nil by ON DELETE
+// SET NULL when the creating account is removed (ADR-0034), so
+// CreatedByUsername resolves to empty afterwards instead of erroring on a
+// dangling id.
+func TestEventService_CreatorAttribution_OmittedWhenCreatorAccountDeleted(t *testing.T) {
+	f := newEventShareFixture(t)
+	ctx := context.Background()
+
+	created, err := f.events.Create(ctx, f.editorID, "evt-1", EventWrite{CalendarID: f.calendarID, Title: "Standup", Start: shareTestStart, End: shareTestEnd})
+	if err != nil {
+		t.Fatalf("editor create: %v", err)
+	}
+
+	if err := f.users.Delete(ctx, f.editorID); err != nil {
+		t.Fatalf("delete editor: %v", err)
+	}
+
+	fetched, err := f.events.Get(ctx, f.ownerID, created.ID)
+	if err != nil {
+		t.Fatalf("expected the event to survive its creator's deletion, got %v", err)
+	}
+	if fetched.CreatedBy != nil || fetched.CreatedByUsername != "" {
+		t.Fatalf("expected no creator attribution once the account is deleted, got %+v", fetched)
 	}
 }
 

@@ -187,6 +187,15 @@ export function EventModal(props: EventModalProps) {
   // absent on a Calendar nobody else can see. Only an existing Event has an
   // id to key an override to.
   const showReminderOverride = mode === "edit" && calendarHasOtherRecipients(editedCalendar);
+  // Attribution (#118) uses the same predicate as the Reminder override
+  // control: absent on a Calendar nobody else can see, since it would only
+  // tell the caller what they already know. Also absent when the Event
+  // carries no creator — a deleted account or an Event predating the
+  // column — rather than rendering an empty "Created by" line.
+  const createdByUsername =
+    mode === "edit" && calendarHasOtherRecipients(editedCalendar)
+      ? props.occurrence.event.createdByUsername
+      : undefined;
 
   const [initial] = useState(() =>
     deriveInitialFormState(props, master, defaultCalendarId(checkedCalendars)),
@@ -590,6 +599,12 @@ export function EventModal(props: EventModalProps) {
                 eventId={props.occurrence.event.id}
                 emailAvailable={emailAvailable}
               />
+            )}
+
+            {createdByUsername && (
+              <p className="mt-4 text-label-sm text-ink-muted">
+                Created by {createdByUsername}
+              </p>
             )}
 
             <div className="mt-5 flex items-center justify-between gap-2">

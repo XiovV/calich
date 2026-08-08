@@ -42,4 +42,11 @@ export interface Event {
   // Free-text description and location, both optional.
   description?: string;
   location?: string;
+  // createdByUsername is who created this Event, for display in the Event
+  // dialog on a Calendar where more than one person could have created it
+  // (#118) — never consulted to decide what a User may do with an Event,
+  // which resolves through its Calendar's Access instead (ADR-0034).
+  // Undefined when the creator's account has been deleted, or the Event
+  // predates this field.
+  createdByUsername?: string;
 }
