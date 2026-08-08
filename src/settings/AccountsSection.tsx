@@ -4,6 +4,8 @@ import { Input } from "../components/ui/Input";
 import { useAccountsStore } from "../lib/accountsStore";
 import { useAsyncAction } from "../hooks/useAsyncAction";
 import { errorMessage } from "../lib/errorMessage";
+import { toast } from "../lib/toast";
+import { ResetPasswordDialog } from "./ResetPasswordDialog";
 import type { Account } from "../lib/accountsApi";
 
 function statusLabels(account: Account): string[] {
@@ -14,19 +16,26 @@ function statusLabels(account: Account): string[] {
   return labels;
 }
 
-// The Settings page's Accounts section (#119, ADR-0037): visible only to an
-// Admin, per getSettingsSections. Lists every account on the instance and
-// lets an Admin create a new one with a username and a temporary password.
-// Reset password, promotion/demotion, disabling and deletion are #120 and
-// #121.
+// The Settings page's Accounts section (#119/#120, ADR-0037): visible only to
+// an Admin, per getSettingsSections. Lists every account on the instance,
+// lets an Admin create a new one, and manages an existing one's lifecycle —
+// reset its password, grant or revoke Admin, and disable or re-enable it.
+// The last-remaining-Admin guards are enforced server-side; this section
+// just surfaces the explanation the server sends back. Delete is #121.
 export function AccountsSection() {
   const accounts = useAccountsStore((state) => state.accounts);
   const fetchAccounts = useAccountsStore((state) => state.fetchAccounts);
   const createAccount = useAccountsStore((state) => state.createAccount);
+  const resetPassword = useAccountsStore((state) => state.resetPassword);
+  const setAdmin = useAccountsStore((state) => state.setAdmin);
+  const setDisabled = useAccountsStore((state) => state.setDisabled);
 
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const { isSubmitting, error, setError, run } = useAsyncAction();
+
+  const [resettingAccount, setResettingAccount] = useState<Account | null>(null);
+  const [busyAccountId, setBusyAccountId] = useState<number | null>(null);
 
   useEffect(() => {
     fetchAccounts().catch((err) => {
@@ -43,6 +52,28 @@ export function AccountsSection() {
       setUsername("");
       setPassword("");
     });
+  }
+
+  async function handleToggleAdmin(account: Account) {
+    setBusyAccountId(account.id);
+    try {
+      await setAdmin(account.id, !account.isAdmin);
+    } catch (err) {
+      toast.error(errorMessage(err));
+    } finally {
+      setBusyAccountId(null);
+    }
+  }
+
+  async function handleToggleDisabled(account: Account) {
+    setBusyAccountId(account.id);
+    try {
+      await setDisabled(account.id, !account.isDisabled);
+    } catch (err) {
+      toast.error(errorMessage(err));
+    } finally {
+      setBusyAccountId(null);
+    }
   }
 
   return (
@@ -77,24 +108,57 @@ export function AccountsSection() {
       <ul className="mt-4 flex flex-col gap-2">
         {accounts.map((account) => {
           const labels = statusLabels(account);
+          const isBusy = busyAccountId === account.id;
           return (
             <li
               key={account.id}
-              className="flex items-center justify-between rounded-md border border-border px-3 py-2"
+              className="flex items-center justify-between gap-3 rounded-md border border-border px-3 py-2"
             >
-              <span className="text-body text-ink">{account.username}</span>
-              {labels.length > 0 && (
-                <span className="flex gap-2">
-                  {labels.map((label) => (
-                    <span
-                      key={label}
-                      className="rounded-full bg-surface-raised px-2 py-0.5 text-label-sm text-ink-muted"
-                    >
-                      {label}
-                    </span>
-                  ))}
-                </span>
-              )}
+              <div className="flex min-w-0 items-center gap-2">
+                <span className="truncate text-body text-ink">{account.username}</span>
+                {labels.length > 0 && (
+                  <span className="flex shrink-0 gap-2">
+                    {labels.map((label) => (
+                      <span
+                        key={label}
+                        className="rounded-full bg-surface-raised px-2 py-0.5 text-label-sm text-ink-muted"
+                      >
+                        {label}
+                      </span>
+                    ))}
+                  </span>
+                )}
+              </div>
+
+              <div className="flex shrink-0 items-center gap-2">
+                <Button
+                  variant="outline"
+                  color="secondary"
+                  size="small"
+                  disabled={isBusy}
+                  onClick={() => setResettingAccount(account)}
+                >
+                  Reset password
+                </Button>
+                <Button
+                  variant="outline"
+                  color="secondary"
+                  size="small"
+                  disabled={isBusy}
+                  onClick={() => handleToggleAdmin(account)}
+                >
+                  {account.isAdmin ? "Remove admin" : "Make admin"}
+                </Button>
+                <Button
+                  variant="outline"
+                  color={account.isDisabled ? "secondary" : "danger"}
+                  size="small"
+                  disabled={isBusy}
+                  onClick={() => handleToggleDisabled(account)}
+                >
+                  {account.isDisabled ? "Enable" : "Disable"}
+                </Button>
+              </div>
             </li>
           );
         })}
@@ -102,6 +166,14 @@ export function AccountsSection() {
           <p className="text-label-sm text-ink-muted">No accounts yet.</p>
         )}
       </ul>
+
+      {resettingAccount && (
+        <ResetPasswordDialog
+          account={resettingAccount}
+          onReset={(newPassword) => resetPassword(resettingAccount.id, newPassword)}
+          onClose={() => setResettingAccount(null)}
+        />
+      )}
     </section>
   );
 }

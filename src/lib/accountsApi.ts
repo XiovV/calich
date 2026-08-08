@@ -1,8 +1,8 @@
 import { authHeader, errorFromResponse } from "./apiClient";
 
 // Account administration (ADR-0037), Admin-only. #119 covers listing and
-// creation only — reset password, admin grant/revoke, disable and delete are
-// #120 and #121.
+// creation; #120 adds reset password, admin grant/revoke, and disable —
+// delete is #121.
 export interface Account {
   id: number;
   username: string;
@@ -50,6 +50,42 @@ export const accountsApi = {
       credentials: "include",
       headers: { "Content-Type": "application/json", ...authHeader(accessToken) },
       body: JSON.stringify({ username, password }),
+    });
+    if (!response.ok) throw await errorFromResponse(response);
+
+    return fromWire(await response.json());
+  },
+
+  async resetPassword(accessToken: string, id: number, password: string): Promise<Account> {
+    const response = await fetch(`/api/accounts/${id}/reset-password`, {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json", ...authHeader(accessToken) },
+      body: JSON.stringify({ password }),
+    });
+    if (!response.ok) throw await errorFromResponse(response);
+
+    return fromWire(await response.json());
+  },
+
+  async setAdmin(accessToken: string, id: number, isAdmin: boolean): Promise<Account> {
+    const response = await fetch(`/api/accounts/${id}/admin`, {
+      method: "PUT",
+      credentials: "include",
+      headers: { "Content-Type": "application/json", ...authHeader(accessToken) },
+      body: JSON.stringify({ is_admin: isAdmin }),
+    });
+    if (!response.ok) throw await errorFromResponse(response);
+
+    return fromWire(await response.json());
+  },
+
+  async setDisabled(accessToken: string, id: number, isDisabled: boolean): Promise<Account> {
+    const response = await fetch(`/api/accounts/${id}/disabled`, {
+      method: "PUT",
+      credentials: "include",
+      headers: { "Content-Type": "application/json", ...authHeader(accessToken) },
+      body: JSON.stringify({ is_disabled: isDisabled }),
     });
     if (!response.ok) throw await errorFromResponse(response);
 

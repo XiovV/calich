@@ -105,3 +105,136 @@ describe("accountsApi.create", () => {
     });
   });
 });
+
+describe("accountsApi.resetPassword", () => {
+  it("sends the new temporary password and maps the response", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(200, {
+        id: 2,
+        username: "kid",
+        is_admin: false,
+        is_disabled: false,
+        must_change_password: true,
+        created_at: "2026-01-01T00:00:00Z",
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await accountsApi.resetPassword("token-123", 2, "new-temp-pass");
+
+    expect(result).toEqual({
+      id: 2,
+      username: "kid",
+      isAdmin: false,
+      isDisabled: false,
+      mustChangePassword: true,
+      createdAt: "2026-01-01T00:00:00Z",
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/accounts/2/reset-password",
+      expect.objectContaining({
+        method: "POST",
+        credentials: "include",
+        headers: expect.objectContaining({ Authorization: "Bearer token-123" }),
+        body: JSON.stringify({ password: "new-temp-pass" }),
+      }),
+    );
+  });
+
+  it("throws an ApiError when the account doesn't exist", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(404, { error: { code: "not_found", message: "account not found" } }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(accountsApi.resetPassword("token-123", 99, "new-temp-pass")).rejects.toMatchObject({
+      code: "not_found",
+    });
+  });
+});
+
+describe("accountsApi.setAdmin", () => {
+  it("sends the admin flag and maps the response", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(200, {
+        id: 2,
+        username: "kid",
+        is_admin: true,
+        is_disabled: false,
+        must_change_password: false,
+        created_at: "2026-01-01T00:00:00Z",
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await accountsApi.setAdmin("token-123", 2, true);
+
+    expect(result.isAdmin).toBe(true);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/accounts/2/admin",
+      expect.objectContaining({
+        method: "PUT",
+        credentials: "include",
+        headers: expect.objectContaining({ Authorization: "Bearer token-123" }),
+        body: JSON.stringify({ is_admin: true }),
+      }),
+    );
+  });
+
+  it("throws an explanation when demoting the last remaining admin", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(409, {
+        error: { code: "last_admin", message: "cannot remove the last remaining admin" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(accountsApi.setAdmin("token-123", 1, false)).rejects.toMatchObject({
+      code: "last_admin",
+      message: "cannot remove the last remaining admin",
+    });
+  });
+});
+
+describe("accountsApi.setDisabled", () => {
+  it("sends the disabled flag and maps the response", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(200, {
+        id: 2,
+        username: "kid",
+        is_admin: false,
+        is_disabled: true,
+        must_change_password: false,
+        created_at: "2026-01-01T00:00:00Z",
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await accountsApi.setDisabled("token-123", 2, true);
+
+    expect(result.isDisabled).toBe(true);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/accounts/2/disabled",
+      expect.objectContaining({
+        method: "PUT",
+        credentials: "include",
+        headers: expect.objectContaining({ Authorization: "Bearer token-123" }),
+        body: JSON.stringify({ is_disabled: true }),
+      }),
+    );
+  });
+
+  it("throws an explanation when disabling the last remaining admin", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(409, {
+        error: { code: "last_admin", message: "cannot disable the last remaining admin" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(accountsApi.setDisabled("token-123", 1, true)).rejects.toMatchObject({
+      code: "last_admin",
+      message: "cannot disable the last remaining admin",
+    });
+  });
+});
