@@ -277,7 +277,7 @@ func TestMustChangePassword_ReflectsUserFlag(t *testing.T) {
 		t.Fatalf("expected default bootstrap user to require a password change")
 	}
 
-	if err := svc.ChangePassword(ctx, user.ID, "admin", "a-new-password"); err != nil {
+	if _, err := svc.ChangePassword(ctx, user.ID, "admin", "a-new-password"); err != nil {
 		t.Fatalf("change password: %v", err)
 	}
 
@@ -304,7 +304,7 @@ func TestChangePassword_SkipsCurrentPasswordCheckWhileMustChangePassword(t *test
 
 	// The bootstrap default is a publicly documented value — while
 	// must_change_password is true, the current password isn't checked at all.
-	if err := svc.ChangePassword(ctx, user.ID, "this-is-not-the-current-password", "a-new-password"); err != nil {
+	if _, err := svc.ChangePassword(ctx, user.ID, "this-is-not-the-current-password", "a-new-password"); err != nil {
 		t.Fatalf("expected the current password check to be skipped, got %v", err)
 	}
 }
@@ -321,11 +321,11 @@ func TestChangePassword_RequiresCurrentPasswordOnceAlreadyChanged(t *testing.T) 
 		t.Fatalf("get user: %v", err)
 	}
 
-	if err := svc.ChangePassword(ctx, user.ID, "admin", "first-new-password"); err != nil {
+	if _, err := svc.ChangePassword(ctx, user.ID, "admin", "first-new-password"); err != nil {
 		t.Fatalf("first change password: %v", err)
 	}
 
-	err = svc.ChangePassword(ctx, user.ID, "wrong-current-password", "second-new-password")
+	_, err = svc.ChangePassword(ctx, user.ID, "wrong-current-password", "second-new-password")
 	if !errors.Is(err, ErrInvalidCredentials) {
 		t.Fatalf("expected ErrInvalidCredentials once must_change_password is false, got %v", err)
 	}
@@ -343,7 +343,7 @@ func TestChangePassword_RejectsEmptyNewPassword(t *testing.T) {
 		t.Fatalf("get user: %v", err)
 	}
 
-	err = svc.ChangePassword(ctx, user.ID, "admin", "")
+	_, err = svc.ChangePassword(ctx, user.ID, "admin", "")
 	if !errors.Is(err, ErrInvalidPassword) {
 		t.Fatalf("expected ErrInvalidPassword, got %v", err)
 	}
@@ -412,7 +412,7 @@ func TestChangePassword_NewPasswordWorksForLogin(t *testing.T) {
 		t.Fatalf("get user: %v", err)
 	}
 
-	if err := svc.ChangePassword(ctx, user.ID, "admin", "a-new-password"); err != nil {
+	if _, err := svc.ChangePassword(ctx, user.ID, "admin", "a-new-password"); err != nil {
 		t.Fatalf("change password: %v", err)
 	}
 
@@ -437,12 +437,56 @@ func TestChangePassword_InvalidatesExistingSessions(t *testing.T) {
 		t.Fatalf("login: %v", err)
 	}
 
-	if err := svc.ChangePassword(ctx, mustUserID(t, svc, "admin"), "admin", "a-new-password"); err != nil {
+	if _, err := svc.ChangePassword(ctx, mustUserID(t, svc, "admin"), "admin", "a-new-password"); err != nil {
 		t.Fatalf("change password: %v", err)
 	}
 
 	if _, err := svc.Refresh(ctx, login.RefreshToken); !errors.Is(err, ErrInvalidSession) {
 		t.Fatalf("expected the refresh token issued before the password change to be invalidated, got %v", err)
+	}
+}
+
+// TestChangePassword_ReissuesExactlyOneNewSession pins the fix for #123: the
+// old Session must be gone (the pre-change refresh token no longer resolves
+// to any Session, not just an expired one) and exactly one new Session must
+// exist in its place.
+func TestChangePassword_ReissuesExactlyOneNewSession(t *testing.T) {
+	svc := newTestAuthService(t, "", "")
+	ctx := context.Background()
+	if _, _, err := svc.Bootstrap(ctx); err != nil {
+		t.Fatalf("bootstrap: %v", err)
+	}
+	userID := mustUserID(t, svc, "admin")
+
+	login, err := svc.Login(ctx, "admin", "admin")
+	if err != nil {
+		t.Fatalf("login: %v", err)
+	}
+
+	result, err := svc.ChangePassword(ctx, userID, "admin", "a-new-password")
+	if err != nil {
+		t.Fatalf("change password: %v", err)
+	}
+	if result.AccessToken == "" {
+		t.Fatalf("expected a non-empty access token")
+	}
+	if result.RefreshToken == "" {
+		t.Fatalf("expected a non-empty refresh token")
+	}
+	if result.RefreshToken == login.RefreshToken {
+		t.Fatalf("expected a freshly issued refresh token, got the pre-change one back")
+	}
+
+	if _, err := svc.sessions.GetByRefreshTokenHash(ctx, hashToken(login.RefreshToken)); !errors.Is(err, repository.ErrNotFound) {
+		t.Fatalf("expected the pre-change session to be gone, got %v", err)
+	}
+
+	session, err := svc.sessions.GetByRefreshTokenHash(ctx, hashToken(result.RefreshToken))
+	if err != nil {
+		t.Fatalf("expected exactly one new session for the returned refresh token, got %v", err)
+	}
+	if session.UserID != userID {
+		t.Fatalf("expected the new session to belong to the user, got user id %d", session.UserID)
 	}
 }
 

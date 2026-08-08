@@ -142,12 +142,13 @@ describe("authApi.logout", () => {
 });
 
 describe("authApi.changePassword", () => {
-  it("sends both passwords and the bearer token", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(emptyResponse(204));
+  it("sends both passwords and the bearer token, and returns the new access token", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, { access_token: "new-token-456" }));
     vi.stubGlobal("fetch", fetchMock);
 
-    await authApi.changePassword("token-123", "old-pw", "new-pw");
+    const result = await authApi.changePassword("token-123", "old-pw", "new-pw");
 
+    expect(result).toEqual({ accessToken: "new-token-456" });
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/auth/change-password",
       expect.objectContaining({

@@ -83,10 +83,13 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     const { accessToken } = get();
     if (!accessToken) throw new Error("Not authenticated.");
 
-    await authApi.changePassword(accessToken, currentPassword, newPassword);
+    // The backend re-issues the Session on a password change rather than
+    // just clearing it (#123), so the fresh access token must replace the
+    // pre-change one before calling anything else with it.
+    const changed = await authApi.changePassword(accessToken, currentPassword, newPassword);
 
-    const user = await authApi.me(accessToken);
-    set(authenticated(user, accessToken));
+    const user = await authApi.me(changed.accessToken);
+    set(authenticated(user, changed.accessToken));
   },
 
   updateEmail: async (email) => {

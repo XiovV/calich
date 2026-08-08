@@ -76,6 +76,18 @@ func changePassword(t *testing.T, srv *httptest.Server, accessToken, currentPass
 	return resp
 }
 
+// mustLoginAccessToken decodes a login response body for its access token.
+// The response's Body must not have been read yet.
+func mustLoginAccessToken(t *testing.T, loginResp *http.Response) string {
+	t.Helper()
+
+	var loggedIn loginResponse
+	if err := json.NewDecoder(loginResp.Body).Decode(&loggedIn); err != nil {
+		t.Fatalf("decode login response: %v", err)
+	}
+	return loggedIn.AccessToken
+}
+
 func refreshCookieFrom(t *testing.T, resp *http.Response) *http.Cookie {
 	t.Helper()
 
@@ -212,8 +224,8 @@ func TestMe_ValidToken_ReturnsUser_AfterPasswordChange(t *testing.T) {
 
 	changeResp := changePassword(t, srv, loggedIn.AccessToken, "admin", "a-new-password")
 	defer changeResp.Body.Close()
-	if changeResp.StatusCode != http.StatusNoContent {
-		t.Fatalf("expected 204 from change-password, got %d", changeResp.StatusCode)
+	if changeResp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 from change-password, got %d", changeResp.StatusCode)
 	}
 
 	req, err := http.NewRequest(http.MethodGet, srv.URL+"/api/auth/me", nil)
@@ -259,11 +271,16 @@ func authenticatedAccessToken(t *testing.T, srv *httptest.Server) string {
 
 	changeResp := changePassword(t, srv, loggedIn.AccessToken, "admin", "a-new-password")
 	defer changeResp.Body.Close()
-	if changeResp.StatusCode != http.StatusNoContent {
-		t.Fatalf("expected 204 from change-password, got %d", changeResp.StatusCode)
+	if changeResp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 from change-password, got %d", changeResp.StatusCode)
 	}
 
-	return loggedIn.AccessToken
+	var changed changePasswordResponse
+	if err := json.NewDecoder(changeResp.Body).Decode(&changed); err != nil {
+		t.Fatalf("decode change-password response: %v", err)
+	}
+
+	return changed.AccessToken
 }
 
 func TestMe_EmailReminderChannelAvailable_FalseWithNoEmailOrSMTP(t *testing.T) {
@@ -446,8 +463,56 @@ func TestChangePassword_AllowedEvenWhileMustChangePassword(t *testing.T) {
 	resp := changePassword(t, srv, loggedIn.AccessToken, "admin", "a-new-password")
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusNoContent {
-		t.Fatalf("expected 204, got %d", resp.StatusCode)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+}
+
+// TestChangePassword_ReissuesSessionInsteadOfOnlyClearingIt pins the fix for
+// #123: changing your password must not log you out of the tab that made the
+// request. The response has to carry a fresh refresh_token cookie and access
+// token, and that new refresh token has to actually work.
+func TestChangePassword_ReissuesSessionInsteadOfOnlyClearingIt(t *testing.T) {
+	srv := newAuthTestServer(t)
+
+	loginResp := login(t, srv, "admin", "admin")
+	defer loginResp.Body.Close()
+	oldCookie := refreshCookieFrom(t, loginResp)
+
+	resp := changePassword(t, srv, mustLoginAccessToken(t, loginResp), "admin", "a-new-password")
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	var body changePasswordResponse
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if body.AccessToken == "" {
+		t.Fatalf("expected a non-empty access token")
+	}
+
+	newCookie := refreshCookieFrom(t, resp)
+	if newCookie.Value == oldCookie.Value {
+		t.Fatalf("expected a freshly issued refresh_token cookie, got the pre-change one back")
+	}
+
+	refreshReq, err := http.NewRequest(http.MethodPost, srv.URL+"/api/auth/refresh", nil)
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	refreshReq.AddCookie(newCookie)
+
+	refreshResp, err := http.DefaultClient.Do(refreshReq)
+	if err != nil {
+		t.Fatalf("POST /api/auth/refresh: %v", err)
+	}
+	defer refreshResp.Body.Close()
+
+	if refreshResp.StatusCode != http.StatusOK {
+		t.Fatalf("expected the newly issued refresh_token cookie to work, got %d", refreshResp.StatusCode)
 	}
 }
 
@@ -466,8 +531,8 @@ func TestChangePassword_SkipsCurrentPasswordCheckWhileMustChangePassword(t *test
 	resp := changePassword(t, srv, loggedIn.AccessToken, "this-is-not-the-current-password", "a-new-password")
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusNoContent {
-		t.Fatalf("expected 204, got %d", resp.StatusCode)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
 	}
 }
 
@@ -483,8 +548,8 @@ func TestChangePassword_RequiresCurrentPasswordOnceAlreadyChanged(t *testing.T) 
 
 	firstChange := changePassword(t, srv, loggedIn.AccessToken, "admin", "first-new-password")
 	defer firstChange.Body.Close()
-	if firstChange.StatusCode != http.StatusNoContent {
-		t.Fatalf("expected first change-password to succeed with 204, got %d", firstChange.StatusCode)
+	if firstChange.StatusCode != http.StatusOK {
+		t.Fatalf("expected first change-password to succeed with 200, got %d", firstChange.StatusCode)
 	}
 
 	resp := changePassword(t, srv, loggedIn.AccessToken, "wrong-password", "second-new-password")

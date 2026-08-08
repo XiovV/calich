@@ -103,11 +103,43 @@ func (s *AuthService) Bootstrap(ctx context.Context) (user repository.User, crea
 	return newUser, true, nil
 }
 
-type LoginResult struct {
+// sessionTokens is the access/refresh token pair issued whenever a Session is
+// created — on Login and on a successful ChangePassword (#123), which
+// re-issues rather than just invalidating.
+type sessionTokens struct {
 	AccessToken           string
 	RefreshToken          string
 	RefreshTokenExpiresAt time.Time
-	MustChangePassword    bool
+}
+
+// issueSession mints an access token, creates a new Session for a fresh
+// opaque refresh token, and returns both.
+func (s *AuthService) issueSession(ctx context.Context, userID int64) (sessionTokens, error) {
+	accessToken, err := s.newAccessToken(userID)
+	if err != nil {
+		return sessionTokens{}, fmt.Errorf("issue access token: %w", err)
+	}
+
+	refreshToken, refreshTokenHash, err := newOpaqueToken()
+	if err != nil {
+		return sessionTokens{}, fmt.Errorf("issue refresh token: %w", err)
+	}
+
+	expiresAt := time.Now().Add(refreshTokenTTL)
+	if _, err := s.sessions.Create(ctx, userID, refreshTokenHash, expiresAt); err != nil {
+		return sessionTokens{}, fmt.Errorf("create session: %w", err)
+	}
+
+	return sessionTokens{
+		AccessToken:           accessToken,
+		RefreshToken:          refreshToken,
+		RefreshTokenExpiresAt: expiresAt,
+	}, nil
+}
+
+type LoginResult struct {
+	sessionTokens
+	MustChangePassword bool
 }
 
 // GetUser returns the user a valid access token was issued for.
@@ -132,26 +164,14 @@ func (s *AuthService) Login(ctx context.Context, username, password string) (Log
 		return LoginResult{}, ErrAccountDisabled
 	}
 
-	accessToken, err := s.newAccessToken(user.ID)
+	tokens, err := s.issueSession(ctx, user.ID)
 	if err != nil {
-		return LoginResult{}, fmt.Errorf("issue access token: %w", err)
-	}
-
-	refreshToken, refreshTokenHash, err := newOpaqueToken()
-	if err != nil {
-		return LoginResult{}, fmt.Errorf("issue refresh token: %w", err)
-	}
-
-	expiresAt := time.Now().Add(refreshTokenTTL)
-	if _, err := s.sessions.Create(ctx, user.ID, refreshTokenHash, expiresAt); err != nil {
-		return LoginResult{}, fmt.Errorf("create session: %w", err)
+		return LoginResult{}, err
 	}
 
 	return LoginResult{
-		AccessToken:           accessToken,
-		RefreshToken:          refreshToken,
-		RefreshTokenExpiresAt: expiresAt,
-		MustChangePassword:    user.MustChangePassword,
+		sessionTokens:      tokens,
+		MustChangePassword: user.MustChangePassword,
 	}, nil
 }
 
@@ -238,10 +258,20 @@ func (s *AuthService) IsAdmin(ctx context.Context, userID int64) (bool, error) {
 	return user.IsAdmin, nil
 }
 
-func (s *AuthService) ChangePassword(ctx context.Context, userID int64, currentPassword, newPassword string) error {
+// ChangePasswordResult is the freshly issued Session's tokens (#123) — the
+// same shape Login returns, minus MustChangePassword, since a successful
+// change always clears that flag.
+type ChangePasswordResult = sessionTokens
+
+// ChangePassword deletes every Session the User has and issues a fresh one,
+// rather than sparing the caller's — the security property is that *every*
+// refresh token issued before the change stops working, including one an
+// attacker stole from this device. Re-issuing rather than sparing keeps that
+// property while leaving the caller signed in (#123).
+func (s *AuthService) ChangePassword(ctx context.Context, userID int64, currentPassword, newPassword string) (ChangePasswordResult, error) {
 	user, err := s.users.GetByID(ctx, userID)
 	if err != nil {
-		return fmt.Errorf("get user: %w", err)
+		return ChangePasswordResult{}, fmt.Errorf("get user: %w", err)
 	}
 
 	// A user forced to change their password is always on the fixed, publicly
@@ -250,30 +280,28 @@ func (s *AuthService) ChangePassword(ctx context.Context, userID int64, currentP
 	// flag is false), a change requires proving the current password as usual.
 	if !user.MustChangePassword {
 		if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(currentPassword)); err != nil {
-			return ErrInvalidCredentials
+			return ChangePasswordResult{}, ErrInvalidCredentials
 		}
 	}
 
 	if newPassword == "" {
-		return ErrInvalidPassword
+		return ChangePasswordResult{}, ErrInvalidPassword
 	}
 
 	hash, err := bcrypt.GenerateFromPassword([]byte(newPassword), bcrypt.DefaultCost)
 	if err != nil {
-		return fmt.Errorf("hash new password: %w", err)
+		return ChangePasswordResult{}, fmt.Errorf("hash new password: %w", err)
 	}
 
 	if err := s.users.UpdatePassword(ctx, userID, string(hash)); err != nil {
-		return fmt.Errorf("update password: %w", err)
+		return ChangePasswordResult{}, fmt.Errorf("update password: %w", err)
 	}
 
-	// Invalidate every outstanding session: a refresh token issued before the
-	// password change (e.g. one an attacker had stolen) must stop working.
 	if err := s.sessions.DeleteAllForUser(ctx, userID); err != nil {
-		return fmt.Errorf("invalidate sessions: %w", err)
+		return ChangePasswordResult{}, fmt.Errorf("invalidate sessions: %w", err)
 	}
 
-	return nil
+	return s.issueSession(ctx, userID)
 }
 
 // UpdateEmail sets userID's account email — the Email-Channel Reminder

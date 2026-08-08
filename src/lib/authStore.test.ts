@@ -139,22 +139,24 @@ describe("changePassword", () => {
     );
   });
 
-  it("fetches the fresh user and goes to authenticated on success", async () => {
+  it("fetches the fresh user and goes to authenticated on success, using the reissued access token", async () => {
     useAuthStore.setState({
       status: "must-change-password",
       user: null,
       pendingUsername: "admin",
       accessToken: "token-123",
     });
-    vi.mocked(authApi.changePassword).mockResolvedValue(undefined);
+    vi.mocked(authApi.changePassword).mockResolvedValue({ accessToken: "token-456" });
     vi.mocked(authApi.me).mockResolvedValue(adminUser);
 
     await useAuthStore.getState().changePassword("old-pw", "new-pw");
 
+    expect(authApi.me).toHaveBeenCalledWith("token-456");
     const state = useAuthStore.getState();
     expect(state.status).toBe("authenticated");
     expect(state.user?.mustChangePassword).toBe(false);
     expect(state.pendingUsername).toBeNull();
+    expect(state.accessToken).toBe("token-456");
   });
 });
 

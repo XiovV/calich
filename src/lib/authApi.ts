@@ -91,7 +91,11 @@ export const authApi = {
     return fromMeWire(await response.json());
   },
 
-  async changePassword(accessToken: string, currentPassword: string, newPassword: string): Promise<void> {
+  async changePassword(
+    accessToken: string,
+    currentPassword: string,
+    newPassword: string,
+  ): Promise<{ accessToken: string }> {
     const response = await fetch("/api/auth/change-password", {
       method: "POST",
       credentials: "include",
@@ -99,6 +103,9 @@ export const authApi = {
       body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }),
     });
     if (!response.ok) throw await errorFromResponse(response);
+
+    const body = (await response.json()) as { access_token: string };
+    return { accessToken: body.access_token };
   },
 
   async updateEmail(accessToken: string, email: string): Promise<User> {

@@ -211,6 +211,10 @@ type changePasswordRequest struct {
 	NewPassword     string `json:"new_password"`
 }
 
+type changePasswordResponse struct {
+	AccessToken string `json:"access_token"`
+}
+
 func (h *AuthHandler) ChangePassword(w http.ResponseWriter, r *http.Request) {
 	userID, ok := httpauth.UserIDFromContext(r.Context())
 	if !ok {
@@ -224,12 +228,14 @@ func (h *AuthHandler) ChangePassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	err := h.auth.ChangePassword(r.Context(), userID, req.CurrentPassword, req.NewPassword)
+	result, err := h.auth.ChangePassword(r.Context(), userID, req.CurrentPassword, req.NewPassword)
 	if respondError(w, err, changePasswordErrors, "failed to change password") {
 		return
 	}
 
-	w.WriteHeader(http.StatusNoContent)
+	setRefreshCookie(w, result.RefreshToken, result.RefreshTokenExpiresAt)
+
+	httpresponse.JSON(w, http.StatusOK, changePasswordResponse{AccessToken: result.AccessToken})
 }
 
 func setRefreshCookie(w http.ResponseWriter, value string, expires time.Time) {
