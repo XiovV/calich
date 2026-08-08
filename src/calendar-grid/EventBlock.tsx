@@ -93,6 +93,7 @@ export function EventBlock({
         end={occurrence.end}
         blockStyle={blockStyle}
         isPast={isPast}
+        hasAttachments={Boolean(event.attachments?.length)}
       />
       {!isReadOnly && (
         <div

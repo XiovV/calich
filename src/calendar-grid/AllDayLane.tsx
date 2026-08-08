@@ -1,4 +1,5 @@
 import { isSameDay } from "date-fns";
+import { AttachmentIndicator } from "./AttachmentIndicator";
 import { canWriteCalendarEvents, getCalendarById } from "../lib/calendar";
 import { getCalendarBlockStyle } from "../lib/calendarColors";
 import { useCalendarsStore } from "../lib/calendarsStore";
@@ -83,9 +84,12 @@ export function AllDayLane({
                     }
                   }}
                   style={blockStyle}
-                  className={`cursor-pointer truncate rounded-shell-sm px-1 text-left text-label-sm ${isDragging ? "invisible" : ""}`}
+                  className={`flex w-full cursor-pointer items-center gap-1 rounded-shell-sm px-1 text-left text-label-sm ${isDragging ? "invisible" : ""}`}
                 >
-                  {occurrence.event.title}
+                  <span className="truncate">{occurrence.event.title}</span>
+                  <AttachmentIndicator
+                    hasAttachments={Boolean(occurrence.event.attachments?.length)}
+                  />
                 </button>
               );
             })}

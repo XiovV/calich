@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { format } from "date-fns";
+import { AttachmentIndicator } from "./AttachmentIndicator";
 import { occurrenceKey, type Occurrence } from "../lib/occurrence";
 import type { DraftBlock } from "../lib/gridTime";
 import { canWriteCalendarEvents, getCalendarById } from "../lib/calendar";
@@ -131,11 +132,16 @@ export function MonthDayCell({
                 }
               }}
               style={blockStyle}
-              className="cursor-pointer truncate rounded-shell-sm px-1 text-left text-label-sm"
+              className="flex w-full cursor-pointer items-center gap-1 rounded-shell-sm px-1 text-left text-label-sm"
             >
-              {occurrence.event.allDay
-                ? occurrence.event.title
-                : `${format(occurrence.start, timePattern)} ${occurrence.event.title}`}
+              <span className="truncate">
+                {occurrence.event.allDay
+                  ? occurrence.event.title
+                  : `${format(occurrence.start, timePattern)} ${occurrence.event.title}`}
+              </span>
+              <AttachmentIndicator
+                hasAttachments={Boolean(occurrence.event.attachments?.length)}
+              />
             </button>
           );
         })}
