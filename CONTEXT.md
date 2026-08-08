@@ -18,14 +18,18 @@ _Avoid_: calendar list item, source
 
 **Calendar color**:
 The single color a Calendar is displayed in, inherited by every Occurrence it contains — an arbitrary sRGB value with an alpha channel, not a choice from a fixed set. Set by the Owner and shared by every client rather than being each client's private preference: whoever writes last wins, there is no conflict detection, and no bound on how long two clients may disagree. A User with Access may shadow it with a personal override that applies to them alone. See ADR-0029, ADR-0038.
-_Avoid_: calendar colour (in prose), event color (Events have none of their own), color enum
+_Avoid_: calendar colour (in prose), color enum
 
 **Swatch**:
-One of the eight curated colors the web app offers as one-click quick picks when choosing a Calendar color. A convenience for the person picking, never a constraint on what a Calendar color may be — a Calendar whose color matches no Swatch is ordinary, not invalid, and is what a native client setting its own color normally produces.
+One of the eight curated colors the web app offers as one-click quick picks when choosing a Calendar color or an Event color. A convenience for the person picking, never a constraint on what either color may be — a Calendar or Event whose color matches no Swatch is ordinary, not invalid, and is what a native client setting its own color normally produces.
 _Avoid_: palette color, preset, theme color
 
+**Event color**:
+An optional color on a Master or Override, in the same arbitrary-hex value space as Calendar color, that wins outright over the Calendar's color for that Occurrence when set. Absent by default, in which case the Occurrence renders in whatever Calendar color would otherwise resolve for the viewer — an Event does not have to have a color, and most don't. A Calendar's color is shared, resolved-per-viewer state (Owner's value, or that viewer's personal override, ADR-0038); an Event color has no such per-viewer layer — it is one value, set by an Editor, seen identically by everyone with Access. See ADR-0029, ADR-0043.
+_Avoid_: event colour (in prose), custom color, color override (ambiguous with Calendar color's per-User override, which is a different mechanism)
+
 **Event**:
-The stored, saved unit — a titled time block belonging to a single Calendar, with a start, an end, zero or more Reminders, and an optional Recurrence rule. Its start/end define the first occurrence and the duration every Occurrence inherits. A non-recurring Event is a series of one. Distinct from the Occurrences it produces on the grid.
+The stored, saved unit — a titled time block belonging to a single Calendar, with a start, an end, zero or more Reminders, an optional Recurrence rule, and an optional Event color. Its start/end define the first occurrence and the duration every Occurrence inherits. A non-recurring Event is a series of one. Distinct from the Occurrences it produces on the grid.
 _Avoid_: appointment, meeting, entry
 
 **Recurrence rule**:
@@ -36,11 +40,11 @@ _Avoid_: repeat pattern, schedule, recurrence pattern
 A single dated instance produced by expanding an Event's Recurrence rule over a date window. Occurrences are computed, never stored; they are what the grid actually renders (an Event chip or timed block is an Occurrence, not an Event). A non-recurring Event yields exactly one Occurrence. Identified by `(eventId, occurrenceStart)`, where `occurrenceStart` is the datetime the rule produced (its iCalendar `RECURRENCE-ID`).
 
 **Master**:
-The Event row that carries the Recurrence rule and anchors a series. Its title/start/end/calendar are the defaults every Occurrence inherits unless an Override replaces them, and it is the row a series' Attachments hang off. A non-recurring Event is a Master with no rule.
+The Event row that carries the Recurrence rule and anchors a series. Its title/start/end/calendar/Event color are the defaults every Occurrence inherits unless an Override replaces them, and it is the row a series' Attachments hang off. A non-recurring Event is a Master with no rule.
 _Avoid_: parent event, root event
 
 **Override**:
-A stored Event row that replaces one Occurrence of a series with its own full title/start/end/calendar, keyed to the Occurrence it replaces by its original start (iCalendar `RECURRENCE-ID`). Produced by editing "this event" on a recurring Occurrence. A complete standalone instance, not a diff.
+A stored Event row that replaces one Occurrence of a series with its own full title/start/end/calendar/Event color, keyed to the Occurrence it replaces by its original start (iCalendar `RECURRENCE-ID`). Produced by editing "this event" on a recurring Occurrence. A complete standalone instance, not a diff.
 _Avoid_: exception (that's the cancellation), detached event, instance edit
 
 **Exception**:
