@@ -13,6 +13,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/XiovV/calendar/server/internal/attachmentstore"
 	"github.com/XiovV/calendar/server/internal/db"
 	"github.com/XiovV/calendar/server/internal/httpauth"
 	"github.com/XiovV/calendar/server/internal/repository"
@@ -121,7 +122,7 @@ func newEventTestServerWithServices(t *testing.T) (baseURL, accessToken, calenda
 	}
 
 	events = service.NewEventService(sqlDB, repository.NewEventRepository(sqlDB), repository.NewEventExceptionRepository(sqlDB), repository.NewEventReminderRepository(sqlDB), repository.NewReminderOverrideRepository(sqlDB), repository.NewSyncRepository(sqlDB), calendars, users, repository.NewAttachmentRepository(sqlDB))
-	eventHandler := NewEventHandler(events)
+	eventHandler := NewEventHandler(events, attachmentstore.New(t.TempDir()))
 
 	r := chi.NewRouter()
 	r.Route("/api/events", func(r chi.Router) {

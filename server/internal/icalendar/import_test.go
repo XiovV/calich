@@ -56,7 +56,7 @@ END:VCALENDAR
 // ICSAll emits for an empty owned Calendar (#92) is importable by this
 // app's own importer, reporting 0 events while its name and color survive.
 func TestParseImportFile_RoundTripsEmptyCalendar(t *testing.T) {
-	cal, err := CalendarToICal("Work", "#12809CFF", nil, nil)
+	cal, err := CalendarToICal("Work", "#12809CFF", nil, nil, SerializationTarget{})
 	if err != nil {
 		t.Fatalf("CalendarToICal: %v", err)
 	}

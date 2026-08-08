@@ -9,6 +9,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/XiovV/calendar/server/internal/attachmentstore"
 	"github.com/XiovV/calendar/server/internal/db"
 	"github.com/XiovV/calendar/server/internal/httpauth"
 	"github.com/XiovV/calendar/server/internal/repository"
@@ -66,8 +67,9 @@ func newReminderOverrideTestServer(t *testing.T) reminderOverrideTestServer {
 	events := service.NewEventService(sqlDB, repository.NewEventRepository(sqlDB), repository.NewEventExceptionRepository(sqlDB), repository.NewEventReminderRepository(sqlDB), repository.NewReminderOverrideRepository(sqlDB), repository.NewSyncRepository(sqlDB), calendars, users, repository.NewAttachmentRepository(sqlDB))
 	imports := service.NewImportService(events, calendars)
 	subscriptions := service.NewSubscribeService(events, calendars, 0, service.WithHTTPClient(&http.Client{}))
-	calendarHandler := NewCalendarHandler(calendars, events, imports, subscriptions)
-	eventHandler := NewEventHandler(events)
+	attachmentStore := attachmentstore.New(t.TempDir())
+	calendarHandler := NewCalendarHandler(calendars, events, imports, subscriptions, attachmentStore)
+	eventHandler := NewEventHandler(events, attachmentStore)
 
 	r := chi.NewRouter()
 	r.Route("/api", func(r chi.Router) {

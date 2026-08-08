@@ -1,4 +1,38 @@
+import { authedFetch, errorFromResponse } from "./apiClient";
 import { downloadBlob } from "./downloadBlob";
+
+/** One Attachment an export's Export summary pre-flight found too large to
+ * inline (ADR-0041) — named by filename, size, and the Event it hangs off. */
+export interface OversizedAttachment {
+  filename: string;
+  sizeBytes: number;
+  eventTitle: string;
+  eventId: string;
+}
+
+/** The Export summary pre-flight's result (ADR-0041): oversized carries up
+ * to a handful of samples (capped server-side), count is the true total —
+ * a caller with more oversized Attachments than fit in oversized still
+ * knows how many there are. */
+export interface ExportSummary {
+  oversized: OversizedAttachment[];
+  count: number;
+}
+
+interface ExportSummaryWire {
+  oversized?: OversizedAttachment[];
+  count: number;
+}
+
+function fromExportSummaryWire(wire: ExportSummaryWire): ExportSummary {
+  return { oversized: wire.oversized ?? [], count: wire.count };
+}
+
+async function fetchExportSummary(accessToken: string, url: string): Promise<ExportSummary> {
+  const response = await authedFetch(accessToken, url, { credentials: "include" });
+  if (!response.ok) throw await errorFromResponse(response);
+  return fromExportSummaryWire((await response.json()) as ExportSummaryWire);
+}
 
 /**
  * A filename built client-side from a Calendar/Event name — sidesteps RFC
@@ -56,5 +90,26 @@ export const icsApi = {
   /** Downloads every Calendar as a .zip of .ics files. */
   async downloadAllCalendars(accessToken: string): Promise<void> {
     await downloadBlob(accessToken, "/api/calendars/ics", "calendars.zip");
+  },
+
+  /**
+   * The Export summary pre-flight (ADR-0041) for a single Event's
+   * whole-series download: which Attachments (if any) would be omitted for
+   * being too large to inline. Metadata-only — no file is generated. Not
+   * meaningful for scope "occurrence": a flattened Occurrence never carries
+   * an Attachment to begin with.
+   */
+  eventOversizedAttachments(accessToken: string, eventId: string): Promise<ExportSummary> {
+    return fetchExportSummary(accessToken, `/api/events/${eventId}/ics/oversized-attachments`);
+  },
+
+  /** The Export summary pre-flight for one Calendar's download. */
+  calendarOversizedAttachments(accessToken: string, calendarId: string): Promise<ExportSummary> {
+    return fetchExportSummary(accessToken, `/api/calendars/${calendarId}/ics/oversized-attachments`);
+  },
+
+  /** The Export summary pre-flight for the download-all zip. */
+  allCalendarsOversizedAttachments(accessToken: string): Promise<ExportSummary> {
+    return fetchExportSummary(accessToken, "/api/calendars/ics/oversized-attachments");
   },
 };

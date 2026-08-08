@@ -93,8 +93,8 @@ func main() {
 	subscribeService := service.NewSubscribeService(eventService, calendarService, cfg.SubscriptionRefreshInterval)
 
 	authHandler := handlers.NewAuthHandler(authService, cfg.SMTPConfigured())
-	calendarHandler := handlers.NewCalendarHandler(calendarService, eventService, importService, subscribeService)
-	eventHandler := handlers.NewEventHandler(eventService)
+	calendarHandler := handlers.NewCalendarHandler(calendarService, eventService, importService, subscribeService, attachmentStore)
+	eventHandler := handlers.NewEventHandler(eventService, attachmentStore)
 	attachmentHandler := handlers.NewAttachmentHandler(attachmentService, cfg.MaxAttachmentSize)
 	notificationHandler := handlers.NewNotificationHandler(notificationService)
 	appPasswordHandler := handlers.NewAppPasswordHandler(appPasswordService)

@@ -13,6 +13,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
+	"github.com/XiovV/calendar/server/internal/attachmentstore"
 	"github.com/XiovV/calendar/server/internal/httpauth"
 	"github.com/XiovV/calendar/server/internal/httpresponse"
 	"github.com/XiovV/calendar/server/internal/icalendar"
@@ -25,10 +26,11 @@ type CalendarHandler struct {
 	events        *service.EventService
 	imports       *service.ImportService
 	subscriptions *service.SubscribeService
+	attachments   *attachmentstore.Store
 }
 
-func NewCalendarHandler(calendars *service.CalendarService, events *service.EventService, imports *service.ImportService, subscriptions *service.SubscribeService) *CalendarHandler {
-	return &CalendarHandler{calendars: calendars, events: events, imports: imports, subscriptions: subscriptions}
+func NewCalendarHandler(calendars *service.CalendarService, events *service.EventService, imports *service.ImportService, subscriptions *service.SubscribeService, attachments *attachmentstore.Store) *CalendarHandler {
+	return &CalendarHandler{calendars: calendars, events: events, imports: imports, subscriptions: subscriptions, attachments: attachments}
 }
 
 type calendarResponse struct {
@@ -343,7 +345,7 @@ func (h *CalendarHandler) icsForCalendar(ctx context.Context, userID int64, cale
 		return nil, err
 	}
 
-	cal, err := icalendar.CalendarToICal(calendar.Name, calendar.Color, masters, overridesByParent)
+	cal, err := icalendar.CalendarToICal(calendar.Name, calendar.Color, masters, overridesByParent, calendarFileTarget(h.attachments))
 	if err != nil {
 		return nil, err
 	}

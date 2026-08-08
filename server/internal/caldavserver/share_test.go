@@ -141,7 +141,7 @@ func TestSharedCalendar_ViewerPutIsForbidden(t *testing.T) {
 		End:       time.Date(2026, 6, 1, 9, 30, 0, 0, time.UTC),
 		CreatedAt: time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC),
 	}
-	cal, err := icalendar.SeriesToICal(master, nil, attachmentsBasePath)
+	cal, err := icalendar.SeriesToICal(master, nil, icalendar.CalDAVTarget(attachmentsBasePath))
 	if err != nil {
 		t.Fatalf("seriesToICal: %v", err)
 	}
@@ -195,7 +195,7 @@ func TestSharedCalendar_EditorCanCreateModifyDelete(t *testing.T) {
 		End:       time.Date(2026, 6, 1, 9, 30, 0, 0, time.UTC),
 		CreatedAt: time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC),
 	}
-	cal, err := icalendar.SeriesToICal(master, nil, attachmentsBasePath)
+	cal, err := icalendar.SeriesToICal(master, nil, icalendar.CalDAVTarget(attachmentsBasePath))
 	if err != nil {
 		t.Fatalf("seriesToICal: %v", err)
 	}
@@ -214,7 +214,7 @@ func TestSharedCalendar_EditorCanCreateModifyDelete(t *testing.T) {
 
 	updated := stored
 	updated.Title = "Standup (edited by editor)"
-	updatedCal, err := icalendar.SeriesToICal(updated, nil, attachmentsBasePath)
+	updatedCal, err := icalendar.SeriesToICal(updated, nil, icalendar.CalDAVTarget(attachmentsBasePath))
 	if err != nil {
 		t.Fatalf("seriesToICal: %v", err)
 	}

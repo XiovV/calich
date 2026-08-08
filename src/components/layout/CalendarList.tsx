@@ -11,9 +11,10 @@ import { useEventsStore } from "../../lib/eventsStore";
 import { useShellStore } from "../../lib/shellStore";
 import { deleteCalendarCascade } from "../../lib/deleteCalendarCascade";
 import { leaveCalendarCascade } from "../../lib/leaveCalendarCascade";
-import { icsApi } from "../../lib/icsApi";
+import { icsApi, type ExportSummary } from "../../lib/icsApi";
 import { ApiError } from "../../lib/apiClient";
 import { toast } from "../../lib/toast";
+import { ExportSummaryDialog } from "../ExportSummaryDialog";
 import { CalendarModal } from "./CalendarModal";
 import { SubscribeCalendarModal } from "./SubscribeCalendarModal";
 import { DeleteCalendarConfirmation } from "./DeleteCalendarConfirmation";
@@ -61,6 +62,11 @@ export function CalendarList() {
   const [refreshingCalendarIds, setRefreshingCalendarIds] = useState<
     Set<string>
   >(new Set());
+  const [pendingExport, setPendingExport] = useState<{
+    calendar: Calendar;
+    summary: ExportSummary;
+  } | null>(null);
+  const [isConfirmingExport, setIsConfirmingExport] = useState(false);
 
   // A Calendar shared with the viewer is grouped by whose it is, not by
   // where its Events come from (#114) — a Subscribed Calendar someone else
@@ -95,7 +101,7 @@ export function CalendarList() {
     setLeavingCalendarId(null);
   }
 
-  async function handleDownload(calendar: Calendar) {
+  async function downloadCalendar(calendar: Calendar) {
     if (!accessToken) return;
     try {
       await icsApi.downloadCalendar(accessToken, calendar.id, calendar.name);
@@ -105,6 +111,34 @@ export function CalendarList() {
       } else {
         toast.error("Failed to download calendar.");
       }
+    }
+  }
+
+  // The Export summary pre-flight (#134, ADR-0041): nothing oversized keeps
+  // this a single click, exactly like before.
+  async function handleDownload(calendar: Calendar) {
+    if (!accessToken) return;
+    try {
+      const summary = await icsApi.calendarOversizedAttachments(accessToken, calendar.id);
+      if (summary.count === 0) {
+        await downloadCalendar(calendar);
+      } else {
+        setPendingExport({ calendar, summary });
+      }
+    } catch {
+      toast.error("Failed to check attachments before download.");
+    }
+  }
+
+  async function handleConfirmExport() {
+    if (!pendingExport) return;
+    const { calendar } = pendingExport;
+    setIsConfirmingExport(true);
+    try {
+      await downloadCalendar(calendar);
+    } finally {
+      setIsConfirmingExport(false);
+      setPendingExport(null);
     }
   }
 
@@ -323,6 +357,14 @@ export function CalendarList() {
           calendar={leavingCalendar}
           onConfirm={handleConfirmLeave}
           onClose={() => setLeavingCalendarId(null)}
+        />
+      )}
+      {pendingExport && (
+        <ExportSummaryDialog
+          summary={pendingExport.summary}
+          isSubmitting={isConfirmingExport}
+          onConfirm={handleConfirmExport}
+          onClose={() => setPendingExport(null)}
         />
       )}
     </div>

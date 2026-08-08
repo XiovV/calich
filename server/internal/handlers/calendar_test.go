@@ -11,6 +11,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/XiovV/calendar/server/internal/attachmentstore"
 	"github.com/XiovV/calendar/server/internal/db"
 	"github.com/XiovV/calendar/server/internal/httpauth"
 	"github.com/XiovV/calendar/server/internal/repository"
@@ -45,7 +46,7 @@ func newCalendarTestServer(t *testing.T) (baseURL string, accessToken string) {
 	// this package's tests: the feed servers below are httptest.Server
 	// instances on loopback, exactly what the guard exists to block.
 	subscriptions := service.NewSubscribeService(events, calendars, 0, service.WithHTTPClient(&http.Client{}))
-	calendarHandler := NewCalendarHandler(calendars, events, imports, subscriptions)
+	calendarHandler := NewCalendarHandler(calendars, events, imports, subscriptions, attachmentstore.New(t.TempDir()))
 
 	r := chi.NewRouter()
 	r.Route("/api/calendars", func(r chi.Router) {

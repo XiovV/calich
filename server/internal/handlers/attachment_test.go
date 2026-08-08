@@ -120,7 +120,7 @@ func newAttachmentTestServer(t *testing.T, maxAttachmentSize int64, maxAttachmen
 
 	store := attachmentstore.New(t.TempDir())
 	attachments := service.NewAttachmentService(attachmentRepo, repository.NewEventRepository(sqlDB), calendars, events, store, maxAttachmentsPerEvent)
-	eventHandler := NewEventHandler(events)
+	eventHandler := NewEventHandler(events, store)
 	attachmentHandler := NewAttachmentHandler(attachments, maxAttachmentSize)
 
 	r := chi.NewRouter()

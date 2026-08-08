@@ -48,12 +48,14 @@ func New(logger *slog.Logger, authHandler *handlers.AuthHandler, calendarHandler
 			r.Get("/", calendarHandler.List)
 			r.Post("/", calendarHandler.Create)
 			r.Get("/ics", calendarHandler.ICSAll)
+			r.Get("/ics/oversized-attachments", calendarHandler.ICSAllOversizedAttachments)
 			r.Post("/import", calendarHandler.Import)
 			r.Post("/subscribe", calendarHandler.Subscribe)
 			r.Get("/{id}", calendarHandler.Get)
 			r.Patch("/{id}", calendarHandler.Update)
 			r.Delete("/{id}", calendarHandler.Delete)
 			r.Get("/{id}/ics", calendarHandler.ICS)
+			r.Get("/{id}/ics/oversized-attachments", calendarHandler.ICSOversizedAttachments)
 			r.Post("/{id}/refresh", calendarHandler.Refresh)
 
 			// Sharing (ADR-0034): grant/revoke/list are Owner-only,
@@ -77,6 +79,7 @@ func New(logger *slog.Logger, authHandler *handlers.AuthHandler, calendarHandler
 			r.Post("/{id}/exceptions", eventHandler.AddException)
 			r.Post("/{id}/reparent", eventHandler.Reparent)
 			r.Get("/{id}/ics", eventHandler.ICS)
+			r.Get("/{id}/ics/oversized-attachments", eventHandler.ICSOversizedAttachments)
 
 			// Per-User Reminder overrides (#105, ADR-0036): a personal
 			// delivery preference, open to any Access level (Viewer

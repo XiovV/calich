@@ -5,6 +5,7 @@ package handlers
 
 import (
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -13,11 +14,22 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
+	"github.com/XiovV/calendar/server/internal/attachmentstore"
 	"github.com/XiovV/calendar/server/internal/httpauth"
 	"github.com/XiovV/calendar/server/internal/httpresponse"
 	"github.com/XiovV/calendar/server/internal/icalendar"
 	"github.com/XiovV/calendar/server/internal/service"
 )
+
+// calendarFileTarget builds the icalendar.SerializationTarget every export
+// call site renders ATTACH with (ADR-0041): bytes inlined from store, capped
+// at maxImportUploadBytes — the same cap the ICS importer enforces, so a
+// file this instance produces is a file it could accept back.
+func calendarFileTarget(store *attachmentstore.Store) icalendar.SerializationTarget {
+	return icalendar.CalendarFileTarget(maxImportUploadBytes, func(id string) (io.ReadCloser, error) {
+		return store.Open(id)
+	})
+}
 
 var occurrenceErrors = alsoHandling(eventNotFoundErrors,
 	errorCase{service.ErrOccurrenceNotFound, notFound("occurrence not found")},
@@ -59,9 +71,9 @@ func (h *EventHandler) icsAll(w http.ResponseWriter, r *http.Request, userID int
 		return
 	}
 
-	// This standalone .ics is a Calendar file (ADR-0041): no ATTACH at all
-	// (inline ATTACH for export is future work).
-	cal, err := icalendar.SeriesToICal(master, overrides, icalendar.NoManagedAttachments)
+	// This standalone .ics is a Calendar file (ADR-0041): its Attachments'
+	// bytes are inlined rather than referenced.
+	cal, err := icalendar.SeriesToICal(master, overrides, calendarFileTarget(h.attachments))
 	if err != nil {
 		httpresponse.Error(w, http.StatusInternalServerError, "internal_error", "failed to build calendar object")
 		return

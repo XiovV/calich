@@ -81,3 +81,68 @@ describe("icsApi.downloadAllCalendars", () => {
     expect(downloadBlobMock).toHaveBeenCalledWith("token-123", "/api/calendars/ics", "calendars.zip");
   });
 });
+
+function jsonResponse(status: number, body: unknown): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
+
+describe("icsApi export pre-flight (ADR-0041)", () => {
+  it("eventOversizedAttachments fetches the event's oversized-attachments endpoint", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(jsonResponse(200, { oversized: [{ filename: "huge.bin", sizeBytes: 20_000_000, eventTitle: "Standup", eventId: "evt-1" }], count: 1 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const summary = await icsApi.eventOversizedAttachments("token-123", "evt-1");
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/events/evt-1/ics/oversized-attachments",
+      expect.objectContaining({ credentials: "include" }),
+    );
+    expect(summary).toEqual({
+      oversized: [{ filename: "huge.bin", sizeBytes: 20_000_000, eventTitle: "Standup", eventId: "evt-1" }],
+      count: 1,
+    });
+  });
+
+  it("calendarOversizedAttachments fetches the calendar's oversized-attachments endpoint", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, { count: 0 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const summary = await icsApi.calendarOversizedAttachments("token-123", "cal-1");
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/calendars/cal-1/ics/oversized-attachments",
+      expect.objectContaining({ credentials: "include" }),
+    );
+    expect(summary).toEqual({ oversized: [], count: 0 });
+  });
+
+  it("allCalendarsOversizedAttachments fetches the download-all oversized-attachments endpoint", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, { count: 0 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await icsApi.allCalendarsOversizedAttachments("token-123");
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/calendars/ics/oversized-attachments",
+      expect.objectContaining({ credentials: "include" }),
+    );
+  });
+
+  it("throws an ApiError on a non-ok response", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(jsonResponse(404, { error: { code: "not_found", message: "not found" } }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(icsApi.eventOversizedAttachments("token-123", "evt-missing")).rejects.toThrow();
+  });
+});

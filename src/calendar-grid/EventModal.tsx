@@ -39,8 +39,9 @@ import { useShellStore } from "../lib/shellStore";
 import { useEventsStore } from "../lib/eventsStore";
 import { useCalendarsStore } from "../lib/calendarsStore";
 import { useAuthStore } from "../lib/authStore";
-import { icsApi } from "../lib/icsApi";
+import { icsApi, type ExportSummary } from "../lib/icsApi";
 import { toast } from "../lib/toast";
+import { ExportSummaryDialog } from "../components/ExportSummaryDialog";
 import { Select } from "../components/ui/Select";
 import { Input } from "../components/ui/Input";
 import { Textarea } from "../components/ui/Textarea";
@@ -253,6 +254,8 @@ export function EventModal(props: EventModalProps) {
   const [isDiscardWarningOpen, setIsDiscardWarningOpen] = useState(false);
   const [isDeleteScopePickerOpen, setIsDeleteScopePickerOpen] = useState(false);
   const [isDownloadScopePickerOpen, setIsDownloadScopePickerOpen] = useState(false);
+  const [pendingExportSummary, setPendingExportSummary] = useState<ExportSummary | null>(null);
+  const [isConfirmingExport, setIsConfirmingExport] = useState(false);
 
   // Preset labels are derived from the event's start date, so e.g. "Weekly on
   // Tuesday" tracks the day the event lives on.
@@ -599,17 +602,48 @@ export function EventModal(props: EventModalProps) {
     }
   }
 
+  // The Export summary pre-flight (#134, ADR-0041): a flattened Occurrence
+  // never carries an Attachment, so only scope "all" needs the check. When
+  // nothing is oversized this stays a single click, same as before.
+  async function runDownload(scope: "all" | "occurrence") {
+    if (mode !== "edit" || !accessToken) return;
+    if (scope === "occurrence") {
+      await downloadEvent("occurrence");
+      return;
+    }
+    try {
+      const summary = await icsApi.eventOversizedAttachments(accessToken, props.occurrence.event.id);
+      if (summary.count === 0) {
+        await downloadEvent("all");
+      } else {
+        setPendingExportSummary(summary);
+      }
+    } catch {
+      toast.error("Failed to check attachments before download.");
+    }
+  }
+
   function handleDownloadClick() {
     if (isRecurring) {
       setIsDownloadScopePickerOpen(true);
       return;
     }
-    downloadEvent("all");
+    void runDownload("all");
   }
 
   function handleDownloadScopeConfirm(scope: EditScope) {
     setIsDownloadScopePickerOpen(false);
-    downloadEvent(scope === "all" ? "all" : "occurrence");
+    void runDownload(scope === "all" ? "all" : "occurrence");
+  }
+
+  async function handleConfirmExport() {
+    setIsConfirmingExport(true);
+    try {
+      await downloadEvent("all");
+    } finally {
+      setIsConfirmingExport(false);
+      setPendingExportSummary(null);
+    }
   }
 
   // Submit on Enter from anywhere in the dialog (base-ui may leave focus on the
@@ -940,6 +974,14 @@ export function EventModal(props: EventModalProps) {
           scopes={["this", "all"]}
           onConfirm={handleDownloadScopeConfirm}
           onClose={() => setIsDownloadScopePickerOpen(false)}
+        />
+      )}
+      {pendingExportSummary && (
+        <ExportSummaryDialog
+          summary={pendingExportSummary}
+          isSubmitting={isConfirmingExport}
+          onConfirm={handleConfirmExport}
+          onClose={() => setPendingExportSummary(null)}
         />
       )}
       {pendingEditChanges && !isDiscardWarningOpen && (

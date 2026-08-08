@@ -8,11 +8,13 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/XiovV/calendar/server/internal/attachmentstore"
 	"github.com/XiovV/calendar/server/internal/db"
 	"github.com/XiovV/calendar/server/internal/httpauth"
 	"github.com/XiovV/calendar/server/internal/icalendar"
@@ -25,11 +27,14 @@ import (
 // tests can set up series/overrides without going through the JSON write
 // endpoints.
 type icsTestEnv struct {
-	baseURL     string
-	accessToken string
-	calendarID  string
-	events      *service.EventService
-	calendars   *service.CalendarService
+	baseURL        string
+	accessToken    string
+	calendarID     string
+	userID         int64
+	events         *service.EventService
+	calendars      *service.CalendarService
+	attachments    *service.AttachmentService
+	attachmentRepo *repository.AttachmentRepository
 }
 
 func newICSTestEnv(t *testing.T) icsTestEnv {
@@ -64,25 +69,31 @@ func newICSTestEnv(t *testing.T) icsTestEnv {
 		t.Fatalf("create calendar: %v", err)
 	}
 
-	events := service.NewEventService(sqlDB, repository.NewEventRepository(sqlDB), repository.NewEventExceptionRepository(sqlDB), repository.NewEventReminderRepository(sqlDB), repository.NewReminderOverrideRepository(sqlDB), repository.NewSyncRepository(sqlDB), calendars, users, repository.NewAttachmentRepository(sqlDB))
-	eventHandler := NewEventHandler(events)
-	calendarHandler := NewCalendarHandler(calendars, events, service.NewImportService(events, calendars), service.NewSubscribeService(events, calendars, 0))
+	attachmentRepo := repository.NewAttachmentRepository(sqlDB)
+	events := service.NewEventService(sqlDB, repository.NewEventRepository(sqlDB), repository.NewEventExceptionRepository(sqlDB), repository.NewEventReminderRepository(sqlDB), repository.NewReminderOverrideRepository(sqlDB), repository.NewSyncRepository(sqlDB), calendars, users, attachmentRepo)
+	attachmentStore := attachmentstore.New(t.TempDir())
+	attachments := service.NewAttachmentService(attachmentRepo, repository.NewEventRepository(sqlDB), calendars, events, attachmentStore, 10)
+	eventHandler := NewEventHandler(events, attachmentStore)
+	calendarHandler := NewCalendarHandler(calendars, events, service.NewImportService(events, calendars), service.NewSubscribeService(events, calendars, 0), attachmentStore)
 
 	r := chi.NewRouter()
 	r.Route("/api/events", func(r chi.Router) {
 		r.Use(httpauth.RequireAuth(auth))
 		r.Get("/{id}/ics", eventHandler.ICS)
+		r.Get("/{id}/ics/oversized-attachments", eventHandler.ICSOversizedAttachments)
 	})
 	r.Route("/api/calendars", func(r chi.Router) {
 		r.Use(httpauth.RequireAuth(auth))
 		r.Get("/ics", calendarHandler.ICSAll)
+		r.Get("/ics/oversized-attachments", calendarHandler.ICSAllOversizedAttachments)
 		r.Get("/{id}/ics", calendarHandler.ICS)
+		r.Get("/{id}/ics/oversized-attachments", calendarHandler.ICSOversizedAttachments)
 	})
 
 	srv := httptest.NewServer(r)
 	t.Cleanup(srv.Close)
 
-	return icsTestEnv{baseURL: srv.URL, accessToken: loginResult.AccessToken, calendarID: cal.ID, events: events, calendars: calendars}
+	return icsTestEnv{baseURL: srv.URL, accessToken: loginResult.AccessToken, calendarID: cal.ID, userID: userID, events: events, calendars: calendars, attachments: attachments, attachmentRepo: attachmentRepo}
 }
 
 func (env icsTestEnv) get(t *testing.T, path string) *http.Response {
@@ -666,4 +677,206 @@ func containsAll(s string, substrs ...string) bool {
 		}
 	}
 	return true
+}
+
+// createFakeOversizedAttachment inserts an Attachment row claiming
+// sizeBytes without writing that many bytes to disk (#134, ADR-0041): the
+// inline ceiling is checked against the stored size before anything is
+// opened, so a fake metadata-only row is enough to exercise "omitted, not
+// inlined" without an actual 11MB fixture.
+func createFakeOversizedAttachment(t *testing.T, env icsTestEnv, eventID, filename string, sizeBytes int64) {
+	t.Helper()
+	if _, err := env.attachmentRepo.Create(context.Background(), "fake-"+filename, eventID, &env.userID, filename, "application/octet-stream", sizeBytes); err != nil {
+		t.Fatalf("create fake oversized attachment: %v", err)
+	}
+}
+
+func TestEventHandler_ICS_InlinesAttachmentBytes(t *testing.T) {
+	env := newICSTestEnv(t)
+	ctx := context.Background()
+	start := time.Date(2026, 6, 2, 9, 0, 0, 0, time.UTC)
+	end := time.Date(2026, 6, 2, 9, 30, 0, 0, time.UTC)
+
+	master, err := env.events.Create(ctx, env.userID, "evt-1", service.EventWrite{
+		CalendarID: env.calendarID, Title: "Standup", Start: start, End: end,
+	})
+	if err != nil {
+		t.Fatalf("create master: %v", err)
+	}
+	if _, err := env.attachments.Upload(ctx, env.userID, master.ID, "notes.txt", "text/plain", strings.NewReader("hello world")); err != nil {
+		t.Fatalf("upload attachment: %v", err)
+	}
+
+	resp := env.get(t, "/api/events/"+master.ID+"/ics")
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	text := string(body)
+
+	if !containsAll(text, "ENCODING=BASE64", "VALUE=BINARY", "FMTTYPE=text/plain", "FILENAME=notes.txt") {
+		t.Fatalf("expected an inline ATTACH, got:\n%s", text)
+	}
+	if bytes.Contains(body, []byte("MANAGED-ID")) {
+		t.Fatalf("expected no managed-attachment reference in an export, got:\n%s", text)
+	}
+}
+
+func TestEventHandler_ICS_OmitsOversizedAttachment(t *testing.T) {
+	env := newICSTestEnv(t)
+	ctx := context.Background()
+	start := time.Date(2026, 6, 2, 9, 0, 0, 0, time.UTC)
+	end := time.Date(2026, 6, 2, 9, 30, 0, 0, time.UTC)
+
+	master, err := env.events.Create(ctx, env.userID, "evt-1", service.EventWrite{
+		CalendarID: env.calendarID, Title: "Standup", Start: start, End: end,
+	})
+	if err != nil {
+		t.Fatalf("create master: %v", err)
+	}
+	createFakeOversizedAttachment(t, env, master.ID, "huge.bin", maxImportUploadBytes+1)
+
+	resp := env.get(t, "/api/events/"+master.ID+"/ics")
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+
+	if bytes.Contains(body, []byte("ATTACH")) {
+		t.Fatalf("expected the oversized attachment to be omitted, got:\n%s", body)
+	}
+}
+
+func TestEventHandler_ICSOversizedAttachments_ReportsOversized(t *testing.T) {
+	env := newICSTestEnv(t)
+	ctx := context.Background()
+	start := time.Date(2026, 6, 2, 9, 0, 0, 0, time.UTC)
+	end := time.Date(2026, 6, 2, 9, 30, 0, 0, time.UTC)
+
+	master, err := env.events.Create(ctx, env.userID, "evt-1", service.EventWrite{
+		CalendarID: env.calendarID, Title: "Standup", Start: start, End: end,
+	})
+	if err != nil {
+		t.Fatalf("create master: %v", err)
+	}
+	createFakeOversizedAttachment(t, env, master.ID, "huge.bin", maxImportUploadBytes+1)
+
+	resp := env.get(t, "/api/events/"+master.ID+"/ics/oversized-attachments")
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	var summary exportSummaryResponse
+	if err := json.NewDecoder(resp.Body).Decode(&summary); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if summary.Count != 1 || len(summary.Oversized) != 1 {
+		t.Fatalf("expected exactly one oversized attachment, got %+v", summary)
+	}
+	got := summary.Oversized[0]
+	if got.Filename != "huge.bin" || got.SizeBytes != maxImportUploadBytes+1 || got.EventTitle != "Standup" || got.EventID != master.ID {
+		t.Fatalf("unexpected entry: %+v", got)
+	}
+}
+
+func TestEventHandler_ICSOversizedAttachments_EmptyWhenNothingOversized(t *testing.T) {
+	env := newICSTestEnv(t)
+	ctx := context.Background()
+	start := time.Date(2026, 6, 2, 9, 0, 0, 0, time.UTC)
+	end := time.Date(2026, 6, 2, 9, 30, 0, 0, time.UTC)
+
+	master, err := env.events.Create(ctx, env.userID, "evt-1", service.EventWrite{
+		CalendarID: env.calendarID, Title: "Standup", Start: start, End: end,
+	})
+	if err != nil {
+		t.Fatalf("create master: %v", err)
+	}
+	if _, err := env.attachments.Upload(ctx, env.userID, master.ID, "notes.txt", "text/plain", strings.NewReader("hello")); err != nil {
+		t.Fatalf("upload attachment: %v", err)
+	}
+
+	resp := env.get(t, "/api/events/"+master.ID+"/ics/oversized-attachments")
+	defer resp.Body.Close()
+
+	var summary exportSummaryResponse
+	if err := json.NewDecoder(resp.Body).Decode(&summary); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if summary.Count != 0 || len(summary.Oversized) != 0 {
+		t.Fatalf("expected no oversized attachments, got %+v", summary)
+	}
+}
+
+func TestCalendarHandler_ICSOversizedAttachments_AggregatesAcrossEvents(t *testing.T) {
+	env := newICSTestEnv(t)
+	ctx := context.Background()
+	start := time.Date(2026, 6, 2, 9, 0, 0, 0, time.UTC)
+	end := time.Date(2026, 6, 2, 9, 30, 0, 0, time.UTC)
+
+	evt1, err := env.events.Create(ctx, env.userID, "evt-1", service.EventWrite{CalendarID: env.calendarID, Title: "Standup", Start: start, End: end})
+	if err != nil {
+		t.Fatalf("create evt-1: %v", err)
+	}
+	evt2, err := env.events.Create(ctx, env.userID, "evt-2", service.EventWrite{CalendarID: env.calendarID, Title: "Retro", Start: start.Add(24 * time.Hour), End: end.Add(24 * time.Hour)})
+	if err != nil {
+		t.Fatalf("create evt-2: %v", err)
+	}
+	createFakeOversizedAttachment(t, env, evt1.ID, "one.bin", maxImportUploadBytes+1)
+	createFakeOversizedAttachment(t, env, evt2.ID, "two.bin", maxImportUploadBytes+2)
+
+	resp := env.get(t, "/api/calendars/"+env.calendarID+"/ics/oversized-attachments")
+	defer resp.Body.Close()
+
+	var summary exportSummaryResponse
+	if err := json.NewDecoder(resp.Body).Decode(&summary); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if summary.Count != 2 {
+		t.Fatalf("expected 2 oversized attachments across the calendar, got %+v", summary)
+	}
+}
+
+func TestCalendarHandler_ICSAllOversizedAttachments_ExcludesSubscribedCalendars(t *testing.T) {
+	env := newICSTestEnv(t)
+	ctx := context.Background()
+	start := time.Date(2026, 6, 2, 9, 0, 0, 0, time.UTC)
+	end := time.Date(2026, 6, 2, 9, 30, 0, 0, time.UTC)
+
+	master, err := env.events.Create(ctx, env.userID, "evt-1", service.EventWrite{CalendarID: env.calendarID, Title: "Standup", Start: start, End: end})
+	if err != nil {
+		t.Fatalf("create master: %v", err)
+	}
+	createFakeOversizedAttachment(t, env, master.ID, "huge.bin", maxImportUploadBytes+1)
+
+	resp := env.get(t, "/api/calendars/ics/oversized-attachments")
+	defer resp.Body.Close()
+
+	var summary exportSummaryResponse
+	if err := json.NewDecoder(resp.Body).Decode(&summary); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if summary.Count != 1 {
+		t.Fatalf("expected 1 oversized attachment from the owned calendar, got %+v", summary)
+	}
+}
+
+func TestCalendarHandler_ICS_InlinesAttachmentBytes(t *testing.T) {
+	env := newICSTestEnv(t)
+	ctx := context.Background()
+	start := time.Date(2026, 6, 2, 9, 0, 0, 0, time.UTC)
+	end := time.Date(2026, 6, 2, 9, 30, 0, 0, time.UTC)
+
+	master, err := env.events.Create(ctx, env.userID, "evt-1", service.EventWrite{CalendarID: env.calendarID, Title: "Standup", Start: start, End: end})
+	if err != nil {
+		t.Fatalf("create master: %v", err)
+	}
+	if _, err := env.attachments.Upload(ctx, env.userID, master.ID, "notes.txt", "text/plain", strings.NewReader("hello")); err != nil {
+		t.Fatalf("upload attachment: %v", err)
+	}
+
+	resp := env.get(t, "/api/calendars/"+env.calendarID+"/ics")
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	text := string(body)
+
+	if !containsAll(text, "ENCODING=BASE64", "FILENAME=notes.txt") {
+		t.Fatalf("expected an inline ATTACH in the per-calendar export, got:\n%s", text)
+	}
 }

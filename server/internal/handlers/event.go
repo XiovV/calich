@@ -9,6 +9,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
+	"github.com/XiovV/calendar/server/internal/attachmentstore"
 	"github.com/XiovV/calendar/server/internal/httpauth"
 	"github.com/XiovV/calendar/server/internal/httpresponse"
 	"github.com/XiovV/calendar/server/internal/repository"
@@ -16,11 +17,12 @@ import (
 )
 
 type EventHandler struct {
-	events *service.EventService
+	events      *service.EventService
+	attachments *attachmentstore.Store
 }
 
-func NewEventHandler(events *service.EventService) *EventHandler {
-	return &EventHandler{events: events}
+func NewEventHandler(events *service.EventService, attachments *attachmentstore.Store) *EventHandler {
+	return &EventHandler{events: events, attachments: attachments}
 }
 
 // dateOnlyLayout is the wire format for an all-day Event's start/end: a

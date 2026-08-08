@@ -5,11 +5,12 @@ import { useAuthStore } from "../lib/authStore";
 import { useCalendarsStore } from "../lib/calendarsStore";
 import { useEventsStore } from "../lib/eventsStore";
 import { errorMessage } from "../lib/errorMessage";
-import { icsApi } from "../lib/icsApi";
+import { icsApi, type ExportSummary } from "../lib/icsApi";
 import { importApi, type ImportSummary, type ImportTarget } from "../lib/importApi";
 import { formatImportSummaryLine, formatReminderLine, summarizeImport } from "../lib/importSummary";
 import { toast } from "../lib/toast";
 import { readZipEntryNames } from "../lib/zipEntryNames";
+import { ExportSummaryDialog } from "../components/ExportSummaryDialog";
 import { ImportPreviewDialog } from "./ImportPreviewDialog";
 
 interface PendingImport {
@@ -50,17 +51,44 @@ export function ImportExportSection() {
   const [isPreviewing, setIsPreviewing] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
   const [pendingImport, setPendingImport] = useState<PendingImport | null>(null);
+  const [pendingExportSummary, setPendingExportSummary] = useState<ExportSummary | null>(null);
 
+  async function downloadAllCalendars() {
+    if (!accessToken) return;
+    try {
+      await icsApi.downloadAllCalendars(accessToken);
+    } catch (err) {
+      toast.error(errorMessage(err));
+    }
+  }
+
+  // The Export summary pre-flight (#134, ADR-0041): nothing oversized keeps
+  // this a single click, exactly like before.
   async function handleExportAll() {
     if (!accessToken || isExporting) return;
 
     setIsExporting(true);
     try {
-      await icsApi.downloadAllCalendars(accessToken);
+      const summary = await icsApi.allCalendarsOversizedAttachments(accessToken);
+      if (summary.count === 0) {
+        await downloadAllCalendars();
+      } else {
+        setPendingExportSummary(summary);
+      }
     } catch (err) {
       toast.error(errorMessage(err));
     } finally {
       setIsExporting(false);
+    }
+  }
+
+  async function handleConfirmExport() {
+    setIsExporting(true);
+    try {
+      await downloadAllCalendars();
+    } finally {
+      setIsExporting(false);
+      setPendingExportSummary(null);
     }
   }
 
@@ -190,6 +218,14 @@ export function ImportExportSection() {
           isSubmitting={isImporting}
           onConfirm={handleConfirmImport}
           onClose={() => setPendingImport(null)}
+        />
+      )}
+      {pendingExportSummary && (
+        <ExportSummaryDialog
+          summary={pendingExportSummary}
+          isSubmitting={isExporting}
+          onConfirm={handleConfirmExport}
+          onClose={() => setPendingExportSummary(null)}
         />
       )}
     </section>
