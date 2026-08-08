@@ -115,6 +115,12 @@ export function calendarHasOtherRecipients(calendar: Calendar | undefined): bool
   return !canManageCalendar(calendar) || (calendar.shareCount ?? 0) > 0;
 }
 
+// shareCountTooltip is the sidebar share badge's tooltip text (#126):
+// singular for exactly one Share, since "Shared with 1 people" reads wrong.
+export function shareCountTooltip(shareCount: number): string {
+  return `Shared with ${shareCount} ${shareCount === 1 ? "person" : "people"}`;
+}
+
 // defaultCalendarId picks the Calendar a new Event should default to, from
 // the caller's writable, checked Calendars — preferring one they own, since
 // an Editor Share on someone else's Calendar may otherwise sort first and

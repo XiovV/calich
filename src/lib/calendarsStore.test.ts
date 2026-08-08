@@ -12,6 +12,8 @@ vi.mock("./calendarsApi", () => ({
     subscribe: vi.fn(),
     get: vi.fn(),
     refresh: vi.fn(),
+    share: vi.fn(),
+    revokeShare: vi.fn(),
   },
 }));
 
@@ -448,5 +450,71 @@ describe("refreshCalendar", () => {
     expect(toast.error).toHaveBeenCalledWith(
       "Refreshed, but couldn't load its events. Reload to see them.",
     );
+  });
+});
+
+// #126: the sidebar's share-count badge reads shareCount straight off the
+// Calendar list, so a grant or revoke must pull a fresh list rather than
+// adjust the count locally — see calendarsStore.ts for why optimistic
+// adjustment was rejected.
+describe("shareCalendar", () => {
+  const share = {
+    userId: 7,
+    username: "bob",
+    role: "viewer" as const,
+    createdAt: "2026-08-06T12:00:00Z",
+  };
+
+  it("re-fetches calendars after granting a Share", async () => {
+    useCalendarsStore.setState({ calendars: [personal] });
+    vi.mocked(calendarsApi.share).mockResolvedValue(share);
+    vi.mocked(calendarsApi.list).mockResolvedValue([{ ...personal, shareCount: 1 }]);
+
+    const result = await useCalendarsStore
+      .getState()
+      .shareCalendar("cal-1", "bob", "viewer");
+
+    expect(result).toEqual(share);
+    expect(calendarsApi.share).toHaveBeenCalledWith("token-123", "cal-1", "bob", "viewer");
+    expect(calendarsApi.list).toHaveBeenCalledWith("token-123");
+    expect(useCalendarsStore.getState().calendars).toEqual([
+      { ...personal, shareCount: 1 },
+    ]);
+  });
+
+  it("rethrows and does not re-fetch when the grant fails", async () => {
+    useCalendarsStore.setState({ calendars: [personal] });
+    vi.mocked(calendarsApi.share).mockRejectedValue(new Error("already shared"));
+
+    await expect(
+      useCalendarsStore.getState().shareCalendar("cal-1", "bob", "viewer"),
+    ).rejects.toThrow("already shared");
+    expect(calendarsApi.list).not.toHaveBeenCalled();
+  });
+});
+
+describe("revokeCalendarShare", () => {
+  it("re-fetches calendars after revoking a Share", async () => {
+    useCalendarsStore.setState({ calendars: [{ ...personal, shareCount: 1 }] });
+    vi.mocked(calendarsApi.revokeShare).mockResolvedValue(undefined);
+    vi.mocked(calendarsApi.list).mockResolvedValue([{ ...personal, shareCount: 0 }]);
+
+    await useCalendarsStore.getState().revokeCalendarShare("cal-1", 7);
+
+    expect(calendarsApi.revokeShare).toHaveBeenCalledWith("token-123", "cal-1", 7);
+    expect(calendarsApi.list).toHaveBeenCalledWith("token-123");
+    expect(useCalendarsStore.getState().calendars).toEqual([
+      { ...personal, shareCount: 0 },
+    ]);
+  });
+
+  it("rethrows and does not re-fetch when the revoke fails", async () => {
+    useCalendarsStore.setState({ calendars: [{ ...personal, shareCount: 1 }] });
+    vi.mocked(calendarsApi.revokeShare).mockRejectedValue(new Error("network error"));
+
+    await expect(
+      useCalendarsStore.getState().revokeCalendarShare("cal-1", 7),
+    ).rejects.toThrow("network error");
+    expect(calendarsApi.list).not.toHaveBeenCalled();
   });
 });

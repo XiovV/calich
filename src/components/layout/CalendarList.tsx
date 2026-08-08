@@ -1,9 +1,9 @@
 import { useState } from "react";
 import { formatDistanceToNow } from "date-fns";
-import { Download, LogOut, Pencil, Plus, RefreshCw, Trash2, TriangleAlert } from "lucide-react";
+import { Download, LogOut, Pencil, Plus, RefreshCw, Trash2, TriangleAlert, Users } from "lucide-react";
 import { Checkbox } from "../ui/Checkbox";
 import { IconButton } from "../ui/IconButton";
-import { canManageCalendar, type Calendar } from "../../lib/calendar";
+import { canManageCalendar, shareCountTooltip, type Calendar } from "../../lib/calendar";
 import { resolveCalendarFill, toOpaqueHex } from "../../lib/calendarColors";
 import { useAuthStore } from "../../lib/authStore";
 import { useCalendarsStore } from "../../lib/calendarsStore";
@@ -42,7 +42,16 @@ export function CalendarList() {
   const refreshCalendar = useCalendarsStore((state) => state.refreshCalendar);
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [isSubscribeOpen, setIsSubscribeOpen] = useState(false);
-  const [editingCalendar, setEditingCalendar] = useState<Calendar | null>(null);
+  // focus: the share-count badge (#126) opens the same edit dialog as the
+  // Pencil button, but scrolled to its sharing section — the badge exists
+  // to answer "who can see my stuff" at a glance, and clicking through to
+  // anywhere else in the dialog wouldn't answer it. Bundled with calendar
+  // in one state, rather than a parallel boolean, so the two can't drift
+  // out of sync across the three places that set them.
+  const [editModalTarget, setEditModalTarget] = useState<{
+    calendar: Calendar;
+    focus?: "sharing";
+  } | null>(null);
   const [deletingCalendarId, setDeletingCalendarId] = useState<string | null>(
     null,
   );
@@ -158,6 +167,23 @@ export function CalendarList() {
             </span>
           )}
         </span>
+        {/* Always visible, unlike the hover-only action buttons below — an
+            at-a-glance answer to "who can see my stuff" that you'd have to
+            hover to see wouldn't be at a glance (#126). Absent on a
+            shared-in row (canManage is false there): that row already says
+            "Shared by {owner}" instead. */}
+        {canManage && (calendar.shareCount ?? 0) > 0 && (
+          <button
+            type="button"
+            onClick={() => setEditModalTarget({ calendar, focus: "sharing" })}
+            title={shareCountTooltip(calendar.shareCount ?? 0)}
+            aria-label={shareCountTooltip(calendar.shareCount ?? 0)}
+            className="flex shrink-0 items-center gap-0.5 rounded-shell-pill px-1 py-0.5 text-label-sm text-ink-muted hover:bg-surface-hover hover:text-ink"
+          >
+            <Users className="size-3.5" />
+            {calendar.shareCount}
+          </button>
+        )}
         {isSubscribed && canManage && (
           <IconButton
             size="tiny"
@@ -188,7 +214,7 @@ export function CalendarList() {
             any Calendar they can see, not just the ones they own. */}
         <IconButton
           size="tiny"
-          onClick={() => setEditingCalendar(calendar)}
+          onClick={() => setEditModalTarget({ calendar })}
           aria-label={`Edit ${calendar.name}`}
           className="opacity-0 focus-visible:opacity-100 group-hover:opacity-100"
         >
@@ -273,11 +299,12 @@ export function CalendarList() {
       {isSubscribeOpen && (
         <SubscribeCalendarModal onClose={() => setIsSubscribeOpen(false)} />
       )}
-      {editingCalendar && (
+      {editModalTarget && (
         <CalendarModal
           mode="edit"
-          calendar={editingCalendar}
-          onClose={() => setEditingCalendar(null)}
+          calendar={editModalTarget.calendar}
+          initialFocus={editModalTarget.focus}
+          onClose={() => setEditModalTarget(null)}
         />
       )}
       {deletingCalendar && (

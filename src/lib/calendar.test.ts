@@ -7,6 +7,7 @@ import {
   defaultCalendarId,
   isBrokenSubscription,
   isSubscribedCalendar,
+  shareCountTooltip,
   type Calendar,
 } from "./calendar";
 
@@ -178,6 +179,18 @@ describe("calendarHasOtherRecipients", () => {
 
   it("is false for undefined", () => {
     expect(calendarHasOtherRecipients(undefined)).toBe(false);
+  });
+});
+
+// The sidebar's share-count badge (#126): singular for exactly one Share.
+describe("shareCountTooltip", () => {
+  it("uses singular for exactly one person", () => {
+    expect(shareCountTooltip(1)).toBe("Shared with 1 person");
+  });
+
+  it("uses plural for zero or more than one person", () => {
+    expect(shareCountTooltip(0)).toBe("Shared with 0 people");
+    expect(shareCountTooltip(2)).toBe("Shared with 2 people");
   });
 });
 

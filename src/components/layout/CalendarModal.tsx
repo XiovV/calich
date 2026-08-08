@@ -1,4 +1,4 @@
-import { useState, type KeyboardEvent } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { Dialog } from "@base-ui/react/dialog";
 import { canManageCalendar, isSubscribedCalendar, type Calendar } from "../../lib/calendar";
 import { getNextUnusedColor } from "../../lib/calendarColors";
@@ -14,7 +14,16 @@ import { fieldLabelClass } from "../ui/fieldStyles";
 
 type CalendarModalProps =
   | { mode: "create"; onClose: () => void }
-  | { mode: "edit"; calendar: Calendar; onClose: () => void };
+  | {
+      mode: "edit";
+      calendar: Calendar;
+      onClose: () => void;
+      // initialFocus: "sharing" scrolls straight to the sharing section on
+      // open (#126) — the sidebar's share-count badge answers "who can see
+      // my stuff", and clicking through to a dialog that opens scrolled
+      // somewhere else wouldn't feel like an answer.
+      initialFocus?: "sharing";
+    };
 
 export function CalendarModal(props: CalendarModalProps) {
   const { mode, onClose } = props;
@@ -53,6 +62,16 @@ export function CalendarModal(props: CalendarModalProps) {
     mode === "edit" ? (props.calendar.sourceUrl ?? "") : "";
   const [url, setUrl] = useState(initialUrl);
   const [isResettingColor, setIsResettingColor] = useState(false);
+  const sharingSectionRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (mode === "edit" && props.initialFocus === "sharing") {
+      sharingSectionRef.current?.scrollIntoView({ block: "nearest" });
+    }
+    // Only ever run on mount — a re-render must not re-scroll the dialog
+    // out from under someone editing it.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const canSave =
     mode === "edit" && !canManage
@@ -191,7 +210,11 @@ export function CalendarModal(props: CalendarModalProps) {
             </label>
           )}
 
-          {showSharing && <CalendarSharingSection calendar={props.calendar} />}
+          {showSharing && (
+            <div ref={sharingSectionRef}>
+              <CalendarSharingSection calendar={props.calendar} />
+            </div>
+          )}
 
           <div className="mt-5 flex justify-end gap-2">
             <Dialog.Close

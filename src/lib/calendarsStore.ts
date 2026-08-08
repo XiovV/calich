@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import { useAuthStore } from "./authStore";
-import { calendarsApi } from "./calendarsApi";
+import { calendarsApi, type Role, type Share } from "./calendarsApi";
 import { useEventsStore } from "./eventsStore";
 import { getCalendarById, type Calendar } from "./calendar";
 import { toast } from "./toast";
@@ -60,6 +60,16 @@ interface CalendarsState {
   // same reason as subscribeCalendar (#93). Rethrows on failure so the
   // caller can show a specific error.
   refreshCalendar: (id: string) => Promise<void>;
+  // shareCalendar grants a new Share (#113, ADR-0034). Re-fetches Calendars
+  // afterward so shareCount on the sidebar badge (#126) moves without a
+  // reload — the caller is looking straight at it while granting, so a
+  // count that doesn't move reads as a failed grant. Rethrows on failure so
+  // CalendarSharingSection can show the specific error inline.
+  shareCalendar: (id: string, username: string, role: Role) => Promise<Share>;
+  // revokeCalendarShare removes a Share (#113, ADR-0034), Owner-only — the
+  // counterpart to leaveCalendar. Re-fetches Calendars afterward for the
+  // same shareCount-freshness reason as shareCalendar. Rethrows on failure.
+  revokeCalendarShare: (id: string, userId: number) => Promise<void>;
 }
 
 function requireAccessToken(): string {
@@ -232,5 +242,16 @@ export const useCalendarsStore = create<CalendarsState>((set, get) => ({
       calendars: state.calendars.map((c) => (c.id === id ? calendar : c)),
     }));
     await refetchEventsAfter("refresh");
+  },
+
+  shareCalendar: async (id, username, role) => {
+    const share = await calendarsApi.share(requireAccessToken(), id, username, role);
+    await get().fetchCalendars();
+    return share;
+  },
+
+  revokeCalendarShare: async (id, userId) => {
+    await calendarsApi.revokeShare(requireAccessToken(), id, userId);
+    await get().fetchCalendars();
   },
 }));

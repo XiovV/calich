@@ -3,6 +3,7 @@ import { Trash2 } from "lucide-react";
 import { calendarsApi, type Role, type Share } from "../../lib/calendarsApi";
 import { usersApi, type UserSummary } from "../../lib/usersApi";
 import { useAuthStore } from "../../lib/authStore";
+import { useCalendarsStore } from "../../lib/calendarsStore";
 import { errorMessage } from "../../lib/errorMessage";
 import { toast } from "../../lib/toast";
 import type { Calendar } from "../../lib/calendar";
@@ -27,6 +28,8 @@ interface CalendarSharingSectionProps {
 // mounts it — see CalendarModal.
 export function CalendarSharingSection({ calendar }: CalendarSharingSectionProps) {
   const accessToken = useAuthStore((state) => state.accessToken);
+  const shareCalendar = useCalendarsStore((state) => state.shareCalendar);
+  const revokeCalendarShare = useCalendarsStore((state) => state.revokeCalendarShare);
 
   const [shares, setShares] = useState<Share[] | null>(null);
   const [directory, setDirectory] = useState<UserSummary[]>([]);
@@ -68,12 +71,7 @@ export function CalendarSharingSection({ calendar }: CalendarSharingSectionProps
     setIsGranting(true);
     setGrantError(null);
     try {
-      const share = await calendarsApi.share(
-        accessToken,
-        calendar.id,
-        effectiveUsername,
-        selectedRole,
-      );
+      const share = await shareCalendar(calendar.id, effectiveUsername, selectedRole);
       setShares((prev) => [...(prev ?? []), share]);
       setSelectedUsername("");
       setSelectedRole("viewer");
@@ -104,7 +102,7 @@ export function CalendarSharingSection({ calendar }: CalendarSharingSectionProps
     const previous = shares;
     setShares((prev) => (prev ?? []).filter((s) => s.userId !== share.userId));
     try {
-      await calendarsApi.revokeShare(accessToken, calendar.id, share.userId);
+      await revokeCalendarShare(calendar.id, share.userId);
     } catch {
       setShares(previous);
       toast.error(`Failed to remove ${share.username}'s access.`);
