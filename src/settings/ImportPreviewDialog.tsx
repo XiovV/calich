@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { format } from "date-fns";
 import { Dialog } from "@base-ui/react/dialog";
-import { canWriteCalendarEvents, type Calendar } from "../lib/calendar";
+import { calendarPickerLabel, canWriteCalendarEvents, type Calendar } from "../lib/calendar";
 import type { ImportFileSummary, ImportSummary, ImportTarget } from "../lib/importApi";
 import { formatImportSummaryLine, formatReminderLine, summarizeImport } from "../lib/importSummary";
 import { Button } from "../components/ui/Button";
@@ -211,7 +211,10 @@ export function ImportPreviewDialog({
                         }
                         options={[
                           { value: NEW_CALENDAR_VALUE, label: "New calendar" },
-                          ...writableCalendars.map((calendar) => ({ value: calendar.id, label: calendar.name })),
+                          ...writableCalendars.map((calendar) => ({
+                            value: calendar.id,
+                            label: calendarPickerLabel(calendar),
+                          })),
                         ]}
                       />
                       {draft.action === "new" && (

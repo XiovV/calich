@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   calendarHasOtherRecipients,
+  calendarPickerLabel,
   calendarReadOnlyReason,
   canManageCalendar,
   canWriteCalendarEvents,
@@ -180,6 +181,57 @@ describe("calendarHasOtherRecipients", () => {
   it("is false for undefined", () => {
     expect(calendarHasOtherRecipients(undefined)).toBe(false);
   });
+});
+
+// The Calendar picker's option label (#127): must qualify a Calendar the
+// caller doesn't own with its Owner's username, unconditionally — not only
+// when another visible Calendar happens to share its name — so Bob's own
+// "Family" and Alice's shared "Family" are never indistinguishable.
+describe("calendarPickerLabel", () => {
+  const subscribed = { sourceUrl: "https://example.com/feed.ics" };
+
+  const cases: Array<{ name: string; overrides: Partial<Calendar>; expected: string }> = [
+    {
+      name: "owner of an ordinary calendar",
+      overrides: { access: "owner", isOwner: true, ownerUsername: "damir" },
+      expected: "Personal",
+    },
+    {
+      name: "editor share on an ordinary calendar",
+      overrides: { access: "editor", isOwner: false, ownerUsername: "alice" },
+      expected: "Personal (alice)",
+    },
+    {
+      name: "viewer share on an ordinary calendar",
+      overrides: { access: "viewer", isOwner: false, ownerUsername: "alice" },
+      expected: "Personal (alice)",
+    },
+    {
+      // The trap canManageCalendar exists to avoid: a Subscription clamps
+      // the Owner's Access to "viewer", but the label must still be bare.
+      name: "owner of a subscribed calendar",
+      overrides: { access: "viewer", isOwner: true, ownerUsername: "damir", ...subscribed },
+      expected: "Personal",
+    },
+    {
+      name: "editor share on a subscribed calendar",
+      overrides: { access: "viewer", isOwner: false, ownerUsername: "alice", ...subscribed },
+      expected: "Personal (alice)",
+    },
+    {
+      // ownerUsername is optional on Calendar; an unresolved one must not
+      // render as "Personal (undefined)".
+      name: "editor share with no resolved ownerUsername",
+      overrides: { access: "editor", isOwner: false, ownerUsername: undefined },
+      expected: "Personal",
+    },
+  ];
+
+  for (const tc of cases) {
+    it(`${tc.name}: "${tc.expected}"`, () => {
+      expect(calendarPickerLabel(makeCalendar(tc.overrides))).toBe(tc.expected);
+    });
+  }
 });
 
 // The sidebar's share-count badge (#126): singular for exactly one Share.

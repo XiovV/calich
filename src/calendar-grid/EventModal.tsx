@@ -25,6 +25,7 @@ import {
 } from "../lib/customRecurrence";
 import {
   calendarHasOtherRecipients,
+  calendarPickerLabel,
   calendarReadOnlyReason,
   canWriteCalendarEvents,
   defaultCalendarId,
@@ -546,7 +547,7 @@ export function EventModal(props: EventModalProps) {
                   onValueChange={setCalendarId}
                   options={calendarOptions.map((calendar) => ({
                     value: calendar.id,
-                    label: calendar.name,
+                    label: calendarPickerLabel(calendar),
                   }))}
                 />
               )}
