@@ -1,4 +1,4 @@
-import { authHeader, errorFromResponse } from "./apiClient";
+import { authedFetch, errorFromResponse } from "./apiClient";
 
 export interface AppPassword {
   id: number;
@@ -29,9 +29,8 @@ function fromWire(wire: AppPasswordWire): AppPassword {
 
 export const appPasswordsApi = {
   async list(accessToken: string): Promise<AppPassword[]> {
-    const response = await fetch("/api/app-passwords/", {
+    const response = await authedFetch(accessToken, "/api/app-passwords/", {
       credentials: "include",
-      headers: authHeader(accessToken),
     });
     if (!response.ok) throw await errorFromResponse(response);
 
@@ -40,10 +39,10 @@ export const appPasswordsApi = {
   },
 
   async create(accessToken: string, label: string): Promise<CreatedAppPassword> {
-    const response = await fetch("/api/app-passwords/", {
+    const response = await authedFetch(accessToken, "/api/app-passwords/", {
       method: "POST",
       credentials: "include",
-      headers: { "Content-Type": "application/json", ...authHeader(accessToken) },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ label }),
     });
     if (!response.ok) throw await errorFromResponse(response);
@@ -53,10 +52,9 @@ export const appPasswordsApi = {
   },
 
   async revoke(accessToken: string, id: number): Promise<void> {
-    const response = await fetch(`/api/app-passwords/${id}`, {
+    const response = await authedFetch(accessToken, `/api/app-passwords/${id}`, {
       method: "DELETE",
       credentials: "include",
-      headers: authHeader(accessToken),
     });
     if (!response.ok) throw await errorFromResponse(response);
   },

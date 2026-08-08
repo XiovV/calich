@@ -1,4 +1,4 @@
-import { authHeader, errorFromResponse } from "./apiClient";
+import { authedFetch, errorFromResponse } from "./apiClient";
 
 export interface ImportTarget {
   filename: string;
@@ -93,10 +93,9 @@ async function upload(
   // No Content-Type header here — the browser sets multipart/form-data plus
   // its boundary for a FormData body; setting it manually would drop the
   // boundary and break parsing on the Go side.
-  const response = await fetch(`/api/calendars/import?dryRun=${dryRun ? "1" : "0"}`, {
+  const response = await authedFetch(accessToken, `/api/calendars/import?dryRun=${dryRun ? "1" : "0"}`, {
     method: "POST",
     credentials: "include",
-    headers: authHeader(accessToken),
     body: formData,
   });
   if (!response.ok) throw await errorFromResponse(response);

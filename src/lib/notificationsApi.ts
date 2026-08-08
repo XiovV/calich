@@ -1,4 +1,4 @@
-import { authHeader, errorFromResponse } from "./apiClient";
+import { authedFetch, errorFromResponse } from "./apiClient";
 import type { Notification } from "./notification";
 
 interface NotificationWire {
@@ -23,9 +23,8 @@ function fromWire(wire: NotificationWire): Notification {
 
 export const notificationsApi = {
   async list(accessToken: string): Promise<Notification[]> {
-    const response = await fetch("/api/notifications/", {
+    const response = await authedFetch(accessToken, "/api/notifications/", {
       credentials: "include",
-      headers: authHeader(accessToken),
     });
     if (!response.ok) throw await errorFromResponse(response);
 
@@ -34,10 +33,9 @@ export const notificationsApi = {
   },
 
   async markSeen(accessToken: string): Promise<void> {
-    const response = await fetch("/api/notifications/seen", {
+    const response = await authedFetch(accessToken, "/api/notifications/seen", {
       method: "POST",
       credentials: "include",
-      headers: authHeader(accessToken),
     });
     if (!response.ok) throw await errorFromResponse(response);
   },

@@ -1,5 +1,5 @@
 import { format } from "date-fns";
-import { authHeader, errorFromResponse } from "./apiClient";
+import { authedFetch, errorFromResponse } from "./apiClient";
 import type { Event, Reminder } from "./event";
 
 interface EventWire {
@@ -74,9 +74,8 @@ function fromWire(wire: EventWire): Event {
 
 export const eventsApi = {
   async list(accessToken: string): Promise<Event[]> {
-    const response = await fetch("/api/events/", {
+    const response = await authedFetch(accessToken, "/api/events/", {
       credentials: "include",
-      headers: authHeader(accessToken),
     });
     if (!response.ok) throw await errorFromResponse(response);
 
@@ -102,10 +101,10 @@ export const eventsApi = {
       location?: string;
     },
   ): Promise<Event> {
-    const response = await fetch("/api/events/", {
+    const response = await authedFetch(accessToken, "/api/events/", {
       method: "POST",
       credentials: "include",
-      headers: { "Content-Type": "application/json", ...authHeader(accessToken) },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         id: event.id,
         calendarId: event.calendarId,
@@ -143,10 +142,10 @@ export const eventsApi = {
       location?: string;
     },
   ): Promise<Event> {
-    const response = await fetch(`/api/events/${id}`, {
+    const response = await authedFetch(accessToken, `/api/events/${id}`, {
       method: "PATCH",
       credentials: "include",
-      headers: { "Content-Type": "application/json", ...authHeader(accessToken) },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         calendarId: changes.calendarId,
         title: changes.title,
@@ -166,10 +165,9 @@ export const eventsApi = {
   },
 
   async remove(accessToken: string, id: string): Promise<void> {
-    const response = await fetch(`/api/events/${id}`, {
+    const response = await authedFetch(accessToken, `/api/events/${id}`, {
       method: "DELETE",
       credentials: "include",
-      headers: authHeader(accessToken),
     });
     if (!response.ok) throw await errorFromResponse(response);
   },
@@ -183,10 +181,10 @@ export const eventsApi = {
     parentId: string,
     occurrenceStart: Date,
   ): Promise<void> {
-    const response = await fetch(`/api/events/${parentId}/exceptions`, {
+    const response = await authedFetch(accessToken, `/api/events/${parentId}/exceptions`, {
       method: "POST",
       credentials: "include",
-      headers: { "Content-Type": "application/json", ...authHeader(accessToken) },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ occurrenceStart: occurrenceStart.toISOString() }),
     });
     if (!response.ok) throw await errorFromResponse(response);
@@ -203,10 +201,10 @@ export const eventsApi = {
     newParentId: string,
     fromStart: Date,
   ): Promise<void> {
-    const response = await fetch(`/api/events/${oldParentId}/reparent`, {
+    const response = await authedFetch(accessToken, `/api/events/${oldParentId}/reparent`, {
       method: "POST",
       credentials: "include",
-      headers: { "Content-Type": "application/json", ...authHeader(accessToken) },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         newParentId,
         fromStart: fromStart.toISOString(),

@@ -1,4 +1,4 @@
-import { authHeader, errorFromResponse } from "./apiClient";
+import { authedFetch, errorFromResponse } from "./apiClient";
 
 // Account administration (ADR-0037), Admin-only. #119 covers listing and
 // creation, #120 adds reset password/admin grant-revoke/disable, and #121
@@ -50,9 +50,8 @@ function fromWire(wire: AccountWire): Account {
 
 export const accountsApi = {
   async list(accessToken: string): Promise<Account[]> {
-    const response = await fetch("/api/accounts/", {
+    const response = await authedFetch(accessToken, "/api/accounts/", {
       credentials: "include",
-      headers: authHeader(accessToken),
     });
     if (!response.ok) throw await errorFromResponse(response);
 
@@ -61,10 +60,10 @@ export const accountsApi = {
   },
 
   async create(accessToken: string, username: string, password: string): Promise<Account> {
-    const response = await fetch("/api/accounts/", {
+    const response = await authedFetch(accessToken, "/api/accounts/", {
       method: "POST",
       credentials: "include",
-      headers: { "Content-Type": "application/json", ...authHeader(accessToken) },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ username, password }),
     });
     if (!response.ok) throw await errorFromResponse(response);
@@ -73,10 +72,10 @@ export const accountsApi = {
   },
 
   async resetPassword(accessToken: string, id: number, password: string): Promise<Account> {
-    const response = await fetch(`/api/accounts/${id}/reset-password`, {
+    const response = await authedFetch(accessToken, `/api/accounts/${id}/reset-password`, {
       method: "POST",
       credentials: "include",
-      headers: { "Content-Type": "application/json", ...authHeader(accessToken) },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ password }),
     });
     if (!response.ok) throw await errorFromResponse(response);
@@ -85,10 +84,10 @@ export const accountsApi = {
   },
 
   async setAdmin(accessToken: string, id: number, isAdmin: boolean): Promise<Account> {
-    const response = await fetch(`/api/accounts/${id}/admin`, {
+    const response = await authedFetch(accessToken, `/api/accounts/${id}/admin`, {
       method: "PUT",
       credentials: "include",
-      headers: { "Content-Type": "application/json", ...authHeader(accessToken) },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ is_admin: isAdmin }),
     });
     if (!response.ok) throw await errorFromResponse(response);
@@ -97,10 +96,10 @@ export const accountsApi = {
   },
 
   async setDisabled(accessToken: string, id: number, isDisabled: boolean): Promise<Account> {
-    const response = await fetch(`/api/accounts/${id}/disabled`, {
+    const response = await authedFetch(accessToken, `/api/accounts/${id}/disabled`, {
       method: "PUT",
       credentials: "include",
-      headers: { "Content-Type": "application/json", ...authHeader(accessToken) },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ is_disabled: isDisabled }),
     });
     if (!response.ok) throw await errorFromResponse(response);
@@ -109,9 +108,8 @@ export const accountsApi = {
   },
 
   async deleteImpact(accessToken: string, id: number): Promise<DeleteImpact> {
-    const response = await fetch(`/api/accounts/${id}/delete-impact`, {
+    const response = await authedFetch(accessToken, `/api/accounts/${id}/delete-impact`, {
       credentials: "include",
-      headers: authHeader(accessToken),
     });
     if (!response.ok) throw await errorFromResponse(response);
 
@@ -128,10 +126,10 @@ export const accountsApi = {
     disposition: AccountDisposition,
     transferTo?: number,
   ): Promise<void> {
-    const response = await fetch(`/api/accounts/${id}`, {
+    const response = await authedFetch(accessToken, `/api/accounts/${id}`, {
       method: "DELETE",
       credentials: "include",
-      headers: { "Content-Type": "application/json", ...authHeader(accessToken) },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify(
         disposition === "transfer"
           ? { owned_calendars: disposition, transfer_to: transferTo }

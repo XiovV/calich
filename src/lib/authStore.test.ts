@@ -17,6 +17,20 @@ vi.mock("./authApi", async () => {
   };
 });
 
+// authStore registers its session refresher with apiClient at module init
+// (#124) — captured here so the "session refresher" tests below can invoke
+// it directly, the way apiClient's authedFetch would on a 401.
+let registeredRefresher: (() => Promise<string>) | undefined;
+vi.mock("./apiClient", async () => {
+  const actual = await vi.importActual<typeof import("./apiClient")>("./apiClient");
+  return {
+    ...actual,
+    setSessionRefresher: vi.fn((refresher: () => Promise<string>) => {
+      registeredRefresher = refresher;
+    }),
+  };
+});
+
 const { authApi } = await import("./authApi");
 const { useAuthStore } = await import("./authStore");
 
@@ -205,5 +219,46 @@ describe("updateSyncedDeviceReminders", () => {
 
     expect(useAuthStore.getState().user).toEqual(updatedUser);
     expect(authApi.updateSyncedDeviceReminders).toHaveBeenCalledWith("token-123", true);
+  });
+});
+
+describe("session refresher", () => {
+  it("is registered with apiClient at module init", () => {
+    expect(registeredRefresher).toBeInstanceOf(Function);
+  });
+
+  it("writes the new access token into the store and returns it, keeping the caller authenticated", async () => {
+    useAuthStore.setState({
+      status: "authenticated",
+      user: adminUser,
+      pendingUsername: null,
+      accessToken: "stale-token",
+    });
+    vi.mocked(authApi.refresh).mockResolvedValue({ accessToken: "fresh-token" });
+
+    const result = await registeredRefresher!();
+
+    expect(result).toBe("fresh-token");
+    const state = useAuthStore.getState();
+    expect(state.accessToken).toBe("fresh-token");
+    expect(state.status).toBe("authenticated");
+    expect(state.user).toEqual(adminUser);
+  });
+
+  it("sets the store to unauthenticated and rethrows when the refresh fails", async () => {
+    useAuthStore.setState({
+      status: "authenticated",
+      user: adminUser,
+      pendingUsername: null,
+      accessToken: "stale-token",
+    });
+    vi.mocked(authApi.refresh).mockRejectedValue(new ApiError(401, "unauthorized", "no session"));
+
+    await expect(registeredRefresher!()).rejects.toMatchObject({ code: "unauthorized" });
+
+    const state = useAuthStore.getState();
+    expect(state.status).toBe("unauthenticated");
+    expect(state.user).toBeNull();
+    expect(state.accessToken).toBeNull();
   });
 });

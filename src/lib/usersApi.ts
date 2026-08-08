@@ -1,4 +1,4 @@
-import { authHeader, errorFromResponse } from "./apiClient";
+import { authedFetch, errorFromResponse } from "./apiClient";
 
 // UserSummary is one entry in the User directory (#113) — enough to pick a
 // Share recipient, and deliberately nothing more (no admin/disabled status,
@@ -12,9 +12,8 @@ export const usersApi = {
   // directory returns every enabled User besides the caller, open to any
   // authenticated caller (#113).
   async directory(accessToken: string): Promise<UserSummary[]> {
-    const response = await fetch("/api/users/", {
+    const response = await authedFetch(accessToken, "/api/users/", {
       credentials: "include",
-      headers: authHeader(accessToken),
     });
     if (!response.ok) throw await errorFromResponse(response);
 

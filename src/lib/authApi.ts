@@ -1,4 +1,4 @@
-import { ApiError, authHeader, errorFromResponse } from "./apiClient";
+import { ApiError, authedFetch, errorFromResponse } from "./apiClient";
 
 export { ApiError };
 
@@ -82,9 +82,8 @@ export const authApi = {
   },
 
   async me(accessToken: string): Promise<User> {
-    const response = await fetch("/api/auth/me", {
+    const response = await authedFetch(accessToken, "/api/auth/me", {
       credentials: "include",
-      headers: authHeader(accessToken),
     });
     if (!response.ok) throw await errorFromResponse(response);
 
@@ -96,10 +95,10 @@ export const authApi = {
     currentPassword: string,
     newPassword: string,
   ): Promise<{ accessToken: string }> {
-    const response = await fetch("/api/auth/change-password", {
+    const response = await authedFetch(accessToken, "/api/auth/change-password", {
       method: "POST",
       credentials: "include",
-      headers: { "Content-Type": "application/json", ...authHeader(accessToken) },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }),
     });
     if (!response.ok) throw await errorFromResponse(response);
@@ -109,10 +108,10 @@ export const authApi = {
   },
 
   async updateEmail(accessToken: string, email: string): Promise<User> {
-    const response = await fetch("/api/auth/email", {
+    const response = await authedFetch(accessToken, "/api/auth/email", {
       method: "PUT",
       credentials: "include",
-      headers: { "Content-Type": "application/json", ...authHeader(accessToken) },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ email }),
     });
     if (!response.ok) throw await errorFromResponse(response);
@@ -121,10 +120,10 @@ export const authApi = {
   },
 
   async updateSyncedDeviceReminders(accessToken: string, enabled: boolean): Promise<User> {
-    const response = await fetch("/api/auth/synced-device-reminders", {
+    const response = await authedFetch(accessToken, "/api/auth/synced-device-reminders", {
       method: "PUT",
       credentials: "include",
-      headers: { "Content-Type": "application/json", ...authHeader(accessToken) },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ synced_device_reminders_enabled: enabled }),
     });
     if (!response.ok) throw await errorFromResponse(response);

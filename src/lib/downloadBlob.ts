@@ -1,4 +1,4 @@
-import { authHeader, errorFromResponse } from "./apiClient";
+import { authedFetch, errorFromResponse } from "./apiClient";
 
 /**
  * Downloads url's response body as filename. Auth is a Bearer header
@@ -11,9 +11,8 @@ export async function downloadBlob(
   url: string,
   filename: string,
 ): Promise<void> {
-  const response = await fetch(url, {
+  const response = await authedFetch(accessToken, url, {
     credentials: "include",
-    headers: authHeader(accessToken),
   });
   if (!response.ok) throw await errorFromResponse(response);
 

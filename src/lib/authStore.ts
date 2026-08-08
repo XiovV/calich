@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { setSessionRefresher } from "./apiClient";
 import { ApiError, authApi, type User } from "./authApi";
 
 export type AuthStatus = "loading" | "unauthenticated" | "must-change-password" | "authenticated";
@@ -34,77 +35,92 @@ function authenticated(user: User, accessToken: string): AuthFields {
   return { status: "authenticated", user, pendingUsername: null, accessToken };
 }
 
-export const useAuthStore = create<AuthState>((set, get) => ({
-  ...unauthenticated(),
-  status: "loading",
-
-  bootstrap: async () => {
-    let accessToken: string;
+export const useAuthStore = create<AuthState>((set, get) => {
+  // Registered once at module init so apiClient's authedFetch can recover
+  // from a 401 without importing authStore itself (#124).
+  setSessionRefresher(async () => {
     try {
-      ({ accessToken } = await authApi.refresh());
-    } catch {
-      set(unauthenticated());
-      return;
-    }
-
-    try {
-      const user = await authApi.me(accessToken);
-      set(authenticated(user, accessToken));
+      const { accessToken } = await authApi.refresh();
+      set({ accessToken });
+      return accessToken;
     } catch (err) {
-      if (err instanceof ApiError && err.code === "password_change_required") {
-        set(mustChangePassword(accessToken, null));
+      set(unauthenticated());
+      throw err;
+    }
+  });
+
+  return {
+    ...unauthenticated(),
+    status: "loading",
+
+    bootstrap: async () => {
+      let accessToken: string;
+      try {
+        ({ accessToken } = await authApi.refresh());
+      } catch {
+        set(unauthenticated());
         return;
       }
+
+      try {
+        const user = await authApi.me(accessToken);
+        set(authenticated(user, accessToken));
+      } catch (err) {
+        if (err instanceof ApiError && err.code === "password_change_required") {
+          set(mustChangePassword(accessToken, null));
+          return;
+        }
+        set(unauthenticated());
+      }
+    },
+
+    login: async (username, password) => {
+      const { accessToken, mustChangePassword: passwordChangeRequired } = await authApi.login(username, password);
+
+      if (passwordChangeRequired) {
+        set(mustChangePassword(accessToken, username));
+        return;
+      }
+
+      const user = await authApi.me(accessToken);
+      set(authenticated(user, accessToken));
+    },
+
+    logout: async () => {
+      // Best-effort: the local session ends regardless of whether the backend
+      // call succeeds (e.g. a network hiccup shouldn't trap the user logged in
+      // from their own point of view).
+      await authApi.logout().catch(() => {});
       set(unauthenticated());
-    }
-  },
+    },
 
-  login: async (username, password) => {
-    const { accessToken, mustChangePassword: passwordChangeRequired } = await authApi.login(username, password);
+    changePassword: async (currentPassword, newPassword) => {
+      const { accessToken } = get();
+      if (!accessToken) throw new Error("Not authenticated.");
 
-    if (passwordChangeRequired) {
-      set(mustChangePassword(accessToken, username));
-      return;
-    }
+      // The backend re-issues the Session on a password change rather than
+      // just clearing it (#123), so the fresh access token must replace the
+      // pre-change one before calling anything else with it.
+      const changed = await authApi.changePassword(accessToken, currentPassword, newPassword);
 
-    const user = await authApi.me(accessToken);
-    set(authenticated(user, accessToken));
-  },
+      const user = await authApi.me(changed.accessToken);
+      set(authenticated(user, changed.accessToken));
+    },
 
-  logout: async () => {
-    // Best-effort: the local session ends regardless of whether the backend
-    // call succeeds (e.g. a network hiccup shouldn't trap the user logged in
-    // from their own point of view).
-    await authApi.logout().catch(() => {});
-    set(unauthenticated());
-  },
+    updateEmail: async (email) => {
+      const { accessToken } = get();
+      if (!accessToken) throw new Error("Not authenticated.");
 
-  changePassword: async (currentPassword, newPassword) => {
-    const { accessToken } = get();
-    if (!accessToken) throw new Error("Not authenticated.");
+      const user = await authApi.updateEmail(accessToken, email);
+      set(authenticated(user, accessToken));
+    },
 
-    // The backend re-issues the Session on a password change rather than
-    // just clearing it (#123), so the fresh access token must replace the
-    // pre-change one before calling anything else with it.
-    const changed = await authApi.changePassword(accessToken, currentPassword, newPassword);
+    updateSyncedDeviceReminders: async (enabled) => {
+      const { accessToken } = get();
+      if (!accessToken) throw new Error("Not authenticated.");
 
-    const user = await authApi.me(changed.accessToken);
-    set(authenticated(user, changed.accessToken));
-  },
-
-  updateEmail: async (email) => {
-    const { accessToken } = get();
-    if (!accessToken) throw new Error("Not authenticated.");
-
-    const user = await authApi.updateEmail(accessToken, email);
-    set(authenticated(user, accessToken));
-  },
-
-  updateSyncedDeviceReminders: async (enabled) => {
-    const { accessToken } = get();
-    if (!accessToken) throw new Error("Not authenticated.");
-
-    const user = await authApi.updateSyncedDeviceReminders(accessToken, enabled);
-    set(authenticated(user, accessToken));
-  },
-}));
+      const user = await authApi.updateSyncedDeviceReminders(accessToken, enabled);
+      set(authenticated(user, accessToken));
+    },
+  };
+});

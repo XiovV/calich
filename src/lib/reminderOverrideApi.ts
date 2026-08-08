@@ -1,4 +1,4 @@
-import { authHeader, errorFromResponse } from "./apiClient";
+import { authedFetch, errorFromResponse } from "./apiClient";
 import type { ReminderChannel } from "./event";
 
 // ReminderOverride is a User's personal Reminder override on an Event (#105,
@@ -38,9 +38,8 @@ export const reminderOverrideApi = {
   // Event's own Reminders apply unchanged in that case. Any caller with at
   // least Viewer Access to the Event's Calendar may call this.
   async get(accessToken: string, eventId: string): Promise<ReminderOverride> {
-    const response = await fetch(`/api/events/${eventId}/reminder-override`, {
+    const response = await authedFetch(accessToken, `/api/events/${eventId}/reminder-override`, {
       credentials: "include",
-      headers: authHeader(accessToken),
     });
     if (!response.ok) throw await errorFromResponse(response);
 
@@ -53,10 +52,10 @@ export const reminderOverrideApi = {
     eventId: string,
     override: ReminderOverride,
   ): Promise<ReminderOverride> {
-    const response = await fetch(`/api/events/${eventId}/reminder-override`, {
+    const response = await authedFetch(accessToken, `/api/events/${eventId}/reminder-override`, {
       method: "PUT",
       credentials: "include",
-      headers: { "Content-Type": "application/json", ...authHeader(accessToken) },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify(override),
     });
     if (!response.ok) throw await errorFromResponse(response);
@@ -67,10 +66,9 @@ export const reminderOverrideApi = {
   // clear removes the caller's override on eventId, falling back to the
   // Event's own Reminders. A no-op if they never set one.
   async clear(accessToken: string, eventId: string): Promise<void> {
-    const response = await fetch(`/api/events/${eventId}/reminder-override`, {
+    const response = await authedFetch(accessToken, `/api/events/${eventId}/reminder-override`, {
       method: "DELETE",
       credentials: "include",
-      headers: authHeader(accessToken),
     });
     if (!response.ok) throw await errorFromResponse(response);
   },

@@ -1,4 +1,4 @@
-import { authHeader, errorFromResponse } from "./apiClient";
+import { authedFetch, errorFromResponse } from "./apiClient";
 import type { Calendar } from "./calendar";
 
 export interface SubscriptionPreview {
@@ -33,9 +33,8 @@ export interface Share {
 
 export const calendarsApi = {
   async list(accessToken: string): Promise<Calendar[]> {
-    const response = await fetch("/api/calendars/", {
+    const response = await authedFetch(accessToken, "/api/calendars/", {
       credentials: "include",
-      headers: authHeader(accessToken),
     });
     if (!response.ok) throw await errorFromResponse(response);
 
@@ -46,10 +45,10 @@ export const calendarsApi = {
     accessToken: string,
     calendar: { id: string; name: string; color: string },
   ): Promise<Calendar> {
-    const response = await fetch("/api/calendars/", {
+    const response = await authedFetch(accessToken, "/api/calendars/", {
       method: "POST",
       credentials: "include",
-      headers: { "Content-Type": "application/json", ...authHeader(accessToken) },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify(calendar),
     });
     if (!response.ok) throw await errorFromResponse(response);
@@ -67,10 +66,10 @@ export const calendarsApi = {
       url?: string;
     },
   ): Promise<Calendar> {
-    const response = await fetch(`/api/calendars/${id}`, {
+    const response = await authedFetch(accessToken, `/api/calendars/${id}`, {
       method: "PATCH",
       credentials: "include",
-      headers: { "Content-Type": "application/json", ...authHeader(accessToken) },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify(changes),
     });
     if (!response.ok) throw await errorFromResponse(response);
@@ -89,10 +88,10 @@ export const calendarsApi = {
     id: string,
     color: string,
   ): Promise<Calendar> {
-    const response = await fetch(`/api/calendars/${id}`, {
+    const response = await authedFetch(accessToken, `/api/calendars/${id}`, {
       method: "PATCH",
       credentials: "include",
-      headers: { "Content-Type": "application/json", ...authHeader(accessToken) },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ color }),
     });
     if (!response.ok) throw await errorFromResponse(response);
@@ -109,18 +108,16 @@ export const calendarsApi = {
   },
 
   async remove(accessToken: string, id: string): Promise<void> {
-    const response = await fetch(`/api/calendars/${id}`, {
+    const response = await authedFetch(accessToken, `/api/calendars/${id}`, {
       method: "DELETE",
       credentials: "include",
-      headers: authHeader(accessToken),
     });
     if (!response.ok) throw await errorFromResponse(response);
   },
 
   async get(accessToken: string, id: string): Promise<Calendar> {
-    const response = await fetch(`/api/calendars/${id}`, {
+    const response = await authedFetch(accessToken, `/api/calendars/${id}`, {
       credentials: "include",
-      headers: authHeader(accessToken),
     });
     if (!response.ok) throw await errorFromResponse(response);
 
@@ -133,10 +130,9 @@ export const calendarsApi = {
   // carries only the refresh summary, not the updated Calendar (its
   // lastSyncedAt) — callers re-fetch that separately (see get above).
   async refresh(accessToken: string, id: string): Promise<RefreshResult> {
-    const response = await fetch(`/api/calendars/${id}/refresh`, {
+    const response = await authedFetch(accessToken, `/api/calendars/${id}/refresh`, {
       method: "POST",
       credentials: "include",
-      headers: authHeader(accessToken),
     });
     if (!response.ok) throw await errorFromResponse(response);
 
@@ -147,10 +143,10 @@ export const calendarsApi = {
     accessToken: string,
     url: string,
   ): Promise<SubscriptionPreview> {
-    const response = await fetch("/api/calendars/subscribe?dryRun=1", {
+    const response = await authedFetch(accessToken, "/api/calendars/subscribe?dryRun=1", {
       method: "POST",
       credentials: "include",
-      headers: { "Content-Type": "application/json", ...authHeader(accessToken) },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ url }),
     });
     if (!response.ok) throw await errorFromResponse(response);
@@ -167,10 +163,10 @@ export const calendarsApi = {
       keepAlarms: boolean;
     },
   ): Promise<Calendar> {
-    const response = await fetch("/api/calendars/subscribe?dryRun=0", {
+    const response = await authedFetch(accessToken, "/api/calendars/subscribe?dryRun=0", {
       method: "POST",
       credentials: "include",
-      headers: { "Content-Type": "application/json", ...authHeader(accessToken) },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify(subscription),
     });
     if (!response.ok) throw await errorFromResponse(response);
@@ -180,9 +176,8 @@ export const calendarsApi = {
 
   // listShares returns every Share on id, Owner-only (#113, ADR-0034).
   async listShares(accessToken: string, id: string): Promise<Share[]> {
-    const response = await fetch(`/api/calendars/${id}/shares`, {
+    const response = await authedFetch(accessToken, `/api/calendars/${id}/shares`, {
       credentials: "include",
-      headers: authHeader(accessToken),
     });
     if (!response.ok) throw await errorFromResponse(response);
 
@@ -197,10 +192,10 @@ export const calendarsApi = {
     username: string,
     role: Role,
   ): Promise<Share> {
-    const response = await fetch(`/api/calendars/${id}/shares`, {
+    const response = await authedFetch(accessToken, `/api/calendars/${id}/shares`, {
       method: "POST",
       credentials: "include",
-      headers: { "Content-Type": "application/json", ...authHeader(accessToken) },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ username, role }),
     });
     if (!response.ok) throw await errorFromResponse(response);
@@ -210,10 +205,9 @@ export const calendarsApi = {
 
   // revokeShare removes userId's Share on id (#113, ADR-0034). Owner-only.
   async revokeShare(accessToken: string, id: string, userId: number): Promise<void> {
-    const response = await fetch(`/api/calendars/${id}/shares/${userId}`, {
+    const response = await authedFetch(accessToken, `/api/calendars/${id}/shares/${userId}`, {
       method: "DELETE",
       credentials: "include",
-      headers: authHeader(accessToken),
     });
     if (!response.ok) throw await errorFromResponse(response);
   },
@@ -221,10 +215,9 @@ export const calendarsApi = {
   // leave renounces the caller's own Share on id (#114, ADR-0034) — the
   // non-Owner counterpart to remove, which only an Owner may call.
   async leave(accessToken: string, id: string): Promise<void> {
-    const response = await fetch(`/api/calendars/${id}/leave`, {
+    const response = await authedFetch(accessToken, `/api/calendars/${id}/leave`, {
       method: "POST",
       credentials: "include",
-      headers: authHeader(accessToken),
     });
     if (!response.ok) throw await errorFromResponse(response);
   },
