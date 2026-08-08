@@ -31,8 +31,9 @@ export interface User {
   defaultView: ActiveView;
   // Time format (ADR-0039): applied wherever this app formats a time itself.
   timeFormat: TimeFormat;
-  // Working hours (ADR-0039): an hour range (0-23) shading the hours outside
-  // it in Day and Week view. Both null means no shading — the default.
+  // Working hours (ADR-0039): a minutes-since-midnight range (0-1439, #136)
+  // shading the hours outside it in Day and Week view. Both null means no
+  // shading — the default.
   workingHoursStart: number | null;
   workingHoursEnd: number | null;
 }

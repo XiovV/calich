@@ -1,16 +1,14 @@
 import { useEffect, useState } from "react";
-import { format } from "date-fns";
 import { useAuthStore } from "../lib/authStore";
 import type { ActiveView } from "../lib/shellStore";
 import type { TimeFormat } from "../lib/authApi";
 import { useAsyncAction } from "../hooks/useAsyncAction";
 import { useWeekStartsOn } from "../hooks/useWeekStartsOn";
-import { useTimePattern } from "../hooks/useTimePattern";
 import { Select } from "../components/ui/Select";
+import { Input } from "../components/ui/Input";
 import { Button } from "../components/ui/Button";
 
 type WeekStartOption = "0" | "1" | "6";
-type HourOption = string;
 
 const WEEK_START_OPTIONS: { value: WeekStartOption; label: string }[] = [
   { value: "0", label: "Sunday" },
@@ -30,11 +28,18 @@ const TIME_FORMAT_OPTIONS: { value: TimeFormat; label: string }[] = [
   { value: "12h", label: "12-hour" },
 ];
 
-function hourOptions(timePattern: string): { value: HourOption; label: string }[] {
-  return Array.from({ length: 24 }, (_, hour) => ({
-    value: String(hour),
-    label: format(new Date(2000, 0, 1, hour), timePattern),
-  }));
+// <input type="time"> emits/expects "HH:mm" in the browser's own locale
+// regardless of the app's Time format setting (see authApi's TimeFormat
+// comment) — minutes-since-midnight is the wire/store unit (ADR-0039, #136).
+function minutesToTimeString(minutes: number): string {
+  const hours = Math.floor(minutes / 60);
+  const mins = minutes % 60;
+  return `${String(hours).padStart(2, "0")}:${String(mins).padStart(2, "0")}`;
+}
+
+function timeStringToMinutes(time: string): number {
+  const [hours, minutes] = time.split(":").map(Number);
+  return hours * 60 + minutes;
 }
 
 // The Settings page's Preferences section (#128, #129, #130, #131, ADR-0039):
@@ -57,13 +62,12 @@ export function PreferencesSection() {
   const updateDefaultView = useAuthStore((state) => state.updateDefaultView);
   const updateTimeFormat = useAuthStore((state) => state.updateTimeFormat);
   const updateWorkingHours = useAuthStore((state) => state.updateWorkingHours);
-  const timePattern = useTimePattern();
 
   const { error, run } = useAsyncAction();
 
-  // Local draft so an in-progress edit (e.g. dragging the end hour below the
-  // start hour) never reaches the server — only once the pair is valid does
-  // it PATCH (ADR-0039). null renders as a blank dropdown rather than
+  // Local draft so an in-progress edit (e.g. picking an end time before the
+  // start time) never reaches the server — only once the pair is valid does
+  // it PATCH (ADR-0039). null renders as a blank time input rather than
   // guessing a starting range, so a User who has never opted in doesn't see
   // a preset that looks already-configured. Resyncs whenever the stored
   // Preference changes underneath it (initial load, or another device
@@ -88,16 +92,24 @@ export function PreferencesSection() {
     await run(() => updateTimeFormat(value));
   }
 
-  async function handleWorkingHoursStartChange(value: HourOption) {
-    const start = Number(value);
+  async function handleWorkingHoursStartChange(event: React.ChangeEvent<HTMLInputElement>) {
+    if (!event.target.value) {
+      setDraftStart(null);
+      return;
+    }
+    const start = timeStringToMinutes(event.target.value);
     setDraftStart(start);
     if (draftEnd !== null && start < draftEnd) {
       await run(() => updateWorkingHours({ start, end: draftEnd }));
     }
   }
 
-  async function handleWorkingHoursEndChange(value: HourOption) {
-    const end = Number(value);
+  async function handleWorkingHoursEndChange(event: React.ChangeEvent<HTMLInputElement>) {
+    if (!event.target.value) {
+      setDraftEnd(null);
+      return;
+    }
+    const end = timeStringToMinutes(event.target.value);
     setDraftEnd(end);
     if (draftStart !== null && draftStart < end) {
       await run(() => updateWorkingHours({ start: draftStart, end }));
@@ -109,7 +121,8 @@ export function PreferencesSection() {
   }
 
   const hasWorkingHours = workingHoursStart !== null && workingHoursEnd !== null;
-  const HOUR_OPTIONS = hourOptions(timePattern);
+  const workingHoursInvalid =
+    draftStart !== null && draftEnd !== null && draftStart >= draftEnd;
 
   return (
     <section>
@@ -147,28 +160,34 @@ export function PreferencesSection() {
             Shades the hours outside this range in Day and Week view. Nothing is hidden — it's a
             visual hint only.
           </p>
-          <div className="flex flex-wrap items-center gap-2">
-            <Select<HourOption>
-              aria-label="Working hours start"
-              value={draftStart === null ? "" : String(draftStart)}
-              onValueChange={handleWorkingHoursStartChange}
-              options={HOUR_OPTIONS}
-              className="min-w-0 flex-1 basis-32"
-            />
-            <span className="text-body text-ink-muted">to</span>
-            <Select<HourOption>
-              aria-label="Working hours end"
-              value={draftEnd === null ? "" : String(draftEnd)}
-              onValueChange={handleWorkingHoursEndChange}
-              options={HOUR_OPTIONS}
-              className="min-w-0 flex-1 basis-32"
-            />
+          <div className="flex flex-wrap items-center gap-3">
+            <div className="flex gap-3">
+              <Input
+                aria-label="Working hours start"
+                type="time"
+                value={draftStart === null ? "" : minutesToTimeString(draftStart)}
+                onChange={handleWorkingHoursStartChange}
+                invalid={workingHoursInvalid}
+                className="flex-1"
+              />
+              <Input
+                aria-label="Working hours end"
+                type="time"
+                value={draftEnd === null ? "" : minutesToTimeString(draftEnd)}
+                onChange={handleWorkingHoursEndChange}
+                invalid={workingHoursInvalid}
+                className="flex-1"
+              />
+            </div>
             {hasWorkingHours && (
               <Button variant="ghost" color="secondary" size="small" onClick={handleClearWorkingHours}>
                 Clear
               </Button>
             )}
           </div>
+          {workingHoursInvalid && (
+            <p className="mt-1 text-label-sm text-danger">End time must be after start time.</p>
+          )}
         </div>
       </div>
 

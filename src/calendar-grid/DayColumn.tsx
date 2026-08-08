@@ -150,13 +150,13 @@ export function DayColumn({
       {workingHours && workingHours.start > 0 && (
         <div
           className="pointer-events-none absolute inset-x-0 top-0 bg-ink/5"
-          style={{ height: workingHours.start * pixelsPerHour }}
+          style={{ height: (workingHours.start / 60) * pixelsPerHour }}
         />
       )}
-      {workingHours && workingHours.end < HOURS_IN_DAY && (
+      {workingHours && workingHours.end < HOURS_IN_DAY * 60 && (
         <div
           className="pointer-events-none absolute inset-x-0 bottom-0 bg-ink/5"
-          style={{ height: (HOURS_IN_DAY - workingHours.end) * pixelsPerHour }}
+          style={{ height: ((HOURS_IN_DAY * 60 - workingHours.end) / 60) * pixelsPerHour }}
         />
       )}
       {Array.from({ length: HOURS_IN_DAY }, (_, hour) => (
