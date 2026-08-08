@@ -76,7 +76,15 @@ type calendarResponse struct {
 }
 
 func toCalendarResponse(c repository.Calendar, isOwner bool, ownerUsername string, shareCount int) calendarResponse {
-	response := calendarResponse{ID: c.ID, Name: c.Name, Color: c.Color, LastSyncedAt: c.LastSyncedAt, ErrorClass: c.ErrorClass, ErrorMessage: c.ErrorMessage, KeepAlarms: c.KeepAlarms, Access: service.AccessOwner.String(), IsOwner: isOwner, OwnerUsername: ownerUsername, ShareCount: shareCount}
+	// respondWithOwnership's callers (Create, Update, Subscribe) always hand
+	// back the caller's own Calendar, so Access is Owner — except a just-
+	// Subscribed Calendar, whose SourceURL clamps it to Viewer even for its
+	// Owner (ADR-0032), same as ResolveAccess applies for every other caller.
+	access := service.AccessOwner
+	if c.SourceURL != nil {
+		access = service.AccessViewer
+	}
+	response := calendarResponse{ID: c.ID, Name: c.Name, Color: c.Color, LastSyncedAt: c.LastSyncedAt, ErrorClass: c.ErrorClass, ErrorMessage: c.ErrorMessage, KeepAlarms: c.KeepAlarms, Access: access.String(), IsOwner: isOwner, OwnerUsername: ownerUsername, ShareCount: shareCount}
 	if c.SourceURL != nil {
 		masked := service.MaskURL(*c.SourceURL)
 		response.SourceURL = &masked
