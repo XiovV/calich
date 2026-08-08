@@ -2,6 +2,7 @@ import { format } from "date-fns";
 import { DayPicker, type MonthCaptionProps } from "react-day-picker";
 import "react-day-picker/style.css";
 import { useShellStore } from "../lib/shellStore";
+import { useWeekStartsOn } from "../hooks/useWeekStartsOn";
 import { dayKey } from "../lib/yearGrid";
 
 interface MiniMonthProps {
@@ -39,12 +40,14 @@ function MiniMonthCaption({ calendarMonth }: MonthCaptionProps) {
 export function MiniMonth({ month, daysWithEvents }: MiniMonthProps) {
   const setSelectedDate = useShellStore((state) => state.setSelectedDate);
   const setActiveView = useShellStore((state) => state.setActiveView);
+  const weekStartsOn = useWeekStartsOn();
 
   return (
     <DayPicker
       month={month}
       hideNavigation
       showOutsideDays={false}
+      weekStartsOn={weekStartsOn}
       onDayClick={(date) => {
         setSelectedDate(date);
         setActiveView("day");

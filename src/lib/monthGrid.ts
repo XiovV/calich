@@ -1,4 +1,5 @@
 import { addDays, isSameDay, isSameMonth, startOfMonth, startOfWeek } from "date-fns";
+import type { Day as WeekStartsOn } from "date-fns";
 import type { Occurrence } from "./occurrence";
 import { roundUpToIncrement, type DraftBlock } from "./gridTime";
 
@@ -11,9 +12,9 @@ export interface MonthGridCell {
   inCurrentMonth: boolean;
 }
 
-export function buildMonthGrid(selectedDate: Date): MonthGridCell[] {
+export function buildMonthGrid(selectedDate: Date, weekStartsOn: WeekStartsOn): MonthGridCell[] {
   const monthStart = startOfMonth(selectedDate);
-  const gridStart = startOfWeek(monthStart);
+  const gridStart = startOfWeek(monthStart, { weekStartsOn });
 
   return Array.from({ length: MONTH_GRID_CELL_COUNT }, (_, index) => {
     const date = addDays(gridStart, index);

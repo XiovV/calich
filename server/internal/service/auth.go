@@ -37,6 +37,9 @@ var (
 	// User (ADR-0037) — two of the three points Disable must be enforced at,
 	// the third being CalDAV Basic auth (AppPasswordService.Authenticate).
 	ErrAccountDisabled = errors.New("account is disabled")
+	// ErrInvalidWeekStart is returned by UpdatePreferences for a Week start
+	// outside the date-fns weekStartsOn range (ADR-0039).
+	ErrInvalidWeekStart = errors.New("week_start must be between 0 and 6")
 )
 
 type AuthService struct {
@@ -351,6 +354,31 @@ func (s *AuthService) UpdateSyncedDeviceReminders(ctx context.Context, userID in
 		return repository.User{}, fmt.Errorf("update synced device reminders preference: %w", err)
 	}
 	return user, nil
+}
+
+// PreferencesUpdate is the partial PATCH /api/auth/preferences body
+// (ADR-0039): a nil field is left untouched, so a Week start of 0 (Sunday)
+// can be told apart from an absent field.
+type PreferencesUpdate struct {
+	WeekStart *int
+}
+
+// UpdatePreferences applies whichever Preferences are present in update,
+// leaving the rest untouched (ADR-0039).
+func (s *AuthService) UpdatePreferences(ctx context.Context, userID int64, update PreferencesUpdate) (repository.User, error) {
+	if update.WeekStart != nil {
+		if *update.WeekStart < 0 || *update.WeekStart > 6 {
+			return repository.User{}, ErrInvalidWeekStart
+		}
+
+		user, err := s.users.UpdateWeekStart(ctx, userID, *update.WeekStart)
+		if err != nil {
+			return repository.User{}, fmt.Errorf("update week start preference: %w", err)
+		}
+		return user, nil
+	}
+
+	return s.users.GetByID(ctx, userID)
 }
 
 // Refresh mints a new access token for the session identified by the given

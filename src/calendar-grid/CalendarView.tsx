@@ -1,5 +1,6 @@
 import { addDays, startOfWeek } from "date-fns";
 import { useShellStore } from "../lib/shellStore";
+import { useWeekStartsOn } from "../hooks/useWeekStartsOn";
 import type { Occurrence } from "../lib/occurrence";
 import type { DraftBlock } from "../lib/gridTime";
 import { TimeGrid } from "./TimeGrid";
@@ -14,6 +15,7 @@ interface CalendarViewProps {
 export function CalendarView({ onDraftCreated, onOccurrenceClick }: CalendarViewProps) {
   const activeView = useShellStore((state) => state.activeView);
   const selectedDate = useShellStore((state) => state.selectedDate);
+  const weekStartsOn = useWeekStartsOn();
 
   switch (activeView) {
     case "day":
@@ -25,7 +27,7 @@ export function CalendarView({ onDraftCreated, onOccurrenceClick }: CalendarView
         />
       );
     case "week": {
-      const weekStart = startOfWeek(selectedDate);
+      const weekStart = startOfWeek(selectedDate, { weekStartsOn });
       const weekDays = Array.from({ length: 7 }, (_, index) =>
         addDays(weekStart, index),
       );

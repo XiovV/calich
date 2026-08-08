@@ -22,6 +22,14 @@ describe("buildCustomRule", () => {
     );
   });
 
+  it("never emits WKST, whatever the interval — Week start (ADR-0039) never reaches a Recurrence rule", () => {
+    const rule = buildCustomRule(
+      fields({ unit: "week", interval: 2, weekdays: [1, 3] }),
+      TUESDAY,
+    );
+    expect(rule).not.toMatch(/WKST/);
+  });
+
   it("includes INTERVAL only when greater than one, and sorts weekday chips", () => {
     expect(
       buildCustomRule(

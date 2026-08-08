@@ -1,6 +1,7 @@
 import { ChevronLeft, ChevronRight, Settings } from "lucide-react";
 import { useNavigate } from "react-router";
 import { useShellStore } from "../../lib/shellStore";
+import { useWeekStartsOn } from "../../hooks/useWeekStartsOn";
 import { navigateDate } from "../../lib/navigateDate";
 import { formatDateLabel } from "../../lib/formatDateLabel";
 import { UserMenu } from "../../auth/UserMenu";
@@ -15,6 +16,7 @@ export function TopBar() {
   const selectedDate = useShellStore((state) => state.selectedDate);
   const activeView = useShellStore((state) => state.activeView);
   const setSelectedDate = useShellStore((state) => state.setSelectedDate);
+  const weekStartsOn = useWeekStartsOn();
 
   const goToToday = () => setSelectedDate(new Date());
   const goToPrevious = () =>
@@ -45,7 +47,7 @@ export function TopBar() {
       </div>
 
       <span className="text-heading text-ink">
-        {formatDateLabel(selectedDate, activeView)}
+        {formatDateLabel(selectedDate, activeView, weekStartsOn)}
       </span>
 
       <div className="ml-auto flex items-center gap-2">

@@ -187,6 +187,36 @@ func TestUserRepository_SyncedDeviceRemindersEnabled_DefaultsOff(t *testing.T) {
 	}
 }
 
+func TestUserRepository_Create_DefaultsWeekStartToMonday(t *testing.T) {
+	repo := newTestUserRepository(t)
+
+	created, err := repo.Create(context.Background(), "admin", "hash", true)
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	if created.WeekStart != 1 {
+		t.Fatalf("expected week_start to default to 1 (Monday), got %d", created.WeekStart)
+	}
+}
+
+func TestUserRepository_UpdateWeekStart(t *testing.T) {
+	repo := newTestUserRepository(t)
+	ctx := context.Background()
+
+	created, err := repo.Create(ctx, "admin", "hash", true)
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+
+	updated, err := repo.UpdateWeekStart(ctx, created.ID, 0)
+	if err != nil {
+		t.Fatalf("update week start: %v", err)
+	}
+	if updated.WeekStart != 0 {
+		t.Fatalf("expected week_start 0, got %d", updated.WeekStart)
+	}
+}
+
 func TestUserRepository_Create_DefaultsToNonAdmin(t *testing.T) {
 	repo := newTestUserRepository(t)
 

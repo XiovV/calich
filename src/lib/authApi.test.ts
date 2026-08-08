@@ -95,6 +95,7 @@ describe("authApi.me", () => {
         email_reminder_channel_available: true,
         synced_device_reminders_enabled: false,
         is_admin: true,
+        week_start: 1,
       }),
     );
     vi.stubGlobal("fetch", fetchMock);
@@ -109,6 +110,7 @@ describe("authApi.me", () => {
       emailReminderChannelAvailable: true,
       syncedDeviceRemindersEnabled: false,
       isAdmin: true,
+      weekStart: 1,
     });
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/auth/me",
@@ -277,6 +279,7 @@ describe("authApi.updateSyncedDeviceReminders", () => {
         email_reminder_channel_available: false,
         synced_device_reminders_enabled: true,
         is_admin: false,
+        week_start: 1,
       }),
     );
     vi.stubGlobal("fetch", fetchMock);
@@ -291,6 +294,7 @@ describe("authApi.updateSyncedDeviceReminders", () => {
       emailReminderChannelAvailable: false,
       syncedDeviceRemindersEnabled: true,
       isAdmin: false,
+      weekStart: 1,
     });
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/auth/synced-device-reminders",
@@ -311,6 +315,57 @@ describe("authApi.updateSyncedDeviceReminders", () => {
 
     await expect(authApi.updateSyncedDeviceReminders("token-123", true)).rejects.toMatchObject({
       code: "internal_error",
+    });
+  });
+});
+
+describe("authApi.updatePreferences", () => {
+  it("sends week_start and the bearer token, and maps the response", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(200, {
+        id: 1,
+        username: "admin",
+        must_change_password: false,
+        email: null,
+        email_reminder_channel_available: false,
+        synced_device_reminders_enabled: false,
+        is_admin: false,
+        week_start: 0,
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const user = await authApi.updatePreferences("token-123", 0);
+
+    expect(user).toEqual({
+      id: 1,
+      username: "admin",
+      mustChangePassword: false,
+      email: null,
+      emailReminderChannelAvailable: false,
+      syncedDeviceRemindersEnabled: false,
+      isAdmin: false,
+      weekStart: 0,
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/auth/preferences",
+      expect.objectContaining({
+        method: "PATCH",
+        credentials: "include",
+        headers: expect.objectContaining({ Authorization: "Bearer token-123" }),
+        body: JSON.stringify({ week_start: 0 }),
+      }),
+    );
+  });
+
+  it("throws on failure", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(400, { error: { code: "invalid_request", message: "week_start must be between 0 and 6" } }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(authApi.updatePreferences("token-123", 7)).rejects.toMatchObject({
+      code: "invalid_request",
     });
   });
 });

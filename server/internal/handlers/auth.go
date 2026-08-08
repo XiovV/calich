@@ -49,6 +49,10 @@ var updateUsernameErrors = []errorCase{
 	{service.ErrUsernameTaken, conflict("username_taken", "username is already taken")},
 }
 
+var updatePreferencesErrors = []errorCase{
+	{service.ErrInvalidWeekStart, badRequest("week_start must be between 0 and 6")},
+}
+
 var refreshErrors = []errorCase{
 	{service.ErrInvalidSession, unauthorized("unauthorized", "invalid or expired refresh token")},
 	{service.ErrAccountDisabled, unauthorized("account_disabled", "this account has been disabled")},
@@ -97,6 +101,14 @@ type meResponse struct {
 	// without it the web app cannot decide whether to render any
 	// administration UI (#119).
 	IsAdmin bool `json:"is_admin"`
+	// Preferences (ADR-0039): per-User display settings. Only WeekStart is
+	// wired up to the frontend yet (#128) — the rest wait on #129, #130,
+	// #131 — but all five are served here as soon as they exist on the User.
+	WeekStart         int    `json:"week_start"`
+	DefaultView       string `json:"default_view"`
+	TimeFormat        string `json:"time_format"`
+	WorkingHoursStart *int   `json:"working_hours_start"`
+	WorkingHoursEnd   *int   `json:"working_hours_end"`
 }
 
 func (h *AuthHandler) toMeResponse(user repository.User) meResponse {
@@ -108,6 +120,11 @@ func (h *AuthHandler) toMeResponse(user repository.User) meResponse {
 		EmailReminderChannelAvailable: h.smtpConfigured && user.Email != nil,
 		SyncedDeviceRemindersEnabled:  user.SyncedDeviceRemindersEnabled,
 		IsAdmin:                       user.IsAdmin,
+		WeekStart:                     user.WeekStart,
+		DefaultView:                   user.DefaultView,
+		TimeFormat:                    user.TimeFormat,
+		WorkingHoursStart:             user.WorkingHoursStart,
+		WorkingHoursEnd:               user.WorkingHoursEnd,
 	}
 }
 
@@ -202,6 +219,36 @@ func (h *AuthHandler) UpdateSyncedDeviceReminders(w http.ResponseWriter, r *http
 	user, err := h.auth.UpdateSyncedDeviceReminders(r.Context(), userID, req.SyncedDeviceRemindersEnabled)
 	if err != nil {
 		httpresponse.Error(w, http.StatusInternalServerError, "internal_error", "failed to update reminder preference")
+		return
+	}
+
+	httpresponse.JSON(w, http.StatusOK, h.toMeResponse(user))
+}
+
+// updatePreferencesRequest decodes into a pointer so an absent field is
+// distinguishable from a zero value — `week_start: 0` is Sunday, not
+// "unset" (ADR-0039).
+type updatePreferencesRequest struct {
+	WeekStart *int `json:"week_start"`
+}
+
+// UpdatePreferences applies whichever Preferences (ADR-0039) are present in
+// the request body, leaving the rest untouched.
+func (h *AuthHandler) UpdatePreferences(w http.ResponseWriter, r *http.Request) {
+	userID, ok := httpauth.UserIDFromContext(r.Context())
+	if !ok {
+		httpresponse.Error(w, http.StatusUnauthorized, "unauthorized", "authentication required")
+		return
+	}
+
+	var req updatePreferencesRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httpresponse.Error(w, http.StatusBadRequest, "invalid_request", "request body must be valid JSON")
+		return
+	}
+
+	user, err := h.auth.UpdatePreferences(r.Context(), userID, service.PreferencesUpdate{WeekStart: req.WeekStart})
+	if respondError(w, err, updatePreferencesErrors, "failed to update preferences") {
 		return
 	}
 

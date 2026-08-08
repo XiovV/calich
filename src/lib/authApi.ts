@@ -17,6 +17,9 @@ export interface User {
   // Authority over who exists on the instance (ADR-0037) — gates whether the
   // app renders any administration UI at all (#119).
   isAdmin: boolean;
+  // Week start (ADR-0039): a date-fns weekStartsOn index, 0 (Sunday) to 6
+  // (Saturday). Never fed into a Recurrence rule's WKST.
+  weekStart: number;
 }
 
 export interface LoginResult {
@@ -32,6 +35,7 @@ interface MeWire {
   email_reminder_channel_available: boolean;
   synced_device_reminders_enabled: boolean;
   is_admin: boolean;
+  week_start: number;
 }
 
 function fromMeWire(wire: MeWire): User {
@@ -43,6 +47,7 @@ function fromMeWire(wire: MeWire): User {
     emailReminderChannelAvailable: wire.email_reminder_channel_available,
     syncedDeviceRemindersEnabled: wire.synced_device_reminders_enabled,
     isAdmin: wire.is_admin,
+    weekStart: wire.week_start,
   };
 }
 
@@ -137,6 +142,20 @@ export const authApi = {
       credentials: "include",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ synced_device_reminders_enabled: enabled }),
+    });
+    if (!response.ok) throw await errorFromResponse(response);
+
+    return fromMeWire(await response.json());
+  },
+
+  // Partial: only week_start is sent today, matching the only Preference
+  // (ADR-0039) wired up to the UI so far.
+  async updatePreferences(accessToken: string, weekStart: number): Promise<User> {
+    const response = await authedFetch(accessToken, "/api/auth/preferences", {
+      method: "PATCH",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ week_start: weekStart }),
     });
     if (!response.ok) throw await errorFromResponse(response);
 

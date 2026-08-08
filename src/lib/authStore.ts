@@ -20,6 +20,7 @@ interface AuthState {
   updateEmail: (email: string) => Promise<void>;
   updateUsername: (username: string) => Promise<void>;
   updateSyncedDeviceReminders: (enabled: boolean) => Promise<void>;
+  updateWeekStart: (weekStart: number) => Promise<void>;
 }
 
 type AuthFields = Pick<AuthState, "status" | "user" | "pendingUsername" | "accessToken">;
@@ -129,6 +130,14 @@ export const useAuthStore = create<AuthState>((set, get) => {
       if (!accessToken) throw new Error("Not authenticated.");
 
       const user = await authApi.updateSyncedDeviceReminders(accessToken, enabled);
+      set(authenticated(user, accessToken));
+    },
+
+    updateWeekStart: async (weekStart) => {
+      const { accessToken } = get();
+      if (!accessToken) throw new Error("Not authenticated.");
+
+      const user = await authApi.updatePreferences(accessToken, weekStart);
       set(authenticated(user, accessToken));
     },
   };

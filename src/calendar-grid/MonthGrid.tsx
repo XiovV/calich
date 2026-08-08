@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import { addDays, isSameDay, startOfDay } from "date-fns";
+import { addDays, format, isSameDay, startOfDay } from "date-fns";
 import { useShellStore } from "../lib/shellStore";
 import { useCalendarsStore } from "../lib/calendarsStore";
 import { getCalendarById } from "../lib/calendar";
@@ -7,9 +7,9 @@ import { getCalendarBlockStyle } from "../lib/calendarColors";
 import { buildMonthGrid, getOccurrencesForDay } from "../lib/monthGrid";
 import { computeMoveToDate } from "../lib/gridTime";
 import { useVisibleOccurrences } from "../hooks/useVisibleOccurrences";
+import { useWeekStartsOn } from "../hooks/useWeekStartsOn";
 import { usePointerDrag, type DragState } from "../hooks/usePointerDrag";
 import { occurrenceKey, type Occurrence } from "../lib/occurrence";
-import { WEEKDAY_SHORT_NAMES } from "../lib/rruleParts";
 import { MonthDayCell } from "./MonthDayCell";
 import { MonthEventDragPreview } from "./MonthEventDragPreview";
 import { ScopePicker } from "./ScopePicker";
@@ -37,6 +37,7 @@ function getCellDateAtPoint(
 
 export function MonthGrid({ onDraftCreated, onOccurrenceClick }: MonthGridProps) {
   const selectedDate = useShellStore((state) => state.selectedDate);
+  const weekStartsOn = useWeekStartsOn();
   const calendars = useCalendarsStore((state) => state.calendars);
   const dragCommit = useOccurrenceDragCommit();
 
@@ -53,7 +54,7 @@ export function MonthGrid({ onDraftCreated, onOccurrenceClick }: MonthGridProps)
     onDraftCreated(day, draft);
   }
 
-  const cells = buildMonthGrid(selectedDate);
+  const cells = buildMonthGrid(selectedDate, weekStartsOn);
 
   // The grid renders Occurrences, not raw Events: each master is expanded over
   // the six-week window the grid displays. A non-recurring Event yields exactly
@@ -108,12 +109,12 @@ export function MonthGrid({ onDraftCreated, onOccurrenceClick }: MonthGridProps)
   return (
     <div className="flex h-full flex-col">
       <div className="grid grid-cols-7 border-t border-border">
-        {WEEKDAY_SHORT_NAMES.map((label) => (
+        {cells.slice(0, 7).map(({ date }) => (
           <div
-            key={label}
+            key={date.toISOString()}
             className="border-b border-l border-border py-2 text-center text-label-sm text-ink-muted"
           >
-            {label}
+            {format(date, "EEE")}
           </div>
         ))}
       </div>

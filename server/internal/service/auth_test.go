@@ -400,6 +400,68 @@ func TestUpdateEmail_EmptyStringClearsIt(t *testing.T) {
 	}
 }
 
+func TestBootstrap_FirstUserDefaultsToMondayWeekStart(t *testing.T) {
+	svc := newTestAuthService(t, "", "")
+	ctx := context.Background()
+	user, _, err := svc.Bootstrap(ctx)
+	if err != nil {
+		t.Fatalf("bootstrap: %v", err)
+	}
+	if user.WeekStart != 1 {
+		t.Fatalf("expected week_start to default to 1 (Monday), got %d", user.WeekStart)
+	}
+}
+
+func TestUpdatePreferences_SetsWeekStart(t *testing.T) {
+	svc := newTestAuthService(t, "", "")
+	ctx := context.Background()
+	user, _, err := svc.Bootstrap(ctx)
+	if err != nil {
+		t.Fatalf("bootstrap: %v", err)
+	}
+
+	weekStart := 0
+	updated, err := svc.UpdatePreferences(ctx, user.ID, PreferencesUpdate{WeekStart: &weekStart})
+	if err != nil {
+		t.Fatalf("update preferences: %v", err)
+	}
+	if updated.WeekStart != 0 {
+		t.Fatalf("expected week_start 0 (Sunday) to be stored, got %d", updated.WeekStart)
+	}
+}
+
+func TestUpdatePreferences_RejectsWeekStartOutOfRange(t *testing.T) {
+	svc := newTestAuthService(t, "", "")
+	ctx := context.Background()
+	user, _, err := svc.Bootstrap(ctx)
+	if err != nil {
+		t.Fatalf("bootstrap: %v", err)
+	}
+
+	weekStart := 7
+	_, err = svc.UpdatePreferences(ctx, user.ID, PreferencesUpdate{WeekStart: &weekStart})
+	if !errors.Is(err, ErrInvalidWeekStart) {
+		t.Fatalf("expected ErrInvalidWeekStart, got %v", err)
+	}
+}
+
+func TestUpdatePreferences_NilFieldLeavesWeekStartUntouched(t *testing.T) {
+	svc := newTestAuthService(t, "", "")
+	ctx := context.Background()
+	user, _, err := svc.Bootstrap(ctx)
+	if err != nil {
+		t.Fatalf("bootstrap: %v", err)
+	}
+
+	updated, err := svc.UpdatePreferences(ctx, user.ID, PreferencesUpdate{})
+	if err != nil {
+		t.Fatalf("update preferences: %v", err)
+	}
+	if updated.WeekStart != 1 {
+		t.Fatalf("expected week_start to remain at its default of 1, got %d", updated.WeekStart)
+	}
+}
+
 func TestUpdateUsername_RenamesTheCaller(t *testing.T) {
 	svc := newTestAuthService(t, "", "")
 	ctx := context.Background()

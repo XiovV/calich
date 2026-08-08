@@ -37,6 +37,7 @@ func New(logger *slog.Logger, authHandler *handlers.AuthHandler, calendarHandler
 				r.Put("/email", authHandler.UpdateEmail)
 				r.Put("/username", authHandler.UpdateUsername)
 				r.Put("/synced-device-reminders", authHandler.UpdateSyncedDeviceReminders)
+				r.Patch("/preferences", authHandler.UpdatePreferences)
 			})
 		})
 

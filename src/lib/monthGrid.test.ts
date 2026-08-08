@@ -9,20 +9,27 @@ import type { Occurrence } from "./occurrence";
 
 describe("buildMonthGrid", () => {
   it("returns 42 cells", () => {
-    const grid = buildMonthGrid(new Date(2026, 7, 15));
+    const grid = buildMonthGrid(new Date(2026, 7, 15), 0);
     expect(grid).toHaveLength(42);
   });
 
   it("starts every row on a Sunday", () => {
-    const grid = buildMonthGrid(new Date(2026, 7, 15));
+    const grid = buildMonthGrid(new Date(2026, 7, 15), 0);
     for (let row = 0; row < 6; row++) {
       expect(grid[row * 7].date.getDay()).toBe(0);
     }
   });
 
+  it("starts every row on the given weekStartsOn day", () => {
+    const grid = buildMonthGrid(new Date(2026, 7, 15), 1);
+    for (let row = 0; row < 6; row++) {
+      expect(grid[row * 7].date.getDay()).toBe(1);
+    }
+  });
+
   it("marks leading/trailing days from a month that starts on Saturday", () => {
     // August 2026 starts on a Saturday, so the grid begins on Sunday, July 26.
-    const grid = buildMonthGrid(new Date(2026, 7, 15));
+    const grid = buildMonthGrid(new Date(2026, 7, 15), 0);
 
     expect(grid[0].date).toEqual(new Date(2026, 6, 26));
     expect(grid[0].inCurrentMonth).toBe(false);
@@ -48,7 +55,7 @@ describe("buildMonthGrid", () => {
   it("still fills six rows for a month that starts on Sunday", () => {
     // February 2026 starts on a Sunday and has 28 days, so it only spans
     // 4 calendar rows on its own — the grid still pads to six.
-    const grid = buildMonthGrid(new Date(2026, 1, 10));
+    const grid = buildMonthGrid(new Date(2026, 1, 10), 0);
 
     expect(grid).toHaveLength(42);
     expect(grid[0].date).toEqual(new Date(2026, 1, 1));
@@ -64,7 +71,7 @@ describe("buildMonthGrid", () => {
   it("handles a December -> January year boundary", () => {
     // December 2025 starts on a Monday, so the grid begins on Sunday,
     // November 30, and trails into January 2026.
-    const grid = buildMonthGrid(new Date(2025, 11, 10));
+    const grid = buildMonthGrid(new Date(2025, 11, 10), 0);
 
     expect(grid[0].date).toEqual(new Date(2025, 10, 30));
     expect(grid[0].inCurrentMonth).toBe(false);

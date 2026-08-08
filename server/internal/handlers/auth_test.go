@@ -49,6 +49,7 @@ func newAuthTestServerWithSMTP(t *testing.T, smtpConfigured bool) *httptest.Serv
 	r.With(httpauth.RequireAuth(auth), httpauth.RequireActiveUser(auth)).Put("/api/auth/email", h.UpdateEmail)
 	r.With(httpauth.RequireAuth(auth), httpauth.RequireActiveUser(auth)).Put("/api/auth/username", h.UpdateUsername)
 	r.With(httpauth.RequireAuth(auth), httpauth.RequireActiveUser(auth)).Put("/api/auth/synced-device-reminders", h.UpdateSyncedDeviceReminders)
+	r.With(httpauth.RequireAuth(auth), httpauth.RequireActiveUser(auth)).Patch("/api/auth/preferences", h.UpdatePreferences)
 
 	srv := httptest.NewServer(r)
 	t.Cleanup(srv.Close)
@@ -556,6 +557,140 @@ func TestUpdateSyncedDeviceReminders_RequiresAuthentication(t *testing.T) {
 		t.Fatalf("expected 401, got %d", resp.StatusCode)
 	}
 }
+
+func TestMe_WeekStart_DefaultsToMonday(t *testing.T) {
+	srv := newAuthTestServer(t)
+	accessToken := authenticatedAccessToken(t, srv)
+
+	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/api/auth/me", nil)
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET /api/auth/me: %v", err)
+	}
+	defer resp.Body.Close()
+
+	var me meResponse
+	if err := json.NewDecoder(resp.Body).Decode(&me); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if me.WeekStart != 1 {
+		t.Fatalf("expected week_start to default to 1 (Monday), got %d", me.WeekStart)
+	}
+}
+
+func TestUpdatePreferences_SetsWeekStart(t *testing.T) {
+	srv := newAuthTestServer(t)
+	accessToken := authenticatedAccessToken(t, srv)
+
+	body, _ := json.Marshal(updatePreferencesRequest{WeekStart: intPtr(0)})
+	req, _ := http.NewRequest(http.MethodPatch, srv.URL+"/api/auth/preferences", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("PATCH /api/auth/preferences: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	var me meResponse
+	if err := json.NewDecoder(resp.Body).Decode(&me); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	// week_start: 0 is Sunday, not "unset" — it must actually be stored.
+	if me.WeekStart != 0 {
+		t.Fatalf("expected week_start to be stored as 0 (Sunday), got %d", me.WeekStart)
+	}
+}
+
+func TestUpdatePreferences_OmittedFieldIsLeftUntouched(t *testing.T) {
+	srv := newAuthTestServer(t)
+	accessToken := authenticatedAccessToken(t, srv)
+
+	req, _ := http.NewRequest(http.MethodPatch, srv.URL+"/api/auth/preferences", bytes.NewReader([]byte(`{}`)))
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("PATCH /api/auth/preferences: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	var me meResponse
+	if err := json.NewDecoder(resp.Body).Decode(&me); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if me.WeekStart != 1 {
+		t.Fatalf("expected week_start to stay at its default of 1, got %d", me.WeekStart)
+	}
+}
+
+func TestUpdatePreferences_RejectsWeekStartOutOfRange(t *testing.T) {
+	srv := newAuthTestServer(t)
+	accessToken := authenticatedAccessToken(t, srv)
+
+	body, _ := json.Marshal(updatePreferencesRequest{WeekStart: intPtr(7)})
+	req, _ := http.NewRequest(http.MethodPatch, srv.URL+"/api/auth/preferences", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("PATCH /api/auth/preferences: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", resp.StatusCode)
+	}
+
+	req2, _ := http.NewRequest(http.MethodGet, srv.URL+"/api/auth/me", nil)
+	req2.Header.Set("Authorization", "Bearer "+accessToken)
+	resp2, err := http.DefaultClient.Do(req2)
+	if err != nil {
+		t.Fatalf("GET /api/auth/me: %v", err)
+	}
+	defer resp2.Body.Close()
+
+	var me meResponse
+	if err := json.NewDecoder(resp2.Body).Decode(&me); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if me.WeekStart != 1 {
+		t.Fatalf("expected an out-of-range week_start to store nothing, got %d", me.WeekStart)
+	}
+}
+
+func TestUpdatePreferences_RequiresAuthentication(t *testing.T) {
+	srv := newAuthTestServer(t)
+
+	body, _ := json.Marshal(updatePreferencesRequest{WeekStart: intPtr(0)})
+	req, _ := http.NewRequest(http.MethodPatch, srv.URL+"/api/auth/preferences", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("PATCH /api/auth/preferences: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", resp.StatusCode)
+	}
+}
+
+func intPtr(v int) *int { return &v }
 
 func TestChangePassword_AllowedEvenWhileMustChangePassword(t *testing.T) {
 	// change-password itself must stay reachable for a user who is otherwise

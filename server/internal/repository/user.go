@@ -33,6 +33,22 @@ type User struct {
 	// account, never of the data.
 	IsDisabled bool
 	CreatedAt  time.Time
+
+	// WeekStart is a date-fns weekStartsOn index (0 = Sunday .. 6 = Saturday):
+	// the first column of the Month grid, the first day of the Week view, and
+	// the mini calendars. Never fed into a Recurrence rule's WKST (ADR-0039).
+	WeekStart int
+	// DefaultView seeds Active view when a Session is established; it is
+	// never written back (ADR-0039).
+	DefaultView string
+	// TimeFormat is "12h" or "24h", applied wherever the app formats a time
+	// itself (ADR-0039).
+	TimeFormat string
+	// WorkingHoursStart and WorkingHoursEnd are an hour range (0..23) shading
+	// the hours outside it in Day and Week view. Nil means no shading
+	// (ADR-0039).
+	WorkingHoursStart *int
+	WorkingHoursEnd   *int
 }
 
 type UserRepository struct {
@@ -77,7 +93,7 @@ func (r *UserRepository) Create(ctx context.Context, username, passwordHash stri
 
 func (r *UserRepository) GetByID(ctx context.Context, id int64) (User, error) {
 	return r.scanUser(r.db.QueryRowContext(ctx,
-		`SELECT id, username, password_hash, must_change_password, email, synced_device_reminders_enabled, is_admin, is_disabled, created_at FROM users WHERE id = ?`, id,
+		`SELECT id, username, password_hash, must_change_password, email, synced_device_reminders_enabled, is_admin, is_disabled, created_at, week_start, default_view, time_format, working_hours_start, working_hours_end FROM users WHERE id = ?`, id,
 	))
 }
 
@@ -91,7 +107,7 @@ func (r *UserRepository) GetByIDs(ctx context.Context, ids []int64) (map[int64]U
 		return result, nil
 	}
 
-	query := `SELECT id, username, password_hash, must_change_password, email, synced_device_reminders_enabled, is_admin, is_disabled, created_at FROM users WHERE id IN (` + placeholders(len(ids)) + `)`
+	query := `SELECT id, username, password_hash, must_change_password, email, synced_device_reminders_enabled, is_admin, is_disabled, created_at, week_start, default_view, time_format, working_hours_start, working_hours_end FROM users WHERE id IN (` + placeholders(len(ids)) + `)`
 	args := make([]any, len(ids))
 	for i, id := range ids {
 		args[i] = id
@@ -119,7 +135,7 @@ func (r *UserRepository) GetByIDs(ctx context.Context, ids []int64) (map[int64]U
 
 func (r *UserRepository) GetByUsername(ctx context.Context, username string) (User, error) {
 	return r.scanUser(r.db.QueryRowContext(ctx,
-		`SELECT id, username, password_hash, must_change_password, email, synced_device_reminders_enabled, is_admin, is_disabled, created_at FROM users WHERE username = ?`, username,
+		`SELECT id, username, password_hash, must_change_password, email, synced_device_reminders_enabled, is_admin, is_disabled, created_at, week_start, default_view, time_format, working_hours_start, working_hours_end FROM users WHERE username = ?`, username,
 	))
 }
 
@@ -127,7 +143,7 @@ func (r *UserRepository) GetByUsername(ctx context.Context, username string) (Us
 // order) so the bootstrapped Admin always leads the list.
 func (r *UserRepository) List(ctx context.Context) ([]User, error) {
 	rows, err := r.db.QueryContext(ctx,
-		`SELECT id, username, password_hash, must_change_password, email, synced_device_reminders_enabled, is_admin, is_disabled, created_at FROM users ORDER BY id`,
+		`SELECT id, username, password_hash, must_change_password, email, synced_device_reminders_enabled, is_admin, is_disabled, created_at, week_start, default_view, time_format, working_hours_start, working_hours_end FROM users ORDER BY id`,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("query users: %w", err)
@@ -156,7 +172,7 @@ func (r *UserRepository) List(ctx context.Context) ([]User, error) {
 // and the caller never sees themselves in their own picker.
 func (r *UserRepository) ListEnabledExcluding(ctx context.Context, excludeID int64) ([]User, error) {
 	rows, err := r.db.QueryContext(ctx,
-		`SELECT id, username, password_hash, must_change_password, email, synced_device_reminders_enabled, is_admin, is_disabled, created_at
+		`SELECT id, username, password_hash, must_change_password, email, synced_device_reminders_enabled, is_admin, is_disabled, created_at, week_start, default_view, time_format, working_hours_start, working_hours_end
 		 FROM users WHERE is_disabled = 0 AND id != ? ORDER BY username`, excludeID,
 	)
 	if err != nil {
@@ -215,6 +231,16 @@ func (r *UserRepository) UpdateSyncedDeviceReminders(ctx context.Context, userID
 	return r.GetByID(ctx, userID)
 }
 
+// UpdateWeekStart sets userID's Week start preference (ADR-0039) — a
+// date-fns weekStartsOn index, 0..6. Range validation happens in
+// AuthService.UpdatePreferences.
+func (r *UserRepository) UpdateWeekStart(ctx context.Context, userID int64, weekStart int) (User, error) {
+	if _, err := r.db.ExecContext(ctx, `UPDATE users SET week_start = ? WHERE id = ?`, weekStart, userID); err != nil {
+		return User{}, fmt.Errorf("update week start preference: %w", err)
+	}
+	return r.GetByID(ctx, userID)
+}
+
 // UpdatePassword sets a new password hash and clears must_change_password.
 func (r *UserRepository) UpdatePassword(ctx context.Context, userID int64, passwordHash string) error {
 	_, err := r.db.ExecContext(ctx,
@@ -231,7 +257,7 @@ func (r *UserRepository) UpdatePassword(ctx context.Context, userID int64, passw
 // single-user instance (ADR-0010).
 func (r *UserRepository) First(ctx context.Context) (User, error) {
 	return r.scanUser(r.db.QueryRowContext(ctx,
-		`SELECT id, username, password_hash, must_change_password, email, synced_device_reminders_enabled, is_admin, is_disabled, created_at FROM users ORDER BY id LIMIT 1`,
+		`SELECT id, username, password_hash, must_change_password, email, synced_device_reminders_enabled, is_admin, is_disabled, created_at, week_start, default_view, time_format, working_hours_start, working_hours_end FROM users ORDER BY id LIMIT 1`,
 	))
 }
 
@@ -340,14 +366,26 @@ func (r *UserRepository) scanUserRow(rows *sql.Rows) (User, error) {
 func scanUserFields(scan func(dest ...any) error) (User, error) {
 	var u User
 	var email sql.NullString
+	var workingHoursStart, workingHoursEnd sql.NullInt64
 	// modernc.org/sqlite converts the TIMESTAMP column straight into time.Time
 	// based on the declared column type — no manual parsing needed here.
-	err := scan(&u.ID, &u.Username, &u.PasswordHash, &u.MustChangePassword, &email, &u.SyncedDeviceRemindersEnabled, &u.IsAdmin, &u.IsDisabled, &u.CreatedAt)
+	err := scan(
+		&u.ID, &u.Username, &u.PasswordHash, &u.MustChangePassword, &email, &u.SyncedDeviceRemindersEnabled, &u.IsAdmin, &u.IsDisabled, &u.CreatedAt,
+		&u.WeekStart, &u.DefaultView, &u.TimeFormat, &workingHoursStart, &workingHoursEnd,
+	)
 	if err != nil {
 		return User{}, err
 	}
 	if email.Valid {
 		u.Email = &email.String
+	}
+	if workingHoursStart.Valid {
+		v := int(workingHoursStart.Int64)
+		u.WorkingHoursStart = &v
+	}
+	if workingHoursEnd.Valid {
+		v := int(workingHoursEnd.Int64)
+		u.WorkingHoursEnd = &v
 	}
 	return u, nil
 }
