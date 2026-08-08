@@ -2,6 +2,7 @@ import { useState } from "react";
 import { X } from "lucide-react";
 import type { Reminder } from "../lib/event";
 import {
+  REMINDER_OFFSET_UNIT_OPTIONS,
   normalizeCustomOffset,
   reminderChannelOptions,
   splitCustomOffset,
@@ -10,13 +11,6 @@ import {
 import { Select } from "../components/ui/Select";
 import { Input } from "../components/ui/Input";
 import { IconButton } from "../components/ui/IconButton";
-
-const UNIT_OPTIONS: { value: ReminderOffsetUnit; label: string }[] = [
-  { value: "minutes", label: "minutes" },
-  { value: "hours", label: "hours" },
-  { value: "days", label: "days" },
-  { value: "weeks", label: "weeks" },
-];
 
 interface ReminderRowProps {
   reminder: Reminder;
@@ -83,7 +77,7 @@ export function ReminderRow({
         aria-label="Reminder offset unit"
         value={unit}
         onValueChange={handleUnitChange}
-        options={UNIT_OPTIONS}
+        options={REMINDER_OFFSET_UNIT_OPTIONS}
         disabled={disabled}
         className="min-w-0 shrink truncate"
       />

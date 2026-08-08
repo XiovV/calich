@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  calendarHasOtherRecipients,
   calendarReadOnlyReason,
   canManageCalendar,
   canWriteCalendarEvents,
@@ -142,6 +143,41 @@ describe("the permission predicates", () => {
 
   it("canManageCalendar is false for undefined", () => {
     expect(canManageCalendar(undefined)).toBe(false);
+  });
+});
+
+// The personal Reminder override control (#117) renders only when more than
+// one person would be notified — an Owner's own single-user Calendar must
+// never show it, since the setting couldn't mean anything there.
+describe("calendarHasOtherRecipients", () => {
+  const cases: { name: string; overrides: Partial<Calendar>; expected: boolean }[] = [
+    { name: "owned, no Shares", overrides: { isOwner: true, shareCount: 0 }, expected: false },
+    { name: "owned, with a Share", overrides: { isOwner: true, shareCount: 1 }, expected: true },
+    {
+      name: "shared with me as Viewer",
+      overrides: { isOwner: false, access: "viewer" },
+      expected: true,
+    },
+    {
+      name: "shared with me as Editor",
+      overrides: { isOwner: false, access: "editor" },
+      expected: true,
+    },
+    {
+      name: "the Owner of a Subscribed Calendar with no Shares",
+      overrides: { isOwner: true, access: "viewer", sourceUrl: "https://example.com/feed.ics" },
+      expected: false,
+    },
+  ];
+
+  for (const tc of cases) {
+    it(`${tc.name}: ${tc.expected}`, () => {
+      expect(calendarHasOtherRecipients(makeCalendar(tc.overrides))).toBe(tc.expected);
+    });
+  }
+
+  it("is false for undefined", () => {
+    expect(calendarHasOtherRecipients(undefined)).toBe(false);
   });
 });
 

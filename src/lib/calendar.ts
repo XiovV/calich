@@ -99,6 +99,22 @@ export function calendarReadOnlyReason(
   return "viewer";
 }
 
+// calendarHasOtherRecipients reports whether more than one person would be
+// notified by calendar's Reminders — the personal Reminder override control
+// (#117, ADR-0036) renders only then, so a single-user instance never sees a
+// setting that cannot mean anything. True either because the caller isn't
+// this Calendar's Owner (so someone else's Reminders already reach them) or
+// because the Owner has granted at least one Share. Uses canManageCalendar,
+// not access, for the same reason canManageCalendar itself does: a
+// Subscribed Calendar's Owner reads "viewer" in access but is still its only
+// Owner. Accepts undefined the same way canWriteCalendarEvents does, and
+// treats an unresolved Calendar as having no other recipients rather than
+// assuming a permissive default.
+export function calendarHasOtherRecipients(calendar: Calendar | undefined): boolean {
+  if (!calendar) return false;
+  return !canManageCalendar(calendar) || (calendar.shareCount ?? 0) > 0;
+}
+
 // defaultCalendarId picks the Calendar a new Event should default to, from
 // the caller's writable, checked Calendars — preferring one they own, since
 // an Editor Share on someone else's Calendar may otherwise sort first and

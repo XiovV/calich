@@ -24,6 +24,7 @@ import {
   summarizeCustomRule,
 } from "../lib/customRecurrence";
 import {
+  calendarHasOtherRecipients,
   calendarReadOnlyReason,
   canWriteCalendarEvents,
   defaultCalendarId,
@@ -48,6 +49,7 @@ import { CustomRecurrenceDialog } from "./CustomRecurrenceDialog";
 import { ScopePicker } from "./ScopePicker";
 import { DiscardRecurrenceWarning } from "./DiscardRecurrenceWarning";
 import { ReminderRow } from "./ReminderRow";
+import { ReminderOverrideControl } from "./ReminderOverrideControl";
 
 /** A Reminder plus a local id, so its row keeps stable identity across
  * add/remove/reorder in the Reminders section (Reminder itself has no id —
@@ -180,6 +182,11 @@ export function EventModal(props: EventModalProps) {
     : undefined;
   const isReadOnlyEvent = !canWriteCalendarEvents(editedCalendar);
   const readOnlyReason = calendarReadOnlyReason(editedCalendar);
+  // The personal Reminder override control (#117) is only meaningful once
+  // there's someone else to distinguish "for everyone" from "for me" —
+  // absent on a Calendar nobody else can see. Only an existing Event has an
+  // id to key an override to.
+  const showReminderOverride = mode === "edit" && calendarHasOtherRecipients(editedCalendar);
 
   const [initial] = useState(() =>
     deriveInitialFormState(props, master, defaultCalendarId(checkedCalendars)),
@@ -552,7 +559,9 @@ export function EventModal(props: EventModalProps) {
             </div>
 
             <div className="mt-4">
-              <p className="mb-1.5 text-label-sm text-ink-muted">Reminders</p>
+              <p className="mb-1.5 text-label-sm text-ink-muted">
+                {showReminderOverride ? "Event reminders (for everyone)" : "Reminders"}
+              </p>
               <div className="flex flex-col gap-2">
                 {reminders.map((reminder) => (
                   <ReminderRow
@@ -575,6 +584,13 @@ export function EventModal(props: EventModalProps) {
                 </button>
               )}
             </div>
+
+            {showReminderOverride && (
+              <ReminderOverrideControl
+                eventId={props.occurrence.event.id}
+                emailAvailable={emailAvailable}
+              />
+            )}
 
             <div className="mt-5 flex items-center justify-between gap-2">
               {mode === "edit" && !isReadOnlyEvent ? (

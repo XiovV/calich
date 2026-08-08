@@ -24,6 +24,15 @@ export function reminderChannelOptions(emailAvailable: boolean): ReminderChannel
  * Custom recurrence dialog's day/week/month/year interval+unit pattern. */
 export type ReminderOffsetUnit = "minutes" | "hours" | "days" | "weeks";
 
+/** The unit dropdown options for a Reminder offset entry, shared by
+ * ReminderRow and ReminderOverrideControl so the two don't drift apart. */
+export const REMINDER_OFFSET_UNIT_OPTIONS: { value: ReminderOffsetUnit; label: string }[] = [
+  { value: "minutes", label: "minutes" },
+  { value: "hours", label: "hours" },
+  { value: "days", label: "days" },
+  { value: "weeks", label: "weeks" },
+];
+
 const UNIT_MINUTES: Record<ReminderOffsetUnit, number> = {
   minutes: 1,
   hours: 60,
