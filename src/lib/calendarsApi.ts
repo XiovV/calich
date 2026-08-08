@@ -187,4 +187,15 @@ export const calendarsApi = {
     });
     if (!response.ok) throw await errorFromResponse(response);
   },
+
+  // leave renounces the caller's own Share on id (#114, ADR-0034) — the
+  // non-Owner counterpart to remove, which only an Owner may call.
+  async leave(accessToken: string, id: string): Promise<void> {
+    const response = await fetch(`/api/calendars/${id}/leave`, {
+      method: "POST",
+      credentials: "include",
+      headers: authHeader(accessToken),
+    });
+    if (!response.ok) throw await errorFromResponse(response);
+  },
 };

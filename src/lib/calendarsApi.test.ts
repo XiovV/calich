@@ -393,6 +393,34 @@ describe("calendarsApi.share", () => {
   });
 });
 
+describe("calendarsApi.leave", () => {
+  it("posts to the leave endpoint", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(emptyResponse(204));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(calendarsApi.leave("token-123", "cal-1")).resolves.toBeUndefined();
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/calendars/cal-1/leave",
+      expect.objectContaining({
+        method: "POST",
+        credentials: "include",
+        headers: { Authorization: "Bearer token-123" },
+      }),
+    );
+  });
+
+  it("throws on failure", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(404, { error: { code: "not_found", message: "calendar not found" } }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(calendarsApi.leave("token-123", "cal-1")).rejects.toMatchObject({
+      code: "not_found",
+    });
+  });
+});
+
 describe("calendarsApi.revokeShare", () => {
   it("sends a DELETE request to the share's user id", async () => {
     const fetchMock = vi.fn().mockResolvedValue(emptyResponse(204));

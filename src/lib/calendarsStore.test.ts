@@ -6,6 +6,7 @@ vi.mock("./calendarsApi", () => ({
     create: vi.fn(),
     update: vi.fn(),
     remove: vi.fn(),
+    leave: vi.fn(),
     subscribe: vi.fn(),
     get: vi.fn(),
     refresh: vi.fn(),
@@ -167,6 +168,35 @@ describe("removeCalendar", () => {
 
     expect(useCalendarsStore.getState().calendars).toEqual([personal]);
     expect(toast.error).toHaveBeenCalledWith("Failed to delete calendar.");
+  });
+});
+
+describe("leaveCalendar", () => {
+  it("removes the calendar immediately", () => {
+    useCalendarsStore.setState({ calendars: [personal] });
+    let resolveLeave: () => void = () => {};
+    vi.mocked(calendarsApi.leave).mockReturnValue(
+      new Promise((resolve) => {
+        resolveLeave = () => resolve(undefined);
+      }),
+    );
+
+    const promise = useCalendarsStore.getState().leaveCalendar("cal-1");
+
+    expect(useCalendarsStore.getState().calendars).toEqual([]);
+
+    resolveLeave();
+    return promise;
+  });
+
+  it("rolls back and shows a toast when the API call fails", async () => {
+    useCalendarsStore.setState({ calendars: [personal] });
+    vi.mocked(calendarsApi.leave).mockRejectedValue(new Error("network error"));
+
+    await useCalendarsStore.getState().leaveCalendar("cal-1");
+
+    expect(useCalendarsStore.getState().calendars).toEqual([personal]);
+    expect(toast.error).toHaveBeenCalledWith("Failed to leave calendar.");
   });
 });
 

@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { formatDistanceToNow } from "date-fns";
-import { Download, Pencil, Plus, RefreshCw, Trash2, TriangleAlert } from "lucide-react";
+import { Download, LogOut, Pencil, Plus, RefreshCw, Trash2, TriangleAlert } from "lucide-react";
 import { Checkbox } from "../ui/Checkbox";
 import { IconButton } from "../ui/IconButton";
 import { canManageCalendar, type Calendar } from "../../lib/calendar";
@@ -10,12 +10,14 @@ import { useCalendarsStore } from "../../lib/calendarsStore";
 import { useEventsStore } from "../../lib/eventsStore";
 import { useShellStore } from "../../lib/shellStore";
 import { deleteCalendarCascade } from "../../lib/deleteCalendarCascade";
+import { leaveCalendarCascade } from "../../lib/leaveCalendarCascade";
 import { icsApi } from "../../lib/icsApi";
 import { ApiError } from "../../lib/apiClient";
 import { toast } from "../../lib/toast";
 import { CalendarModal } from "./CalendarModal";
 import { SubscribeCalendarModal } from "./SubscribeCalendarModal";
 import { DeleteCalendarConfirmation } from "./DeleteCalendarConfirmation";
+import { LeaveCalendarConfirmation } from "./LeaveCalendarConfirmation";
 
 // subscriptionErrorReason renders a broken Subscription's sidebar tooltip,
 // undefined for a healthy Calendar. The two error classes need different
@@ -44,21 +46,44 @@ export function CalendarList() {
   const [deletingCalendarId, setDeletingCalendarId] = useState<string | null>(
     null,
   );
+  const [leavingCalendarId, setLeavingCalendarId] = useState<string | null>(
+    null,
+  );
   const [refreshingCalendarIds, setRefreshingCalendarIds] = useState<
     Set<string>
   >(new Set());
 
-  const ownedCalendars = calendars.filter((calendar) => !calendar.sourceUrl);
-  const subscribedCalendars = calendars.filter((calendar) => calendar.sourceUrl);
+  // A Calendar shared with the viewer is grouped by whose it is, not by
+  // where its Events come from (#114) — a Subscribed Calendar someone else
+  // owns groups with the shared ones, since its Subscription controls
+  // aren't the viewer's in any case.
+  const myCalendars = calendars.filter(
+    (calendar) => canManageCalendar(calendar) && !calendar.sourceUrl,
+  );
+  const subscribedCalendars = calendars.filter(
+    (calendar) => canManageCalendar(calendar) && calendar.sourceUrl,
+  );
+  const sharedCalendars = calendars.filter(
+    (calendar) => !canManageCalendar(calendar),
+  );
 
   const deletingCalendar = calendars.find(
     (calendar) => calendar.id === deletingCalendarId,
+  );
+  const leavingCalendar = calendars.find(
+    (calendar) => calendar.id === leavingCalendarId,
   );
 
   function handleConfirmDelete() {
     if (!deletingCalendar) return;
     deleteCalendarCascade(deletingCalendar.id);
     setDeletingCalendarId(null);
+  }
+
+  function handleConfirmLeave() {
+    if (!leavingCalendar) return;
+    leaveCalendarCascade(leavingCalendar.id);
+    setLeavingCalendarId(null);
   }
 
   async function handleDownload(calendar: Calendar) {
@@ -121,6 +146,11 @@ export function CalendarList() {
         )}
         <span className="flex min-w-0 flex-1 flex-col">
           <span className="truncate text-body text-ink">{calendar.name}</span>
+          {!canManage && calendar.ownerUsername && (
+            <span className="truncate text-label-sm text-ink-muted">
+              Shared by {calendar.ownerUsername}
+            </span>
+          )}
           {isSubscribed && calendar.lastSyncedAt && (
             <span className="truncate text-label-sm text-ink-muted">
               Synced{" "}
@@ -172,6 +202,19 @@ export function CalendarList() {
             <Trash2 className="size-3.5" />
           </IconButton>
         )}
+        {/* A shared-in Calendar isn't the viewer's to delete — Leave
+            renounces their own Share instead, without touching the
+            Calendar itself or its Owner (#114). */}
+        {!canManage && (
+          <IconButton
+            size="tiny"
+            onClick={() => setLeavingCalendarId(calendar.id)}
+            aria-label={`Leave ${calendar.name}`}
+            className="opacity-0 focus-visible:opacity-100 group-hover:opacity-100"
+          >
+            <LogOut className="size-3.5" />
+          </IconButton>
+        )}
         <Checkbox
           checked={checkedCalendarIds.has(calendar.id)}
           onCheckedChange={() => toggleCalendarChecked(calendar.id)}
@@ -195,7 +238,7 @@ export function CalendarList() {
           <Plus className="size-4" />
         </IconButton>
       </div>
-      <ul>{ownedCalendars.map(renderCalendarItem)}</ul>
+      <ul>{myCalendars.map(renderCalendarItem)}</ul>
 
       <div className="flex items-center justify-between py-2 ps-5 pe-2">
         <p className="text-label-sm font-medium text-ink-muted">
@@ -210,6 +253,17 @@ export function CalendarList() {
         </IconButton>
       </div>
       <ul>{subscribedCalendars.map(renderCalendarItem)}</ul>
+
+      {sharedCalendars.length > 0 && (
+        <>
+          <div className="flex items-center justify-between py-2 ps-5 pe-2">
+            <p className="text-label-sm font-medium text-ink-muted">
+              Shared with me
+            </p>
+          </div>
+          <ul>{sharedCalendars.map(renderCalendarItem)}</ul>
+        </>
+      )}
 
       {isCreateOpen && (
         <CalendarModal mode="create" onClose={() => setIsCreateOpen(false)} />
@@ -233,6 +287,13 @@ export function CalendarList() {
           }
           onConfirm={handleConfirmDelete}
           onClose={() => setDeletingCalendarId(null)}
+        />
+      )}
+      {leavingCalendar && (
+        <LeaveCalendarConfirmation
+          calendar={leavingCalendar}
+          onConfirm={handleConfirmLeave}
+          onClose={() => setLeavingCalendarId(null)}
         />
       )}
     </div>

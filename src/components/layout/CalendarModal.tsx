@@ -61,7 +61,11 @@ export function CalendarModal(props: CalendarModalProps) {
       });
     } else {
       const id = crypto.randomUUID();
-      addCalendar({ id, name: name.trim(), color });
+      // isOwner: true — a calendar the viewer just created is theirs, but
+      // canManageCalendar (#111) treats an unset isOwner as false, which
+      // would optimistically misclassify it into "Shared with me" (#114)
+      // for the brief window before the server's response overwrites it.
+      addCalendar({ id, name: name.trim(), color, isOwner: true });
       toggleCalendarChecked(id);
     }
     onClose();

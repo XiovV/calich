@@ -22,6 +22,10 @@ interface CalendarsState {
   // cascade other local state off of it (e.g. deleteCalendarCascade) know
   // whether to undo that cascade too.
   removeCalendar: (id: string) => Promise<boolean>;
+  // Renounces the caller's own Share (#114, ADR-0034) — the non-Owner
+  // counterpart to removeCalendar, which only an Owner may call. Same
+  // optimistic-remove/rollback contract.
+  leaveCalendar: (id: string) => Promise<boolean>;
   // Not optimistic, unlike addCalendar — the server does the fetch and
   // write, so there's nothing to show until it responds. Rethrows on
   // failure so the Subscribe dialog can show the specific error (bad URL,
@@ -131,6 +135,22 @@ export const useCalendarsStore = create<CalendarsState>((set, get) => ({
     } catch {
       set({ calendars: previousCalendars });
       toast.error("Failed to delete calendar.");
+      return false;
+    }
+  },
+
+  leaveCalendar: async (id) => {
+    const previousCalendars = get().calendars;
+    set((state) => ({
+      calendars: state.calendars.filter((calendar) => calendar.id !== id),
+    }));
+
+    try {
+      await calendarsApi.leave(requireAccessToken(), id);
+      return true;
+    } catch {
+      set({ calendars: previousCalendars });
+      toast.error("Failed to leave calendar.");
       return false;
     }
   },
