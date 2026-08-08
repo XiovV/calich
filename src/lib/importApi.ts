@@ -29,6 +29,16 @@ export interface ReminderCounts {
   email: number;
 }
 
+/** The four outcomes an ATTACH property can have on import (#135, ADR-0040):
+ * imported, too large for MAX_ATTACHMENT_SIZE, past MAX_ATTACHMENTS_PER_EVENT,
+ * or a URI ATTACH ignored outright (never fetched). */
+export interface AttachmentCounts {
+  imported: number;
+  tooLarge: number;
+  tooMany: number;
+  ignoredUri: number;
+}
+
 export interface ImportFileSummary {
   filename: string;
   calendarName: string;
@@ -40,6 +50,7 @@ export interface ImportFileSummary {
   adjusted: AdjustedGroup[];
   ignored: IgnoredCounts;
   reminders: ReminderCounts;
+  attachments: AttachmentCounts;
 }
 
 export interface ImportSummary {
@@ -57,6 +68,7 @@ interface ImportFileSummaryWire {
   adjusted?: AdjustedGroup[];
   ignored: IgnoredCounts;
   reminders: ReminderCounts;
+  attachments: AttachmentCounts;
 }
 
 interface ImportSummaryWire {
@@ -76,6 +88,7 @@ function fromWire(wire: ImportSummaryWire): ImportSummary {
       adjusted: file.adjusted ?? [],
       ignored: file.ignored,
       reminders: file.reminders,
+      attachments: file.attachments,
     })),
   };
 }

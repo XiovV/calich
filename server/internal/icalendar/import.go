@@ -5,12 +5,21 @@
 // classifies whatever ParseCalendarObject can't express — an unparseable
 // group, a missing DTSTART, an orphan RECURRENCE-ID, a cancelled series — as
 // skipped rather than failing the whole file. VTODO/VJOURNAL/VFREEBUSY
-// components are counted as ignored without being decoded at all.
+// components are counted as ignored without being decoded at all. Unlike
+// ParseCalendarObject (shared with CalDAV PUT, which never touches
+// Attachments per ADR-0040), this also decodes each series' inline ATTACH
+// properties into its Master's Attachments, deduplicated across the raw
+// master and Override VEVENTs, with a URI ATTACH counted but never fetched
+// (#135, ADR-0040).
 package icalendar
 
 import (
+	"crypto/sha256"
 	"fmt"
 	"io"
+	"mime"
+	"net/http"
+	"sort"
 	"time"
 
 	"github.com/emersion/go-ical"
@@ -34,6 +43,31 @@ type ImportedSeries struct {
 	ParsedSeries
 	FloatingDowngrades int
 	DroppedAlarms      int
+	// Attachments are the inline ATTACH bytes decoded for this series'
+	// Master, deduplicated across every VEVENT (master and Overrides alike)
+	// that carried the same one — a file this app exports (#134) repeats the
+	// same ATTACH on every VEVENT in the object, and re-importing it must not
+	// produce one copy per Occurrence (#135, ADR-0040).
+	Attachments []InlineAttachment
+	// AttachmentsTooLarge, AttachmentsTooMany and AttachmentsIgnoredURI count
+	// what this series' ATTACH properties held that import declined to
+	// ingest — a distinct inline attachment over MAX_ATTACHMENT_SIZE, a
+	// distinct inline attachment past MAX_ATTACHMENTS_PER_EVENT, and a
+	// distinct URI ATTACH (never fetched, ADR-0040) respectively. Each is
+	// counted once per distinct ATTACH value, not once per VEVENT it repeats
+	// on.
+	AttachmentsTooLarge, AttachmentsTooMany, AttachmentsIgnoredURI int
+}
+
+// InlineAttachment is one inline ATTACH decoded from a foreign VEVENT,
+// ready to become an Attachment on the imported series' Master. FMTTYPE and
+// FILENAME are used when present; plenty of real files carry neither, so
+// Filename and ContentType already carry the sniffed/generated fallback by
+// the time a caller sees this (#135).
+type InlineAttachment struct {
+	Filename    string
+	ContentType string
+	Data        []byte
 }
 
 // SkippedSeries is one VEVENT UID group import declined to write, and why.
@@ -68,8 +102,10 @@ type ParsedFile struct {
 }
 
 // ParseImportFile decodes r as an iCalendar document and classifies its
-// contents for import.
-func ParseImportFile(r io.Reader) (*ParsedFile, error) {
+// contents for import. maxAttachmentSize and maxAttachmentsPerEvent are
+// MAX_ATTACHMENT_SIZE/MAX_ATTACHMENTS_PER_EVENT (ADR-0040), enforced per
+// series exactly as a live upload would be (#135).
+func ParseImportFile(r io.Reader, maxAttachmentSize int64, maxAttachmentsPerEvent int) (*ParsedFile, error) {
 	cal, err := ical.NewDecoder(r).Decode()
 	if err != nil {
 		return nil, fmt.Errorf("decode calendar: %w", err)
@@ -113,7 +149,7 @@ func ParseImportFile(r io.Reader) (*ParsedFile, error) {
 	}
 
 	for _, uid := range order {
-		series, skipped := parseSeriesGroup(groups[uid])
+		series, skipped := parseSeriesGroup(groups[uid], maxAttachmentSize, maxAttachmentsPerEvent)
 		if skipped != nil {
 			skipped.UID = uid
 			out.Skipped = append(out.Skipped, *skipped)
@@ -140,7 +176,7 @@ func sampleTitle(events []ical.Event) string {
 // cases ADR-0030 calls out by name; ParseCalendarObject's own error (e.g. a
 // second master, an unparseable date) folds into the generic "unparseable"
 // reason since the codec doesn't distinguish them further.
-func parseSeriesGroup(events []ical.Event) (*ImportedSeries, *SkippedSeries) {
+func parseSeriesGroup(events []ical.Event, maxAttachmentSize int64, maxAttachmentsPerEvent int) (*ImportedSeries, *SkippedSeries) {
 	var master *ical.Event
 	multipleMasters := false
 	for i := range events {
@@ -189,6 +225,8 @@ func parseSeriesGroup(events []ical.Event) (*ImportedSeries, *SkippedSeries) {
 
 	imported := ImportedSeries{ParsedSeries: *parsed, FloatingDowngrades: floatingDowngrades}
 	imported.DroppedAlarms = droppedAlarms(master, imported.Master.Reminders)
+	imported.Attachments, imported.AttachmentsTooLarge, imported.AttachmentsTooMany, imported.AttachmentsIgnoredURI =
+		parseSeriesAttachments(events, maxAttachmentSize, maxAttachmentsPerEvent)
 
 	var rawOverrides []*ical.Event
 	for i := range events {
@@ -262,4 +300,89 @@ func droppedAlarms(v *ical.Event, reminders []repository.Reminder) int {
 		return 0
 	}
 	return total - len(reminders)
+}
+
+// parseSeriesAttachments decodes every ATTACH property across events (one
+// series' raw master and Override VEVENTs) into the Attachments its Master
+// will carry, deduplicated by content across the whole series — a file this
+// app exports (#134) puts the same ATTACH on every VEVENT in the object, and
+// re-importing it must produce one Attachment, not one per VEVENT (ADR-0040).
+// A URI ATTACH is never fetched (a request-forgery surface) and never stored
+// — only counted. Each distinct value is counted at most once, in whichever
+// one of the three "declined" buckets applies, or accepted, giving the four
+// outcomes the Import summary reports (#135).
+func parseSeriesAttachments(events []ical.Event, maxAttachmentSize int64, maxAttachmentsPerEvent int) (accepted []InlineAttachment, tooLarge, tooMany, ignoredURI int) {
+	seenInline := make(map[[sha256.Size]byte]bool)
+	seenURI := make(map[string]bool)
+
+	for _, v := range events {
+		for _, prop := range v.Props.Values(ical.PropAttach) {
+			p := prop
+			if p.ValueType() != ical.ValueBinary {
+				if !seenURI[p.Value] {
+					seenURI[p.Value] = true
+					ignoredURI++
+				}
+				continue
+			}
+
+			data, err := p.Binary()
+			if err != nil {
+				continue
+			}
+			// The dedup key folds in the raw FMTTYPE/FILENAME params (before
+			// either falls back) alongside the content hash, not the hash
+			// alone — two independently-attached files that happen to share
+			// identical bytes but carry different names/types are distinct
+			// Attachments, not the "same ATTACH repeated on every VEVENT"
+			// case #135 exists to collapse.
+			rawContentType := p.Params.Get(attachFmtTypeParam)
+			rawFilename := p.Params.Get(attachFilenameParam)
+			key := sha256.Sum256([]byte(rawContentType + "\x00" + rawFilename + "\x00" + string(data)))
+			if seenInline[key] {
+				continue
+			}
+			seenInline[key] = true
+
+			if int64(len(data)) > maxAttachmentSize {
+				tooLarge++
+				continue
+			}
+			if len(accepted) >= maxAttachmentsPerEvent {
+				tooMany++
+				continue
+			}
+
+			contentType := rawContentType
+			if contentType == "" {
+				contentType = http.DetectContentType(data)
+			}
+			filename := rawFilename
+			if filename == "" {
+				filename = fallbackAttachmentFilename(contentType, len(accepted)+1)
+			}
+
+			accepted = append(accepted, InlineAttachment{
+				Filename:    filename,
+				ContentType: contentType,
+				Data:        data,
+			})
+		}
+	}
+
+	return accepted, tooLarge, tooMany, ignoredURI
+}
+
+// fallbackAttachmentFilename names an ATTACH with no FILENAME param
+// "attachment-<n>", with a best-guess extension from contentType when mime
+// knows one — n is the attachment's 1-based position among its series'
+// accepted Attachments, so two nameless attachments on the same series don't
+// collide.
+func fallbackAttachmentFilename(contentType string, n int) string {
+	name := fmt.Sprintf("attachment-%d", n)
+	if exts, err := mime.ExtensionsByType(contentType); err == nil && len(exts) > 0 {
+		sort.Strings(exts)
+		name += exts[0]
+	}
+	return name
 }

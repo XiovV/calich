@@ -74,7 +74,7 @@ func newICSTestEnv(t *testing.T) icsTestEnv {
 	attachmentStore := attachmentstore.New(t.TempDir())
 	attachments := service.NewAttachmentService(attachmentRepo, repository.NewEventRepository(sqlDB), calendars, events, attachmentStore, 10)
 	eventHandler := NewEventHandler(events, attachmentStore)
-	calendarHandler := NewCalendarHandler(calendars, events, service.NewImportService(events, calendars), service.NewSubscribeService(events, calendars, 0), attachmentStore)
+	calendarHandler := NewCalendarHandler(calendars, events, service.NewImportService(events, calendars, attachmentStore, testMaxAttachmentSize, testMaxAttachmentsPerEvent), service.NewSubscribeService(events, calendars, 0), attachmentStore)
 
 	r := chi.NewRouter()
 	r.Route("/api/events", func(r chi.Router) {
@@ -518,7 +518,7 @@ func TestCalendarHandler_ICSAll_EmptyOwnedCalendar_StillGetsAnEntry(t *testing.T
 		t.Fatalf("expected no VEVENTs, got:\n%s", entryBytes)
 	}
 
-	parsed, err := icalendar.ParseImportFile(bytes.NewReader(entryBytes))
+	parsed, err := icalendar.ParseImportFile(bytes.NewReader(entryBytes), testMaxAttachmentSize, testMaxAttachmentsPerEvent)
 	if err != nil {
 		t.Fatalf("ParseImportFile on the empty entry: %v", err)
 	}

@@ -18,6 +18,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/XiovV/calendar/server/internal/attachmentstore"
 	"github.com/XiovV/calendar/server/internal/icalendar"
 	"github.com/XiovV/calendar/server/internal/repository"
 )
@@ -170,6 +171,23 @@ type IgnoredCounts struct {
 	VTodo, VJournal, VFreeBusy int
 }
 
+// AttachmentCounts tallies the four outcomes an inline/URI ATTACH can have
+// on import (#135, ADR-0040): produced by the parse, so the same figures
+// appear in the dry-run preview and after a real run.
+type AttachmentCounts struct {
+	// Imported is how many distinct inline ATTACH values became Attachments.
+	Imported int
+	// TooLarge is how many distinct inline ATTACH values exceeded
+	// MAX_ATTACHMENT_SIZE and were skipped.
+	TooLarge int
+	// TooMany is how many distinct inline ATTACH values were skipped for
+	// arriving past MAX_ATTACHMENTS_PER_EVENT on their series.
+	TooMany int
+	// IgnoredURI is how many distinct URI ATTACH values were seen and never
+	// fetched (ADR-0040: a link is not an Attachment).
+	IgnoredURI int
+}
+
 // FileSummary is one imported file's contribution to the Import summary
 // (ADR-0030): its proposed (or resolved) destination Calendar, how many
 // series it contributed, the date range they span, and everything import
@@ -188,6 +206,7 @@ type FileSummary struct {
 	Adjusted             []AdjustedGroup
 	Ignored              IgnoredCounts
 	Reminders            ReminderCounts
+	Attachments          AttachmentCounts
 }
 
 // ImportSummary is the whole upload's Import summary — the same payload for
@@ -196,16 +215,28 @@ type ImportSummary struct {
 	Files []FileSummary
 }
 
-// ImportService orchestrates ICS import: it owns no storage of its own,
-// delegating the actual write to EventService.ImportSeries and Calendar
-// creation to CalendarService.
+// ImportService orchestrates ICS import: it owns the attachmentstore.Store
+// directly (mirroring AttachmentService.Upload's pattern) so an inline
+// ATTACH's bytes land on disk before EventService.ImportSeries opens the
+// transaction that rows them (ADR-0040), delegating everything else — the
+// actual Event write and Calendar creation — to EventService and
+// CalendarService.
 type ImportService struct {
 	events    *EventService
 	calendars *CalendarService
+	// attachments is where saveAttachments writes an inline ATTACH's bytes
+	// before EventService.ImportSeries rows them (ADR-0040).
+	attachments *attachmentstore.Store
+	// maxAttachmentSize and maxAttachmentsPerEvent are
+	// MAX_ATTACHMENT_SIZE/MAX_ATTACHMENTS_PER_EVENT, threaded into
+	// icalendar.ParseImportFile so the parse enforces the same caps a live
+	// upload would (#135).
+	maxAttachmentSize      int64
+	maxAttachmentsPerEvent int
 }
 
-func NewImportService(events *EventService, calendars *CalendarService) *ImportService {
-	return &ImportService{events: events, calendars: calendars}
+func NewImportService(events *EventService, calendars *CalendarService, attachments *attachmentstore.Store, maxAttachmentSize int64, maxAttachmentsPerEvent int) *ImportService {
+	return &ImportService{events: events, calendars: calendars, attachments: attachments, maxAttachmentSize: maxAttachmentSize, maxAttachmentsPerEvent: maxAttachmentsPerEvent}
 }
 
 // importColorRotation is the default Calendar color a new import-created
@@ -270,7 +301,7 @@ func (s *ImportService) Import(ctx context.Context, userID int64, filename strin
 			continue
 		}
 
-		parsed, err := icalendar.ParseImportFile(bytes.NewReader(file.Data))
+		parsed, err := icalendar.ParseImportFile(bytes.NewReader(file.Data), s.maxAttachmentSize, s.maxAttachmentsPerEvent)
 		if err != nil {
 			return ImportSummary{}, fmt.Errorf("parse %q: %w", file.Name, err)
 		}
@@ -304,6 +335,9 @@ func (s *ImportService) Import(ctx context.Context, userID int64, filename strin
 		}
 
 		if !dryRun && len(p.writes) > 0 {
+			if err := s.saveAttachments(p.parsed.Series, p.writes); err != nil {
+				return ImportSummary{}, fmt.Errorf("save attachments for %q: %w", p.file.Name, err)
+			}
 			if _, err := s.events.ImportSeries(ctx, userID, calendarID, p.writes); err != nil {
 				return ImportSummary{}, fmt.Errorf("import %q: %w", p.file.Name, err)
 			}
@@ -314,6 +348,34 @@ func (s *ImportService) Import(ctx context.Context, userID int64, filename strin
 	}
 
 	return summary, nil
+}
+
+// saveAttachments writes every series' decoded inline Attachments to disk
+// and fills in writes' Attachments field with the saved id/size a moment
+// before EventService.ImportSeries rows them — ADR-0040's ordering
+// ("bytes before commit") holds because this runs, and returns, before
+// ImportSeries ever opens its transaction. series and writes are the same
+// length and index-aligned (both built 1:1 from parsed.Series by Import), so
+// a dry run — which never calls this — writes nothing to disk. A failure
+// partway through leaves whatever was already saved for the sweeper to
+// reclaim (#132), matching ADR-0040's "do not add a bespoke rollback path".
+func (s *ImportService) saveAttachments(series []icalendar.ImportedSeries, writes []SeriesWrite) error {
+	for i, sr := range series {
+		if len(sr.Attachments) == 0 {
+			continue
+		}
+		attachments := make([]AttachmentWrite, len(sr.Attachments))
+		for j, ia := range sr.Attachments {
+			id := uuid.NewString()
+			size, err := s.attachments.Save(id, bytes.NewReader(ia.Data))
+			if err != nil {
+				return fmt.Errorf("save attachment: %w", err)
+			}
+			attachments[j] = AttachmentWrite{ID: id, Filename: ia.Filename, ContentType: ia.ContentType, SizeBytes: size}
+		}
+		writes[i].Attachments = attachments
+	}
+	return nil
 }
 
 // validateTarget checks target's action is one Import understands and, for
@@ -397,6 +459,10 @@ func fillFileSummary(summary *FileSummary, parsed *icalendar.ParsedFile, writes 
 	for i, series := range parsed.Series {
 		floatingDowngrades += series.FloatingDowngrades
 		droppedAlarms += series.DroppedAlarms
+		summary.Attachments.Imported += len(series.Attachments)
+		summary.Attachments.TooLarge += series.AttachmentsTooLarge
+		summary.Attachments.TooMany += series.AttachmentsTooMany
+		summary.Attachments.IgnoredURI += series.AttachmentsIgnoredURI
 
 		extendRange(summary, writes[i].Start, writes[i].End)
 		summary.Reminders.add(writes[i].Reminders)

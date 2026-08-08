@@ -427,7 +427,11 @@ func (s *SubscribeService) doRefresh(ctx context.Context, userID int64, calendar
 		}, nil
 	}
 
-	parsed, err := icalendar.ParseImportFile(bytes.NewReader(fetched.Data))
+	// 0, 0: Refresh ignores ATTACH entirely (ADR-0040) — an unattended hourly
+	// poller against a URL the instance doesn't control gets no attachment
+	// ingestion, unlike a human-driven Import. Passing zero limits means
+	// every ATTACH parseSeriesAttachments sees is declined, never accepted.
+	parsed, err := icalendar.ParseImportFile(bytes.NewReader(fetched.Data), 0, 0)
 	if err != nil {
 		return RefreshResult{}, refreshSyncOutcome{}, fmt.Errorf("%w: %s", ErrSubscribeUnparseable, MaskURL(*calendar.SourceURL))
 	}
@@ -559,7 +563,10 @@ func (s *SubscribeService) fetchAndParse(ctx context.Context, rawURL string, kee
 		return nil, nil, "", err
 	}
 
-	parsed, err := icalendar.ParseImportFile(bytes.NewReader(data))
+	// 0, 0: Subscribe's initial import goes through this same parse, and
+	// ADR-0040 draws no exception for it — attachment ingestion is Import's
+	// (#135), not Subscribe's.
+	parsed, err := icalendar.ParseImportFile(bytes.NewReader(data), 0, 0)
 	if err != nil {
 		return nil, nil, "", fmt.Errorf("%w: %s", ErrSubscribeUnparseable, MaskURL(normalized))
 	}

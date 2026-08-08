@@ -6,9 +6,22 @@ import (
 	"time"
 )
 
+// defaultTestMaxAttachmentSize and defaultTestMaxAttachmentsPerEvent are
+// generous stand-ins for MAX_ATTACHMENT_SIZE/MAX_ATTACHMENTS_PER_EVENT
+// (ADR-0040) for every test that isn't itself exercising those caps.
+const (
+	defaultTestMaxAttachmentSize      int64 = 1 << 20
+	defaultTestMaxAttachmentsPerEvent       = 10
+)
+
 func mustParseFile(t *testing.T, ics string) *ParsedFile {
 	t.Helper()
-	f, err := ParseImportFile(strings.NewReader(normalizeCRLF(ics)))
+	return mustParseFileWithLimits(t, ics, defaultTestMaxAttachmentSize, defaultTestMaxAttachmentsPerEvent)
+}
+
+func mustParseFileWithLimits(t *testing.T, ics string, maxAttachmentSize int64, maxAttachmentsPerEvent int) *ParsedFile {
+	t.Helper()
+	f, err := ParseImportFile(strings.NewReader(normalizeCRLF(ics)), maxAttachmentSize, maxAttachmentsPerEvent)
 	if err != nil {
 		t.Fatalf("ParseImportFile: %v", err)
 	}
@@ -65,7 +78,7 @@ func TestParseImportFile_RoundTripsEmptyCalendar(t *testing.T) {
 		t.Fatalf("EncodeEmpty: %v", err)
 	}
 
-	f, err := ParseImportFile(strings.NewReader(string(body)))
+	f, err := ParseImportFile(strings.NewReader(string(body)), defaultTestMaxAttachmentSize, defaultTestMaxAttachmentsPerEvent)
 	if err != nil {
 		t.Fatalf("ParseImportFile: %v", err)
 	}
@@ -418,3 +431,240 @@ END:VCALENDAR
 		t.Fatalf("expected one unparseable skip, got series=%+v skipped=%+v", f.Series, f.Skipped)
 	}
 }
+
+// base64("hello world") = "aGVsbG8gd29ybGQ="
+const helloWorldBase64 = "aGVsbG8gd29ybGQ="
+
+func TestParseImportFile_InlineAttachment_Imported(t *testing.T) {
+	ics := `BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//test//EN
+BEGIN:VEVENT
+UID:series-1
+DTSTART:20260601T090000Z
+DTEND:20260601T093000Z
+SUMMARY:Standup
+ATTACH;ENCODING=BASE64;VALUE=BINARY;FMTTYPE=text/plain;FILENAME=notes.txt:` + helloWorldBase64 + `
+END:VEVENT
+END:VCALENDAR
+`
+	f := mustParseFile(t, ics)
+
+	if len(f.Series) != 1 {
+		t.Fatalf("expected 1 series, got %d: skipped=%+v", len(f.Series), f.Skipped)
+	}
+	s := f.Series[0]
+	if len(s.Attachments) != 1 {
+		t.Fatalf("expected 1 attachment, got %d", len(s.Attachments))
+	}
+	a := s.Attachments[0]
+	if a.Filename != "notes.txt" || a.ContentType != "text/plain" || string(a.Data) != "hello world" {
+		t.Fatalf("expected {notes.txt text/plain \"hello world\"}, got %+v", a)
+	}
+	if s.AttachmentsTooLarge != 0 || s.AttachmentsTooMany != 0 || s.AttachmentsIgnoredURI != 0 {
+		t.Fatalf("expected no declined attachments, got %+v", s)
+	}
+}
+
+func TestParseImportFile_InlineAttachment_FallsBackToSniffedTypeAndGeneratedName(t *testing.T) {
+	ics := `BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//test//EN
+BEGIN:VEVENT
+UID:series-1
+DTSTART:20260601T090000Z
+DTEND:20260601T093000Z
+SUMMARY:Standup
+ATTACH;ENCODING=BASE64;VALUE=BINARY:` + helloWorldBase64 + `
+END:VEVENT
+END:VCALENDAR
+`
+	f := mustParseFile(t, ics)
+
+	if len(f.Series) != 1 || len(f.Series[0].Attachments) != 1 {
+		t.Fatalf("expected 1 series with 1 attachment, got %+v", f.Series)
+	}
+	a := f.Series[0].Attachments[0]
+	if a.Filename == "" {
+		t.Fatalf("expected a generated filename, got empty")
+	}
+	if a.ContentType == "" {
+		t.Fatalf("expected a sniffed content type, got empty")
+	}
+}
+
+// TestParseImportFile_InlineAttachment_DedupedAcrossMasterAndOverride pins
+// down #135's acceptance criterion directly: a file exported by #134 puts
+// the same ATTACH on the master and every Override VEVENT, and re-importing
+// it must produce one Attachment, not one per VEVENT (ADR-0040).
+func TestParseImportFile_InlineAttachment_DedupedAcrossMasterAndOverride(t *testing.T) {
+	ics := `BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//test//EN
+BEGIN:VEVENT
+UID:series-1
+DTSTART:20260601T090000Z
+DTEND:20260601T093000Z
+RRULE:FREQ=WEEKLY
+SUMMARY:Standup
+ATTACH;ENCODING=BASE64;VALUE=BINARY;FMTTYPE=text/plain;FILENAME=notes.txt:` + helloWorldBase64 + `
+END:VEVENT
+BEGIN:VEVENT
+UID:series-1
+RECURRENCE-ID:20260608T090000Z
+DTSTART:20260608T100000Z
+DTEND:20260608T103000Z
+SUMMARY:Standup (moved)
+ATTACH;ENCODING=BASE64;VALUE=BINARY;FMTTYPE=text/plain;FILENAME=notes.txt:` + helloWorldBase64 + `
+END:VEVENT
+END:VCALENDAR
+`
+	f := mustParseFile(t, ics)
+
+	if len(f.Series) != 1 {
+		t.Fatalf("expected 1 series, got %d", len(f.Series))
+	}
+	if len(f.Series[0].Attachments) != 1 {
+		t.Fatalf("expected the repeated ATTACH to be deduplicated into 1 attachment, got %d", len(f.Series[0].Attachments))
+	}
+}
+
+// TestParseImportFile_InlineAttachment_SameBytesDifferentNameNotDeduped
+// pins down that dedup collapses the *same* ATTACH repeated across VEVENTs
+// (identical bytes and metadata), not merely identical bytes: two
+// separately-attached files that happen to share content but carry
+// different FILENAME/FMTTYPE are distinct Attachments.
+func TestParseImportFile_InlineAttachment_SameBytesDifferentNameNotDeduped(t *testing.T) {
+	ics := `BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//test//EN
+BEGIN:VEVENT
+UID:series-1
+DTSTART:20260601T090000Z
+DTEND:20260601T093000Z
+SUMMARY:Standup
+ATTACH;ENCODING=BASE64;VALUE=BINARY;FMTTYPE=text/plain;FILENAME=one.txt:` + helloWorldBase64 + `
+ATTACH;ENCODING=BASE64;VALUE=BINARY;FMTTYPE=text/plain;FILENAME=two.txt:` + helloWorldBase64 + `
+END:VEVENT
+END:VCALENDAR
+`
+	f := mustParseFile(t, ics)
+
+	if len(f.Series) != 1 {
+		t.Fatalf("expected 1 series, got %d", len(f.Series))
+	}
+	if len(f.Series[0].Attachments) != 2 {
+		t.Fatalf("expected 2 distinct attachments despite identical bytes, got %d", len(f.Series[0].Attachments))
+	}
+}
+
+func TestParseImportFile_InlineAttachment_OverMaxSize_Skipped(t *testing.T) {
+	ics := `BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//test//EN
+BEGIN:VEVENT
+UID:series-1
+DTSTART:20260601T090000Z
+DTEND:20260601T093000Z
+SUMMARY:Standup
+ATTACH;ENCODING=BASE64;VALUE=BINARY;FMTTYPE=text/plain;FILENAME=notes.txt:` + helloWorldBase64 + `
+END:VEVENT
+END:VCALENDAR
+`
+	// "hello world" is 11 bytes; cap it at 5 so it's declined.
+	f := mustParseFileWithLimits(t, ics, 5, defaultTestMaxAttachmentsPerEvent)
+
+	if len(f.Series) != 1 {
+		t.Fatalf("expected the series to still import, got %d series: skipped=%+v", len(f.Series), f.Skipped)
+	}
+	s := f.Series[0]
+	if len(s.Attachments) != 0 {
+		t.Fatalf("expected the oversized attachment to be skipped, got %d", len(s.Attachments))
+	}
+	if s.AttachmentsTooLarge != 1 {
+		t.Fatalf("expected 1 too-large attachment, got %d", s.AttachmentsTooLarge)
+	}
+}
+
+func TestParseImportFile_InlineAttachment_OverMaxCount_Skipped(t *testing.T) {
+	ics := `BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//test//EN
+BEGIN:VEVENT
+UID:series-1
+DTSTART:20260601T090000Z
+DTEND:20260601T093000Z
+SUMMARY:Standup
+ATTACH;ENCODING=BASE64;VALUE=BINARY;FMTTYPE=text/plain;FILENAME=one.txt:` + helloWorldBase64 + `
+ATTACH;ENCODING=BASE64;VALUE=BINARY;FMTTYPE=text/plain;FILENAME=two.txt:aGVsbG8=
+END:VEVENT
+END:VCALENDAR
+`
+	f := mustParseFileWithLimits(t, ics, defaultTestMaxAttachmentSize, 1)
+
+	if len(f.Series) != 1 {
+		t.Fatalf("expected the series to still import, got %d series: skipped=%+v", len(f.Series), f.Skipped)
+	}
+	s := f.Series[0]
+	if len(s.Attachments) != 1 {
+		t.Fatalf("expected 1 accepted attachment (the cap), got %d", len(s.Attachments))
+	}
+	if s.AttachmentsTooMany != 1 {
+		t.Fatalf("expected 1 too-many attachment, got %d", s.AttachmentsTooMany)
+	}
+}
+
+func TestParseImportFile_URIAttachment_IgnoredNotFetched(t *testing.T) {
+	ics := `BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//test//EN
+BEGIN:VEVENT
+UID:series-1
+DTSTART:20260601T090000Z
+DTEND:20260601T093000Z
+SUMMARY:Standup
+ATTACH:https://example.com/private/plan.pdf
+END:VEVENT
+END:VCALENDAR
+`
+	f := mustParseFile(t, ics)
+
+	if len(f.Series) != 1 {
+		t.Fatalf("expected the series to still import, got %d series: skipped=%+v", len(f.Series), f.Skipped)
+	}
+	s := f.Series[0]
+	if len(s.Attachments) != 0 {
+		t.Fatalf("expected no Attachments from a URI ATTACH, got %d", len(s.Attachments))
+	}
+	if s.AttachmentsIgnoredURI != 1 {
+		t.Fatalf("expected 1 ignored URI attachment, got %d", s.AttachmentsIgnoredURI)
+	}
+	// ParseImportFile takes an io.Reader and never makes an outbound
+	// request of its own — the only way it could "fetch" this URI is by
+	// storing it somewhere a later step would dereference, and it doesn't:
+	// s.Attachments is empty, so there is nothing downstream to fetch it.
+}
+
+func TestParseImportFile_NoAttach_BehavesAsBefore(t *testing.T) {
+	f := mustParseFile(t, singleEventICSAttachmentFree)
+
+	if len(f.Series) != 1 {
+		t.Fatalf("expected 1 series, got %d", len(f.Series))
+	}
+	s := f.Series[0]
+	if len(s.Attachments) != 0 || s.AttachmentsTooLarge != 0 || s.AttachmentsTooMany != 0 || s.AttachmentsIgnoredURI != 0 {
+		t.Fatalf("expected no attachment activity, got %+v", s)
+	}
+}
+
+const singleEventICSAttachmentFree = `BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//test//EN
+BEGIN:VEVENT
+UID:series-1
+DTSTART:20260601T090000Z
+DTEND:20260601T093000Z
+SUMMARY:Standup
+END:VEVENT
+END:VCALENDAR
+`

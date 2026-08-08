@@ -164,8 +164,8 @@ export function ImportExportSection() {
         Download every calendar you own as a .zip of .ics files — Subscribed Calendars aren't
         included, since re-subscribing elsewhere is what actually moves them; their URLs are
         listed in the archive instead. Or import a .ics or .zip export from another app.
-        Importing the same file twice creates duplicate events — if an import goes wrong, undo it
-        by deleting the calendar it created.
+        Importing the same file twice creates duplicate events — and a duplicate copy of every
+        attachment — if an import goes wrong, undo it by deleting the calendar it created.
       </p>
 
       <Button

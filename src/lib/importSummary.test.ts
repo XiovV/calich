@@ -14,6 +14,7 @@ function fileSummary(overrides: Partial<ImportSummary["files"][number]> = {}) {
     adjusted: [],
     ignored: { vtodo: 0, vjournal: 0, vfreebusy: 0 },
     reminders: { notification: 0, email: 0 },
+    attachments: { imported: 0, tooLarge: 0, tooMany: 0, ignoredUri: 0 },
     ...overrides,
   };
 }
@@ -28,6 +29,7 @@ describe("summarizeImport", () => {
           adjusted: [{ reason: "unresolvable timezone downgraded to a Floating Event", count: 40 }],
           ignored: { vtodo: 2, vjournal: 0, vfreebusy: 1 },
           reminders: { notification: 10, email: 3 },
+          attachments: { imported: 2, tooLarge: 1, tooMany: 0, ignoredUri: 1 },
         }),
         fileSummary({
           filename: "second.ics",
@@ -35,6 +37,7 @@ describe("summarizeImport", () => {
           skipped: [{ reason: "missing DTSTART", count: 7 }],
           ignored: { vtodo: 1, vjournal: 0, vfreebusy: 0 },
           reminders: { notification: 5, email: 0 },
+          attachments: { imported: 1, tooLarge: 0, tooMany: 0, ignoredUri: 0 },
         }),
       ],
     };
@@ -45,6 +48,7 @@ describe("summarizeImport", () => {
       adjustedCount: 40,
       ignoredCount: 4,
       reminders: { notification: 15, email: 3 },
+      attachmentsImported: 3,
     });
   });
 
@@ -55,6 +59,7 @@ describe("summarizeImport", () => {
       adjustedCount: 0,
       ignoredCount: 0,
       reminders: { notification: 0, email: 0 },
+      attachmentsImported: 0,
     });
   });
 });
@@ -67,21 +72,23 @@ describe("formatImportSummaryLine", () => {
       adjustedCount: 40,
       ignoredCount: 3,
       reminders: { notification: 0, email: 0 },
+      attachmentsImported: 2,
     });
 
-    expect(line).toBe("1,847 events · 12 skipped · 40 adjusted · 3 ignored");
+    expect(line).toBe("1,847 events · 12 skipped · 40 adjusted · 3 ignored · 2 attachments");
   });
 
-  it("omits zero categories and singularizes a single event", () => {
+  it("omits zero categories and singularizes a single event or attachment", () => {
     const line = formatImportSummaryLine({
       eventCount: 1,
       skippedCount: 0,
       adjustedCount: 0,
       ignoredCount: 0,
       reminders: { notification: 0, email: 0 },
+      attachmentsImported: 1,
     });
 
-    expect(line).toBe("1 event");
+    expect(line).toBe("1 event · 1 attachment");
   });
 });
 

@@ -22,6 +22,7 @@ const wireSummary = {
       adjusted: [{ reason: "unresolvable timezone downgraded to a Floating Event", count: 2 }],
       ignored: { vtodo: 1, vjournal: 0, vfreebusy: 0 },
       reminders: { notification: 4, email: 1 },
+      attachments: { imported: 2, tooLarge: 0, tooMany: 0, ignoredUri: 0 },
     },
   ],
 };
@@ -50,6 +51,7 @@ describe("importApi.preview", () => {
       adjusted: [{ reason: "unresolvable timezone downgraded to a Floating Event", count: 2 }],
       ignored: { vtodo: 1, vjournal: 0, vfreebusy: 0 },
       reminders: { notification: 4, email: 1 },
+      attachments: { imported: 2, tooLarge: 0, tooMany: 0, ignoredUri: 0 },
     });
     expect(summary.files[0].rangeStart).toEqual(new Date("2026-01-01T09:00:00Z"));
     expect(summary.files[0].rangeEnd).toEqual(new Date("2026-03-01T09:00:00Z"));
@@ -77,6 +79,7 @@ describe("importApi.preview", () => {
             eventCount: 0,
             ignored: { vtodo: 0, vjournal: 0, vfreebusy: 0 },
             reminders: { notification: 0, email: 0 },
+            attachments: { imported: 0, tooLarge: 0, tooMany: 0, ignoredUri: 0 },
           },
         ],
       }),

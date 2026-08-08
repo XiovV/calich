@@ -39,8 +39,15 @@ function ignoredTotal(file: ImportFileSummary): number {
   return file.ignored.vtodo + file.ignored.vjournal + file.ignored.vfreebusy;
 }
 
+function hasAttachmentDetails(file: ImportFileSummary): boolean {
+  const a = file.attachments;
+  return a.imported > 0 || a.tooLarge > 0 || a.tooMany > 0 || a.ignoredUri > 0;
+}
+
 function hasDetails(file: ImportFileSummary): boolean {
-  return file.skipped.length > 0 || file.adjusted.length > 0 || ignoredTotal(file) > 0;
+  return (
+    file.skipped.length > 0 || file.adjusted.length > 0 || ignoredTotal(file) > 0 || hasAttachmentDetails(file)
+  );
 }
 
 const NEW_CALENDAR_VALUE = "__new__";
@@ -158,6 +165,30 @@ export function ImportPreviewDialog({
                       <p>
                         Ignored {entrySummary.ignored.vfreebusy} free/busy block
                         {entrySummary.ignored.vfreebusy === 1 ? "" : "s"}
+                      </p>
+                    )}
+                    {entrySummary.attachments.imported > 0 && (
+                      <p>
+                        Imported {entrySummary.attachments.imported} attachment
+                        {entrySummary.attachments.imported === 1 ? "" : "s"}
+                      </p>
+                    )}
+                    {entrySummary.attachments.tooLarge > 0 && (
+                      <p>
+                        Skipped {entrySummary.attachments.tooLarge} attachment
+                        {entrySummary.attachments.tooLarge === 1 ? "" : "s"} — too large
+                      </p>
+                    )}
+                    {entrySummary.attachments.tooMany > 0 && (
+                      <p>
+                        Skipped {entrySummary.attachments.tooMany} attachment
+                        {entrySummary.attachments.tooMany === 1 ? "" : "s"} — too many on one event
+                      </p>
+                    )}
+                    {entrySummary.attachments.ignoredUri > 0 && (
+                      <p>
+                        Ignored {entrySummary.attachments.ignoredUri} linked attachment
+                        {entrySummary.attachments.ignoredUri === 1 ? "" : "s"} — not fetched
                       </p>
                     )}
                   </div>

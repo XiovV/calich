@@ -89,7 +89,7 @@ func main() {
 		}
 	}
 
-	importService := service.NewImportService(eventService, calendarService)
+	importService := service.NewImportService(eventService, calendarService, attachmentStore, cfg.MaxAttachmentSize, cfg.MaxAttachmentsPerEvent)
 	subscribeService := service.NewSubscribeService(eventService, calendarService, cfg.SubscriptionRefreshInterval)
 
 	authHandler := handlers.NewAuthHandler(authService, cfg.SMTPConfigured())

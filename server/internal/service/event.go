@@ -229,12 +229,16 @@ func (s *EventService) ClearReminderOverride(ctx context.Context, userID int64, 
 
 // txRepos is the set of transaction-bound repositories a withTx body writes
 // through. Grouped into one struct so a body names only what it needs — most
-// use two or three of the four.
+// use two or three of the five. attachments is writeSeries' alone — it rows
+// a SeriesWrite's already-on-disk Attachments (ADR-0040) inside the same
+// transaction as their Master, so a failed write leaves no attachment row
+// even though the bytes were saved beforehand (#135).
 type txRepos struct {
-	events     *repository.EventRepository
-	exceptions *repository.EventExceptionRepository
-	reminders  *repository.EventReminderRepository
-	sync       *repository.SyncRepository
+	events      *repository.EventRepository
+	exceptions  *repository.EventExceptionRepository
+	reminders   *repository.EventReminderRepository
+	sync        *repository.SyncRepository
+	attachments *repository.AttachmentRepository
 }
 
 // withTx runs fn inside a transaction, passing it transaction-bound clones
@@ -245,10 +249,11 @@ type txRepos struct {
 func (s *EventService) withTx(ctx context.Context, fn func(repos txRepos) error) error {
 	return repository.WithTx(ctx, s.db, func(tx *sql.Tx) error {
 		return fn(txRepos{
-			events:     s.events.WithTx(tx),
-			exceptions: s.exceptions.WithTx(tx),
-			reminders:  s.reminders.WithTx(tx),
-			sync:       s.sync.WithTx(tx),
+			events:      s.events.WithTx(tx),
+			exceptions:  s.exceptions.WithTx(tx),
+			reminders:   s.reminders.WithTx(tx),
+			sync:        s.sync.WithTx(tx),
+			attachments: s.attachments.WithTx(tx),
 		})
 	})
 }
@@ -806,6 +811,11 @@ func (s *EventService) writeSeries(ctx context.Context, userID int64, calendarID
 			for _, exdate := range w.Exdates {
 				if err := repos.exceptions.Add(ctx, masterID, exdate); err != nil {
 					return fmt.Errorf("add exdate: %w", err)
+				}
+			}
+			for _, a := range w.Attachments {
+				if _, err := repos.attachments.Create(ctx, a.ID, masterID, &userID, a.Filename, a.ContentType, a.SizeBytes); err != nil {
+					return fmt.Errorf("create attachment: %w", err)
 				}
 			}
 
@@ -1555,6 +1565,23 @@ type SeriesWrite struct {
 	// Calendar's Events (#83, ADR-0033) — empty for ordinary import and
 	// CalDAV PUT, which leave the row's external_uid column NULL.
 	ExternalUID string
+	// Attachments are Attachments already saved to disk (ADR-0040's
+	// before-commit ordering) for writeSeries to row alongside the Master —
+	// populated only by ordinary ICS import (#135); every other SeriesWrite
+	// source (CalDAV PUT, Subscribe/Refresh) leaves this empty, since
+	// Attachments arrive only through Import's own POST actions or ICS
+	// import, never through a PUT or an unattended poll.
+	Attachments []AttachmentWrite
+}
+
+// AttachmentWrite is one Attachment whose bytes are already on disk under
+// ID, ready for writeSeries to create its row inside the same transaction as
+// its series' Master — ICS import's counterpart to AttachmentService.Upload,
+// which does the same two steps (save, then row) outside a series write
+// (#135, ADR-0040).
+type AttachmentWrite struct {
+	ID, Filename, ContentType string
+	SizeBytes                 int64
 }
 
 // OverrideWrite is one Override VEVENT's fields, keyed by the Occurrence it

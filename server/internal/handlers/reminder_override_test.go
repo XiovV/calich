@@ -65,9 +65,9 @@ func newReminderOverrideTestServer(t *testing.T) reminderOverrideTestServer {
 	}
 
 	events := service.NewEventService(sqlDB, repository.NewEventRepository(sqlDB), repository.NewEventExceptionRepository(sqlDB), repository.NewEventReminderRepository(sqlDB), repository.NewReminderOverrideRepository(sqlDB), repository.NewSyncRepository(sqlDB), calendars, users, repository.NewAttachmentRepository(sqlDB))
-	imports := service.NewImportService(events, calendars)
-	subscriptions := service.NewSubscribeService(events, calendars, 0, service.WithHTTPClient(&http.Client{}))
 	attachmentStore := attachmentstore.New(t.TempDir())
+	imports := service.NewImportService(events, calendars, attachmentStore, testMaxAttachmentSize, testMaxAttachmentsPerEvent)
+	subscriptions := service.NewSubscribeService(events, calendars, 0, service.WithHTTPClient(&http.Client{}))
 	calendarHandler := NewCalendarHandler(calendars, events, imports, subscriptions, attachmentStore)
 	eventHandler := NewEventHandler(events, attachmentStore)
 

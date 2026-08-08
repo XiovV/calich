@@ -18,6 +18,15 @@ import (
 	"github.com/XiovV/calendar/server/internal/service"
 )
 
+// testMaxAttachmentSize and testMaxAttachmentsPerEvent are the
+// MAX_ATTACHMENT_SIZE/MAX_ATTACHMENTS_PER_EVENT stand-ins this package's
+// tests wire an ImportService with (ADR-0040), mirroring
+// caldavserver/backend_test.go's own constants of the same name.
+const (
+	testMaxAttachmentSize      int64 = 25 << 20
+	testMaxAttachmentsPerEvent       = 10
+)
+
 func newCalendarTestServer(t *testing.T) (baseURL string, accessToken string) {
 	t.Helper()
 
@@ -41,12 +50,13 @@ func newCalendarTestServer(t *testing.T) (baseURL string, accessToken string) {
 
 	calendars := service.NewCalendarService(repository.NewCalendarRepository(sqlDB), repository.NewCalendarShareRepository(sqlDB), users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB))
 	events := service.NewEventService(sqlDB, repository.NewEventRepository(sqlDB), repository.NewEventExceptionRepository(sqlDB), repository.NewEventReminderRepository(sqlDB), repository.NewReminderOverrideRepository(sqlDB), repository.NewSyncRepository(sqlDB), calendars, users, repository.NewAttachmentRepository(sqlDB))
-	imports := service.NewImportService(events, calendars)
+	attachmentStore := attachmentstore.New(t.TempDir())
+	imports := service.NewImportService(events, calendars, attachmentStore, testMaxAttachmentSize, testMaxAttachmentsPerEvent)
 	// The address guard (#97, ADR-0032) would otherwise refuse every fetch in
 	// this package's tests: the feed servers below are httptest.Server
 	// instances on loopback, exactly what the guard exists to block.
 	subscriptions := service.NewSubscribeService(events, calendars, 0, service.WithHTTPClient(&http.Client{}))
-	calendarHandler := NewCalendarHandler(calendars, events, imports, subscriptions, attachmentstore.New(t.TempDir()))
+	calendarHandler := NewCalendarHandler(calendars, events, imports, subscriptions, attachmentStore)
 
 	r := chi.NewRouter()
 	r.Route("/api/calendars", func(r chi.Router) {

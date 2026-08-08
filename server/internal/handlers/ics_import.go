@@ -126,16 +126,17 @@ type importSummaryResponse struct {
 }
 
 type importFileSummaryResponse struct {
-	Filename     string                  `json:"filename"`
-	CalendarName string                  `json:"calendarName"`
-	CalendarID   string                  `json:"calendarId,omitempty"`
-	EventCount   int                     `json:"eventCount"`
-	RangeStart   *time.Time              `json:"rangeStart,omitempty"`
-	RangeEnd     *time.Time              `json:"rangeEnd,omitempty"`
-	Skipped      []skippedGroupResponse  `json:"skipped,omitempty"`
-	Adjusted     []adjustedGroupResponse `json:"adjusted,omitempty"`
-	Ignored      ignoredCountsResponse   `json:"ignored"`
-	Reminders    reminderCountsResponse  `json:"reminders"`
+	Filename     string                   `json:"filename"`
+	CalendarName string                   `json:"calendarName"`
+	CalendarID   string                   `json:"calendarId,omitempty"`
+	EventCount   int                      `json:"eventCount"`
+	RangeStart   *time.Time               `json:"rangeStart,omitempty"`
+	RangeEnd     *time.Time               `json:"rangeEnd,omitempty"`
+	Skipped      []skippedGroupResponse   `json:"skipped,omitempty"`
+	Adjusted     []adjustedGroupResponse  `json:"adjusted,omitempty"`
+	Ignored      ignoredCountsResponse    `json:"ignored"`
+	Reminders    reminderCountsResponse   `json:"reminders"`
+	Attachments  attachmentCountsResponse `json:"attachments"`
 }
 
 type skippedGroupResponse struct {
@@ -160,6 +161,16 @@ type reminderCountsResponse struct {
 	Email        int `json:"email"`
 }
 
+// attachmentCountsResponse is the four outcomes an ATTACH property can have
+// on import (#135, ADR-0040): imported, too large for MAX_ATTACHMENT_SIZE,
+// past MAX_ATTACHMENTS_PER_EVENT, or a URI ATTACH ignored outright.
+type attachmentCountsResponse struct {
+	Imported   int `json:"imported"`
+	TooLarge   int `json:"tooLarge"`
+	TooMany    int `json:"tooMany"`
+	IgnoredURI int `json:"ignoredUri"`
+}
+
 func toImportSummaryResponse(summary service.ImportSummary) importSummaryResponse {
 	files := make([]importFileSummaryResponse, len(summary.Files))
 	for i, f := range summary.Files {
@@ -180,6 +191,12 @@ func toImportSummaryResponse(summary service.ImportSummary) importSummaryRespons
 			Reminders: reminderCountsResponse{
 				Notification: f.Reminders.Notification,
 				Email:        f.Reminders.Email,
+			},
+			Attachments: attachmentCountsResponse{
+				Imported:   f.Attachments.Imported,
+				TooLarge:   f.Attachments.TooLarge,
+				TooMany:    f.Attachments.TooMany,
+				IgnoredURI: f.Attachments.IgnoredURI,
 			},
 		}
 	}

@@ -39,7 +39,7 @@ func newTestRouter(t *testing.T) http.Handler {
 	calendarService := service.NewCalendarService(calendarRepo, shareRepo, users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB))
 	eventService := service.NewEventService(sqlDB, repository.NewEventRepository(sqlDB), repository.NewEventExceptionRepository(sqlDB), repository.NewEventReminderRepository(sqlDB), repository.NewReminderOverrideRepository(sqlDB), repository.NewSyncRepository(sqlDB), calendarService, users, repository.NewAttachmentRepository(sqlDB))
 	attachmentStore := attachmentstore.New(t.TempDir())
-	calendarHandler := handlers.NewCalendarHandler(calendarService, eventService, service.NewImportService(eventService, calendarService), service.NewSubscribeService(eventService, calendarService, 0), attachmentStore)
+	calendarHandler := handlers.NewCalendarHandler(calendarService, eventService, service.NewImportService(eventService, calendarService, attachmentStore, 25<<20, 10), service.NewSubscribeService(eventService, calendarService, 0), attachmentStore)
 	eventHandler := handlers.NewEventHandler(eventService, attachmentStore)
 	attachmentService := service.NewAttachmentService(repository.NewAttachmentRepository(sqlDB), repository.NewEventRepository(sqlDB), calendarService, eventService, attachmentStore, 10)
 	attachmentHandler := handlers.NewAttachmentHandler(attachmentService, 25<<20)

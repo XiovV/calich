@@ -207,6 +207,49 @@ func TestCalendarHandler_Import_Zip_RejectsExistingTarget(t *testing.T) {
 	}
 }
 
+// importTestICSWithAttach carries one inline ATTACH, base64("hello world").
+const importTestICSWithAttach = `BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//test//EN
+X-WR-CALNAME:Imported Calendar
+BEGIN:VEVENT
+UID:foreign-uid-attach
+DTSTART:20260601T090000Z
+DTEND:20260601T093000Z
+SUMMARY:Standup
+ATTACH;ENCODING=BASE64;VALUE=BINARY;FMTTYPE=text/plain;FILENAME=notes.txt:aGVsbG8gd29ybGQ=
+END:VEVENT
+END:VCALENDAR
+`
+
+// TestCalendarHandler_Import_RealRun_IngestsInlineAttachment exercises #135
+// over HTTP: the Import summary's "attachments" counts round-trip through
+// the JSON wire shape (ADR-0030). newCalendarTestServer wires no
+// /api/events routes, so the imported Event/Attachment row themselves are
+// checked at the service layer (TestImportService_RealRun_WritesInlineAttachment).
+func TestCalendarHandler_Import_RealRun_IngestsInlineAttachment(t *testing.T) {
+	baseURL, accessToken := newCalendarTestServer(t)
+
+	resp := importRequest(t, baseURL, accessToken, "/api/calendars/import", "invite.ics", []byte(crlf(importTestICSWithAttach)),
+		`{"entries":[{"filename":"invite.ics","action":"new"}]}`)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("expected 200, got %d: %s", resp.StatusCode, body)
+	}
+
+	var summary importSummaryResponse
+	if err := json.NewDecoder(resp.Body).Decode(&summary); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if summary.Files[0].Attachments.Imported != 1 {
+		t.Fatalf("expected 1 imported attachment in the summary, got %+v", summary.Files[0].Attachments)
+	}
+	if summary.Files[0].Attachments.TooLarge != 0 || summary.Files[0].Attachments.TooMany != 0 || summary.Files[0].Attachments.IgnoredURI != 0 {
+		t.Fatalf("expected the other three attachment counts to be 0, got %+v", summary.Files[0].Attachments)
+	}
+}
+
 func TestCalendarHandler_Import_RequiresAuth(t *testing.T) {
 	baseURL, _ := newCalendarTestServer(t)
 
