@@ -822,6 +822,191 @@ func TestUpdatePreferences_RejectsInvalidTimeFormat(t *testing.T) {
 	}
 }
 
+func TestUpdatePreferences_SetsWorkingHours(t *testing.T) {
+	srv := newAuthTestServer(t)
+	accessToken := authenticatedAccessToken(t, srv)
+
+	body, _ := json.Marshal(updatePreferencesRequest{
+		WorkingHoursStart: intPtr(9),
+		WorkingHoursEnd:   intPtr(17),
+	})
+	req, _ := http.NewRequest(http.MethodPatch, srv.URL+"/api/auth/preferences", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("PATCH /api/auth/preferences: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	var me meResponse
+	if err := json.NewDecoder(resp.Body).Decode(&me); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if me.WorkingHoursStart == nil || *me.WorkingHoursStart != 9 {
+		t.Fatalf("expected working_hours_start to be stored as 9, got %+v", me.WorkingHoursStart)
+	}
+	if me.WorkingHoursEnd == nil || *me.WorkingHoursEnd != 17 {
+		t.Fatalf("expected working_hours_end to be stored as 17, got %+v", me.WorkingHoursEnd)
+	}
+}
+
+func TestUpdatePreferences_ClearsWorkingHoursWithBothNull(t *testing.T) {
+	srv := newAuthTestServer(t)
+	accessToken := authenticatedAccessToken(t, srv)
+
+	setBody, _ := json.Marshal(updatePreferencesRequest{
+		WorkingHoursStart: intPtr(9),
+		WorkingHoursEnd:   intPtr(17),
+	})
+	setReq, _ := http.NewRequest(http.MethodPatch, srv.URL+"/api/auth/preferences", bytes.NewReader(setBody))
+	setReq.Header.Set("Authorization", "Bearer "+accessToken)
+	setReq.Header.Set("Content-Type", "application/json")
+	setResp, err := http.DefaultClient.Do(setReq)
+	if err != nil {
+		t.Fatalf("PATCH /api/auth/preferences (set): %v", err)
+	}
+	setResp.Body.Close()
+
+	clearReq, _ := http.NewRequest(http.MethodPatch, srv.URL+"/api/auth/preferences", bytes.NewReader([]byte(`{"working_hours_start": null, "working_hours_end": null}`)))
+	clearReq.Header.Set("Authorization", "Bearer "+accessToken)
+	clearReq.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(clearReq)
+	if err != nil {
+		t.Fatalf("PATCH /api/auth/preferences (clear): %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	var me meResponse
+	if err := json.NewDecoder(resp.Body).Decode(&me); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if me.WorkingHoursStart != nil || me.WorkingHoursEnd != nil {
+		t.Fatalf("expected working hours to be cleared, got start=%+v end=%+v", me.WorkingHoursStart, me.WorkingHoursEnd)
+	}
+}
+
+func TestUpdatePreferences_RejectsWorkingHoursStartNotBeforeEnd(t *testing.T) {
+	srv := newAuthTestServer(t)
+	accessToken := authenticatedAccessToken(t, srv)
+
+	body, _ := json.Marshal(updatePreferencesRequest{
+		WorkingHoursStart: intPtr(17),
+		WorkingHoursEnd:   intPtr(9),
+	})
+	req, _ := http.NewRequest(http.MethodPatch, srv.URL+"/api/auth/preferences", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("PATCH /api/auth/preferences: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", resp.StatusCode)
+	}
+
+	req2, _ := http.NewRequest(http.MethodGet, srv.URL+"/api/auth/me", nil)
+	req2.Header.Set("Authorization", "Bearer "+accessToken)
+	resp2, err := http.DefaultClient.Do(req2)
+	if err != nil {
+		t.Fatalf("GET /api/auth/me: %v", err)
+	}
+	defer resp2.Body.Close()
+
+	var me meResponse
+	if err := json.NewDecoder(resp2.Body).Decode(&me); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if me.WorkingHoursStart != nil || me.WorkingHoursEnd != nil {
+		t.Fatalf("expected start >= end to store nothing, got start=%+v end=%+v", me.WorkingHoursStart, me.WorkingHoursEnd)
+	}
+}
+
+func TestUpdatePreferences_RejectsWorkingHoursOneBoundNull(t *testing.T) {
+	srv := newAuthTestServer(t)
+	accessToken := authenticatedAccessToken(t, srv)
+
+	req, _ := http.NewRequest(http.MethodPatch, srv.URL+"/api/auth/preferences", bytes.NewReader([]byte(`{"working_hours_start": 9, "working_hours_end": null}`)))
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("PATCH /api/auth/preferences: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", resp.StatusCode)
+	}
+
+	req2, _ := http.NewRequest(http.MethodGet, srv.URL+"/api/auth/me", nil)
+	req2.Header.Set("Authorization", "Bearer "+accessToken)
+	resp2, err := http.DefaultClient.Do(req2)
+	if err != nil {
+		t.Fatalf("GET /api/auth/me: %v", err)
+	}
+	defer resp2.Body.Close()
+
+	var me meResponse
+	if err := json.NewDecoder(resp2.Body).Decode(&me); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if me.WorkingHoursStart != nil || me.WorkingHoursEnd != nil {
+		t.Fatalf("expected one bound set / other null to store nothing, got start=%+v end=%+v", me.WorkingHoursStart, me.WorkingHoursEnd)
+	}
+}
+
+func TestUpdatePreferences_OmittedWorkingHoursFieldsAreLeftUntouched(t *testing.T) {
+	srv := newAuthTestServer(t)
+	accessToken := authenticatedAccessToken(t, srv)
+
+	setBody, _ := json.Marshal(updatePreferencesRequest{
+		WorkingHoursStart: intPtr(9),
+		WorkingHoursEnd:   intPtr(17),
+	})
+	setReq, _ := http.NewRequest(http.MethodPatch, srv.URL+"/api/auth/preferences", bytes.NewReader(setBody))
+	setReq.Header.Set("Authorization", "Bearer "+accessToken)
+	setReq.Header.Set("Content-Type", "application/json")
+	setResp, err := http.DefaultClient.Do(setReq)
+	if err != nil {
+		t.Fatalf("PATCH /api/auth/preferences (set): %v", err)
+	}
+	setResp.Body.Close()
+
+	req, _ := http.NewRequest(http.MethodPatch, srv.URL+"/api/auth/preferences", bytes.NewReader([]byte(`{"week_start": 0}`)))
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("PATCH /api/auth/preferences: %v", err)
+	}
+	defer resp.Body.Close()
+
+	var me meResponse
+	if err := json.NewDecoder(resp.Body).Decode(&me); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if me.WorkingHoursStart == nil || *me.WorkingHoursStart != 9 {
+		t.Fatalf("expected working_hours_start to remain 9, got %+v", me.WorkingHoursStart)
+	}
+	if me.WorkingHoursEnd == nil || *me.WorkingHoursEnd != 17 {
+		t.Fatalf("expected working_hours_end to remain 17, got %+v", me.WorkingHoursEnd)
+	}
+}
+
 func TestUpdatePreferences_RequiresAuthentication(t *testing.T) {
 	srv := newAuthTestServer(t)
 

@@ -24,6 +24,7 @@ interface AuthState {
   updateWeekStart: (weekStart: number) => Promise<void>;
   updateDefaultView: (defaultView: ActiveView) => Promise<void>;
   updateTimeFormat: (timeFormat: TimeFormat) => Promise<void>;
+  updateWorkingHours: (workingHours: { start: number; end: number } | null) => Promise<void>;
 }
 
 type AuthFields = Pick<AuthState, "status" | "user" | "pendingUsername" | "accessToken">;
@@ -167,6 +168,14 @@ export const useAuthStore = create<AuthState>((set, get) => {
       if (!accessToken) throw new Error("Not authenticated.");
 
       const user = await authApi.updatePreferences(accessToken, { timeFormat });
+      set(authenticated(user, accessToken));
+    },
+
+    updateWorkingHours: async (workingHours) => {
+      const { accessToken } = get();
+      if (!accessToken) throw new Error("Not authenticated.");
+
+      const user = await authApi.updatePreferences(accessToken, { workingHours });
       set(authenticated(user, accessToken));
     },
   };

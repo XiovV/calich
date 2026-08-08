@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { isSameDay } from "date-fns";
 import { layoutOverlappingEvents } from "../lib/layoutOverlappingEvents";
 import { occurrenceKey, type Occurrence } from "../lib/occurrence";
+import { useWorkingHours } from "../hooks/useWorkingHours";
 import {
   HOURS_IN_DAY,
   computeDraftBlock,
@@ -61,6 +62,7 @@ export function DayColumn({
     isSameDay(occurrence.start, day),
   );
   const isToday = isSameDay(day, now);
+  const workingHours = useWorkingHours();
 
   const columnRef = useRef<HTMLDivElement>(null);
   const [dragStartY, setDragStartY] = useState<number | null>(null);
@@ -145,6 +147,18 @@ export function DayColumn({
       className="relative flex-1 border-l border-border select-none"
       style={{ height: pixelsPerHour * HOURS_IN_DAY }}
     >
+      {workingHours && workingHours.start > 0 && (
+        <div
+          className="pointer-events-none absolute inset-x-0 top-0 bg-ink/5"
+          style={{ height: workingHours.start * pixelsPerHour }}
+        />
+      )}
+      {workingHours && workingHours.end < HOURS_IN_DAY && (
+        <div
+          className="pointer-events-none absolute inset-x-0 bottom-0 bg-ink/5"
+          style={{ height: (HOURS_IN_DAY - workingHours.end) * pixelsPerHour }}
+        />
+      )}
       {Array.from({ length: HOURS_IN_DAY }, (_, hour) => (
         <div
           key={hour}

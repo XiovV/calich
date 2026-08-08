@@ -596,6 +596,125 @@ func TestUpdatePreferences_SetsWeekStartAndDefaultViewTogether(t *testing.T) {
 	}
 }
 
+func TestUpdatePreferences_SetsWorkingHours(t *testing.T) {
+	svc := newTestAuthService(t, "", "")
+	ctx := context.Background()
+	user, _, err := svc.Bootstrap(ctx)
+	if err != nil {
+		t.Fatalf("bootstrap: %v", err)
+	}
+
+	start, end := 9, 17
+	updated, err := svc.UpdatePreferences(ctx, user.ID, PreferencesUpdate{
+		WorkingHours: &WorkingHoursUpdate{Start: &start, End: &end},
+	})
+	if err != nil {
+		t.Fatalf("update preferences: %v", err)
+	}
+	if updated.WorkingHoursStart == nil || *updated.WorkingHoursStart != 9 {
+		t.Fatalf("expected working_hours_start 9 to be stored, got %+v", updated.WorkingHoursStart)
+	}
+	if updated.WorkingHoursEnd == nil || *updated.WorkingHoursEnd != 17 {
+		t.Fatalf("expected working_hours_end 17 to be stored, got %+v", updated.WorkingHoursEnd)
+	}
+}
+
+func TestUpdatePreferences_ClearsWorkingHoursWithBothNil(t *testing.T) {
+	svc := newTestAuthService(t, "", "")
+	ctx := context.Background()
+	user, _, err := svc.Bootstrap(ctx)
+	if err != nil {
+		t.Fatalf("bootstrap: %v", err)
+	}
+
+	start, end := 9, 17
+	if _, err := svc.UpdatePreferences(ctx, user.ID, PreferencesUpdate{
+		WorkingHours: &WorkingHoursUpdate{Start: &start, End: &end},
+	}); err != nil {
+		t.Fatalf("set working hours: %v", err)
+	}
+
+	cleared, err := svc.UpdatePreferences(ctx, user.ID, PreferencesUpdate{
+		WorkingHours: &WorkingHoursUpdate{},
+	})
+	if err != nil {
+		t.Fatalf("clear working hours: %v", err)
+	}
+	if cleared.WorkingHoursStart != nil || cleared.WorkingHoursEnd != nil {
+		t.Fatalf("expected working hours to be cleared, got start=%+v end=%+v", cleared.WorkingHoursStart, cleared.WorkingHoursEnd)
+	}
+}
+
+func TestUpdatePreferences_RejectsWorkingHoursStartNotBeforeEnd(t *testing.T) {
+	svc := newTestAuthService(t, "", "")
+	ctx := context.Background()
+	user, _, err := svc.Bootstrap(ctx)
+	if err != nil {
+		t.Fatalf("bootstrap: %v", err)
+	}
+
+	start, end := 17, 9
+	_, err = svc.UpdatePreferences(ctx, user.ID, PreferencesUpdate{
+		WorkingHours: &WorkingHoursUpdate{Start: &start, End: &end},
+	})
+	if !errors.Is(err, ErrInvalidWorkingHours) {
+		t.Fatalf("expected ErrInvalidWorkingHours, got %v", err)
+	}
+}
+
+func TestUpdatePreferences_RejectsWorkingHoursOneBoundNil(t *testing.T) {
+	svc := newTestAuthService(t, "", "")
+	ctx := context.Background()
+	user, _, err := svc.Bootstrap(ctx)
+	if err != nil {
+		t.Fatalf("bootstrap: %v", err)
+	}
+
+	start := 9
+	_, err = svc.UpdatePreferences(ctx, user.ID, PreferencesUpdate{
+		WorkingHours: &WorkingHoursUpdate{Start: &start, End: nil},
+	})
+	if !errors.Is(err, ErrInvalidWorkingHours) {
+		t.Fatalf("expected ErrInvalidWorkingHours, got %v", err)
+	}
+
+	updated, err := svc.GetUser(ctx, user.ID)
+	if err != nil {
+		t.Fatalf("get user: %v", err)
+	}
+	if updated.WorkingHoursStart != nil || updated.WorkingHoursEnd != nil {
+		t.Fatalf("expected an invalid working hours pair to store nothing, got start=%+v end=%+v", updated.WorkingHoursStart, updated.WorkingHoursEnd)
+	}
+}
+
+func TestUpdatePreferences_NilWorkingHoursLeavesItUntouched(t *testing.T) {
+	svc := newTestAuthService(t, "", "")
+	ctx := context.Background()
+	user, _, err := svc.Bootstrap(ctx)
+	if err != nil {
+		t.Fatalf("bootstrap: %v", err)
+	}
+
+	start, end := 9, 17
+	if _, err := svc.UpdatePreferences(ctx, user.ID, PreferencesUpdate{
+		WorkingHours: &WorkingHoursUpdate{Start: &start, End: &end},
+	}); err != nil {
+		t.Fatalf("set working hours: %v", err)
+	}
+
+	weekStart := 0
+	updated, err := svc.UpdatePreferences(ctx, user.ID, PreferencesUpdate{WeekStart: &weekStart})
+	if err != nil {
+		t.Fatalf("update preferences: %v", err)
+	}
+	if updated.WorkingHoursStart == nil || *updated.WorkingHoursStart != 9 {
+		t.Fatalf("expected working_hours_start to remain 9, got %+v", updated.WorkingHoursStart)
+	}
+	if updated.WorkingHoursEnd == nil || *updated.WorkingHoursEnd != 17 {
+		t.Fatalf("expected working_hours_end to remain 17, got %+v", updated.WorkingHoursEnd)
+	}
+}
+
 func TestUpdateUsername_RenamesTheCaller(t *testing.T) {
 	svc := newTestAuthService(t, "", "")
 	ctx := context.Background()

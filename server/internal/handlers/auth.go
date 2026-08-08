@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"time"
 
@@ -53,6 +54,7 @@ var updatePreferencesErrors = []errorCase{
 	{service.ErrInvalidWeekStart, badRequest("week_start must be between 0 and 6")},
 	{service.ErrInvalidDefaultView, badRequest("default_view must be one of day, week, month, year")},
 	{service.ErrInvalidTimeFormat, badRequest("time_format must be one of 12h, 24h")},
+	{service.ErrInvalidWorkingHours, badRequest("working_hours_start and working_hours_end must both be set (0-23, start < end) or both be null")},
 }
 
 var refreshErrors = []errorCase{
@@ -103,10 +105,8 @@ type meResponse struct {
 	// without it the web app cannot decide whether to render any
 	// administration UI (#119).
 	IsAdmin bool `json:"is_admin"`
-	// Preferences (ADR-0039): per-User display settings. WeekStart, DefaultView
-	// and TimeFormat are wired up to the frontend (#128, #129, #130) — Working
-	// hours waits on #131 — but all five are served here as soon as they exist
-	// on the User.
+	// Preferences (ADR-0039): per-User display settings, wired up to the
+	// frontend (#128, #129, #130, #131).
 	WeekStart         int    `json:"week_start"`
 	DefaultView       string `json:"default_view"`
 	TimeFormat        string `json:"time_format"`
@@ -230,11 +230,16 @@ func (h *AuthHandler) UpdateSyncedDeviceReminders(w http.ResponseWriter, r *http
 
 // updatePreferencesRequest decodes into a pointer so an absent field is
 // distinguishable from a zero value — `week_start: 0` is Sunday, not
-// "unset" (ADR-0039).
+// "unset" (ADR-0039). WorkingHoursStart/End alone can't tell "key present as
+// null" apart from "key absent" this way — encoding/json collapses both to a
+// nil pointer — so UpdatePreferences also checks the raw body for which of
+// the two keys were actually named.
 type updatePreferencesRequest struct {
-	WeekStart   *int    `json:"week_start"`
-	DefaultView *string `json:"default_view"`
-	TimeFormat  *string `json:"time_format"`
+	WeekStart         *int    `json:"week_start"`
+	DefaultView       *string `json:"default_view"`
+	TimeFormat        *string `json:"time_format"`
+	WorkingHoursStart *int    `json:"working_hours_start"`
+	WorkingHoursEnd   *int    `json:"working_hours_end"`
 }
 
 // UpdatePreferences applies whichever Preferences (ADR-0039) are present in
@@ -246,17 +251,45 @@ func (h *AuthHandler) UpdatePreferences(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	var req updatePreferencesRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
 		httpresponse.Error(w, http.StatusBadRequest, "invalid_request", "request body must be valid JSON")
 		return
 	}
 
-	user, err := h.auth.UpdatePreferences(r.Context(), userID, service.PreferencesUpdate{
+	var req updatePreferencesRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		httpresponse.Error(w, http.StatusBadRequest, "invalid_request", "request body must be valid JSON")
+		return
+	}
+
+	// A second, raw decode just to see which top-level keys were named — the
+	// only way to tell "working_hours_start: null" (touched, clearing) apart
+	// from an omitted key (untouched), since both land on req as nil above.
+	var rawFields map[string]json.RawMessage
+	if err := json.Unmarshal(body, &rawFields); err != nil {
+		httpresponse.Error(w, http.StatusBadRequest, "invalid_request", "request body must be valid JSON")
+		return
+	}
+	_, startNamed := rawFields["working_hours_start"]
+	_, endNamed := rawFields["working_hours_end"]
+
+	update := service.PreferencesUpdate{
 		WeekStart:   req.WeekStart,
 		DefaultView: req.DefaultView,
 		TimeFormat:  req.TimeFormat,
-	})
+	}
+	// Working hours is a pair: naming either key builds the update, and
+	// AuthService.UpdatePreferences rejects it unless both bounds ended up set
+	// or both ended up null — that also catches a request naming only one key.
+	if startNamed || endNamed {
+		update.WorkingHours = &service.WorkingHoursUpdate{
+			Start: req.WorkingHoursStart,
+			End:   req.WorkingHoursEnd,
+		}
+	}
+
+	user, err := h.auth.UpdatePreferences(r.Context(), userID, update)
 	if respondError(w, err, updatePreferencesErrors, "failed to update preferences") {
 		return
 	}

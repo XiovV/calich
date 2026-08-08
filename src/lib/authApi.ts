@@ -31,6 +31,10 @@ export interface User {
   defaultView: ActiveView;
   // Time format (ADR-0039): applied wherever this app formats a time itself.
   timeFormat: TimeFormat;
+  // Working hours (ADR-0039): an hour range (0-23) shading the hours outside
+  // it in Day and Week view. Both null means no shading — the default.
+  workingHoursStart: number | null;
+  workingHoursEnd: number | null;
 }
 
 export interface LoginResult {
@@ -49,6 +53,8 @@ interface MeWire {
   week_start: number;
   default_view: ActiveView;
   time_format: TimeFormat;
+  working_hours_start: number | null;
+  working_hours_end: number | null;
 }
 
 function fromMeWire(wire: MeWire): User {
@@ -63,6 +69,8 @@ function fromMeWire(wire: MeWire): User {
     weekStart: wire.week_start,
     defaultView: wire.default_view,
     timeFormat: wire.time_format,
+    workingHoursStart: wire.working_hours_start,
+    workingHoursEnd: wire.working_hours_end,
   };
 }
 
@@ -165,14 +173,26 @@ export const authApi = {
 
   // Partial PATCH body: only the fields present in `updates` are sent, so a
   // Week start update never touches Default view and vice versa (ADR-0039).
+  // workingHours is a pair sent together — `null` clears it back to no
+  // shading, and it's the one field this app never sends alone (Working
+  // hours must be valid, start < end, before PreferencesSection dispatches).
   async updatePreferences(
     accessToken: string,
-    updates: { weekStart?: number; defaultView?: ActiveView; timeFormat?: TimeFormat },
+    updates: {
+      weekStart?: number;
+      defaultView?: ActiveView;
+      timeFormat?: TimeFormat;
+      workingHours?: { start: number; end: number } | null;
+    },
   ): Promise<User> {
     const body: Record<string, unknown> = {};
     if (updates.weekStart !== undefined) body.week_start = updates.weekStart;
     if (updates.defaultView !== undefined) body.default_view = updates.defaultView;
     if (updates.timeFormat !== undefined) body.time_format = updates.timeFormat;
+    if (updates.workingHours !== undefined) {
+      body.working_hours_start = updates.workingHours ? updates.workingHours.start : null;
+      body.working_hours_end = updates.workingHours ? updates.workingHours.end : null;
+    }
 
     const response = await authedFetch(accessToken, "/api/auth/preferences", {
       method: "PATCH",

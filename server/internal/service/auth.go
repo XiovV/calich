@@ -46,6 +46,10 @@ var (
 	// ErrInvalidTimeFormat is returned by UpdatePreferences for a Time format
 	// other than 12h/24h (ADR-0039).
 	ErrInvalidTimeFormat = errors.New("time_format must be one of 12h, 24h")
+	// ErrInvalidWorkingHours is returned by UpdatePreferences for a Working
+	// hours pair that isn't both-set-or-both-null, isn't 0..23, or has
+	// start >= end (ADR-0039).
+	ErrInvalidWorkingHours = errors.New("working_hours_start and working_hours_end must both be set (0-23, start < end) or both be null")
 )
 
 // validDefaultViews are the Active views a Default view may seed (ADR-0039).
@@ -376,13 +380,24 @@ func (s *AuthService) UpdateSyncedDeviceReminders(ctx context.Context, userID in
 	return user, nil
 }
 
+// WorkingHoursUpdate is the Working hours half of PreferencesUpdate
+// (ADR-0039): Start and End are nil together to clear the range, or both set
+// to apply it — one nil and the other set is rejected by UpdatePreferences,
+// and so is a caller omitting one side of the pair entirely.
+type WorkingHoursUpdate struct {
+	Start *int
+	End   *int
+}
+
 // PreferencesUpdate is the partial PATCH /api/auth/preferences body
 // (ADR-0039): a nil field is left untouched, so a Week start of 0 (Sunday)
-// can be told apart from an absent field.
+// can be told apart from an absent field. WorkingHours follows the same
+// rule at the pair level: nil means neither bound was present in the request.
 type PreferencesUpdate struct {
-	WeekStart   *int
-	DefaultView *string
-	TimeFormat  *string
+	WeekStart    *int
+	DefaultView  *string
+	TimeFormat   *string
+	WorkingHours *WorkingHoursUpdate
 }
 
 // UpdatePreferences applies whichever Preferences are present in update,
@@ -399,6 +414,17 @@ func (s *AuthService) UpdatePreferences(ctx context.Context, userID int64, updat
 	if update.TimeFormat != nil && !validTimeFormats[*update.TimeFormat] {
 		return repository.User{}, ErrInvalidTimeFormat
 	}
+	if update.WorkingHours != nil {
+		wh := update.WorkingHours
+		if (wh.Start == nil) != (wh.End == nil) {
+			return repository.User{}, ErrInvalidWorkingHours
+		}
+		if wh.Start != nil {
+			if *wh.Start < 0 || *wh.Start > 23 || *wh.End < 0 || *wh.End > 23 || *wh.Start >= *wh.End {
+				return repository.User{}, ErrInvalidWorkingHours
+			}
+		}
+	}
 
 	if update.WeekStart != nil {
 		if _, err := s.users.UpdateWeekStart(ctx, userID, *update.WeekStart); err != nil {
@@ -413,6 +439,11 @@ func (s *AuthService) UpdatePreferences(ctx context.Context, userID int64, updat
 	if update.TimeFormat != nil {
 		if _, err := s.users.UpdateTimeFormat(ctx, userID, *update.TimeFormat); err != nil {
 			return repository.User{}, fmt.Errorf("update time format preference: %w", err)
+		}
+	}
+	if update.WorkingHours != nil {
+		if _, err := s.users.UpdateWorkingHours(ctx, userID, update.WorkingHours.Start, update.WorkingHours.End); err != nil {
+			return repository.User{}, fmt.Errorf("update working hours preference: %w", err)
 		}
 	}
 

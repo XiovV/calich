@@ -423,6 +423,71 @@ describe("authApi.updatePreferences", () => {
     );
   });
 
+  it("sends both working hours bounds and the bearer token, and maps the response", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(200, {
+        id: 1,
+        username: "admin",
+        must_change_password: false,
+        email: null,
+        email_reminder_channel_available: false,
+        synced_device_reminders_enabled: false,
+        is_admin: false,
+        week_start: 1,
+        default_view: "week",
+        time_format: "24h",
+        working_hours_start: 9,
+        working_hours_end: 17,
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const user = await authApi.updatePreferences("token-123", { workingHours: { start: 9, end: 17 } });
+
+    expect(user.workingHoursStart).toBe(9);
+    expect(user.workingHoursEnd).toBe(17);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/auth/preferences",
+      expect.objectContaining({
+        method: "PATCH",
+        credentials: "include",
+        headers: expect.objectContaining({ Authorization: "Bearer token-123" }),
+        body: JSON.stringify({ working_hours_start: 9, working_hours_end: 17 }),
+      }),
+    );
+  });
+
+  it("sends both working hours bounds as null when clearing", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(200, {
+        id: 1,
+        username: "admin",
+        must_change_password: false,
+        email: null,
+        email_reminder_channel_available: false,
+        synced_device_reminders_enabled: false,
+        is_admin: false,
+        week_start: 1,
+        default_view: "week",
+        time_format: "24h",
+        working_hours_start: null,
+        working_hours_end: null,
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const user = await authApi.updatePreferences("token-123", { workingHours: null });
+
+    expect(user.workingHoursStart).toBeNull();
+    expect(user.workingHoursEnd).toBeNull();
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/auth/preferences",
+      expect.objectContaining({
+        body: JSON.stringify({ working_hours_start: null, working_hours_end: null }),
+      }),
+    );
+  });
+
   it("throws on failure", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       jsonResponse(400, { error: { code: "invalid_request", message: "week_start must be between 0 and 6" } }),

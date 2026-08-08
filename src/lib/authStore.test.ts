@@ -44,9 +44,12 @@ const adminUser = {
   email: null,
   emailReminderChannelAvailable: false,
   syncedDeviceRemindersEnabled: false,
+  isAdmin: false,
   weekStart: 1,
   defaultView: "week" as const,
   timeFormat: "24h" as const,
+  workingHoursStart: null,
+  workingHoursEnd: null,
 };
 
 function resetStore() {
@@ -340,6 +343,48 @@ describe("updateTimeFormat", () => {
 
     expect(useAuthStore.getState().user).toEqual(updatedUser);
     expect(authApi.updatePreferences).toHaveBeenCalledWith("token-123", { timeFormat: "12h" });
+  });
+});
+
+describe("updateWorkingHours", () => {
+  it("throws when there is no access token", async () => {
+    await expect(useAuthStore.getState().updateWorkingHours({ start: 9, end: 17 })).rejects.toThrow(
+      "Not authenticated.",
+    );
+  });
+
+  it("stores the fresh user returned by the API", async () => {
+    useAuthStore.setState({
+      status: "authenticated",
+      user: adminUser,
+      pendingUsername: null,
+      accessToken: "token-123",
+    });
+    const updatedUser = { ...adminUser, workingHoursStart: 9, workingHoursEnd: 17 };
+    vi.mocked(authApi.updatePreferences).mockResolvedValue(updatedUser);
+
+    await useAuthStore.getState().updateWorkingHours({ start: 9, end: 17 });
+
+    expect(useAuthStore.getState().user).toEqual(updatedUser);
+    expect(authApi.updatePreferences).toHaveBeenCalledWith("token-123", {
+      workingHours: { start: 9, end: 17 },
+    });
+  });
+
+  it("clears working hours by passing null", async () => {
+    useAuthStore.setState({
+      status: "authenticated",
+      user: { ...adminUser, workingHoursStart: 9, workingHoursEnd: 17 },
+      pendingUsername: null,
+      accessToken: "token-123",
+    });
+    const updatedUser = { ...adminUser, workingHoursStart: null, workingHoursEnd: null };
+    vi.mocked(authApi.updatePreferences).mockResolvedValue(updatedUser);
+
+    await useAuthStore.getState().updateWorkingHours(null);
+
+    expect(useAuthStore.getState().user).toEqual(updatedUser);
+    expect(authApi.updatePreferences).toHaveBeenCalledWith("token-123", { workingHours: null });
   });
 });
 

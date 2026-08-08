@@ -259,6 +259,24 @@ func (r *UserRepository) UpdateTimeFormat(ctx context.Context, userID int64, tim
 	return r.GetByID(ctx, userID)
 }
 
+// UpdateWorkingHours sets userID's Working hours preference (ADR-0039) — an
+// hour range 0..23, or both nil to clear back to no shading. Pair validity
+// (both set or both nil, start < end) is checked in AuthService.UpdatePreferences.
+func (r *UserRepository) UpdateWorkingHours(ctx context.Context, userID int64, start, end *int) (User, error) {
+	var startVal, endVal any
+	if start != nil {
+		startVal = *start
+	}
+	if end != nil {
+		endVal = *end
+	}
+
+	if _, err := r.db.ExecContext(ctx, `UPDATE users SET working_hours_start = ?, working_hours_end = ? WHERE id = ?`, startVal, endVal, userID); err != nil {
+		return User{}, fmt.Errorf("update working hours preference: %w", err)
+	}
+	return r.GetByID(ctx, userID)
+}
+
 // UpdatePassword sets a new password hash and clears must_change_password.
 func (r *UserRepository) UpdatePassword(ctx context.Context, userID int64, passwordHash string) error {
 	_, err := r.db.ExecContext(ctx,
