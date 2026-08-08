@@ -847,10 +847,10 @@ export function EventModal(props: EventModalProps) {
             )}
 
             <div
-              className={`mt-4 rounded-shell-md p-1.5 transition-colors ${
+              className={`rounded-shell-md p-1.5 transition-colors ${
                 isDraggingOverAttachments && !isReadOnlyEvent
-                  ? "bg-surface-hover outline-2 outline-dashed outline-accent"
-                  : ""
+                  ? "mt-4 bg-surface-hover outline-2 outline-dashed outline-accent"
+                  : "mt-2.5 -mx-1.5 -mb-1.5"
               }`}
             >
               <p className="mb-1.5 text-label-sm text-ink-muted">Attachments</p>
