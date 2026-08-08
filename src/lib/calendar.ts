@@ -98,3 +98,12 @@ export function calendarReadOnlyReason(
   if (isSubscribedCalendar(calendar)) return "subscription";
   return "viewer";
 }
+
+// defaultCalendarId picks the Calendar a new Event should default to, from
+// the caller's writable, checked Calendars — preferring one they own, since
+// an Editor Share on someone else's Calendar may otherwise sort first and
+// default a new Event onto a Calendar that isn't theirs (#115).
+export function defaultCalendarId(calendars: Calendar[]): string {
+  const owned = calendars.find((calendar) => canManageCalendar(calendar));
+  return (owned ?? calendars[0])?.id ?? "";
+}

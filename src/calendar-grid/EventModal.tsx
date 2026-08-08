@@ -26,6 +26,7 @@ import {
 import {
   calendarReadOnlyReason,
   canWriteCalendarEvents,
+  defaultCalendarId,
   getCalendarById,
   getCheckedCalendars,
 } from "../lib/calendar";
@@ -181,7 +182,7 @@ export function EventModal(props: EventModalProps) {
   const readOnlyReason = calendarReadOnlyReason(editedCalendar);
 
   const [initial] = useState(() =>
-    deriveInitialFormState(props, master, checkedCalendars[0]?.id ?? ""),
+    deriveInitialFormState(props, master, defaultCalendarId(checkedCalendars)),
   );
   const { day } = initial;
 

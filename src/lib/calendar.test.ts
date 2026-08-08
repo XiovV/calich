@@ -3,6 +3,7 @@ import {
   calendarReadOnlyReason,
   canManageCalendar,
   canWriteCalendarEvents,
+  defaultCalendarId,
   isBrokenSubscription,
   isSubscribedCalendar,
   type Calendar,
@@ -141,5 +142,28 @@ describe("the permission predicates", () => {
 
   it("canManageCalendar is false for undefined", () => {
     expect(canManageCalendar(undefined)).toBe(false);
+  });
+});
+
+// A new Event must default onto a Calendar the caller owns rather than
+// whichever writable Calendar happens to sort first, which may now be a
+// Calendar someone else shared with Editor Access (#115).
+describe("defaultCalendarId", () => {
+  it("picks the owned calendar even when it sorts after a shared one", () => {
+    const shared = makeCalendar({ id: "cal-shared", isOwner: false, access: "editor" });
+    const owned = makeCalendar({ id: "cal-owned", isOwner: true, access: "owner" });
+
+    expect(defaultCalendarId([shared, owned])).toBe("cal-owned");
+  });
+
+  it("falls back to the first calendar when none is owned", () => {
+    const first = makeCalendar({ id: "cal-1", isOwner: false, access: "editor" });
+    const second = makeCalendar({ id: "cal-2", isOwner: false, access: "editor" });
+
+    expect(defaultCalendarId([first, second])).toBe("cal-1");
+  });
+
+  it("returns an empty string for an empty list", () => {
+    expect(defaultCalendarId([])).toBe("");
   });
 });
