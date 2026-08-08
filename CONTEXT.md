@@ -140,15 +140,19 @@ _Avoid_: business hours, office hours, availability, day bounds
 ## Authentication
 
 **User**:
-The account record a Session belongs to, validated by the backend. An instance holds many — the first is bootstrapped (ADR-0010), the rest are created by an Admin (ADR-0037). Either enabled or Disabled.
+The account record a Session belongs to, validated by the backend. An instance holds many — the first is bootstrapped (ADR-0010), the rest are created by an Admin (ADR-0037). Active, Pending, or Disabled.
 _Avoid_: account, profile
 
 **Admin**:
-A User who may create, Disable, delete, and reset the password of other Users, and grant or revoke Admin. Authority over *who exists*, and nothing else — an Admin has no access to another User's Calendars or Events and needs a Share like anyone else. The last remaining Admin can be neither Disabled nor deleted. See ADR-0037.
+A User who may create, Invite, Disable, delete, and reset the password of other Users, and grant or revoke Admin. Authority over *who exists*, and nothing else — an Admin has no access to another User's Calendars or Events and needs a Share like anyone else. The last remaining Admin can be neither Disabled nor deleted. See ADR-0037, ADR-0042.
 _Avoid_: owner (that's a Calendar's), superuser, root, administrator (in prose)
 
+**Pending**:
+The account state of a User created via an Invite who has not yet set a password. A Pending User cannot log in, same as Disabled, but the two are not the same state: Disabled is something an Admin does to a User who was active, where Pending is a User who has never been active yet. Ends the moment the User accepts — there is no path back to Pending once a User has had a password. See ADR-0042.
+_Avoid_: invited (that's the Invite, not the state), unactivated, unconfirmed
+
 **Disabled**:
-The reversible account state in which a User cannot log in, refresh a Session, or authenticate over CalDAV, and receives no Reminders. Everything they own stays live and unchanged for everyone else — Disabling an account never degrades another User's Calendars. Distinct from deletion, which removes the account and demands an explicit disposition for the Calendars it owned. See ADR-0037.
+The reversible account state in which an *active* User cannot log in, refresh a Session, or authenticate over CalDAV, and receives no Reminders. Everything they own stays live and unchanged for everyone else — Disabling an account never degrades another User's Calendars. Distinct from deletion, which removes the account and demands an explicit disposition for the Calendars it owned. Distinct from Pending, which a User has never left Active to enter. See ADR-0037.
 _Avoid_: suspended, deactivated, locked, banned
 
 **Session**:
@@ -167,6 +171,10 @@ _Avoid_: renewal token
 A per-User, revocable credential a native calendar client uses to authenticate over CalDAV (HTTP Basic), distinct from the login password and shown to the User only once when generated. Stored hashed, one row per generated credential, so a single device can be revoked without touching the account password. The successor to the abandoned feed token. See ADR-0024.
 _Avoid_: app-specific password (in prose), device password, API key
 
+**Invite**:
+A single-use, expiring credential an Admin issues for a Pending User, letting them set their own password instead of an Admin choosing one on their behalf. Account-level, not Calendar-level — a deliberately different concept from Share, which is why the two may share the English word "invite" in conversation without being the same thing in this glossary. An Admin may reissue an Invite for the same Pending User at any time, which invalidates whichever one came before it. See ADR-0042.
+_Avoid_: invite token (in prose — the credential and the act are one term here), invitation, activation link
+
 ## Sharing
 
 **Owner**:
@@ -175,7 +183,7 @@ _Avoid_: creator, admin (that's the instance role), author
 
 **Share**:
 The grant binding one Calendar to one User with one Role. What an Owner creates and revokes, and what a User may renounce to leave a Calendar. The Owner never has one.
-_Avoid_: invite, permission, membership, ACL entry
+_Avoid_: invite (that word is reserved for the Authentication section's Invite — getting an account, not Access to a Calendar), permission, membership, ACL entry
 
 **Role**:
 What a Share permits: **Viewer** (read the Calendar's Events and download their Attachments) or **Editor** (create, edit, and delete them, set their Reminders, and add or remove their Attachments). Neither permits managing the Calendar itself — rename, delete, re-share, revoke, and binding a Subscription are Owner-only. See ADR-0034, ADR-0040.
