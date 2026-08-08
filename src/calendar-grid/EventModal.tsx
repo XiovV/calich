@@ -180,7 +180,11 @@ export function EventModal(props: EventModalProps) {
   const editedCalendar = eventForOptions
     ? getCalendarById(calendars, eventForOptions.calendarId)
     : undefined;
-  const isReadOnlyEvent = !canWriteCalendarEvents(editedCalendar);
+  // Only an edited Event can be read-only — a new one is always being
+  // created on a Calendar the picker already limited to writableCalendars
+  // above, so editedCalendar (undefined in create mode) must never make
+  // canWriteCalendarEvents' undefined-is-unwritable default apply here too.
+  const isReadOnlyEvent = mode === "edit" && !canWriteCalendarEvents(editedCalendar);
   const readOnlyReason = calendarReadOnlyReason(editedCalendar);
   // The personal Reminder override control (#117) is only meaningful once
   // there's someone else to distinguish "for everyone" from "for me" —

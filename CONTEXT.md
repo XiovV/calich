@@ -5,7 +5,7 @@ Domain vocabulary for the calendar app — navigation chrome, view state, and th
 ## Language
 
 **Active view**:
-The granularity at which the calendar is currently displayed — Day, Week, Month, or Year. Drives the main content grid (later) and the top bar's date label format.
+The granularity at which the calendar is currently displayed — Day, Week, Month, or Year. Drives the main content grid (later) and the top bar's date label format. Starts each Session at the User's Default view.
 _Avoid_: mode, display mode
 
 **Selected date**:
@@ -36,7 +36,7 @@ _Avoid_: repeat pattern, schedule, recurrence pattern
 A single dated instance produced by expanding an Event's Recurrence rule over a date window. Occurrences are computed, never stored; they are what the grid actually renders (an Event chip or timed block is an Occurrence, not an Event). A non-recurring Event yields exactly one Occurrence. Identified by `(eventId, occurrenceStart)`, where `occurrenceStart` is the datetime the rule produced (its iCalendar `RECURRENCE-ID`).
 
 **Master**:
-The Event row that carries the Recurrence rule and anchors a series. Its title/start/end/calendar are the defaults every Occurrence inherits unless an Override replaces them. A non-recurring Event is a Master with no rule.
+The Event row that carries the Recurrence rule and anchors a series. Its title/start/end/calendar are the defaults every Occurrence inherits unless an Override replaces them, and it is the row a series' Attachments hang off. A non-recurring Event is a Master with no rule.
 _Avoid_: parent event, root event
 
 **Override**:
@@ -68,8 +68,8 @@ A single cue attached to an Event that fires a fixed offset before an Occurrence
 _Avoid_: alert
 
 **Reminder override**:
-One User's personal replacement for an Event's Reminders — a different offset, a different Channel, or muted entirely — applying to that User alone. A server-side delivery preference, not a change to the Event: the Event's own Reminders are still what every CalDAV client receives as `VALARM`s, so a device that fires its own alarms fires the Event's timing rather than the override. See ADR-0036.
-_Avoid_: personal reminder, custom alarm, snooze
+One User's personal modifier applied to *every* Reminder on an Event — one offset, one Channel, one muted flag per User per Event, substituted into each of the Event's Reminders wherever it sets a value. Deliberately not a personal replacement list: a User cannot add a Reminder, remove one, or retune two of them differently, only shift all of them together. A server-side delivery preference, not a change to the Event: the Event's own Reminders are still what every CalDAV client receives as `VALARM`s, so a device that fires its own alarms fires the Event's timing rather than the override. See ADR-0036.
+_Avoid_: personal reminder, custom alarm, snooze, personal reminder list (it is one modifier, not a list)
 
 **Channel**:
 The delivery method of a Reminder — **Notification** (shown in-app) or **Email** (sent to the User). Corresponds to the iCalendar `VALARM` `ACTION` (`DISPLAY` / `EMAIL`).
@@ -112,8 +112,30 @@ A timed Event with no Anchor zone (`tzid` absent), whose wall-clock is interpret
 _Avoid_: local event, zoneless event, naive event
 
 **Theme preference**:
-The user's chosen appearance — Light, Dark, or System — persisted locally and applied by toggling a `.dark` class on the document root. System defers to the OS setting; Light and Dark pin the appearance regardless of the OS. See ADR-0014.
+The user's chosen appearance — Light, Dark, or System — persisted locally and applied by toggling a `.dark` class on the document root. System defers to the OS setting; Light and Dark pin the appearance regardless of the OS. Despite the name, deliberately **not** one of the Preferences: it is stored per-device rather than on the User, so it does not follow them to another browser. See ADR-0014, ADR-0039.
 _Avoid_: color scheme, mode, dark-mode toggle
+
+## Preferences
+
+**Preferences**:
+The per-User settings that shape how the calendar is displayed to one User — Week start, Default view, Time format, and Working hours. Stored on the User and served to every browser they log in from, so a Preference follows the User rather than the device. None of them changes what an Event *is*: two Users with Access to one Calendar see the same Occurrences at the same instants, formatted differently. Theme preference is deliberately not one. See ADR-0039.
+_Avoid_: settings (Settings is the page these live on, not the concept), config, options, profile
+
+**Week start**:
+The weekday a displayed week begins on — the first column of the Month grid, the first day of the Week view, and the leftmost column of the mini calendars. Stored as a day index 0–6 (Sunday–Saturday). A viewer's Preference and nothing more: it never reaches an Event's Recurrence rule, whose `WKST` stays at the iCalendar default, so one Event yields the same Occurrences for every viewer and for every CalDAV client. See ADR-0039.
+_Avoid_: first day, week offset, WKST (that belongs to the rule, not the viewer)
+
+**Default view**:
+The Active view a User's session starts at. Seeds Active view when a Session is established and is never written back — switching to Month mid-session changes Active view alone, and the next load returns to the Default view. Distinct from Active view, which is where the User is now, and deliberately not a memory of where they last were. See ADR-0039.
+_Avoid_: initial view, starting view, preferred view, last view
+
+**Time format**:
+Whether times are rendered as 12-hour or 24-hour, applied wherever this app formats a time itself — Event chips, timed Event blocks, the hour gutter, and the Email a Reminder sends. Deliberately does not reach the browser's native time input, which renders in the browser's own locale and cannot be told otherwise. See ADR-0039.
+_Avoid_: clock format, hour format, locale (this is one axis of a locale, not a locale)
+
+**Working hours**:
+The daily hour range a User treats as their working day, shading the hours outside it in Day and Week view. A visual hint only: every hour of the day stays rendered, live, and clickable, and no Occurrence is ever hidden, clipped, or scrolled out of reach by it. Absent by default, in which case nothing is shaded. Carries no availability meaning — it does not affect free/busy, scheduling, or Reminders. See ADR-0039.
+_Avoid_: business hours, office hours, availability, day bounds
 
 ## Authentication
 
@@ -130,7 +152,7 @@ The reversible account state in which a User cannot log in, refresh a Session, o
 _Avoid_: suspended, deactivated, locked, banned
 
 **Session**:
-The logged-in state for one User, established by the backend after validating credentials. Present or absent — there is no partial/expired-but-visible session state in this app.
+The logged-in state for one User, established by the backend after validating credentials and outliving every Access token issued within it. Present or absent — an expired Access token is not a partial Session, because a live Session silently yields another one. A Session ends only by logging out, by expiring, or by being invalidated: a password change ends every Session the User had, and issues a new one to whoever made the change.
 _Avoid_: login state, auth state
 
 **Access token**:
@@ -156,7 +178,7 @@ The grant binding one Calendar to one User with one Role. What an Owner creates 
 _Avoid_: invite, permission, membership, ACL entry
 
 **Role**:
-What a Share permits: **Viewer** (read the Calendar's Events) or **Editor** (create, edit, and delete them, and set their Reminders). Neither permits managing the Calendar itself — rename, delete, re-share, revoke, and binding a Subscription are Owner-only. See ADR-0034.
+What a Share permits: **Viewer** (read the Calendar's Events and download their Attachments) or **Editor** (create, edit, and delete them, set their Reminders, and add or remove their Attachments). Neither permits managing the Calendar itself — rename, delete, re-share, revoke, and binding a Subscription are Owner-only. See ADR-0034, ADR-0040.
 _Avoid_: permission, level, access level (Access is the resolved value, not this)
 
 **Access**:
@@ -165,21 +187,35 @@ _Avoid_: permission, privilege (that's the CalDAV property), rights
 
 There is deliberately **no term for a Calendar someone shared with you.** "Shared Calendar" points both ways — the Owner shares it out, the recipient sees it shared in — and would sit confusingly beside Subscribed Calendar, which is also a Calendar you see and may not write. Say "a Calendar you have Editor Access to" instead. UI copy may still read "Shared with me"; that is a label, not a term.
 
+## Attachments
+
+**Attachment**:
+A file uploaded to this instance and held against one Master, shown on every Occurrence of that series. Always bytes this instance stores — a link to a file elsewhere is not an Attachment and is not modelled. Belongs to the series rather than to any one Occurrence, so an Override cannot carry one of its own: "this week's slides" is deliberately unrepresentable. Downloadable by anyone with Access, added and removed by an Owner or Editor, and never present on a Subscribed Calendar. See ADR-0040.
+_Avoid_: file, upload, document, enclosure, asset
+
+**Managed ID**:
+The identifier CalDAV addresses an Attachment by — RFC 8607's `MANAGED-ID`, minted by this instance and meaningful only within it. Also the Attachment's id and the name of its file on disk: one value, so there is no mapping to keep honest. Only ever minted, never accepted from a client, which is what makes "you may not reuse someone else's Attachment" true by construction rather than by a check. See ADR-0040.
+_Avoid_: attachment id (they are the same thing — say Managed ID), handle, token
+
 ## Sync
 
 **Calendar object**:
-The unit CalDAV addresses — one `.ics` resource per Event *series*, sharing a single iCalendar `UID` (the Master's id) and bundling the Master, all its Overrides, and its Exceptions in one file. The CalDAV-visible counterpart to the many rows a series occupies and to the Occurrences it expands to: one Calendar object, one series, many rows. Exposed at `{masterId}.ics`. See ADR-0025.
+The unit CalDAV addresses — one `.ics` resource per Event *series*, sharing a single iCalendar `UID` (the Master's id) and bundling the Master, all its Overrides, and its Exceptions in one file. The CalDAV-visible counterpart to the many rows a series occupies and to the Occurrences it expands to: one Calendar object, one series, many rows. Exposed at `{masterId}.ics`. Its Attachments are referenced by `ATTACH`, never carried inside it. See ADR-0025, ADR-0040.
 _Avoid_: calendar resource, ics file, vevent
 
 ## Interchange
 
 **Calendar file**:
-A standalone `.ics` document exchanged with the world outside this instance — downloaded to hand to a person or another app, or uploaded to bring foreign events in. Distinct from a Calendar object: that is the sync unit CalDAV addresses (always exactly one series), whereas a Calendar file may hold one Event, one whole Calendar, or a foreign app's entire export. See ADR-0030.
+A standalone `.ics` document exchanged with the world outside this instance — downloaded to hand to a person or another app, or uploaded to bring foreign events in. Standalone is the operative word: it carries its Attachments' bytes inside it, because a reference to this instance means nothing to whoever receives it. Distinct from a Calendar object: that is the sync unit CalDAV addresses (always exactly one series, referencing its Attachments rather than carrying them), whereas a Calendar file may hold one Event, one whole Calendar, or a foreign app's entire export. See ADR-0030, ADR-0041.
 _Avoid_: ics file, export file, calendar export
 
 **Import summary**:
 The counted account of what an import did to a Calendar file's contents — what was skipped (and why), what was imported but altered, and what was ignored as unmodelled. Shown before the import is confirmed and again after it runs. The user's only view of a deliberately lossy translation, so it is part of the feature rather than a diagnostic. See ADR-0030.
 _Avoid_: import report, import log, import result
+
+**Export summary**:
+The Import summary's mirror: the counted account of what leaving this instance will cost a Calendar file's contents — currently the Attachments too large to inline. Shown *before* the file is produced and only when there is something to say, so an export that loses nothing stays a single click. Exists for the same reason the Import summary does, and only that reason: a human is watching a one-time act, so the loss is disclosed while they can still act on it rather than being silently normalized. See ADR-0041.
+_Avoid_: export report, export warning, export preview (there is nothing to preview when nothing is lost)
 
 ## Subscriptions
 
@@ -202,5 +238,5 @@ _Avoid_: source UID, foreign ID, original UID
 ## Deployment
 
 **Data directory**:
-The single directory (`DATA_DIR`, default `/data`) under which the backend stores all persistent state — currently the SQLite database, and any future runtime data (backups, attachments). The one path a self-hoster needs to mount as a volume.
+The single directory (`DATA_DIR`, default `/data`) under which the backend stores all persistent state — the SQLite database and every Attachment's bytes, plus any future runtime data. The one path a self-hoster needs to mount as a volume, and now the only place where losing it loses data the database cannot describe.
 _Avoid_: data dir (in prose), storage path
