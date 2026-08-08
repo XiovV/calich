@@ -11,8 +11,8 @@ users
   week_start           INTEGER NOT NULL DEFAULT 1   -- date-fns weekStartsOn, 0..6
   default_view         TEXT    NOT NULL DEFAULT 'week'
   time_format          TEXT    NOT NULL DEFAULT '24h'   -- '12h' | '24h'
-  working_hours_start  INTEGER NULL                 -- 0..23; NULL = no shading
-  working_hours_end    INTEGER NULL                 -- 0..23; NULL = no shading
+  working_hours_start  INTEGER NULL                 -- minutes since midnight, 0..1439; NULL = no shading
+  working_hours_end    INTEGER NULL                 -- minutes since midnight, 0..1439; NULL = no shading
 ```
 
 They ride along on `GET /api/auth/me` and are written by a partial `PATCH /api/auth/preferences`, which returns the same `me` payload.

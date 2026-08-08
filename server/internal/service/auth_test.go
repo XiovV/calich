@@ -619,6 +619,46 @@ func TestUpdatePreferences_SetsWorkingHours(t *testing.T) {
 	}
 }
 
+func TestUpdatePreferences_SetsWorkingHoursToMinuteOfDayPrecision(t *testing.T) {
+	svc := newTestAuthService(t, "", "")
+	ctx := context.Background()
+	user, _, err := svc.Bootstrap(ctx)
+	if err != nil {
+		t.Fatalf("bootstrap: %v", err)
+	}
+
+	start, end := 510, 1020 // 08:30-17:00
+	updated, err := svc.UpdatePreferences(ctx, user.ID, PreferencesUpdate{
+		WorkingHours: &WorkingHoursUpdate{Start: &start, End: &end},
+	})
+	if err != nil {
+		t.Fatalf("update preferences: %v", err)
+	}
+	if updated.WorkingHoursStart == nil || *updated.WorkingHoursStart != 510 {
+		t.Fatalf("expected working_hours_start 510 to be stored, got %+v", updated.WorkingHoursStart)
+	}
+	if updated.WorkingHoursEnd == nil || *updated.WorkingHoursEnd != 1020 {
+		t.Fatalf("expected working_hours_end 1020 to be stored, got %+v", updated.WorkingHoursEnd)
+	}
+}
+
+func TestUpdatePreferences_RejectsWorkingHoursOutOfMinuteOfDayRange(t *testing.T) {
+	svc := newTestAuthService(t, "", "")
+	ctx := context.Background()
+	user, _, err := svc.Bootstrap(ctx)
+	if err != nil {
+		t.Fatalf("bootstrap: %v", err)
+	}
+
+	start, end := 0, 1440
+	_, err = svc.UpdatePreferences(ctx, user.ID, PreferencesUpdate{
+		WorkingHours: &WorkingHoursUpdate{Start: &start, End: &end},
+	})
+	if !errors.Is(err, ErrInvalidWorkingHours) {
+		t.Fatalf("expected ErrInvalidWorkingHours, got %v", err)
+	}
+}
+
 func TestUpdatePreferences_ClearsWorkingHoursWithBothNil(t *testing.T) {
 	svc := newTestAuthService(t, "", "")
 	ctx := context.Background()

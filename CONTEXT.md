@@ -138,7 +138,7 @@ Whether times are rendered as 12-hour or 24-hour, applied wherever this app form
 _Avoid_: clock format, hour format, locale (this is one axis of a locale, not a locale)
 
 **Working hours**:
-The daily hour range a User treats as their working day, shading the hours outside it in Day and Week view. A visual hint only: every hour of the day stays rendered, live, and clickable, and no Occurrence is ever hidden, clipped, or scrolled out of reach by it. Absent by default, in which case nothing is shaded. Carries no availability meaning — it does not affect free/busy, scheduling, or Reminders. See ADR-0039.
+The daily time range (minute-of-day precision) a User treats as their working day, shading the time outside it in Day and Week view. A visual hint only: every hour of the day stays rendered, live, and clickable, and no Occurrence is ever hidden, clipped, or scrolled out of reach by it. Absent by default, in which case nothing is shaded. Carries no availability meaning — it does not affect free/busy, scheduling, or Reminders. See ADR-0039.
 _Avoid_: business hours, office hours, availability, day bounds
 
 ## Authentication

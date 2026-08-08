@@ -44,9 +44,9 @@ type User struct {
 	// TimeFormat is "12h" or "24h", applied wherever the app formats a time
 	// itself (ADR-0039).
 	TimeFormat string
-	// WorkingHoursStart and WorkingHoursEnd are an hour range (0..23) shading
-	// the hours outside it in Day and Week view. Nil means no shading
-	// (ADR-0039).
+	// WorkingHoursStart and WorkingHoursEnd are minutes-since-midnight
+	// (0..1439) shading the time outside that range in Day and Week view.
+	// Nil means no shading (ADR-0039).
 	WorkingHoursStart *int
 	WorkingHoursEnd   *int
 }
@@ -259,9 +259,10 @@ func (r *UserRepository) UpdateTimeFormat(ctx context.Context, userID int64, tim
 	return r.GetByID(ctx, userID)
 }
 
-// UpdateWorkingHours sets userID's Working hours preference (ADR-0039) — an
-// hour range 0..23, or both nil to clear back to no shading. Pair validity
-// (both set or both nil, start < end) is checked in AuthService.UpdatePreferences.
+// UpdateWorkingHours sets userID's Working hours preference (ADR-0039) — a
+// minutes-since-midnight range 0..1439, or both nil to clear back to no
+// shading. Pair validity (both set or both nil, start < end) is checked in
+// AuthService.UpdatePreferences.
 func (r *UserRepository) UpdateWorkingHours(ctx context.Context, userID int64, start, end *int) (User, error) {
 	var startVal, endVal any
 	if start != nil {

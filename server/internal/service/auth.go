@@ -47,9 +47,9 @@ var (
 	// other than 12h/24h (ADR-0039).
 	ErrInvalidTimeFormat = errors.New("time_format must be one of 12h, 24h")
 	// ErrInvalidWorkingHours is returned by UpdatePreferences for a Working
-	// hours pair that isn't both-set-or-both-null, isn't 0..23, or has
-	// start >= end (ADR-0039).
-	ErrInvalidWorkingHours = errors.New("working_hours_start and working_hours_end must both be set (0-23, start < end) or both be null")
+	// hours pair that isn't both-set-or-both-null, isn't 0..1439 minutes
+	// since midnight, or has start >= end (ADR-0039).
+	ErrInvalidWorkingHours = errors.New("working_hours_start and working_hours_end must both be set (0-1439 minutes since midnight, start < end) or both be null")
 )
 
 // validDefaultViews are the Active views a Default view may seed (ADR-0039).
@@ -65,6 +65,10 @@ var validTimeFormats = map[string]bool{
 	"12h": true,
 	"24h": true,
 }
+
+// maxWorkingHoursMinute is the last valid minute-of-day a Working hours
+// bound may hold — 23:59, expressed as minutes since midnight (ADR-0039).
+const maxWorkingHoursMinute = 1439
 
 type AuthService struct {
 	users           *repository.UserRepository
@@ -420,7 +424,7 @@ func (s *AuthService) UpdatePreferences(ctx context.Context, userID int64, updat
 			return repository.User{}, ErrInvalidWorkingHours
 		}
 		if wh.Start != nil {
-			if *wh.Start < 0 || *wh.Start > 23 || *wh.End < 0 || *wh.End > 23 || *wh.Start >= *wh.End {
+			if *wh.Start < 0 || *wh.Start > maxWorkingHoursMinute || *wh.End < 0 || *wh.End > maxWorkingHoursMinute || *wh.Start >= *wh.End {
 				return repository.User{}, ErrInvalidWorkingHours
 			}
 		}

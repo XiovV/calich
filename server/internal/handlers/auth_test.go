@@ -856,6 +856,63 @@ func TestUpdatePreferences_SetsWorkingHours(t *testing.T) {
 	}
 }
 
+func TestUpdatePreferences_SetsWorkingHoursToMinuteOfDayPrecision(t *testing.T) {
+	srv := newAuthTestServer(t)
+	accessToken := authenticatedAccessToken(t, srv)
+
+	body, _ := json.Marshal(updatePreferencesRequest{
+		WorkingHoursStart: intPtr(510),  // 08:30
+		WorkingHoursEnd:   intPtr(1020), // 17:00
+	})
+	req, _ := http.NewRequest(http.MethodPatch, srv.URL+"/api/auth/preferences", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("PATCH /api/auth/preferences: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	var me meResponse
+	if err := json.NewDecoder(resp.Body).Decode(&me); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if me.WorkingHoursStart == nil || *me.WorkingHoursStart != 510 {
+		t.Fatalf("expected working_hours_start to be stored as 510, got %+v", me.WorkingHoursStart)
+	}
+	if me.WorkingHoursEnd == nil || *me.WorkingHoursEnd != 1020 {
+		t.Fatalf("expected working_hours_end to be stored as 1020, got %+v", me.WorkingHoursEnd)
+	}
+}
+
+func TestUpdatePreferences_RejectsWorkingHoursOutOfMinuteOfDayRange(t *testing.T) {
+	srv := newAuthTestServer(t)
+	accessToken := authenticatedAccessToken(t, srv)
+
+	body, _ := json.Marshal(updatePreferencesRequest{
+		WorkingHoursStart: intPtr(0),
+		WorkingHoursEnd:   intPtr(1440),
+	})
+	req, _ := http.NewRequest(http.MethodPatch, srv.URL+"/api/auth/preferences", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("PATCH /api/auth/preferences: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", resp.StatusCode)
+	}
+}
+
 func TestUpdatePreferences_ClearsWorkingHoursWithBothNull(t *testing.T) {
 	srv := newAuthTestServer(t)
 	accessToken := authenticatedAccessToken(t, srv)
