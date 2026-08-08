@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { type Account, accountsApi } from "./accountsApi";
+import { type Account, type AccountDisposition, accountsApi } from "./accountsApi";
 import { useAuthStore } from "./authStore";
 
 interface AccountsState {
@@ -9,6 +9,7 @@ interface AccountsState {
   resetPassword: (id: number, password: string) => Promise<void>;
   setAdmin: (id: number, isAdmin: boolean) => Promise<void>;
   setDisabled: (id: number, isDisabled: boolean) => Promise<void>;
+  deleteAccount: (id: number, disposition: AccountDisposition, transferTo?: number) => Promise<void>;
 }
 
 function requireAccessToken(): string {
@@ -43,5 +44,10 @@ export const useAccountsStore = create<AccountsState>((set, get) => ({
   setDisabled: async (id, isDisabled) => {
     const account = await accountsApi.setDisabled(requireAccessToken(), id, isDisabled);
     set({ accounts: get().accounts.map((a) => (a.id === id ? account : a)) });
+  },
+
+  deleteAccount: async (id, disposition, transferTo) => {
+    await accountsApi.delete(requireAccessToken(), id, disposition, transferTo);
+    set({ accounts: get().accounts.filter((a) => a.id !== id) });
   },
 }));

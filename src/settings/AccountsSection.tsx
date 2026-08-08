@@ -5,6 +5,7 @@ import { useAccountsStore } from "../lib/accountsStore";
 import { useAsyncAction } from "../hooks/useAsyncAction";
 import { errorMessage } from "../lib/errorMessage";
 import { toast } from "../lib/toast";
+import { DeleteAccountDialog } from "./DeleteAccountDialog";
 import { ResetPasswordDialog } from "./ResetPasswordDialog";
 import type { Account } from "../lib/accountsApi";
 
@@ -16,12 +17,14 @@ function statusLabels(account: Account): string[] {
   return labels;
 }
 
-// The Settings page's Accounts section (#119/#120, ADR-0037): visible only to
-// an Admin, per getSettingsSections. Lists every account on the instance,
-// lets an Admin create a new one, and manages an existing one's lifecycle —
-// reset its password, grant or revoke Admin, and disable or re-enable it.
-// The last-remaining-Admin guards are enforced server-side; this section
-// just surfaces the explanation the server sends back. Delete is #121.
+// The Settings page's Accounts section (#119/#120/#121, ADR-0037): visible
+// only to an Admin, per getSettingsSections. Lists every account on the
+// instance, lets an Admin create a new one, and manages an existing one's
+// lifecycle — reset its password, grant or revoke Admin, disable or
+// re-enable it, and delete it with an explicit disposition for the
+// Calendars it owned. The last-remaining-Admin guards are enforced
+// server-side; this section just surfaces the explanation the server sends
+// back.
 export function AccountsSection() {
   const accounts = useAccountsStore((state) => state.accounts);
   const fetchAccounts = useAccountsStore((state) => state.fetchAccounts);
@@ -29,12 +32,14 @@ export function AccountsSection() {
   const resetPassword = useAccountsStore((state) => state.resetPassword);
   const setAdmin = useAccountsStore((state) => state.setAdmin);
   const setDisabled = useAccountsStore((state) => state.setDisabled);
+  const deleteAccount = useAccountsStore((state) => state.deleteAccount);
 
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const { isSubmitting, error, setError, run } = useAsyncAction();
 
   const [resettingAccount, setResettingAccount] = useState<Account | null>(null);
+  const [deletingAccount, setDeletingAccount] = useState<Account | null>(null);
   const [busyAccountId, setBusyAccountId] = useState<number | null>(null);
 
   useEffect(() => {
@@ -158,6 +163,15 @@ export function AccountsSection() {
                 >
                   {account.isDisabled ? "Enable" : "Disable"}
                 </Button>
+                <Button
+                  variant="outline"
+                  color="danger"
+                  size="small"
+                  disabled={isBusy}
+                  onClick={() => setDeletingAccount(account)}
+                >
+                  Delete
+                </Button>
               </div>
             </li>
           );
@@ -172,6 +186,17 @@ export function AccountsSection() {
           account={resettingAccount}
           onReset={(newPassword) => resetPassword(resettingAccount.id, newPassword)}
           onClose={() => setResettingAccount(null)}
+        />
+      )}
+
+      {deletingAccount && (
+        <DeleteAccountDialog
+          account={deletingAccount}
+          transferCandidates={accounts.filter((a) => a.id !== deletingAccount.id)}
+          onDelete={(disposition, transferTo) =>
+            deleteAccount(deletingAccount.id, disposition, transferTo)
+          }
+          onClose={() => setDeletingAccount(null)}
         />
       )}
     </section>

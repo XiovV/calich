@@ -225,6 +225,10 @@ var updateSourceURLErrors = []errorCase{
 
 var updateSourceURLErrorsWithNotFound = alsoHandling(updateSourceURLErrors, calendarNotFoundErrors...)
 
+// nonOwnerColorUpdateErrors renders the color-only path a non-Owner caller
+// takes through Update.
+var nonOwnerColorUpdateErrors = alsoHandling(calendarWriteErrors, calendarNotFoundErrors...)
+
 func (h *CalendarHandler) Update(w http.ResponseWriter, r *http.Request) {
 	userID, ok := httpauth.UserIDFromContext(r.Context())
 	if !ok {
@@ -237,6 +241,47 @@ func (h *CalendarHandler) Update(w http.ResponseWriter, r *http.Request) {
 	var req updateCalendarRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		httpresponse.Error(w, http.StatusBadRequest, "invalid_request", "request body must be valid JSON")
+		return
+	}
+
+	access, existing, err := h.calendars.Access(r.Context(), userID, id)
+	if respondError(w, err, calendarNotFoundErrors, "failed to update calendar") {
+		return
+	}
+	if !access.CanRead() {
+		httpresponse.Error(w, http.StatusNotFound, "not_found", "calendar not found")
+		return
+	}
+
+	// A caller who isn't id's Owner may only ever change their own colour
+	// here (ADR-0038): name, Subscription URL and KeepAlarms remain Calendar
+	// management, which stays Owner-only (ADR-0034). Refused outright rather
+	// than silently dropped, mirroring PROPPATCH's own 403 for a non-Owner's
+	// displayname write (#106).
+	if existing.UserID != userID {
+		if req.URL != nil || req.KeepAlarms != nil || (req.Name != "" && req.Name != existing.Name) {
+			httpresponse.Error(w, http.StatusForbidden, "forbidden", "only the calendar's owner may change its name, subscription url, or feed alarms setting")
+			return
+		}
+
+		// An empty color is the "clear my override" signal (ADR-0038) —
+		// there is nothing else a color-only request could otherwise mean by
+		// it, since a non-Owner's write never touches calendars.color, which
+		// is NOT NULL and so has no "unset" of its own.
+		if req.Color == "" {
+			err = h.calendars.ClearColorOverride(r.Context(), userID, id)
+		} else {
+			_, err = h.calendars.SetColorOverride(r.Context(), userID, id, req.Color)
+		}
+		if respondError(w, err, nonOwnerColorUpdateErrors, "failed to update calendar") {
+			return
+		}
+
+		result, err := h.calendars.AccessWithColor(r.Context(), userID, id)
+		if respondError(w, err, calendarNotFoundErrors, "failed to update calendar") {
+			return
+		}
+		httpresponse.JSON(w, http.StatusOK, toCalendarWithAccessResponse(result))
 		return
 	}
 

@@ -18,6 +18,19 @@ interface CalendarsState {
       url?: string;
     },
   ) => Promise<void>;
+  // setCalendarColor sets the caller's own colour on id over the same PATCH
+  // endpoint updateCalendar uses (ADR-0038, #122): an Owner's write lands on
+  // the Calendar's own colour, anyone else's lands as their personal
+  // override — the server decides which, not this store. Optimistic like
+  // updateCalendar, since the colour applied is exactly the one the caller
+  // just picked, with no override-vs-fallback ambiguity to resolve.
+  setCalendarColor: (id: string, color: string) => Promise<void>;
+  // clearCalendarColor removes the caller's personal override on id,
+  // falling back to the Owner's colour (ADR-0038, #122). Not optimistic,
+  // unlike setCalendarColor: the fallback colour is whatever the Owner's is,
+  // which this store must never resolve itself — only the server's response
+  // says what it is.
+  clearCalendarColor: (id: string) => Promise<void>;
   // Resolves to whether the delete actually succeeded, so callers that
   // cascade other local state off of it (e.g. deleteCalendarCascade) know
   // whether to undo that cascade too.
@@ -135,6 +148,35 @@ export const useCalendarsStore = create<CalendarsState>((set, get) => ({
     } catch {
       set({ calendars: previousCalendars });
       toast.error("Failed to update calendar.");
+    }
+  },
+
+  setCalendarColor: async (id, color) => {
+    const previousCalendars = get().calendars;
+    set((state) => ({
+      calendars: state.calendars.map((calendar) =>
+        calendar.id === id ? { ...calendar, color } : calendar,
+      ),
+    }));
+
+    try {
+      await calendarsApi.updateColor(requireAccessToken(), id, color);
+    } catch {
+      set({ calendars: previousCalendars });
+      toast.error("Failed to update calendar color.");
+    }
+  },
+
+  clearCalendarColor: async (id) => {
+    try {
+      const updated = await calendarsApi.clearColor(requireAccessToken(), id);
+      set((state) => ({
+        calendars: state.calendars.map((calendar) =>
+          calendar.id === id ? { ...calendar, color: updated.color } : calendar,
+        ),
+      }));
+    } catch {
+      toast.error("Failed to clear calendar color.");
     }
   },
 

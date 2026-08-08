@@ -22,6 +22,8 @@ export function CalendarModal(props: CalendarModalProps) {
   const calendars = useCalendarsStore((state) => state.calendars);
   const addCalendar = useCalendarsStore((state) => state.addCalendar);
   const updateCalendar = useCalendarsStore((state) => state.updateCalendar);
+  const setCalendarColor = useCalendarsStore((state) => state.setCalendarColor);
+  const clearCalendarColor = useCalendarsStore((state) => state.clearCalendarColor);
   const toggleCalendarChecked = useShellStore(
     (state) => state.toggleCalendarChecked,
   );
@@ -36,7 +38,13 @@ export function CalendarModal(props: CalendarModalProps) {
     mode === "edit" ? (props.calendar.keepAlarms ?? false) : false,
   );
   const isSubscribed = mode === "edit" && isSubscribedCalendar(props.calendar);
-  const showSharing = mode === "edit" && canManageCalendar(props.calendar);
+  // canManage decides whose colour this dialog is editing (ADR-0038, #122):
+  // an Owner's picker is the Calendar's colour and the default everyone
+  // inherits; anyone else's is their own personal override alone. Name,
+  // Subscription URL, KeepAlarms and sharing stay Owner-only, so a non-Owner
+  // sees only the colour picker and a way to fall back to the Owner's.
+  const canManage = mode === "create" || canManageCalendar(props.calendar);
+  const showSharing = mode === "edit" && canManage;
   // initialUrl is the masked value the dialog opened with (#88, ADR-0032:
   // a password in an edited URL is masked here, same as everywhere else a
   // Subscription URL is shown) — captured once so Save can tell whether
@@ -44,13 +52,30 @@ export function CalendarModal(props: CalendarModalProps) {
   const initialUrl =
     mode === "edit" ? (props.calendar.sourceUrl ?? "") : "";
   const [url, setUrl] = useState(initialUrl);
+  const [isResettingColor, setIsResettingColor] = useState(false);
 
-  const canSave = name.trim() !== "" && (!isSubscribed || url.trim() !== "");
+  const canSave =
+    mode === "edit" && !canManage
+      ? true
+      : name.trim() !== "" && (!isSubscribed || url.trim() !== "");
+
+  async function handleResetColor() {
+    if (mode !== "edit") return;
+    setIsResettingColor(true);
+    try {
+      await clearCalendarColor(props.calendar.id);
+    } finally {
+      setIsResettingColor(false);
+    }
+    onClose();
+  }
 
   function handleSave() {
     if (!canSave) return;
 
-    if (mode === "edit") {
+    if (mode === "edit" && !canManage) {
+      setCalendarColor(props.calendar.id, color);
+    } else if (mode === "edit") {
       updateCalendar(props.calendar.id, {
         name: name.trim(),
         color,
@@ -103,6 +128,11 @@ export function CalendarModal(props: CalendarModalProps) {
           <Dialog.Title className="text-heading font-medium text-ink">
             {mode === "edit" ? "Edit calendar" : "New calendar"}
           </Dialog.Title>
+          {mode === "edit" && !canManage && props.calendar.ownerUsername && (
+            <p className="mt-1 text-label-sm text-ink-muted">
+              Shared by {props.calendar.ownerUsername}
+            </p>
+          )}
 
           <form
             onSubmit={(event) => {
@@ -110,7 +140,7 @@ export function CalendarModal(props: CalendarModalProps) {
               handleSave();
             }}
           >
-          {isSubscribed && (
+          {isSubscribed && canManage && (
             <Input
               label="Subscription URL"
               value={url}
@@ -120,22 +150,34 @@ export function CalendarModal(props: CalendarModalProps) {
             />
           )}
 
-          <Input
-            label="Name"
-            value={name}
-            onChange={(event) => setName(event.target.value)}
-            placeholder="Calendar name"
-            className="mt-4"
-          />
+          {canManage && (
+            <Input
+              label="Name"
+              value={name}
+              onChange={(event) => setName(event.target.value)}
+              placeholder="Calendar name"
+              className="mt-4"
+            />
+          )}
 
           <div className="mt-4">
             <p className={fieldLabelClass}>Color</p>
             <div className="mt-2">
               <ColorSwatchPicker value={color} onValueChange={setColor} />
             </div>
+            {mode === "edit" && !canManage && (
+              <button
+                type="button"
+                onClick={handleResetColor}
+                disabled={isResettingColor}
+                className="mt-2 text-label-sm text-accent hover:underline disabled:opacity-50"
+              >
+                Reset to the owner&apos;s color
+              </button>
+            )}
           </div>
 
-          {isSubscribed && (
+          {isSubscribed && canManage && (
             <label className="mt-4 flex items-start gap-2 text-label-sm text-ink">
               <Checkbox
                 checked={keepAlarms}

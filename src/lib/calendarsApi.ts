@@ -78,6 +78,36 @@ export const calendarsApi = {
     return (await response.json()) as Calendar;
   },
 
+  // updateColor sets the caller's personal colour on id (ADR-0038): an
+  // Owner's write lands on the Calendar's own colour, and anyone else's with
+  // Access lands as their own override, over this same PATCH endpoint (#122)
+  // — the app never chooses which happens, the server does. Sends only
+  // color, never name/url/keepAlarms, since those remain Owner-only on this
+  // endpoint and a non-Owner's request must not appear to touch them.
+  async updateColor(
+    accessToken: string,
+    id: string,
+    color: string,
+  ): Promise<Calendar> {
+    const response = await fetch(`/api/calendars/${id}`, {
+      method: "PATCH",
+      credentials: "include",
+      headers: { "Content-Type": "application/json", ...authHeader(accessToken) },
+      body: JSON.stringify({ color }),
+    });
+    if (!response.ok) throw await errorFromResponse(response);
+
+    return (await response.json()) as Calendar;
+  },
+
+  // clearColor removes the caller's personal colour override on id,
+  // falling back to the Owner's (ADR-0038) — an empty color is the server's
+  // "clear" signal on this endpoint, since a non-Owner's write never touches
+  // the Calendar's own NOT NULL colour column (#122).
+  async clearColor(accessToken: string, id: string): Promise<Calendar> {
+    return calendarsApi.updateColor(accessToken, id, "");
+  },
+
   async remove(accessToken: string, id: string): Promise<void> {
     const response = await fetch(`/api/calendars/${id}`, {
       method: "DELETE",

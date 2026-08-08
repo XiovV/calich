@@ -81,6 +81,7 @@ func newShareTestServer(t *testing.T) shareTestServer {
 		r.Post("/", calendarHandler.Create)
 		r.Get("/", calendarHandler.List)
 		r.Get("/{id}", calendarHandler.Get)
+		r.Patch("/{id}", calendarHandler.Update)
 		r.Get("/{id}/shares", calendarHandler.ListShares)
 		r.Post("/{id}/shares", calendarHandler.Share)
 		r.Delete("/{id}/shares/{userId}", calendarHandler.RevokeShare)
@@ -239,11 +240,10 @@ func TestCalendarHandler_List_CarriesOwnershipMeta(t *testing.T) {
 
 // TestCalendarHandler_List_And_Get_ResolveColorPerCaller covers ADR-0038's
 // "effective colour returned with every Calendar": a User's own colour
-// override — set here directly through the service, since the REST API
-// exposes no dedicated endpoint for it; the override exists to serve
-// CalDAV's native-client colour picker (ADR-0038) — is what List and Get
-// report back to that User, while the Owner's own response stays the
-// Calendar's own stored colour.
+// override — set here directly through the service rather than through
+// Update's REST path, which calendar_color_update_test.go covers on its own
+// — is what List and Get report back to that User, while the Owner's own
+// response stays the Calendar's own stored colour.
 func TestCalendarHandler_List_And_Get_ResolveColorPerCaller(t *testing.T) {
 	s := newShareTestServer(t)
 

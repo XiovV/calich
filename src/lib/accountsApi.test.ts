@@ -8,6 +8,10 @@ function jsonResponse(status: number, body: unknown): Response {
   });
 }
 
+function noContentResponse(): Response {
+  return new Response(null, { status: 204 });
+}
+
 afterEach(() => {
   vi.unstubAllGlobals();
 });
@@ -235,6 +239,105 @@ describe("accountsApi.setDisabled", () => {
     await expect(accountsApi.setDisabled("token-123", 1, true)).rejects.toMatchObject({
       code: "last_admin",
       message: "cannot disable the last remaining admin",
+    });
+  });
+});
+
+describe("accountsApi.deleteImpact", () => {
+  it("sends the bearer token and maps the response", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(200, {
+        calendars: [{ id: "cal-1", name: "Family", share_count: 2 }],
+        affected_user_count: 2,
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await accountsApi.deleteImpact("token-123", 2);
+
+    expect(result).toEqual({
+      calendars: [{ id: "cal-1", name: "Family", shareCount: 2 }],
+      affectedUserCount: 2,
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/accounts/2/delete-impact",
+      expect.objectContaining({
+        credentials: "include",
+        headers: { Authorization: "Bearer token-123" },
+      }),
+    );
+  });
+
+  it("throws an ApiError when the account doesn't exist", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(404, { error: { code: "not_found", message: "account not found" } }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(accountsApi.deleteImpact("token-123", 99)).rejects.toMatchObject({
+      code: "not_found",
+    });
+  });
+});
+
+describe("accountsApi.delete", () => {
+  it("sends the disposition and deletes the account", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(noContentResponse());
+    vi.stubGlobal("fetch", fetchMock);
+
+    await accountsApi.delete("token-123", 2, "delete");
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/accounts/2",
+      expect.objectContaining({
+        method: "DELETE",
+        credentials: "include",
+        headers: expect.objectContaining({ Authorization: "Bearer token-123" }),
+        body: JSON.stringify({ owned_calendars: "delete" }),
+      }),
+    );
+  });
+
+  it("sends the transfer target when transferring", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(noContentResponse());
+    vi.stubGlobal("fetch", fetchMock);
+
+    await accountsApi.delete("token-123", 2, "transfer", 3);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/accounts/2",
+      expect.objectContaining({
+        method: "DELETE",
+        credentials: "include",
+        headers: expect.objectContaining({ Authorization: "Bearer token-123" }),
+        body: JSON.stringify({ owned_calendars: "transfer", transfer_to: 3 }),
+      }),
+    );
+  });
+
+  it("throws an explanation when deleting the last remaining admin", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(409, {
+        error: { code: "last_admin", message: "cannot delete the last remaining admin" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(accountsApi.delete("token-123", 1, "delete")).rejects.toMatchObject({
+      code: "last_admin",
+      message: "cannot delete the last remaining admin",
+    });
+  });
+
+  it("throws an explanation when the transfer target doesn't exist", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(400, { error: { code: "invalid_request", message: "transfer target not found" } }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(accountsApi.delete("token-123", 2, "transfer", 99)).rejects.toMatchObject({
+      code: "invalid_request",
+      message: "transfer target not found",
     });
   });
 });

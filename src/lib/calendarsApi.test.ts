@@ -143,6 +143,59 @@ describe("calendarsApi.update", () => {
   });
 });
 
+describe("calendarsApi.updateColor", () => {
+  it("patches only the color", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(200, { id: "cal-1", name: "Family", color: "#654321FF" }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const updated = await calendarsApi.updateColor("token-123", "cal-1", "#654321");
+
+    expect(updated).toEqual({ id: "cal-1", name: "Family", color: "#654321FF" });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/calendars/cal-1",
+      expect.objectContaining({
+        method: "PATCH",
+        credentials: "include",
+        body: JSON.stringify({ color: "#654321" }),
+      }),
+    );
+  });
+
+  it("throws an ApiError on failure", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(403, { error: { code: "forbidden", message: "only the calendar's owner may change its name" } }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      calendarsApi.updateColor("token-123", "cal-1", "#654321"),
+    ).rejects.toMatchObject({ code: "forbidden" });
+  });
+});
+
+describe("calendarsApi.clearColor", () => {
+  it("patches an empty color to signal falling back to the owner's", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(200, { id: "cal-1", name: "Family", color: "#12809CFF" }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const updated = await calendarsApi.clearColor("token-123", "cal-1");
+
+    expect(updated).toEqual({ id: "cal-1", name: "Family", color: "#12809CFF" });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/calendars/cal-1",
+      expect.objectContaining({
+        method: "PATCH",
+        credentials: "include",
+        body: JSON.stringify({ color: "" }),
+      }),
+    );
+  });
+});
+
 describe("calendarsApi.previewSubscription", () => {
   it("posts the url with dryRun=1 and returns the preview", async () => {
     const fetchMock = vi.fn().mockResolvedValue(

@@ -5,6 +5,8 @@ vi.mock("./calendarsApi", () => ({
     list: vi.fn(),
     create: vi.fn(),
     update: vi.fn(),
+    updateColor: vi.fn(),
+    clearColor: vi.fn(),
     remove: vi.fn(),
     leave: vi.fn(),
     subscribe: vi.fn(),
@@ -139,6 +141,60 @@ describe("updateCalendar", () => {
     const stored = useCalendarsStore.getState().calendars[0];
     expect(stored.sourceUrl).toBe("https://new.example.com/••••••@feed.ics");
     expect(stored.sourceUrl).not.toContain("s3cret");
+  });
+});
+
+describe("setCalendarColor", () => {
+  it("applies the color immediately", () => {
+    useCalendarsStore.setState({ calendars: [personal] });
+    let resolveUpdate: () => void = () => {};
+    vi.mocked(calendarsApi.updateColor).mockReturnValue(
+      new Promise((resolve) => {
+        resolveUpdate = () => resolve({ ...personal, color: "#654321FF" });
+      }),
+    );
+
+    const promise = useCalendarsStore.getState().setCalendarColor("cal-1", "#654321");
+
+    expect(useCalendarsStore.getState().calendars[0].color).toBe("#654321");
+    expect(calendarsApi.updateColor).toHaveBeenCalledWith("token-123", "cal-1", "#654321");
+
+    resolveUpdate();
+    return promise;
+  });
+
+  it("rolls back and shows a toast when the API call fails", async () => {
+    useCalendarsStore.setState({ calendars: [personal] });
+    vi.mocked(calendarsApi.updateColor).mockRejectedValue(new Error("network error"));
+
+    await useCalendarsStore.getState().setCalendarColor("cal-1", "#654321");
+
+    expect(useCalendarsStore.getState().calendars).toEqual([personal]);
+    expect(toast.error).toHaveBeenCalledWith("Failed to update calendar color.");
+  });
+});
+
+describe("clearCalendarColor", () => {
+  it("applies the server's resolved fallback colour rather than guessing it", async () => {
+    const shared = { ...personal, color: "#654321FF" };
+    useCalendarsStore.setState({ calendars: [shared] });
+    vi.mocked(calendarsApi.clearColor).mockResolvedValue({ ...personal, color: "#12809CFF" });
+
+    await useCalendarsStore.getState().clearCalendarColor("cal-1");
+
+    expect(useCalendarsStore.getState().calendars[0].color).toBe("#12809CFF");
+    expect(calendarsApi.clearColor).toHaveBeenCalledWith("token-123", "cal-1");
+  });
+
+  it("shows a toast when the API call fails, leaving the override in place", async () => {
+    const shared = { ...personal, color: "#654321FF" };
+    useCalendarsStore.setState({ calendars: [shared] });
+    vi.mocked(calendarsApi.clearColor).mockRejectedValue(new Error("network error"));
+
+    await useCalendarsStore.getState().clearCalendarColor("cal-1");
+
+    expect(useCalendarsStore.getState().calendars).toEqual([shared]);
+    expect(toast.error).toHaveBeenCalledWith("Failed to clear calendar color.");
   });
 });
 

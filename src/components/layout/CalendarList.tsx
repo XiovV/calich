@@ -182,16 +182,18 @@ export function CalendarList() {
             <Download className="size-3.5" />
           </IconButton>
         )}
-        {canManage && (
-          <IconButton
-            size="tiny"
-            onClick={() => setEditingCalendar(calendar)}
-            aria-label={`Edit ${calendar.name}`}
-            className="opacity-0 focus-visible:opacity-100 group-hover:opacity-100"
-          >
-            <Pencil className="size-3.5" />
-          </IconButton>
-        )}
+        {/* Edit opens the same dialog for everyone (#122): an Owner manages
+            the Calendar itself, while anyone else with Access sees only
+            their own colour, since a personal colour is theirs to set on
+            any Calendar they can see, not just the ones they own. */}
+        <IconButton
+          size="tiny"
+          onClick={() => setEditingCalendar(calendar)}
+          aria-label={`Edit ${calendar.name}`}
+          className="opacity-0 focus-visible:opacity-100 group-hover:opacity-100"
+        >
+          <Pencil className="size-3.5" />
+        </IconButton>
         {canManage && (
           <IconButton
             size="tiny"
