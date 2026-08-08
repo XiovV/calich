@@ -59,6 +59,35 @@ func TestAttachmentRepository_CreateAndGetByID(t *testing.T) {
 	}
 }
 
+func TestAttachmentRepository_Update(t *testing.T) {
+	repo, attachments, userID, calendarID := newTestAttachmentRepository(t)
+	ctx := context.Background()
+	mustCreateEvent(t, repo, "evt-1", userID, calendarID, "2026-01-01T09:00:00Z", "2026-01-01T10:00:00Z")
+
+	created, err := attachments.Create(ctx, "att-1", "evt-1", &userID, "agenda.pdf", "application/pdf", 1024)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	updated, err := attachments.Update(ctx, "att-1", "agenda-v2.pdf", "application/octet-stream", 2048)
+	if err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	if updated.Filename != "agenda-v2.pdf" || updated.ContentType != "application/octet-stream" || updated.SizeBytes != 2048 {
+		t.Fatalf("unexpected attachment after update: %+v", updated)
+	}
+	if updated.UploadedBy == nil || *updated.UploadedBy != *created.UploadedBy {
+		t.Fatalf("expected uploaded_by to survive an update, got %+v", updated.UploadedBy)
+	}
+}
+
+func TestAttachmentRepository_Update_NotFound(t *testing.T) {
+	_, attachments, _, _ := newTestAttachmentRepository(t)
+	if _, err := attachments.Update(context.Background(), "missing", "a.txt", "text/plain", 1); err != ErrNotFound {
+		t.Fatalf("expected ErrNotFound, got %v", err)
+	}
+}
+
 func TestAttachmentRepository_GetByID_NotFound(t *testing.T) {
 	_, attachments, _, _ := newTestAttachmentRepository(t)
 	if _, err := attachments.GetByID(context.Background(), "missing"); err != ErrNotFound {

@@ -10,6 +10,7 @@ package caldavserver
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -28,11 +29,19 @@ var propfindPatches = []propfindPatch{
 	{trigger: "getctag", apply: applyGetCTagPatch},
 	{trigger: "calendar-color", apply: applyCalendarColorPatch},
 	{trigger: "current-user-privilege-set", apply: applyPrivilegeSetPatch},
+	{trigger: "managed-attachments-server-URL", apply: applyManagedAttachmentsURLPatch},
+	{trigger: "max-attachment-size", apply: applyMaxAttachmentSizePatch},
+	{trigger: "max-attachments-per-resource", apply: applyMaxAttachmentsPerResourcePatch},
 }
 
 // calendarColorNamespace is the Apple/DAVx⁵ calendar-color extension's
 // namespace (ADR-0028).
 const calendarColorNamespace = "http://apple.com/ns/ical/"
+
+// caldavNamespace is RFC 4791's CalDAV XML namespace, shared by every
+// CalDAV-defined property this package injects (managed-attachments-server-URL,
+// max-attachment-size, max-attachments-per-resource — #133, ADR-0040).
+const caldavNamespace = "urn:ietf:params:xml:ns:caldav"
 
 // collectionValueFunc adapts a per-Calendar lookup into a propertyValueFunc:
 // only an href that is a Calendar collection directly under the user's
@@ -98,6 +107,56 @@ func applyPrivilegeSetPatch(ctx context.Context, h *dispatchHandler, userID int6
 			return "", false
 		}
 		return subscribedReadOnlyPrivilegeSet, true
+	}))
+}
+
+// homeSetValueFunc adapts a per-User lookup into a propertyValueFunc that
+// only fires for the caller's own calendar-home-set href exactly — the
+// scope managed-attachments-server-URL is advertised at (#133, ADR-0040) —
+// leaving every other href (a Calendar collection, a calendar object, the
+// principal) alone.
+func homeSetValueFunc(userID int64, value func(ctx context.Context) (string, bool)) propertyValueFunc {
+	target := homeSetPath(userID)
+	return func(ctx context.Context, href string) (string, bool) {
+		if href != target {
+			return "", false
+		}
+		return value(ctx)
+	}
+}
+
+// applyManagedAttachmentsURLPatch advertises CALDAV:managed-attachments-server-URL
+// on the caller's calendar home collection as a path-only DAV:href (#133,
+// ADR-0040): per RFC 8607, the client substitutes scheme and authority from
+// its own request, so this server never needs to know its own external base
+// URL.
+func applyManagedAttachmentsURLPatch(ctx context.Context, h *dispatchHandler, userID int64, body []byte) []byte {
+	return injectPropertyRaw(ctx, body, "managed-attachments-server-URL", caldavNamespace, homeSetValueFunc(userID, func(ctx context.Context) (string, bool) {
+		return fmt.Sprintf(`<href xmlns=%q>%s</href>`, davNamespace, attachmentsBasePath), true
+	}))
+}
+
+// applyMaxAttachmentSizePatch and applyMaxAttachmentsPerResourcePatch
+// advertise Attachments' MAX_ATTACHMENT_SIZE/MAX_ATTACHMENTS_PER_EVENT
+// limits (config.go) on every Calendar collection the caller can at least
+// read (#133, ADR-0040) — the same access gate applyCalendarColorPatch uses.
+func applyMaxAttachmentSizePatch(ctx context.Context, h *dispatchHandler, userID int64, body []byte) []byte {
+	return injectProperty(ctx, body, "max-attachment-size", caldavNamespace, collectionValueFunc(userID, func(ctx context.Context, calendarID string) (string, bool) {
+		access, _, err := h.backend.calendars.Access(ctx, userID, calendarID)
+		if err != nil || !access.CanRead() {
+			return "", false
+		}
+		return strconv.FormatInt(h.backend.maxAttachmentSize, 10), true
+	}))
+}
+
+func applyMaxAttachmentsPerResourcePatch(ctx context.Context, h *dispatchHandler, userID int64, body []byte) []byte {
+	return injectProperty(ctx, body, "max-attachments-per-resource", caldavNamespace, collectionValueFunc(userID, func(ctx context.Context, calendarID string) (string, bool) {
+		access, _, err := h.backend.calendars.Access(ctx, userID, calendarID)
+		if err != nil || !access.CanRead() {
+			return "", false
+		}
+		return strconv.Itoa(h.backend.maxAttachmentsPerEvent), true
 	}))
 }
 

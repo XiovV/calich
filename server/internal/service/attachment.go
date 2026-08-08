@@ -35,12 +35,18 @@ type AttachmentService struct {
 	attachments *repository.AttachmentRepository
 	events      *repository.EventRepository
 	calendars   *CalendarService
-	store       *attachmentstore.Store
-	maxPerEvent int
+	// eventService bumps a Master's change_seq after every add/replace/remove
+	// (TouchChangeSeq), so the Master's ETag and its Calendar's CTag reflect
+	// an Attachment change the same way they reflect any other write to the
+	// series (#133, ADR-0040) — this covers both this service's REST callers
+	// and CalDAV's RFC 8607 POST actions, which both funnel through here.
+	eventService *EventService
+	store        *attachmentstore.Store
+	maxPerEvent  int
 }
 
-func NewAttachmentService(attachments *repository.AttachmentRepository, events *repository.EventRepository, calendars *CalendarService, store *attachmentstore.Store, maxPerEvent int) *AttachmentService {
-	return &AttachmentService{attachments: attachments, events: events, calendars: calendars, store: store, maxPerEvent: maxPerEvent}
+func NewAttachmentService(attachments *repository.AttachmentRepository, events *repository.EventRepository, calendars *CalendarService, eventService *EventService, store *attachmentstore.Store, maxPerEvent int) *AttachmentService {
+	return &AttachmentService{attachments: attachments, events: events, calendars: calendars, eventService: eventService, store: store, maxPerEvent: maxPerEvent}
 }
 
 // requireAccess resolves userID's Access to calendarID and refuses it
@@ -111,7 +117,41 @@ func (s *AttachmentService) Upload(ctx context.Context, userID int64, eventID, f
 		s.store.Delete(id)
 		return repository.Attachment{}, fmt.Errorf("insert attachment: %w", err)
 	}
+
+	if err := s.eventService.TouchChangeSeq(ctx, eventID); err != nil {
+		return repository.Attachment{}, fmt.Errorf("bump change seq: %w", err)
+	}
 	return created, nil
+}
+
+// Replace overwrites attachmentID's bytes and metadata in place — RFC 8607's
+// attachment-update action (#133, ADR-0040): the MANAGED-ID, and therefore
+// every ATTACH referencing it, is unchanged, only the file underneath. Like
+// Upload, the new bytes are saved before the row updates, so a write failure
+// after the save rolls back immediately rather than waiting for a Sweep.
+func (s *AttachmentService) Replace(ctx context.Context, userID int64, attachmentID, filename, contentType string, r io.Reader) (repository.Attachment, error) {
+	attachment, err := s.attachments.GetByID(ctx, attachmentID)
+	if err != nil {
+		return repository.Attachment{}, err
+	}
+	if _, err := s.eventForAttachment(ctx, userID, attachment.EventID, true); err != nil {
+		return repository.Attachment{}, err
+	}
+
+	size, err := s.store.Save(attachmentID, r)
+	if err != nil {
+		return repository.Attachment{}, fmt.Errorf("save attachment: %w", err)
+	}
+
+	updated, err := s.attachments.Update(ctx, attachmentID, filename, contentType, size)
+	if err != nil {
+		return repository.Attachment{}, fmt.Errorf("update attachment: %w", err)
+	}
+
+	if err := s.eventService.TouchChangeSeq(ctx, attachment.EventID); err != nil {
+		return repository.Attachment{}, fmt.Errorf("bump change seq: %w", err)
+	}
+	return updated, nil
 }
 
 // Delete removes attachmentID: the row first, then its file best-effort
@@ -130,6 +170,10 @@ func (s *AttachmentService) Delete(ctx context.Context, userID int64, attachment
 		return err
 	}
 	s.store.Delete(attachmentID)
+
+	if err := s.eventService.TouchChangeSeq(ctx, attachment.EventID); err != nil {
+		return fmt.Errorf("bump change seq: %w", err)
+	}
 	return nil
 }
 

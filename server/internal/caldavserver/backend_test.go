@@ -11,10 +11,19 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/XiovV/calendar/server/internal/attachmentstore"
 	"github.com/XiovV/calendar/server/internal/db"
 	"github.com/XiovV/calendar/server/internal/httpauth"
 	"github.com/XiovV/calendar/server/internal/repository"
 	"github.com/XiovV/calendar/server/internal/service"
+)
+
+// testMaxAttachmentSize and testMaxAttachmentsPerEvent are the limits
+// newTestCalDAVEnv wires the Backend with — arbitrary but generous, since
+// most tests aren't exercising the limits themselves (#133, ADR-0040).
+const (
+	testMaxAttachmentSize      int64 = 25 << 20
+	testMaxAttachmentsPerEvent       = 10
 )
 
 // testCalDAVEnv is the full wiring newTestCalDAVServer and its variants share:
@@ -28,6 +37,7 @@ type testCalDAVEnv struct {
 	appPasswordService *service.AppPasswordService
 	eventService       *service.EventService
 	calendarService    *service.CalendarService
+	attachmentService  *service.AttachmentService
 	users              *repository.UserRepository
 }
 
@@ -54,7 +64,9 @@ func newTestCalDAVEnv(t *testing.T) testCalDAVEnv {
 		t.Fatalf("create calendar: %v", err)
 	}
 
-	eventService := service.NewEventService(sqlDB, repository.NewEventRepository(sqlDB), repository.NewEventExceptionRepository(sqlDB), repository.NewEventReminderRepository(sqlDB), repository.NewReminderOverrideRepository(sqlDB), repository.NewSyncRepository(sqlDB), calendarService, users, repository.NewAttachmentRepository(sqlDB))
+	attachmentRepo := repository.NewAttachmentRepository(sqlDB)
+	eventService := service.NewEventService(sqlDB, repository.NewEventRepository(sqlDB), repository.NewEventExceptionRepository(sqlDB), repository.NewEventReminderRepository(sqlDB), repository.NewReminderOverrideRepository(sqlDB), repository.NewSyncRepository(sqlDB), calendarService, users, attachmentRepo)
+	attachmentService := service.NewAttachmentService(attachmentRepo, repository.NewEventRepository(sqlDB), calendarService, eventService, attachmentstore.New(t.TempDir()), testMaxAttachmentsPerEvent)
 
 	appPasswordService := service.NewAppPasswordService(repository.NewAppPasswordRepository(sqlDB), users)
 	created, err := appPasswordService.Create(context.Background(), user.ID, "Test device")
@@ -62,7 +74,7 @@ func newTestCalDAVEnv(t *testing.T) testCalDAVEnv {
 		t.Fatalf("create app password: %v", err)
 	}
 
-	backend := NewBackend(calendarService, eventService)
+	backend := NewBackend(calendarService, eventService, attachmentService, testMaxAttachmentSize, testMaxAttachmentsPerEvent)
 	handler := NewHTTPHandler(backend)
 
 	r := chi.NewRouter()
@@ -84,6 +96,7 @@ func newTestCalDAVEnv(t *testing.T) testCalDAVEnv {
 		appPasswordService: appPasswordService,
 		eventService:       eventService,
 		calendarService:    calendarService,
+		attachmentService:  attachmentService,
 		users:              users,
 	}
 }

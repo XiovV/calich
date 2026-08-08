@@ -1170,6 +1170,9 @@ func (s *EventService) GetSeries(ctx context.Context, userID int64, masterID str
 	if err := s.attachReminders(ctx, all); err != nil {
 		return repository.Event{}, nil, err
 	}
+	if err := s.attachAttachments(ctx, all); err != nil {
+		return repository.Event{}, nil, err
+	}
 
 	return all[0], all[1:], nil
 }
@@ -1286,6 +1289,9 @@ func (s *EventService) ListSeriesByCalendar(ctx context.Context, userID int64, c
 	if err != nil {
 		return nil, nil, err
 	}
+	if err := s.attachAttachments(ctx, masters); err != nil {
+		return nil, nil, err
+	}
 	return masters, overridesByParent, nil
 }
 
@@ -1377,6 +1383,24 @@ func (s *EventService) SyncSince(ctx context.Context, userID int64, calendarID s
 		DeletedUIDs:       deletedUIDs,
 		NewToken:          newToken,
 	}, nil
+}
+
+// TouchChangeSeq bumps masterID's change_seq without touching any of its own
+// columns, so a write to something outside the events table — an Attachment
+// (#132/#133, ADR-0040) — still changes the Master's ETag (SeriesToICal picks
+// up the new Attachment on the next read) and its Calendar's CTag. The caller
+// has already resolved masterID and checked Access; this trusts that.
+func (s *EventService) TouchChangeSeq(ctx context.Context, masterID string) error {
+	return s.withTx(ctx, func(repos txRepos) error {
+		seq, err := repos.sync.NextChangeSeq(ctx)
+		if err != nil {
+			return fmt.Errorf("next change seq: %w", err)
+		}
+		if err := repos.events.SetChangeSeq(ctx, masterID, seq); err != nil {
+			return fmt.Errorf("bump change_seq: %w", err)
+		}
+		return nil
+	})
 }
 
 // CalendarCTag returns calendarID's CTag — the highest change_seq among its

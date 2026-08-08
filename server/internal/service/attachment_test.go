@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"io"
 	"strings"
 	"testing"
 	"time"
@@ -80,7 +81,7 @@ func newAttachmentTestFixture(t *testing.T, maxPerEvent int) attachmentTestFixtu
 	}
 
 	store := attachmentstore.New(t.TempDir())
-	attachments := NewAttachmentService(attachmentsRepo, eventsRepo, calendars, store, maxPerEvent)
+	attachments := NewAttachmentService(attachmentsRepo, eventsRepo, calendars, events, store, maxPerEvent)
 
 	return attachmentTestFixture{
 		attachments: attachments,
@@ -194,6 +195,54 @@ func TestAttachmentService_DeleteAndDownload(t *testing.T) {
 	}
 }
 
+// TestAttachmentService_Replace_OwnerAndEditorSucceed_ViewerAndStrangerRefused
+// is Replace's ADR-0034 gating (#133, RFC 8607 attachment-update): the same
+// Owner/Editor-write, Viewer/stranger-refused shape Upload and Delete both
+// already have.
+func TestAttachmentService_Replace_OwnerAndEditorSucceed_ViewerAndStrangerRefused(t *testing.T) {
+	f := newAttachmentTestFixture(t, 10)
+	ctx := context.Background()
+
+	created, err := f.attachments.Upload(ctx, f.ownerID, f.masterID, "agenda.pdf", "application/pdf", strings.NewReader("v1"))
+	if err != nil {
+		t.Fatalf("upload: %v", err)
+	}
+
+	if _, err := f.attachments.Replace(ctx, f.viewerID, created.ID, "agenda.pdf", "application/pdf", strings.NewReader("v2")); !errors.Is(err, ErrCalendarReadOnly) {
+		t.Fatalf("expected viewer replace to be refused with ErrCalendarReadOnly, got %v", err)
+	}
+	if _, err := f.attachments.Replace(ctx, f.strangerID, created.ID, "agenda.pdf", "application/pdf", strings.NewReader("v2")); !errors.Is(err, repository.ErrNotFound) {
+		t.Fatalf("expected stranger replace to be refused with ErrNotFound, got %v", err)
+	}
+
+	updated, err := f.attachments.Replace(ctx, f.editorID, created.ID, "agenda-v2.pdf", "application/pdf", strings.NewReader("hello there"))
+	if err != nil {
+		t.Fatalf("editor replace: %v", err)
+	}
+	if updated.ID != created.ID {
+		t.Fatalf("expected the managed-id to stay %q, got %q", created.ID, updated.ID)
+	}
+	if updated.Filename != "agenda-v2.pdf" {
+		t.Fatalf("expected the filename to update, got %q", updated.Filename)
+	}
+	if updated.SizeBytes != int64(len("hello there")) {
+		t.Fatalf("expected size_bytes to reflect the new bytes, got %d", updated.SizeBytes)
+	}
+
+	_, file, err := f.attachments.Download(ctx, f.ownerID, created.ID)
+	if err != nil {
+		t.Fatalf("download after replace: %v", err)
+	}
+	defer file.Close()
+	got, err := io.ReadAll(file)
+	if err != nil {
+		t.Fatalf("read after replace: %v", err)
+	}
+	if string(got) != "hello there" {
+		t.Fatalf("expected the replaced bytes on disk, got %q", got)
+	}
+}
+
 func TestAttachmentService_Download_StrangerGetsNotFound(t *testing.T) {
 	f := newAttachmentTestFixture(t, 10)
 	ctx := context.Background()
@@ -259,7 +308,7 @@ func TestAttachmentService_Upload_SubscribedCalendarRefused(t *testing.T) {
 		t.Fatalf("list seeded event: %v, %+v", err, list)
 	}
 
-	attachments := NewAttachmentService(attachmentsRepo, eventsRepo, calendars, attachmentstore.New(t.TempDir()), 10)
+	attachments := NewAttachmentService(attachmentsRepo, eventsRepo, calendars, events, attachmentstore.New(t.TempDir()), 10)
 
 	_, err = attachments.Upload(ctx, owner.ID, list[0].ID, "x.txt", "text/plain", strings.NewReader("x"))
 	if !errors.Is(err, ErrCalendarReadOnly) {

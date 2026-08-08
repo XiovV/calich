@@ -31,6 +31,21 @@ import (
 
 const pathPrefix = "/dav"
 
+// attachmentsBasePath is the RFC 8607 managed-attachments server URL,
+// advertised path-only on the calendar home collection (managed-attachments-server-URL, propfind.go) and
+// the base every managed-attachment URI ATTACH emits is built from
+// (icalendar.SeriesToICal's attachmentURIPrefix) — also this app's own
+// download route (attachment_actions.go's GET handler), so the two always
+// agree by construction (#133, ADR-0040).
+const attachmentsBasePath = pathPrefix + "/attachments/"
+
+// attachmentDownloadPath is one Attachment's full managed-attachment path —
+// the value ATTACH's URI carries and the CalDAV POST actions' Location
+// header returns.
+func attachmentDownloadPath(id string) string {
+	return attachmentsBasePath + id
+}
+
 // chi only routes its own fixed set of HTTP methods by default; CalDAV
 // clients also send PROPFIND/REPORT/MKCOL/PROPPATCH, so those must be
 // registered before any router mounts CalDAV routes (ADR-0023, ADR-0028).
@@ -42,12 +57,19 @@ func init() {
 }
 
 type Backend struct {
-	calendars *service.CalendarService
-	events    *service.EventService
+	calendars   *service.CalendarService
+	events      *service.EventService
+	attachments *service.AttachmentService
+	// maxAttachmentSize and maxAttachmentsPerEvent are Attachments' limits
+	// (#132, ADR-0040), advertised on the calendar collection as RFC 8607's
+	// max-attachment-size/max-attachments-per-resource (propfind.go) and
+	// enforced against an attachment-add/-update body (attachment_actions.go).
+	maxAttachmentSize      int64
+	maxAttachmentsPerEvent int
 }
 
-func NewBackend(calendars *service.CalendarService, events *service.EventService) *Backend {
-	return &Backend{calendars: calendars, events: events}
+func NewBackend(calendars *service.CalendarService, events *service.EventService, attachments *service.AttachmentService, maxAttachmentSize int64, maxAttachmentsPerEvent int) *Backend {
+	return &Backend{calendars: calendars, events: events, attachments: attachments, maxAttachmentSize: maxAttachmentSize, maxAttachmentsPerEvent: maxAttachmentsPerEvent}
 }
 
 // Path depths below are load-bearing: go-webdav's PROPFIND dispatch
@@ -314,7 +336,7 @@ func seriesHasOccurrenceInRange(master repository.Event, from, to time.Time) (bo
 // CalendarObject GetCalendarObject/ListCalendarObjects/QueryCalendarObjects
 // all serve (ADR-0025).
 func buildCalendarObject(userID int64, master repository.Event, overrides []repository.Event) (*caldav.CalendarObject, error) {
-	cal, err := icalendar.SeriesToICal(master, overrides)
+	cal, err := icalendar.SeriesToICal(master, overrides, attachmentsBasePath)
 	if err != nil {
 		return nil, fmt.Errorf("serialize series %q: %w", master.ID, err)
 	}
@@ -451,7 +473,7 @@ func (b *Backend) currentObjectETag(ctx context.Context, userID int64, calendarI
 		return false, "", nil
 	}
 
-	cal, err := icalendar.SeriesToICal(master, overrides)
+	cal, err := icalendar.SeriesToICal(master, overrides, attachmentsBasePath)
 	if err != nil {
 		return false, "", err
 	}

@@ -69,7 +69,7 @@ func main() {
 	eventRepo := repository.NewEventRepository(sqlDB)
 	eventService := service.NewEventService(sqlDB, eventRepo, repository.NewEventExceptionRepository(sqlDB), repository.NewEventReminderRepository(sqlDB), reminderOverrideRepo, repository.NewSyncRepository(sqlDB), calendarService, users, attachmentRepo)
 	attachmentStore := attachmentstore.New(cfg.DataDir)
-	attachmentService := service.NewAttachmentService(attachmentRepo, eventRepo, calendarService, attachmentStore, cfg.MaxAttachmentsPerEvent)
+	attachmentService := service.NewAttachmentService(attachmentRepo, eventRepo, calendarService, eventService, attachmentStore, cfg.MaxAttachmentsPerEvent)
 	notificationRepo := repository.NewNotificationRepository(sqlDB)
 	notificationService := service.NewNotificationService(notificationRepo)
 	appPasswordService := service.NewAppPasswordService(repository.NewAppPasswordRepository(sqlDB), users)
@@ -101,7 +101,7 @@ func main() {
 	accountHandler := handlers.NewAccountHandler(accountService)
 	userService := service.NewUserService(users)
 	userHandler := handlers.NewUserHandler(userService)
-	calDAVHandler := caldavserver.NewHTTPHandler(caldavserver.NewBackend(calendarService, eventService))
+	calDAVHandler := caldavserver.NewHTTPHandler(caldavserver.NewBackend(calendarService, eventService, attachmentService, cfg.MaxAttachmentSize, cfg.MaxAttachmentsPerEvent))
 
 	handler, err := router.New(logger, authHandler, calendarHandler, eventHandler, attachmentHandler, notificationHandler, appPasswordHandler, accountHandler, userHandler, calDAVHandler, authService, authService, appPasswordService, authService)
 	if err != nil {

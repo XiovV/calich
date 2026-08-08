@@ -59,7 +59,9 @@ func (h *EventHandler) icsAll(w http.ResponseWriter, r *http.Request, userID int
 		return
 	}
 
-	cal, err := icalendar.SeriesToICal(master, overrides)
+	// This standalone .ics is a Calendar file (ADR-0041): no ATTACH at all
+	// (inline ATTACH for export is future work).
+	cal, err := icalendar.SeriesToICal(master, overrides, icalendar.NoManagedAttachments)
 	if err != nil {
 		httpresponse.Error(w, http.StatusInternalServerError, "internal_error", "failed to build calendar object")
 		return

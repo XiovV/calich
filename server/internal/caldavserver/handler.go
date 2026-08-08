@@ -5,6 +5,7 @@ import (
 	"context"
 	"io"
 	"net/http"
+	"strings"
 
 	"github.com/emersion/go-webdav/caldav"
 )
@@ -38,7 +39,8 @@ func ifMatchFromContext(ctx context.Context) (string, bool) {
 // NewHTTPHandler returns the http.Handler that serves everything under
 // pathPrefix: base CalDAV (discovery, GET/PUT/DELETE, calendar-query and
 // calendar-multiget REPORTs) via go-webdav, plus sync-collection, getctag,
-// calendar-color, and PROPPATCH on top (ADR-0023, ADR-0025, ADR-0028, #65).
+// calendar-color, PROPPATCH, and RFC 8607 managed attachments on top
+// (ADR-0023, ADR-0025, ADR-0028, ADR-0040, #65, #133).
 func NewHTTPHandler(backend *Backend) http.Handler {
 	return &dispatchHandler{
 		base:    &caldav.Handler{Backend: backend, Prefix: pathPrefix},
@@ -47,6 +49,15 @@ func NewHTTPHandler(backend *Backend) http.Handler {
 }
 
 func (h *dispatchHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// GET /dav/attachments/{managed-id} lives outside go-webdav's own
+	// resource tree entirely (it isn't a calendar, a calendar object, or a
+	// principal), so it's matched on its own reserved path prefix before the
+	// method switch below even runs (#133, ADR-0040).
+	if r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, attachmentsBasePath) {
+		h.serveAttachmentDownload(w, r)
+		return
+	}
+
 	switch r.Method {
 	case "REPORT":
 		body, err := readAndRestoreBody(r)
@@ -64,6 +75,11 @@ func (h *dispatchHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "PROPPATCH":
 		h.handlePropPatch(w, r)
 		return
+	case http.MethodPost:
+		if r.URL.Query().Get("action") != "" {
+			h.handlePostAction(w, r)
+			return
+		}
 	case http.MethodDelete:
 		if ifMatch := r.Header.Get("If-Match"); ifMatch != "" {
 			ctx := context.WithValue(r.Context(), ifMatchContextKey{}, ifMatch)

@@ -19,7 +19,7 @@ import (
 func putSeriesStatus(t *testing.T, env testCalDAVEnv, calendarID string, master repository.Event) int {
 	t.Helper()
 
-	cal, err := icalendar.SeriesToICal(master, nil)
+	cal, err := icalendar.SeriesToICal(master, nil, attachmentsBasePath)
 	if err != nil {
 		t.Fatalf("seriesToICal: %v", err)
 	}
@@ -122,7 +122,7 @@ func TestPutCalendarObject_UIDMismatchIsConflict(t *testing.T) {
 	env := newTestCalDAVEnv(t)
 
 	master := validPutMaster()
-	cal, err := icalendar.SeriesToICal(master, nil)
+	cal, err := icalendar.SeriesToICal(master, nil, attachmentsBasePath)
 	if err != nil {
 		t.Fatalf("seriesToICal: %v", err)
 	}

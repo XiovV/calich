@@ -11,6 +11,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -29,12 +30,26 @@ const ProdID = "-//calendar//caldavserver//EN"
 // Reminder never fires in the middle of the night (ADR-0020).
 const allDayReminderAnchorOffset = 9 * time.Hour
 
+// NoManagedAttachments is SeriesToICal/CalendarToICal's attachmentURIPrefix
+// for a "Calendar file" serialization target (ADR-0041): a standalone .ics
+// handed to a client this server didn't mint the URI for, where a managed-
+// attachment reference would be meaningless. Every export call site
+// (handlers/ics.go's single-event .ics, CalendarToICal's bulk export) passes
+// this rather than a bare "", so the target is a named value at the call
+// site, not a magic empty string standing in for one. OccurrenceToICal never
+// takes this parameter at all — it builds its single flattened VEVENT
+// directly and carries no ATTACH by construction.
+const NoManagedAttachments = ""
+
 // SeriesToICal recomposes master and its overrides into one VCALENDAR: a
 // VTIMEZONE for each distinct TZID the series references, then the Master
 // VEVENT (carrying EXDATE for each cancelled Occurrence) followed by one
 // VEVENT per Override ordered by RecurrenceID, all sharing master's id as
-// their UID (ADR-0025).
-func SeriesToICal(master repository.Event, overrides []repository.Event) (*ical.Calendar, error) {
+// their UID (ADR-0025). attachmentURIPrefix is the RFC 8607 managed-attachment
+// URI prefix (e.g. "/dav/attachments/") ATTACH properties for master.Attachments
+// are built from, or NoManagedAttachments to omit ATTACH entirely — see
+// appendSeriesVEvents.
+func SeriesToICal(master repository.Event, overrides []repository.Event, attachmentURIPrefix string) (*ical.Calendar, error) {
 	cal := newVCalendar()
 
 	for _, tzid := range seriesTzids(master, overrides) {
@@ -45,7 +60,7 @@ func SeriesToICal(master repository.Event, overrides []repository.Event) (*ical.
 		cal.Children = append(cal.Children, vtz)
 	}
 
-	if err := appendSeriesVEvents(cal, master, overrides); err != nil {
+	if err := appendSeriesVEvents(cal, master, overrides, attachmentURIPrefix); err != nil {
 		return nil, err
 	}
 	return cal, nil
@@ -63,8 +78,14 @@ func newVCalendar() *ical.Calendar {
 // appendSeriesVEvents appends master's VEVENT (with its EXDATEs) followed by
 // one VEVENT per override (sorted by RecurrenceID) to cal.Children — the
 // per-series VEVENT-building step SeriesToICal and CalendarToICal both need,
-// the latter once per series in a Calendar.
-func appendSeriesVEvents(cal *ical.Calendar, master repository.Event, overrides []repository.Event) error {
+// the latter once per series in a Calendar. attachmentURIPrefix, when
+// non-empty, adds one ATTACH property per entry in master.Attachments onto
+// every VEVENT emitted (the master and every override alike) — an Attachment
+// belongs to the whole series, never to one Occurrence (ADR-0040). A blank
+// prefix (CalendarToICal's bulk export, OccurrenceToICal's flattened single
+// Occurrence) skips this: a managed-attachment URI is meaningless outside the
+// server that minted it (ADR-0041).
+func appendSeriesVEvents(cal *ical.Calendar, master repository.Event, overrides []repository.Event, attachmentURIPrefix string) error {
 	masterEvent, err := buildVEvent(master, master.ID, nil, nil)
 	if err != nil {
 		return fmt.Errorf("build master vevent: %w", err)
@@ -76,6 +97,7 @@ func appendSeriesVEvents(cal *ical.Calendar, master repository.Event, overrides 
 		}
 		masterEvent.Props.Add(prop)
 	}
+	appendAttachProps(masterEvent, master.Attachments, attachmentURIPrefix)
 	cal.Children = append(cal.Children, masterEvent.Component)
 
 	sorted := append([]repository.Event(nil), overrides...)
@@ -87,9 +109,44 @@ func appendSeriesVEvents(cal *ical.Calendar, master repository.Event, overrides 
 		if err != nil {
 			return fmt.Errorf("build override vevent: %w", err)
 		}
+		appendAttachProps(overrideEvent, master.Attachments, attachmentURIPrefix)
 		cal.Children = append(cal.Children, overrideEvent.Component)
 	}
 	return nil
+}
+
+// attachManagedIDParam, attachFmtTypeParam, attachSizeParam and
+// attachFilenameParam are RFC 8607's ATTACH parameters carrying a managed
+// Attachment's identity and metadata alongside its URI value.
+const (
+	attachManagedIDParam = "MANAGED-ID"
+	attachFmtTypeParam   = "FMTTYPE"
+	attachSizeParam      = "SIZE"
+	attachFilenameParam  = "FILENAME"
+)
+
+// appendAttachProps adds one ATTACH property per attachment onto v, each
+// carrying the RFC 8607 managed-attachment URI (uriPrefix+id) as its value
+// and MANAGED-ID/FMTTYPE/SIZE/FILENAME as params (#133, ADR-0040). A blank
+// uriPrefix is a no-op — see appendSeriesVEvents.
+func appendAttachProps(v *ical.Event, attachments []repository.Attachment, uriPrefix string) {
+	if uriPrefix == NoManagedAttachments {
+		return
+	}
+	for _, a := range attachments {
+		prop := ical.NewProp(ical.PropAttach)
+		prop.SetValueType(ical.ValueURI)
+		prop.Value = uriPrefix + a.ID
+		prop.Params.Set(attachManagedIDParam, a.ID)
+		if a.ContentType != "" {
+			prop.Params.Set(attachFmtTypeParam, a.ContentType)
+		}
+		prop.Params.Set(attachSizeParam, strconv.FormatInt(a.SizeBytes, 10))
+		if a.Filename != "" {
+			prop.Params.Set(attachFilenameParam, a.Filename)
+		}
+		v.Props.Add(prop)
+	}
 }
 
 // seriesTzids returns the distinct, sorted TZIDs master and overrides
@@ -378,7 +435,9 @@ func CalendarToICal(name, color string, masters []repository.Event, overridesByP
 	sorted := append([]repository.Event(nil), masters...)
 	sort.Slice(sorted, func(i, j int) bool { return sorted[i].ID < sorted[j].ID })
 	for _, master := range sorted {
-		if err := appendSeriesVEvents(cal, master, overridesByParent[master.ID]); err != nil {
+		// A bulk export is a Calendar file (ADR-0041): no ATTACH at all here
+		// (inline ATTACH for export is future work).
+		if err := appendSeriesVEvents(cal, master, overridesByParent[master.ID], NoManagedAttachments); err != nil {
 			return nil, err
 		}
 	}

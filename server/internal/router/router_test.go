@@ -40,14 +40,14 @@ func newTestRouter(t *testing.T) http.Handler {
 	eventService := service.NewEventService(sqlDB, repository.NewEventRepository(sqlDB), repository.NewEventExceptionRepository(sqlDB), repository.NewEventReminderRepository(sqlDB), repository.NewReminderOverrideRepository(sqlDB), repository.NewSyncRepository(sqlDB), calendarService, users, repository.NewAttachmentRepository(sqlDB))
 	calendarHandler := handlers.NewCalendarHandler(calendarService, eventService, service.NewImportService(eventService, calendarService), service.NewSubscribeService(eventService, calendarService, 0))
 	eventHandler := handlers.NewEventHandler(eventService)
-	attachmentService := service.NewAttachmentService(repository.NewAttachmentRepository(sqlDB), repository.NewEventRepository(sqlDB), calendarService, attachmentstore.New(t.TempDir()), 10)
+	attachmentService := service.NewAttachmentService(repository.NewAttachmentRepository(sqlDB), repository.NewEventRepository(sqlDB), calendarService, eventService, attachmentstore.New(t.TempDir()), 10)
 	attachmentHandler := handlers.NewAttachmentHandler(attachmentService, 25<<20)
 	notificationHandler := handlers.NewNotificationHandler(service.NewNotificationService(repository.NewNotificationRepository(sqlDB)))
 	appPasswordService := service.NewAppPasswordService(repository.NewAppPasswordRepository(sqlDB), users)
 	appPasswordHandler := handlers.NewAppPasswordHandler(appPasswordService)
 	accountHandler := handlers.NewAccountHandler(service.NewAccountService(sqlDB, users, sessions, calendarRepo, shareRepo, calendarService, appPasswordService))
 	userHandler := handlers.NewUserHandler(service.NewUserService(users))
-	calDAVHandler := &caldav.Handler{Backend: caldavserver.NewBackend(calendarService, eventService), Prefix: "/dav"}
+	calDAVHandler := &caldav.Handler{Backend: caldavserver.NewBackend(calendarService, eventService, attachmentService, 25<<20, 10), Prefix: "/dav"}
 
 	r, err := New(slog.New(slog.NewTextHandler(io.Discard, nil)), authHandler, calendarHandler, eventHandler, attachmentHandler, notificationHandler, appPasswordHandler, accountHandler, userHandler, calDAVHandler, authService, authService, appPasswordService, authService)
 	if err != nil {

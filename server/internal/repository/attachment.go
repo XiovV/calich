@@ -135,6 +135,25 @@ func (r *AttachmentRepository) ListAllIDs(ctx context.Context) ([]string, error)
 	return ids, nil
 }
 
+// Update overwrites id's filename/content_type/size_bytes in place — the
+// RFC 8607 attachment-update action's bookkeeping (#133, ADR-0040), called
+// after the new bytes are already on disk under the same id. uploaded_by is
+// left untouched: replacing an Attachment's bytes doesn't change who
+// originally attached it.
+func (r *AttachmentRepository) Update(ctx context.Context, id, filename, contentType string, sizeBytes int64) (Attachment, error) {
+	res, err := r.db.ExecContext(ctx,
+		`UPDATE event_attachments SET filename = ?, content_type = ?, size_bytes = ? WHERE id = ?`,
+		filename, contentType, sizeBytes, id,
+	)
+	if err != nil {
+		return Attachment{}, fmt.Errorf("update attachment: %w", err)
+	}
+	if err := requireAffected(res); err != nil {
+		return Attachment{}, err
+	}
+	return r.GetByID(ctx, id)
+}
+
 // Delete removes id's row. The caller unlinks the file only after this
 // commits (ADR-0040) — see attachmentstore.Store.Delete.
 func (r *AttachmentRepository) Delete(ctx context.Context, id string) error {
