@@ -19,18 +19,35 @@ export function AppShell() {
   const [eventModalState, setEventModalState] = useState<EventModalState>(null);
   const fetchCalendars = useCalendarsStore((state) => state.fetchCalendars);
   const fetchEvents = useEventsStore((state) => state.fetchEvents);
-  const setCheckedCalendarIds = useShellStore(
-    (state) => state.setCheckedCalendarIds,
+  const reconcileCheckedCalendarIds = useShellStore(
+    (state) => state.reconcileCheckedCalendarIds,
   );
 
   useEffect(() => {
-    fetchCalendars().then(() => {
-      setCheckedCalendarIds(
-        useCalendarsStore.getState().calendars.map((calendar) => calendar.id),
-      );
-    });
-    fetchEvents();
-  }, [fetchCalendars, fetchEvents, setCheckedCalendarIds]);
+    // Refetches on mount and whenever the tab regains focus, so a Share
+    // granted or revoked while it was in the background is reflected without
+    // a reload (#116). reconcileCheckedCalendarIds (rather than replacing the
+    // checked set outright) is what keeps a deliberately-unchecked Calendar
+    // unchecked across a later refetch while still auto-checking one seen
+    // for the first time.
+    function refetch() {
+      fetchCalendars().then(() => {
+        reconcileCheckedCalendarIds(
+          useCalendarsStore.getState().calendars.map((calendar) => calendar.id),
+        );
+      });
+      fetchEvents();
+    }
+
+    refetch();
+
+    function handleVisibilityChange() {
+      if (document.visibilityState === "visible") refetch();
+    }
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () =>
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+  }, [fetchCalendars, fetchEvents, reconcileCheckedCalendarIds]);
 
   function handleCreateClick() {
     const draft = computeDefaultDraft(new Date());

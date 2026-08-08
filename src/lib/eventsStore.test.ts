@@ -11,13 +11,22 @@ vi.mock("./eventsApi", () => ({
   },
 }));
 
+vi.mock("./calendarsApi", () => ({
+  calendarsApi: {
+    list: vi.fn(),
+  },
+}));
+
 vi.mock("./toast", () => ({
   toast: { error: vi.fn() },
 }));
 
 const { eventsApi } = await import("./eventsApi");
+const { calendarsApi } = await import("./calendarsApi");
 const { toast } = await import("./toast");
+const { ApiError } = await import("./apiClient");
 const { useAuthStore } = await import("./authStore");
+const { useCalendarsStore } = await import("./calendarsStore");
 const { useEventsStore } = await import("./eventsStore");
 
 const standup = {
@@ -31,6 +40,7 @@ const standup = {
 function resetStore() {
   useEventsStore.setState({ events: [] });
   useAuthStore.setState({ accessToken: "token-123" });
+  useCalendarsStore.setState({ calendars: [] });
 }
 
 beforeEach(() => {
@@ -478,5 +488,122 @@ describe("removeEventsByCalendarId", () => {
 
     expect(useEventsStore.getState().events).toEqual([other]);
     expect(eventsApi.remove).not.toHaveBeenCalled();
+  });
+});
+
+describe("recovery from a write refused because Access changed (#116)", () => {
+  it("refetches Calendars and names the Calendar in the toast on a 403 from updateEvent", async () => {
+    useEventsStore.setState({ events: [standup] });
+    useCalendarsStore.setState({ calendars: [{ id: "cal-1", name: "Family", color: "#fff" }] });
+    vi.mocked(eventsApi.update).mockRejectedValue(
+      new ApiError(403, "forbidden", "calendar is read-only"),
+    );
+    vi.mocked(calendarsApi.list).mockResolvedValue([
+      { id: "cal-1", name: "Family", color: "#fff", access: "viewer" },
+    ]);
+
+    await useEventsStore.getState().updateEvent("evt-1", { title: "Renamed" });
+
+    expect(useEventsStore.getState().events).toEqual([standup]);
+    expect(calendarsApi.list).toHaveBeenCalledWith("token-123");
+    expect(useCalendarsStore.getState().calendars).toEqual([
+      { id: "cal-1", name: "Family", color: "#fff", access: "viewer" },
+    ]);
+    expect(toast.error).toHaveBeenCalledWith(
+      'Your access to "Family" has changed. Refreshing calendars.',
+    );
+  });
+
+  it("refetches Calendars on a 404 from removeEvent", async () => {
+    useEventsStore.setState({ events: [standup] });
+    useCalendarsStore.setState({ calendars: [{ id: "cal-1", name: "Family", color: "#fff" }] });
+    vi.mocked(eventsApi.remove).mockRejectedValue(
+      new ApiError(404, "not_found", "event not found"),
+    );
+    vi.mocked(calendarsApi.list).mockResolvedValue([]);
+
+    await useEventsStore.getState().removeEvent("evt-1");
+
+    expect(useEventsStore.getState().events).toEqual([standup]);
+    expect(calendarsApi.list).toHaveBeenCalledWith("token-123");
+    expect(toast.error).toHaveBeenCalledWith(
+      'Your access to "Family" has changed. Refreshing calendars.',
+    );
+  });
+
+  it("falls back to the generic toast for a non-access failure, without refetching Calendars", async () => {
+    useEventsStore.setState({ events: [standup] });
+    vi.mocked(eventsApi.update).mockRejectedValue(new Error("network error"));
+
+    await useEventsStore.getState().updateEvent("evt-1", { title: "Renamed" });
+
+    expect(calendarsApi.list).not.toHaveBeenCalled();
+    expect(toast.error).toHaveBeenCalledWith("Failed to update event.");
+  });
+
+  it("refetches Calendars and names the Calendar in the toast on a 403 from addEvent", async () => {
+    useEventsStore.setState({ events: [] });
+    useCalendarsStore.setState({ calendars: [{ id: "cal-1", name: "Family", color: "#fff" }] });
+    vi.mocked(eventsApi.create).mockRejectedValue(
+      new ApiError(403, "forbidden", "calendar is read-only"),
+    );
+    vi.mocked(calendarsApi.list).mockResolvedValue([
+      { id: "cal-1", name: "Family", color: "#fff", access: "viewer" },
+    ]);
+
+    await useEventsStore.getState().addEvent(standup);
+
+    expect(useEventsStore.getState().events).toEqual([]);
+    expect(calendarsApi.list).toHaveBeenCalledWith("token-123");
+    expect(toast.error).toHaveBeenCalledWith(
+      'Your access to "Family" has changed. Refreshing calendars.',
+    );
+  });
+
+  it("refetches Calendars on a 403 dispatch failure from editOccurrence", async () => {
+    useEventsStore.setState({ events: [recurringMaster] });
+    useCalendarsStore.setState({ calendars: [{ id: "cal-1", name: "Family", color: "#fff" }] });
+    vi.mocked(eventsApi.create).mockRejectedValue(
+      new ApiError(403, "forbidden", "calendar is read-only"),
+    );
+    vi.mocked(calendarsApi.list).mockResolvedValue([
+      { id: "cal-1", name: "Family", color: "#fff", access: "viewer" },
+    ]);
+
+    await useEventsStore.getState().editOccurrence(
+      occurrenceOf(recurringMaster, new Date("2026-01-03T09:00:00Z")),
+      "this",
+      {
+        calendarId: "cal-1",
+        title: "Standup (moved)",
+        start: new Date("2026-01-03T10:00:00Z"),
+        end: new Date("2026-01-03T10:30:00Z"),
+      },
+    );
+
+    expect(useEventsStore.getState().events).toEqual([recurringMaster]);
+    expect(calendarsApi.list).toHaveBeenCalledWith("token-123");
+    expect(toast.error).toHaveBeenCalledWith(
+      'Your access to "Family" has changed. Refreshing calendars.',
+    );
+  });
+
+  it("refetches Calendars on a 404 dispatch failure from deleteOccurrence", async () => {
+    useEventsStore.setState({ events: [recurringMaster] });
+    useCalendarsStore.setState({ calendars: [{ id: "cal-1", name: "Family", color: "#fff" }] });
+    vi.mocked(eventsApi.addException).mockRejectedValue(
+      new ApiError(404, "not_found", "event not found"),
+    );
+    vi.mocked(calendarsApi.list).mockResolvedValue([]);
+
+    await useEventsStore
+      .getState()
+      .deleteOccurrence(occurrenceOf(recurringMaster, new Date("2026-01-03T09:00:00Z")), "this");
+
+    expect(useEventsStore.getState().events).toEqual([recurringMaster]);
+    expect(calendarsApi.list).toHaveBeenCalledWith("token-123");
+    expect(toast.error).toHaveBeenCalledWith(
+      'Your access to "Family" has changed. Refreshing calendars.',
+    );
   });
 });

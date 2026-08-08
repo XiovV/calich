@@ -2,7 +2,7 @@ import { create } from "zustand";
 import { useAuthStore } from "./authStore";
 import { calendarsApi } from "./calendarsApi";
 import { useEventsStore } from "./eventsStore";
-import type { Calendar } from "./calendar";
+import { getCalendarById, type Calendar } from "./calendar";
 import { toast } from "./toast";
 
 interface CalendarsState {
@@ -70,6 +70,21 @@ async function refetchEventsAfter(action: "subscribe" | "refresh"): Promise<void
         : "Refreshed, but couldn't load its events. Reload to see them.",
     );
   }
+}
+
+// accessChangeMessage refetches Calendars after an Event write elsewhere was
+// refused because the caller's Access changed, and returns a toast message
+// naming the affected Calendar (#116). Exported for eventsStore's write
+// catch blocks to call, rather than having them reach into this store's
+// state and fetchCalendars directly — this is the one place that touches
+// both. The name is resolved before the refetch, since a revoked Share may
+// drop the Calendar from the list entirely.
+export async function accessChangeMessage(calendarId: string): Promise<string> {
+  const calendar = getCalendarById(useCalendarsStore.getState().calendars, calendarId);
+  await useCalendarsStore.getState().fetchCalendars().catch(() => {});
+  return calendar
+    ? `Your access to "${calendar.name}" has changed. Refreshing calendars.`
+    : "Your access to this calendar has changed. Refreshing calendars.";
 }
 
 export const useCalendarsStore = create<CalendarsState>((set, get) => ({

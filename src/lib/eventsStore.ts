@@ -1,5 +1,7 @@
 import { create } from "zustand";
+import { ApiError } from "./apiClient";
 import { useAuthStore } from "./authStore";
+import { accessChangeMessage } from "./calendarsStore";
 import type { Event } from "./event";
 import { eventsApi } from "./eventsApi";
 import { resolveMaster, type Occurrence } from "./occurrence";
@@ -29,6 +31,36 @@ interface EventsState {
   editOccurrence: (occurrence: Occurrence, scope: EditScope, changes: MasterFieldChanges) => Promise<void>;
   /** Applies a scoped delete to a recurring Occurrence (ADR-0016). */
   deleteOccurrence: (occurrence: Occurrence, scope: EditScope) => Promise<void>;
+}
+
+// isAccessChangeError reports whether error is the shape the server uses for
+// a write refused because the caller's Access changed underneath them — the
+// Calendar's Share was revoked or downgraded (403 "forbidden") or the Event
+// itself is gone (404 "not found") — as opposed to validation or network
+// failure, which stay a generic "failed to ..." toast (#116).
+function isAccessChangeError(error: unknown): boolean {
+  return error instanceof ApiError && (error.status === 403 || error.status === 404);
+}
+
+// handleWriteFailure is every write action's shared catch-block tail, after
+// its own optimistic-state rollback: an access-change error explains itself
+// by naming the Calendar and refetches Calendars (#116); anything else
+// (validation, network) keeps the action's own generic message. calendarId
+// is undefined only for removeEvent's already-gone-locally edge case, which
+// falls back to the generic message since there's nothing to name. The
+// Event dialog that triggered the write already closes unconditionally on
+// its own, regardless of success or failure, so no separate dismissal is
+// needed here.
+async function handleWriteFailure(
+  error: unknown,
+  calendarId: string | undefined,
+  fallbackMessage: string,
+): Promise<void> {
+  if (calendarId && isAccessChangeError(error)) {
+    toast.error(await accessChangeMessage(calendarId));
+  } else {
+    toast.error(fallbackMessage);
+  }
 }
 
 function requireAccessToken(): string {
@@ -66,11 +98,11 @@ export const useEventsStore = create<EventsState>((set, get) => ({
 
     try {
       await eventsApi.create(requireAccessToken(), event);
-    } catch {
+    } catch (error) {
       set((state) => ({
         events: state.events.filter((e) => e.id !== event.id),
       }));
-      toast.error(`Failed to create event "${event.title}".`);
+      await handleWriteFailure(error, event.calendarId, `Failed to create event "${event.title}".`);
     }
   },
 
@@ -97,23 +129,24 @@ export const useEventsStore = create<EventsState>((set, get) => ({
         description: updated.description,
         location: updated.location,
       });
-    } catch {
+    } catch (error) {
       set({ events: previousEvents });
-      toast.error("Failed to update event.");
+      await handleWriteFailure(error, updated.calendarId, "Failed to update event.");
     }
   },
 
   removeEvent: async (id) => {
     const previousEvents = get().events;
+    const current = previousEvents.find((event) => event.id === id);
     set((state) => ({
       events: state.events.filter((event) => event.id !== id),
     }));
 
     try {
       await eventsApi.remove(requireAccessToken(), id);
-    } catch {
+    } catch (error) {
       set({ events: previousEvents });
-      toast.error("Failed to delete event.");
+      await handleWriteFailure(error, current?.calendarId, "Failed to delete event.");
     }
   },
 
@@ -141,9 +174,9 @@ export const useEventsStore = create<EventsState>((set, get) => ({
 
     try {
       await dispatchSeriesOps(accessToken, ops);
-    } catch {
+    } catch (error) {
       set({ events: previousEvents });
-      toast.error("Failed to update event.");
+      await handleWriteFailure(error, master.calendarId, "Failed to update event.");
     }
   },
 
@@ -166,9 +199,9 @@ export const useEventsStore = create<EventsState>((set, get) => ({
 
     try {
       await dispatchSeriesOps(accessToken, ops);
-    } catch {
+    } catch (error) {
       set({ events: previousEvents });
-      toast.error("Failed to delete event.");
+      await handleWriteFailure(error, master.calendarId, "Failed to delete event.");
     }
   },
 }));
