@@ -363,6 +363,28 @@ func TestMe_SyncedDeviceRemindersEnabled_DefaultsFalse(t *testing.T) {
 	}
 }
 
+func TestMe_IsAdmin_TrueForBootstrappedAccount(t *testing.T) {
+	srv := newAuthTestServer(t)
+	accessToken := authenticatedAccessToken(t, srv)
+
+	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/api/auth/me", nil)
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET /api/auth/me: %v", err)
+	}
+	defer resp.Body.Close()
+
+	var me meResponse
+	if err := json.NewDecoder(resp.Body).Decode(&me); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if !me.IsAdmin {
+		t.Fatalf("expected the bootstrapped account to be reported as admin")
+	}
+}
+
 func TestUpdateSyncedDeviceReminders_TogglesThePreference(t *testing.T) {
 	srv := newAuthTestServer(t)
 	accessToken := authenticatedAccessToken(t, srv)

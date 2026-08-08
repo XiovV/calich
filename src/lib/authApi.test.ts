@@ -94,6 +94,7 @@ describe("authApi.me", () => {
         email: "admin@example.com",
         email_reminder_channel_available: true,
         synced_device_reminders_enabled: false,
+        is_admin: true,
       }),
     );
     vi.stubGlobal("fetch", fetchMock);
@@ -107,6 +108,7 @@ describe("authApi.me", () => {
       email: "admin@example.com",
       emailReminderChannelAvailable: true,
       syncedDeviceRemindersEnabled: false,
+      isAdmin: true,
     });
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/auth/me",
@@ -178,6 +180,7 @@ describe("authApi.updateEmail", () => {
         must_change_password: false,
         email: "admin@example.com",
         email_reminder_channel_available: true,
+        is_admin: false,
       }),
     );
     vi.stubGlobal("fetch", fetchMock);
@@ -190,6 +193,7 @@ describe("authApi.updateEmail", () => {
       mustChangePassword: false,
       email: "admin@example.com",
       emailReminderChannelAvailable: true,
+      isAdmin: false,
     });
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/auth/email",
@@ -224,6 +228,7 @@ describe("authApi.updateSyncedDeviceReminders", () => {
         email: null,
         email_reminder_channel_available: false,
         synced_device_reminders_enabled: true,
+        is_admin: false,
       }),
     );
     vi.stubGlobal("fetch", fetchMock);
@@ -237,6 +242,7 @@ describe("authApi.updateSyncedDeviceReminders", () => {
       email: null,
       emailReminderChannelAvailable: false,
       syncedDeviceRemindersEnabled: true,
+      isAdmin: false,
     });
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/auth/synced-device-reminders",

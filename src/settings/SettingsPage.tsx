@@ -1,13 +1,16 @@
 import { ArrowLeft } from "lucide-react";
 import { NavLink, Outlet, useNavigate } from "react-router";
 import { IconButton } from "../components/ui/IconButton";
-import { SETTINGS_SECTIONS } from "./settingsSections";
+import { useAuthStore } from "../lib/authStore";
+import { getSettingsSections } from "./settingsSections";
 
 // The Settings page shell (#112): a left-hand nav addresses each section by
 // its own route rather than one flat scroll, so account administration
 // (#109) can land as a fifth item without the page growing unbounded.
 export function SettingsPage() {
   const navigate = useNavigate();
+  const isAdmin = useAuthStore((state) => state.user?.isAdmin ?? false);
+  const sections = getSettingsSections(isAdmin);
 
   return (
     <div className="flex h-screen flex-col bg-surface text-ink">
@@ -23,7 +26,7 @@ export function SettingsPage() {
       <div className="flex flex-1 overflow-hidden">
         <nav className="w-56 shrink-0 overflow-y-auto border-e border-border py-4">
           <ul>
-            {SETTINGS_SECTIONS.map((section) => (
+            {sections.map((section) => (
               <li key={section.path}>
                 <NavLink
                   to={section.path}

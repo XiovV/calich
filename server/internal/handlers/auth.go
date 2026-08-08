@@ -88,6 +88,10 @@ type meResponse struct {
 	// SyncedDeviceRemindersEnabled is "let my synced devices show reminder
 	// pop-ups (disable in-app reminder notifications)" (ADR-0027).
 	SyncedDeviceRemindersEnabled bool `json:"synced_device_reminders_enabled"`
+	// IsAdmin is authority over who exists on the instance (ADR-0037) —
+	// without it the web app cannot decide whether to render any
+	// administration UI (#119).
+	IsAdmin bool `json:"is_admin"`
 }
 
 func (h *AuthHandler) toMeResponse(user repository.User) meResponse {
@@ -98,6 +102,7 @@ func (h *AuthHandler) toMeResponse(user repository.User) meResponse {
 		Email:                         user.Email,
 		EmailReminderChannelAvailable: h.smtpConfigured && user.Email != nil,
 		SyncedDeviceRemindersEnabled:  user.SyncedDeviceRemindersEnabled,
+		IsAdmin:                       user.IsAdmin,
 	}
 }
 

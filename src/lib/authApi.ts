@@ -14,6 +14,9 @@ export interface User {
   // "Let my synced devices show reminder pop-ups (disable in-app reminder
   // notifications)" (ADR-0027). Defaults false.
   syncedDeviceRemindersEnabled: boolean;
+  // Authority over who exists on the instance (ADR-0037) — gates whether the
+  // app renders any administration UI at all (#119).
+  isAdmin: boolean;
 }
 
 export interface LoginResult {
@@ -28,6 +31,7 @@ interface MeWire {
   email: string | null;
   email_reminder_channel_available: boolean;
   synced_device_reminders_enabled: boolean;
+  is_admin: boolean;
 }
 
 function fromMeWire(wire: MeWire): User {
@@ -38,6 +42,7 @@ function fromMeWire(wire: MeWire): User {
     email: wire.email,
     emailReminderChannelAvailable: wire.email_reminder_channel_available,
     syncedDeviceRemindersEnabled: wire.synced_device_reminders_enabled,
+    isAdmin: wire.is_admin,
   };
 }
 
