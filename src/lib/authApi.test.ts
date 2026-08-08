@@ -392,6 +392,37 @@ describe("authApi.updatePreferences", () => {
     );
   });
 
+  it("sends time_format and the bearer token, and maps the response", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(200, {
+        id: 1,
+        username: "admin",
+        must_change_password: false,
+        email: null,
+        email_reminder_channel_available: false,
+        synced_device_reminders_enabled: false,
+        is_admin: false,
+        week_start: 1,
+        default_view: "week",
+        time_format: "12h",
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const user = await authApi.updatePreferences("token-123", { timeFormat: "12h" });
+
+    expect(user.timeFormat).toBe("12h");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/auth/preferences",
+      expect.objectContaining({
+        method: "PATCH",
+        credentials: "include",
+        headers: expect.objectContaining({ Authorization: "Bearer token-123" }),
+        body: JSON.stringify({ time_format: "12h" }),
+      }),
+    );
+  });
+
   it("throws on failure", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       jsonResponse(400, { error: { code: "invalid_request", message: "week_start must be between 0 and 6" } }),

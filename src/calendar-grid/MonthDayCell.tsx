@@ -7,6 +7,7 @@ import { getCalendarBlockStyle } from "../lib/calendarColors";
 import { useCalendarsStore } from "../lib/calendarsStore";
 import { useShellStore } from "../lib/shellStore";
 import { computeCellDraft, computeChipCapacity } from "../lib/monthGrid";
+import { useTimePattern } from "../hooks/useTimePattern";
 
 const CHIP_ROW_HEIGHT_PX = 20;
 const MORE_ROW_HEIGHT_PX = 20;
@@ -39,6 +40,7 @@ export function MonthDayCell({
   const calendars = useCalendarsStore((state) => state.calendars);
   const setSelectedDate = useShellStore((state) => state.setSelectedDate);
   const setActiveView = useShellStore((state) => state.setActiveView);
+  const timePattern = useTimePattern();
 
   const eventsContainerRef = useRef<HTMLDivElement>(null);
   const [availableHeight, setAvailableHeight] = useState(0);
@@ -133,7 +135,7 @@ export function MonthDayCell({
             >
               {occurrence.event.allDay
                 ? occurrence.event.title
-                : `${format(occurrence.start, "h:mm a")} ${occurrence.event.title}`}
+                : `${format(occurrence.start, timePattern)} ${occurrence.event.title}`}
             </button>
           );
         })}

@@ -2,6 +2,7 @@ package reminder
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -269,6 +270,45 @@ func TestEmailDispatcher_SkipsDisabledUsers(t *testing.T) {
 
 	if len(mailer.sent) != 0 {
 		t.Fatalf("expected no email sent for a disabled user, got %+v", mailer.sent)
+	}
+}
+
+// TestEmailDispatcher_RendersEachRecipientsTimeFormat covers ADR-0039: two
+// recipients of one Reminder with different Time format Preferences each get
+// their own rendering, read off the User already fetched by GetByID above —
+// no second, per-Email query for the Preference.
+func TestEmailDispatcher_RendersEachRecipientsTimeFormat(t *testing.T) {
+	users := fakeUserLookup{usersByID: map[int64]repository.User{
+		7: {ID: 7, Email: emailPtr("alice@example.com"), TimeFormat: "12h"},
+		8: {ID: 8, Email: emailPtr("bob@example.com"), TimeFormat: "24h"},
+	}}
+	mailer := &fakeMailer{}
+	fallback := &fakeDispatcher{}
+	dispatcher := EmailDispatcher{Users: users, Mailer: mailer, Fallback: fallback}
+
+	occurrenceStart := time.Date(2026, 1, 1, 13, 30, 0, 0, time.UTC)
+
+	if err := dispatcher.Dispatch(context.Background(), DueReminder{
+		EventID: "evt-1", UserID: 7, Title: "Standup", ReminderID: 100,
+		OccurrenceStart: occurrenceStart, Channel: "email",
+	}); err != nil {
+		t.Fatalf("dispatch alice: %v", err)
+	}
+	if err := dispatcher.Dispatch(context.Background(), DueReminder{
+		EventID: "evt-1", UserID: 8, Title: "Standup", ReminderID: 100,
+		OccurrenceStart: occurrenceStart, Channel: "email",
+	}); err != nil {
+		t.Fatalf("dispatch bob: %v", err)
+	}
+
+	if len(mailer.sent) != 2 {
+		t.Fatalf("expected 2 emails sent, got %+v", mailer.sent)
+	}
+	if !strings.Contains(mailer.sent[0].body, "1:30:00 PM") {
+		t.Fatalf("expected alice's 12h email to contain \"1:30:00 PM\", got %q", mailer.sent[0].body)
+	}
+	if !strings.Contains(mailer.sent[1].body, "13:30:00") {
+		t.Fatalf("expected bob's 24h email to contain \"13:30:00\", got %q", mailer.sent[1].body)
 	}
 }
 

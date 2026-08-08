@@ -250,6 +250,15 @@ func (r *UserRepository) UpdateDefaultView(ctx context.Context, userID int64, de
 	return r.GetByID(ctx, userID)
 }
 
+// UpdateTimeFormat sets userID's Time format preference (ADR-0039) — "12h"
+// or "24h". Validation happens in AuthService.UpdatePreferences.
+func (r *UserRepository) UpdateTimeFormat(ctx context.Context, userID int64, timeFormat string) (User, error) {
+	if _, err := r.db.ExecContext(ctx, `UPDATE users SET time_format = ? WHERE id = ?`, timeFormat, userID); err != nil {
+		return User{}, fmt.Errorf("update time format preference: %w", err)
+	}
+	return r.GetByID(ctx, userID)
+}
+
 // UpdatePassword sets a new password hash and clears must_change_password.
 func (r *UserRepository) UpdatePassword(ctx context.Context, userID int64, passwordHash string) error {
 	_, err := r.db.ExecContext(ctx,

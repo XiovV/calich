@@ -3,6 +3,11 @@ import type { ActiveView } from "./shellStore";
 
 export { ApiError };
 
+// Time format (ADR-0039): whether this app renders a time itself as 12-hour
+// or 24-hour. Never reaches the browser's native time input, which renders
+// in the browser's own locale regardless.
+export type TimeFormat = "12h" | "24h";
+
 export interface User {
   id: number;
   username: string;
@@ -24,6 +29,8 @@ export interface User {
   // Default view (ADR-0039): seeds Active view when a Session is
   // established (authStore's bootstrap/login) and is never written back.
   defaultView: ActiveView;
+  // Time format (ADR-0039): applied wherever this app formats a time itself.
+  timeFormat: TimeFormat;
 }
 
 export interface LoginResult {
@@ -41,6 +48,7 @@ interface MeWire {
   is_admin: boolean;
   week_start: number;
   default_view: ActiveView;
+  time_format: TimeFormat;
 }
 
 function fromMeWire(wire: MeWire): User {
@@ -54,6 +62,7 @@ function fromMeWire(wire: MeWire): User {
     isAdmin: wire.is_admin,
     weekStart: wire.week_start,
     defaultView: wire.default_view,
+    timeFormat: wire.time_format,
   };
 }
 
@@ -158,11 +167,12 @@ export const authApi = {
   // Week start update never touches Default view and vice versa (ADR-0039).
   async updatePreferences(
     accessToken: string,
-    updates: { weekStart?: number; defaultView?: ActiveView },
+    updates: { weekStart?: number; defaultView?: ActiveView; timeFormat?: TimeFormat },
   ): Promise<User> {
     const body: Record<string, unknown> = {};
     if (updates.weekStart !== undefined) body.week_start = updates.weekStart;
     if (updates.defaultView !== undefined) body.default_view = updates.defaultView;
+    if (updates.timeFormat !== undefined) body.time_format = updates.timeFormat;
 
     const response = await authedFetch(accessToken, "/api/auth/preferences", {
       method: "PATCH",

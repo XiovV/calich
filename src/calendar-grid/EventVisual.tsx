@@ -1,5 +1,6 @@
 import { format } from "date-fns";
 import type { CalendarBlockStyle } from "../lib/calendarColors";
+import { useTimePattern } from "../hooks/useTimePattern";
 
 interface EventVisualProps {
   title: string;
@@ -16,6 +17,7 @@ export function EventVisual({
   blockStyle,
   isPast,
 }: EventVisualProps) {
+  const timePattern = useTimePattern();
   return (
     <div className="h-full w-full overflow-hidden rounded-shell-sm bg-surface">
       <div
@@ -24,7 +26,7 @@ export function EventVisual({
       >
         <p className="truncate text-label-sm font-medium">{title}</p>
         <p className="truncate text-label-sm opacity-90">
-          {format(start, "h:mm a")} – {format(end, "h:mm a")}
+          {format(start, timePattern)} – {format(end, timePattern)}
         </p>
       </div>
     </div>

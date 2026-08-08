@@ -43,6 +43,9 @@ var (
 	// ErrInvalidDefaultView is returned by UpdatePreferences for a Default
 	// view outside day/week/month/year (ADR-0039).
 	ErrInvalidDefaultView = errors.New("default_view must be one of day, week, month, year")
+	// ErrInvalidTimeFormat is returned by UpdatePreferences for a Time format
+	// other than 12h/24h (ADR-0039).
+	ErrInvalidTimeFormat = errors.New("time_format must be one of 12h, 24h")
 )
 
 // validDefaultViews are the Active views a Default view may seed (ADR-0039).
@@ -51,6 +54,12 @@ var validDefaultViews = map[string]bool{
 	"week":  true,
 	"month": true,
 	"year":  true,
+}
+
+// validTimeFormats are the Time format values a Preference may take (ADR-0039).
+var validTimeFormats = map[string]bool{
+	"12h": true,
+	"24h": true,
 }
 
 type AuthService struct {
@@ -373,6 +382,7 @@ func (s *AuthService) UpdateSyncedDeviceReminders(ctx context.Context, userID in
 type PreferencesUpdate struct {
 	WeekStart   *int
 	DefaultView *string
+	TimeFormat  *string
 }
 
 // UpdatePreferences applies whichever Preferences are present in update,
@@ -386,6 +396,9 @@ func (s *AuthService) UpdatePreferences(ctx context.Context, userID int64, updat
 	if update.DefaultView != nil && !validDefaultViews[*update.DefaultView] {
 		return repository.User{}, ErrInvalidDefaultView
 	}
+	if update.TimeFormat != nil && !validTimeFormats[*update.TimeFormat] {
+		return repository.User{}, ErrInvalidTimeFormat
+	}
 
 	if update.WeekStart != nil {
 		if _, err := s.users.UpdateWeekStart(ctx, userID, *update.WeekStart); err != nil {
@@ -395,6 +408,11 @@ func (s *AuthService) UpdatePreferences(ctx context.Context, userID int64, updat
 	if update.DefaultView != nil {
 		if _, err := s.users.UpdateDefaultView(ctx, userID, *update.DefaultView); err != nil {
 			return repository.User{}, fmt.Errorf("update default view preference: %w", err)
+		}
+	}
+	if update.TimeFormat != nil {
+		if _, err := s.users.UpdateTimeFormat(ctx, userID, *update.TimeFormat); err != nil {
+			return repository.User{}, fmt.Errorf("update time format preference: %w", err)
 		}
 	}
 

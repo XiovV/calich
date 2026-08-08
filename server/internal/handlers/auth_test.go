@@ -736,6 +736,92 @@ func TestUpdatePreferences_RejectsInvalidDefaultView(t *testing.T) {
 	}
 }
 
+func TestMe_TimeFormat_DefaultsTo24h(t *testing.T) {
+	srv := newAuthTestServer(t)
+	accessToken := authenticatedAccessToken(t, srv)
+
+	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/api/auth/me", nil)
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET /api/auth/me: %v", err)
+	}
+	defer resp.Body.Close()
+
+	var me meResponse
+	if err := json.NewDecoder(resp.Body).Decode(&me); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if me.TimeFormat != "24h" {
+		t.Fatalf("expected time_format to default to \"24h\", got %q", me.TimeFormat)
+	}
+}
+
+func TestUpdatePreferences_SetsTimeFormat(t *testing.T) {
+	srv := newAuthTestServer(t)
+	accessToken := authenticatedAccessToken(t, srv)
+
+	body, _ := json.Marshal(updatePreferencesRequest{TimeFormat: strPtr("12h")})
+	req, _ := http.NewRequest(http.MethodPatch, srv.URL+"/api/auth/preferences", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("PATCH /api/auth/preferences: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	var me meResponse
+	if err := json.NewDecoder(resp.Body).Decode(&me); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if me.TimeFormat != "12h" {
+		t.Fatalf("expected time_format to be stored as \"12h\", got %q", me.TimeFormat)
+	}
+}
+
+func TestUpdatePreferences_RejectsInvalidTimeFormat(t *testing.T) {
+	srv := newAuthTestServer(t)
+	accessToken := authenticatedAccessToken(t, srv)
+
+	body, _ := json.Marshal(updatePreferencesRequest{TimeFormat: strPtr("36h")})
+	req, _ := http.NewRequest(http.MethodPatch, srv.URL+"/api/auth/preferences", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("PATCH /api/auth/preferences: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", resp.StatusCode)
+	}
+
+	req2, _ := http.NewRequest(http.MethodGet, srv.URL+"/api/auth/me", nil)
+	req2.Header.Set("Authorization", "Bearer "+accessToken)
+	resp2, err := http.DefaultClient.Do(req2)
+	if err != nil {
+		t.Fatalf("GET /api/auth/me: %v", err)
+	}
+	defer resp2.Body.Close()
+
+	var me meResponse
+	if err := json.NewDecoder(resp2.Body).Decode(&me); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if me.TimeFormat != "24h" {
+		t.Fatalf("expected an invalid time_format to store nothing, got %q", me.TimeFormat)
+	}
+}
+
 func TestUpdatePreferences_RequiresAuthentication(t *testing.T) {
 	srv := newAuthTestServer(t)
 

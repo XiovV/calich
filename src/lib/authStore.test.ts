@@ -46,6 +46,7 @@ const adminUser = {
   syncedDeviceRemindersEnabled: false,
   weekStart: 1,
   defaultView: "week" as const,
+  timeFormat: "24h" as const,
 };
 
 function resetStore() {
@@ -315,6 +316,30 @@ describe("updateDefaultView", () => {
     // Settings only updates the Preference — it is not "last-used wins", so
     // the caller's current Active view stays exactly where they left it.
     expect(useShellStore.getState().activeView).toBe("day");
+  });
+});
+
+describe("updateTimeFormat", () => {
+  it("throws when there is no access token", async () => {
+    await expect(useAuthStore.getState().updateTimeFormat("12h")).rejects.toThrow(
+      "Not authenticated.",
+    );
+  });
+
+  it("stores the fresh user returned by the API", async () => {
+    useAuthStore.setState({
+      status: "authenticated",
+      user: adminUser,
+      pendingUsername: null,
+      accessToken: "token-123",
+    });
+    const updatedUser = { ...adminUser, timeFormat: "12h" as const };
+    vi.mocked(authApi.updatePreferences).mockResolvedValue(updatedUser);
+
+    await useAuthStore.getState().updateTimeFormat("12h");
+
+    expect(useAuthStore.getState().user).toEqual(updatedUser);
+    expect(authApi.updatePreferences).toHaveBeenCalledWith("token-123", { timeFormat: "12h" });
   });
 });
 

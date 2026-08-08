@@ -52,6 +52,7 @@ var updateUsernameErrors = []errorCase{
 var updatePreferencesErrors = []errorCase{
 	{service.ErrInvalidWeekStart, badRequest("week_start must be between 0 and 6")},
 	{service.ErrInvalidDefaultView, badRequest("default_view must be one of day, week, month, year")},
+	{service.ErrInvalidTimeFormat, badRequest("time_format must be one of 12h, 24h")},
 }
 
 var refreshErrors = []errorCase{
@@ -102,9 +103,10 @@ type meResponse struct {
 	// without it the web app cannot decide whether to render any
 	// administration UI (#119).
 	IsAdmin bool `json:"is_admin"`
-	// Preferences (ADR-0039): per-User display settings. Only WeekStart is
-	// wired up to the frontend yet (#128) — the rest wait on #129, #130,
-	// #131 — but all five are served here as soon as they exist on the User.
+	// Preferences (ADR-0039): per-User display settings. WeekStart, DefaultView
+	// and TimeFormat are wired up to the frontend (#128, #129, #130) — Working
+	// hours waits on #131 — but all five are served here as soon as they exist
+	// on the User.
 	WeekStart         int    `json:"week_start"`
 	DefaultView       string `json:"default_view"`
 	TimeFormat        string `json:"time_format"`
@@ -232,6 +234,7 @@ func (h *AuthHandler) UpdateSyncedDeviceReminders(w http.ResponseWriter, r *http
 type updatePreferencesRequest struct {
 	WeekStart   *int    `json:"week_start"`
 	DefaultView *string `json:"default_view"`
+	TimeFormat  *string `json:"time_format"`
 }
 
 // UpdatePreferences applies whichever Preferences (ADR-0039) are present in
@@ -252,6 +255,7 @@ func (h *AuthHandler) UpdatePreferences(w http.ResponseWriter, r *http.Request) 
 	user, err := h.auth.UpdatePreferences(r.Context(), userID, service.PreferencesUpdate{
 		WeekStart:   req.WeekStart,
 		DefaultView: req.DefaultView,
+		TimeFormat:  req.TimeFormat,
 	})
 	if respondError(w, err, updatePreferencesErrors, "failed to update preferences") {
 		return

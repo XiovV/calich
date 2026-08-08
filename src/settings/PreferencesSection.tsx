@@ -1,5 +1,6 @@
 import { useAuthStore } from "../lib/authStore";
 import type { ActiveView } from "../lib/shellStore";
+import type { TimeFormat } from "../lib/authApi";
 import { useAsyncAction } from "../hooks/useAsyncAction";
 import { useWeekStartsOn } from "../hooks/useWeekStartsOn";
 import { Select } from "../components/ui/Select";
@@ -19,10 +20,15 @@ const DEFAULT_VIEW_OPTIONS: { value: ActiveView; label: string }[] = [
   { value: "year", label: "Year" },
 ];
 
-// The Settings page's Preferences section (#128, #129, ADR-0039): per-User
-// display settings. Week start and Default view are wired up so far — Time
-// format and Working hours land in #130, #131. Auto-saves on change, matching
-// ReminderDeliverySection: no Save button, here or in the follow-ups.
+const TIME_FORMAT_OPTIONS: { value: TimeFormat; label: string }[] = [
+  { value: "24h", label: "24-hour" },
+  { value: "12h", label: "12-hour" },
+];
+
+// The Settings page's Preferences section (#128, #129, #130, ADR-0039):
+// per-User display settings. Week start, Default view and Time format are
+// wired up so far — Working hours lands in #131. Auto-saves on change,
+// matching ReminderDeliverySection: no Save button, here or in the follow-up.
 //
 // Default view seeds Active view only at the next Session's bootstrap/login
 // (authStore) — it deliberately does not change the Active view the caller
@@ -30,8 +36,10 @@ const DEFAULT_VIEW_OPTIONS: { value: ActiveView; label: string }[] = [
 export function PreferencesSection() {
   const weekStartsOn = useWeekStartsOn();
   const defaultView = useAuthStore((state) => state.user?.defaultView ?? "week");
+  const timeFormat = useAuthStore((state) => state.user?.timeFormat ?? "24h");
   const updateWeekStart = useAuthStore((state) => state.updateWeekStart);
   const updateDefaultView = useAuthStore((state) => state.updateDefaultView);
+  const updateTimeFormat = useAuthStore((state) => state.updateTimeFormat);
 
   const { error, run } = useAsyncAction();
 
@@ -41,6 +49,10 @@ export function PreferencesSection() {
 
   async function handleDefaultViewChange(value: ActiveView) {
     await run(() => updateDefaultView(value));
+  }
+
+  async function handleTimeFormatChange(value: TimeFormat) {
+    await run(() => updateTimeFormat(value));
   }
 
   return (
@@ -64,6 +76,13 @@ export function PreferencesSection() {
           value={defaultView}
           onValueChange={handleDefaultViewChange}
           options={DEFAULT_VIEW_OPTIONS}
+        />
+
+        <Select<TimeFormat>
+          label="Time format"
+          value={timeFormat}
+          onValueChange={handleTimeFormatChange}
+          options={TIME_FORMAT_OPTIONS}
         />
       </div>
 

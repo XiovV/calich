@@ -512,6 +512,68 @@ func TestUpdatePreferences_NilFieldLeavesDefaultViewUntouched(t *testing.T) {
 	}
 }
 
+func TestBootstrap_FirstUserDefaultsTo24hTimeFormat(t *testing.T) {
+	svc := newTestAuthService(t, "", "")
+	ctx := context.Background()
+	user, _, err := svc.Bootstrap(ctx)
+	if err != nil {
+		t.Fatalf("bootstrap: %v", err)
+	}
+	if user.TimeFormat != "24h" {
+		t.Fatalf("expected time_format to default to \"24h\", got %q", user.TimeFormat)
+	}
+}
+
+func TestUpdatePreferences_SetsTimeFormat(t *testing.T) {
+	svc := newTestAuthService(t, "", "")
+	ctx := context.Background()
+	user, _, err := svc.Bootstrap(ctx)
+	if err != nil {
+		t.Fatalf("bootstrap: %v", err)
+	}
+
+	timeFormat := "12h"
+	updated, err := svc.UpdatePreferences(ctx, user.ID, PreferencesUpdate{TimeFormat: &timeFormat})
+	if err != nil {
+		t.Fatalf("update preferences: %v", err)
+	}
+	if updated.TimeFormat != "12h" {
+		t.Fatalf("expected time_format \"12h\" to be stored, got %q", updated.TimeFormat)
+	}
+}
+
+func TestUpdatePreferences_RejectsInvalidTimeFormat(t *testing.T) {
+	svc := newTestAuthService(t, "", "")
+	ctx := context.Background()
+	user, _, err := svc.Bootstrap(ctx)
+	if err != nil {
+		t.Fatalf("bootstrap: %v", err)
+	}
+
+	timeFormat := "36h"
+	_, err = svc.UpdatePreferences(ctx, user.ID, PreferencesUpdate{TimeFormat: &timeFormat})
+	if !errors.Is(err, ErrInvalidTimeFormat) {
+		t.Fatalf("expected ErrInvalidTimeFormat, got %v", err)
+	}
+}
+
+func TestUpdatePreferences_NilFieldLeavesTimeFormatUntouched(t *testing.T) {
+	svc := newTestAuthService(t, "", "")
+	ctx := context.Background()
+	user, _, err := svc.Bootstrap(ctx)
+	if err != nil {
+		t.Fatalf("bootstrap: %v", err)
+	}
+
+	updated, err := svc.UpdatePreferences(ctx, user.ID, PreferencesUpdate{})
+	if err != nil {
+		t.Fatalf("update preferences: %v", err)
+	}
+	if updated.TimeFormat != "24h" {
+		t.Fatalf("expected time_format to remain at its default of \"24h\", got %q", updated.TimeFormat)
+	}
+}
+
 func TestUpdatePreferences_SetsWeekStartAndDefaultViewTogether(t *testing.T) {
 	svc := newTestAuthService(t, "", "")
 	ctx := context.Background()

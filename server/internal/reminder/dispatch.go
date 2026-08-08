@@ -121,6 +121,19 @@ func (d EmailDispatcher) Dispatch(ctx context.Context, due DueReminder) error {
 	}
 
 	subject := fmt.Sprintf("Reminder: %s", due.Title)
-	body := fmt.Sprintf("%s starts at %s.", due.Title, due.OccurrenceStart.Format(time.RFC1123))
+	body := fmt.Sprintf("%s starts at %s.", due.Title, due.OccurrenceStart.Format(emailTimeLayout(user.TimeFormat)))
 	return d.Mailer.Send(*user.Email, subject, body)
+}
+
+// emailTimeLayout is time.RFC1123 with its hour segment swapped for the
+// recipient's Time format Preference (ADR-0039) — everything else (date,
+// zone) is unaffected; which zone the Email renders in is a separate,
+// pre-existing question this doesn't touch. user.TimeFormat is already on
+// hand from the GetByID lookup above, so this reads it for free rather than
+// issuing a second per-Email query.
+func emailTimeLayout(timeFormat string) string {
+	if timeFormat == "12h" {
+		return "Mon, 02 Jan 2006 3:04:05 PM MST"
+	}
+	return "Mon, 02 Jan 2006 15:04:05 MST"
 }

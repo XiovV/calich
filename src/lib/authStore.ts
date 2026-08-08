@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import { setSessionRefresher } from "./apiClient";
-import { ApiError, authApi, type User } from "./authApi";
+import { ApiError, authApi, type TimeFormat, type User } from "./authApi";
 import { useShellStore, type ActiveView } from "./shellStore";
 
 export type AuthStatus = "loading" | "unauthenticated" | "must-change-password" | "authenticated";
@@ -23,6 +23,7 @@ interface AuthState {
   updateSyncedDeviceReminders: (enabled: boolean) => Promise<void>;
   updateWeekStart: (weekStart: number) => Promise<void>;
   updateDefaultView: (defaultView: ActiveView) => Promise<void>;
+  updateTimeFormat: (timeFormat: TimeFormat) => Promise<void>;
 }
 
 type AuthFields = Pick<AuthState, "status" | "user" | "pendingUsername" | "accessToken">;
@@ -158,6 +159,14 @@ export const useAuthStore = create<AuthState>((set, get) => {
       if (!accessToken) throw new Error("Not authenticated.");
 
       const user = await authApi.updatePreferences(accessToken, { defaultView });
+      set(authenticated(user, accessToken));
+    },
+
+    updateTimeFormat: async (timeFormat) => {
+      const { accessToken } = get();
+      if (!accessToken) throw new Error("Not authenticated.");
+
+      const user = await authApi.updatePreferences(accessToken, { timeFormat });
       set(authenticated(user, accessToken));
     },
   };
