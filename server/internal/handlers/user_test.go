@@ -43,7 +43,8 @@ func newUserDirectoryTestServer(t *testing.T) userDirectoryTestServer {
 	calendarRepo := repository.NewCalendarRepository(sqlDB)
 	shareRepo := repository.NewCalendarShareRepository(sqlDB)
 	calendars := service.NewCalendarService(calendarRepo, shareRepo, users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB))
-	accounts := service.NewAccountService(sqlDB, users, sessions, calendarRepo, shareRepo, calendars)
+	appPasswords := service.NewAppPasswordService(repository.NewAppPasswordRepository(sqlDB), users)
+	accounts := service.NewAccountService(sqlDB, users, sessions, calendarRepo, shareRepo, calendars, appPasswords)
 
 	if _, err := accounts.Create(ctx, "bob", "temp-password"); err != nil {
 		t.Fatalf("create bob: %v", err)

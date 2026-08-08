@@ -9,6 +9,7 @@ interface AccountsState {
   resetPassword: (id: number, password: string) => Promise<void>;
   setAdmin: (id: number, isAdmin: boolean) => Promise<void>;
   setDisabled: (id: number, isDisabled: boolean) => Promise<void>;
+  renameAccount: (id: number, username: string) => Promise<void>;
   deleteAccount: (id: number, disposition: AccountDisposition, transferTo?: number) => Promise<void>;
 }
 
@@ -43,6 +44,11 @@ export const useAccountsStore = create<AccountsState>((set, get) => ({
 
   setDisabled: async (id, isDisabled) => {
     const account = await accountsApi.setDisabled(requireAccessToken(), id, isDisabled);
+    set({ accounts: get().accounts.map((a) => (a.id === id ? account : a)) });
+  },
+
+  renameAccount: async (id, username) => {
+    const account = await accountsApi.renameUsername(requireAccessToken(), id, username);
     set({ accounts: get().accounts.map((a) => (a.id === id ? account : a)) });
   },
 

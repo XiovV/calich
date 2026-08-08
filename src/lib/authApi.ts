@@ -119,6 +119,18 @@ export const authApi = {
     return fromMeWire(await response.json());
   },
 
+  async updateUsername(accessToken: string, username: string): Promise<User> {
+    const response = await authedFetch(accessToken, "/api/auth/username", {
+      method: "PUT",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username }),
+    });
+    if (!response.ok) throw await errorFromResponse(response);
+
+    return fromMeWire(await response.json());
+  },
+
   async updateSyncedDeviceReminders(accessToken: string, enabled: boolean): Promise<User> {
     const response = await authedFetch(accessToken, "/api/auth/synced-device-reminders", {
       method: "PUT",

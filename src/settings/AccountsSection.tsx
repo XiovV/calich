@@ -6,6 +6,7 @@ import { useAsyncAction } from "../hooks/useAsyncAction";
 import { errorMessage } from "../lib/errorMessage";
 import { toast } from "../lib/toast";
 import { DeleteAccountDialog } from "./DeleteAccountDialog";
+import { RenameAccountDialog } from "./RenameAccountDialog";
 import { ResetPasswordDialog } from "./ResetPasswordDialog";
 import type { Account } from "../lib/accountsApi";
 
@@ -32,6 +33,7 @@ export function AccountsSection() {
   const resetPassword = useAccountsStore((state) => state.resetPassword);
   const setAdmin = useAccountsStore((state) => state.setAdmin);
   const setDisabled = useAccountsStore((state) => state.setDisabled);
+  const renameAccount = useAccountsStore((state) => state.renameAccount);
   const deleteAccount = useAccountsStore((state) => state.deleteAccount);
 
   const [username, setUsername] = useState("");
@@ -39,6 +41,7 @@ export function AccountsSection() {
   const { isSubmitting, error, setError, run } = useAsyncAction();
 
   const [resettingAccount, setResettingAccount] = useState<Account | null>(null);
+  const [renamingAccount, setRenamingAccount] = useState<Account | null>(null);
   const [deletingAccount, setDeletingAccount] = useState<Account | null>(null);
   const [busyAccountId, setBusyAccountId] = useState<number | null>(null);
 
@@ -150,6 +153,15 @@ export function AccountsSection() {
                   color="secondary"
                   size="small"
                   disabled={isBusy}
+                  onClick={() => setRenamingAccount(account)}
+                >
+                  Rename
+                </Button>
+                <Button
+                  variant="outline"
+                  color="secondary"
+                  size="small"
+                  disabled={isBusy}
                   onClick={() => handleToggleAdmin(account)}
                 >
                   {account.isAdmin ? "Remove admin" : "Make admin"}
@@ -186,6 +198,14 @@ export function AccountsSection() {
           account={resettingAccount}
           onReset={(newPassword) => resetPassword(resettingAccount.id, newPassword)}
           onClose={() => setResettingAccount(null)}
+        />
+      )}
+
+      {renamingAccount && (
+        <RenameAccountDialog
+          account={renamingAccount}
+          onRename={(newUsername) => renameAccount(renamingAccount.id, newUsername)}
+          onClose={() => setRenamingAccount(null)}
         />
       )}
 

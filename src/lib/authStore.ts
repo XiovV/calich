@@ -18,6 +18,7 @@ interface AuthState {
   logout: () => Promise<void>;
   changePassword: (currentPassword: string, newPassword: string) => Promise<void>;
   updateEmail: (email: string) => Promise<void>;
+  updateUsername: (username: string) => Promise<void>;
   updateSyncedDeviceReminders: (enabled: boolean) => Promise<void>;
 }
 
@@ -112,6 +113,14 @@ export const useAuthStore = create<AuthState>((set, get) => {
       if (!accessToken) throw new Error("Not authenticated.");
 
       const user = await authApi.updateEmail(accessToken, email);
+      set(authenticated(user, accessToken));
+    },
+
+    updateUsername: async (username) => {
+      const { accessToken } = get();
+      if (!accessToken) throw new Error("Not authenticated.");
+
+      const user = await authApi.updateUsername(accessToken, username);
       set(authenticated(user, accessToken));
     },
 

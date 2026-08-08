@@ -12,6 +12,7 @@ vi.mock("./authApi", async () => {
       me: vi.fn(),
       changePassword: vi.fn(),
       updateEmail: vi.fn(),
+      updateUsername: vi.fn(),
       updateSyncedDeviceReminders: vi.fn(),
     },
   };
@@ -195,6 +196,30 @@ describe("updateEmail", () => {
 
     expect(useAuthStore.getState().user).toEqual(updatedUser);
     expect(authApi.updateEmail).toHaveBeenCalledWith("token-123", "admin@example.com");
+  });
+});
+
+describe("updateUsername", () => {
+  it("throws when there is no access token", async () => {
+    await expect(useAuthStore.getState().updateUsername("newname")).rejects.toThrow(
+      "Not authenticated.",
+    );
+  });
+
+  it("stores the fresh user returned by the API", async () => {
+    useAuthStore.setState({
+      status: "authenticated",
+      user: adminUser,
+      pendingUsername: null,
+      accessToken: "token-123",
+    });
+    const updatedUser = { ...adminUser, username: "newname" };
+    vi.mocked(authApi.updateUsername).mockResolvedValue(updatedUser);
+
+    await useAuthStore.getState().updateUsername("newname");
+
+    expect(useAuthStore.getState().user).toEqual(updatedUser);
+    expect(authApi.updateUsername).toHaveBeenCalledWith("token-123", "newname");
   });
 });
 

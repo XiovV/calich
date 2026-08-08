@@ -65,6 +65,16 @@ var setDisabledErrors = []errorCase{
 	{repository.ErrNotFound, notFound("account not found")},
 }
 
+var setUsernameErrors = []errorCase{
+	{service.ErrInvalidUsername, badRequest("username must not be empty, must not contain whitespace or a colon, and must be at most 64 characters")},
+	{service.ErrUsernameTaken, conflict("username_taken", "username is already taken")},
+	{repository.ErrNotFound, notFound("account not found")},
+}
+
+var usernameImpactErrors = []errorCase{
+	{repository.ErrNotFound, notFound("account not found")},
+}
+
 var deleteImpactErrors = []errorCase{
 	{repository.ErrNotFound, notFound("account not found")},
 }
@@ -186,6 +196,54 @@ func (h *AccountHandler) SetDisabled(w http.ResponseWriter, r *http.Request) {
 	}
 
 	httpresponse.JSON(w, http.StatusOK, toAccountResponse(user))
+}
+
+type setUsernameRequest struct {
+	Username string `json:"username"`
+}
+
+func (h *AccountHandler) SetUsername(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		httpresponse.Error(w, http.StatusBadRequest, "invalid_request", "id must be a number")
+		return
+	}
+
+	var req setUsernameRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httpresponse.Error(w, http.StatusBadRequest, "invalid_request", "request body must be valid JSON")
+		return
+	}
+
+	user, err := h.accounts.SetUsername(r.Context(), id, req.Username)
+	if respondError(w, err, setUsernameErrors, "failed to update username") {
+		return
+	}
+
+	httpresponse.JSON(w, http.StatusOK, toAccountResponse(user))
+}
+
+type usernameImpactResponse struct {
+	AppPasswordCount int `json:"app_password_count"`
+}
+
+// UsernameImpact reports how many App passwords id's account holds (#125) —
+// the Admin-facing preview shown before renaming somebody else's account, so
+// the Admin knows how many of their synced devices are about to stop
+// syncing until reconfigured.
+func (h *AccountHandler) UsernameImpact(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		httpresponse.Error(w, http.StatusBadRequest, "invalid_request", "id must be a number")
+		return
+	}
+
+	count, err := h.accounts.UsernameImpact(r.Context(), id)
+	if respondError(w, err, usernameImpactErrors, "failed to compute username impact") {
+		return
+	}
+
+	httpresponse.JSON(w, http.StatusOK, usernameImpactResponse{AppPasswordCount: count})
 }
 
 type calendarImpactResponse struct {

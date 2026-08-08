@@ -62,7 +62,7 @@ func main() {
 	notificationRepo := repository.NewNotificationRepository(sqlDB)
 	notificationService := service.NewNotificationService(notificationRepo)
 	appPasswordService := service.NewAppPasswordService(repository.NewAppPasswordRepository(sqlDB), users)
-	accountService := service.NewAccountService(sqlDB, users, sessions, calendarRepo, shareRepo, calendarService)
+	accountService := service.NewAccountService(sqlDB, users, sessions, calendarRepo, shareRepo, calendarService, appPasswordService)
 
 	ctx := context.Background()
 	bootstrapUser, bootstrapCreatedUser, err := authService.Bootstrap(ctx)

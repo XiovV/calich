@@ -243,6 +243,75 @@ describe("accountsApi.setDisabled", () => {
   });
 });
 
+describe("accountsApi.renameUsername", () => {
+  it("sends the username and maps the response", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(200, {
+        id: 2,
+        username: "alicia",
+        is_admin: false,
+        is_disabled: false,
+        must_change_password: false,
+        created_at: "2026-01-01T00:00:00Z",
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await accountsApi.renameUsername("token-123", 2, "alicia");
+
+    expect(result.username).toBe("alicia");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/accounts/2/username",
+      expect.objectContaining({
+        method: "PUT",
+        credentials: "include",
+        headers: expect.objectContaining({ Authorization: "Bearer token-123" }),
+        body: JSON.stringify({ username: "alicia" }),
+      }),
+    );
+  });
+
+  it("throws username_taken on a conflict", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(409, { error: { code: "username_taken", message: "username is already taken" } }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(accountsApi.renameUsername("token-123", 2, "bob")).rejects.toMatchObject({
+      code: "username_taken",
+    });
+  });
+});
+
+describe("accountsApi.usernameImpact", () => {
+  it("sends the bearer token and maps the response", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, { app_password_count: 3 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await accountsApi.usernameImpact("token-123", 2);
+
+    expect(result).toEqual({ appPasswordCount: 3 });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/accounts/2/username-impact",
+      expect.objectContaining({
+        credentials: "include",
+        headers: { Authorization: "Bearer token-123" },
+      }),
+    );
+  });
+
+  it("throws an ApiError when the account doesn't exist", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(404, { error: { code: "not_found", message: "account not found" } }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(accountsApi.usernameImpact("token-123", 99)).rejects.toMatchObject({
+      code: "not_found",
+    });
+  });
+});
+
 describe("accountsApi.deleteImpact", () => {
   it("sends the bearer token and maps the response", async () => {
     const fetchMock = vi.fn().mockResolvedValue(

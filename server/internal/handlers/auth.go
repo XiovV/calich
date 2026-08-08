@@ -44,6 +44,11 @@ var updateEmailErrors = []errorCase{
 	{service.ErrInvalidEmail, badRequest("email is not a valid address")},
 }
 
+var updateUsernameErrors = []errorCase{
+	{service.ErrInvalidUsername, badRequest("username must not be empty, must not contain whitespace or a colon, and must be at most 64 characters")},
+	{service.ErrUsernameTaken, conflict("username_taken", "username is already taken")},
+}
+
 var refreshErrors = []errorCase{
 	{service.ErrInvalidSession, unauthorized("unauthorized", "invalid or expired refresh token")},
 	{service.ErrAccountDisabled, unauthorized("account_disabled", "this account has been disabled")},
@@ -141,6 +146,34 @@ func (h *AuthHandler) UpdateEmail(w http.ResponseWriter, r *http.Request) {
 
 	user, err := h.auth.UpdateEmail(r.Context(), userID, req.Email)
 	if respondError(w, err, updateEmailErrors, "failed to update email") {
+		return
+	}
+
+	httpresponse.JSON(w, http.StatusOK, h.toMeResponse(user))
+}
+
+type updateUsernameRequest struct {
+	Username string `json:"username"`
+}
+
+// UpdateUsername renames the caller's own account (#125). No current
+// password is required, matching UpdateEmail — the Access token already
+// proves identity.
+func (h *AuthHandler) UpdateUsername(w http.ResponseWriter, r *http.Request) {
+	userID, ok := httpauth.UserIDFromContext(r.Context())
+	if !ok {
+		httpresponse.Error(w, http.StatusUnauthorized, "unauthorized", "authentication required")
+		return
+	}
+
+	var req updateUsernameRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httpresponse.Error(w, http.StatusBadRequest, "invalid_request", "request body must be valid JSON")
+		return
+	}
+
+	user, err := h.auth.UpdateUsername(r.Context(), userID, req.Username)
+	if respondError(w, err, updateUsernameErrors, "failed to update username") {
 		return
 	}
 

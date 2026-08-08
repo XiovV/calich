@@ -47,6 +47,7 @@ func newAuthTestServerWithSMTP(t *testing.T, smtpConfigured bool) *httptest.Serv
 	r.With(httpauth.RequireAuth(auth)).Post("/api/auth/change-password", h.ChangePassword)
 	r.With(httpauth.RequireAuth(auth), httpauth.RequireActiveUser(auth)).Get("/api/auth/me", h.Me)
 	r.With(httpauth.RequireAuth(auth), httpauth.RequireActiveUser(auth)).Put("/api/auth/email", h.UpdateEmail)
+	r.With(httpauth.RequireAuth(auth), httpauth.RequireActiveUser(auth)).Put("/api/auth/username", h.UpdateUsername)
 	r.With(httpauth.RequireAuth(auth), httpauth.RequireActiveUser(auth)).Put("/api/auth/synced-device-reminders", h.UpdateSyncedDeviceReminders)
 
 	srv := httptest.NewServer(r)
@@ -355,6 +356,114 @@ func TestUpdateEmail_RejectsAnInvalidAddress(t *testing.T) {
 
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d", resp.StatusCode)
+	}
+}
+
+func TestUpdateUsername_RenamesAndLoginWorksWithTheNewUsername(t *testing.T) {
+	srv := newAuthTestServer(t)
+	accessToken := authenticatedAccessToken(t, srv)
+
+	body, _ := json.Marshal(updateUsernameRequest{Username: "newadmin"})
+	req, _ := http.NewRequest(http.MethodPut, srv.URL+"/api/auth/username", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("PUT /api/auth/username: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	var me meResponse
+	if err := json.NewDecoder(resp.Body).Decode(&me); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if me.Username != "newadmin" {
+		t.Fatalf("expected username newadmin, got %q", me.Username)
+	}
+
+	oldLoginResp := login(t, srv, "admin", "a-new-password")
+	defer oldLoginResp.Body.Close()
+	if oldLoginResp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected the old username to no longer log in, got %d", oldLoginResp.StatusCode)
+	}
+
+	newLoginResp := login(t, srv, "newadmin", "a-new-password")
+	defer newLoginResp.Body.Close()
+	if newLoginResp.StatusCode != http.StatusOK {
+		t.Fatalf("expected the new username to log in, got %d", newLoginResp.StatusCode)
+	}
+}
+
+func TestUpdateUsername_RejectsAColon(t *testing.T) {
+	srv := newAuthTestServer(t)
+	accessToken := authenticatedAccessToken(t, srv)
+
+	body, _ := json.Marshal(updateUsernameRequest{Username: "ad:min"})
+	req, _ := http.NewRequest(http.MethodPut, srv.URL+"/api/auth/username", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("PUT /api/auth/username: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", resp.StatusCode)
+	}
+}
+
+func TestUpdateUsername_DuplicateUsername_Returns409(t *testing.T) {
+	sqlDB, err := db.OpenInMemory()
+	if err != nil {
+		t.Fatalf("open in-memory db: %v", err)
+	}
+	t.Cleanup(func() { sqlDB.Close() })
+
+	users := repository.NewUserRepository(sqlDB)
+	sessions := repository.NewSessionRepository(sqlDB)
+	auth := service.NewAuthService(users, sessions, []byte("test-secret"), "", "")
+	bootstrapUser, _, err := auth.Bootstrap(context.Background())
+	if err != nil {
+		t.Fatalf("bootstrap: %v", err)
+	}
+	if _, err := users.Create(context.Background(), "bob", "hash", false); err != nil {
+		t.Fatalf("create bob: %v", err)
+	}
+	if _, err := auth.ChangePassword(context.Background(), bootstrapUser.ID, "admin", "a-new-password"); err != nil {
+		t.Fatalf("change password: %v", err)
+	}
+
+	h := NewAuthHandler(auth, false)
+	r := chi.NewRouter()
+	r.Post("/api/auth/login", h.Login)
+	r.With(httpauth.RequireAuth(auth), httpauth.RequireActiveUser(auth)).Put("/api/auth/username", h.UpdateUsername)
+	srv := httptest.NewServer(r)
+	t.Cleanup(srv.Close)
+
+	loginResp := login(t, srv, "admin", "a-new-password")
+	defer loginResp.Body.Close()
+	accessToken := mustLoginAccessToken(t, loginResp)
+
+	body, _ := json.Marshal(updateUsernameRequest{Username: "bob"})
+	req, _ := http.NewRequest(http.MethodPut, srv.URL+"/api/auth/username", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("PUT /api/auth/username: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("expected 409, got %d", resp.StatusCode)
 	}
 }
 

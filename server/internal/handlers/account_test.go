@@ -36,7 +36,8 @@ func newAccountTestServer(t *testing.T) (*httptest.Server, string) {
 	calendarRepo := repository.NewCalendarRepository(sqlDB)
 	shareRepo := repository.NewCalendarShareRepository(sqlDB)
 	calendars := service.NewCalendarService(calendarRepo, shareRepo, users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB))
-	accounts := service.NewAccountService(sqlDB, users, sessions, calendarRepo, shareRepo, calendars)
+	appPasswords := service.NewAppPasswordService(repository.NewAppPasswordRepository(sqlDB), users)
+	accounts := service.NewAccountService(sqlDB, users, sessions, calendarRepo, shareRepo, calendars, appPasswords)
 	h := NewAccountHandler(accounts)
 	authHandler := NewAuthHandler(auth, false)
 
@@ -51,6 +52,8 @@ func newAccountTestServer(t *testing.T) (*httptest.Server, string) {
 		r.Post("/{id}/reset-password", h.ResetPassword)
 		r.Put("/{id}/admin", h.SetAdmin)
 		r.Put("/{id}/disabled", h.SetDisabled)
+		r.Put("/{id}/username", h.SetUsername)
+		r.Get("/{id}/username-impact", h.UsernameImpact)
 		r.Get("/{id}/delete-impact", h.DeleteImpact)
 		r.Delete("/{id}", h.Delete)
 	})
@@ -858,6 +861,182 @@ func TestAccountDeleteImpact_NonAdmin_Returns403(t *testing.T) {
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatalf("GET delete-impact: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d", resp.StatusCode)
+	}
+}
+
+func setUsername(t *testing.T, srv *httptest.Server, accessToken string, id int64, username string) *http.Response {
+	t.Helper()
+
+	body, err := json.Marshal(setUsernameRequest{Username: username})
+	if err != nil {
+		t.Fatalf("marshal set username request: %v", err)
+	}
+
+	req, err := http.NewRequest(http.MethodPut, fmt.Sprintf("%s/api/accounts/%d/username", srv.URL, id), bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("PUT username: %v", err)
+	}
+	return resp
+}
+
+func TestAccountSetUsername_RenamesAccount(t *testing.T) {
+	srv, accessToken := newAccountTestServer(t)
+
+	createResp := createAccount(t, srv, accessToken, "alice", "temp-secret")
+	defer createResp.Body.Close()
+	var created accountResponse
+	if err := json.NewDecoder(createResp.Body).Decode(&created); err != nil {
+		t.Fatalf("decode create response: %v", err)
+	}
+
+	resp := setUsername(t, srv, accessToken, created.ID, "alicia")
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	var renamed accountResponse
+	if err := json.NewDecoder(resp.Body).Decode(&renamed); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if renamed.Username != "alicia" {
+		t.Fatalf("expected username alicia, got %q", renamed.Username)
+	}
+}
+
+func TestAccountSetUsername_DuplicateUsername_Returns409(t *testing.T) {
+	srv, accessToken := newAccountTestServer(t)
+
+	createResp := createAccount(t, srv, accessToken, "alice", "temp-secret")
+	createResp.Body.Close()
+	bobResp := createAccount(t, srv, accessToken, "bob", "temp-secret")
+	defer bobResp.Body.Close()
+	var bob accountResponse
+	if err := json.NewDecoder(bobResp.Body).Decode(&bob); err != nil {
+		t.Fatalf("decode create response: %v", err)
+	}
+
+	resp := setUsername(t, srv, accessToken, bob.ID, "alice")
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("expected 409, got %d", resp.StatusCode)
+	}
+}
+
+func TestAccountSetUsername_UnknownID_Returns404(t *testing.T) {
+	srv, accessToken := newAccountTestServer(t)
+
+	resp := setUsername(t, srv, accessToken, 999, "alicia")
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d", resp.StatusCode)
+	}
+}
+
+func TestAccountSetUsername_NonAdmin_Returns403(t *testing.T) {
+	srv, accessToken := newAccountTestServer(t)
+	aliceToken := nonAdminAccessToken(t, srv, accessToken)
+
+	resp := setUsername(t, srv, aliceToken, 1, "someoneelse")
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d", resp.StatusCode)
+	}
+}
+
+func TestAccountSetUsername_RenamedAccountLogsInWithNewUsername(t *testing.T) {
+	srv, accessToken := newAccountTestServer(t)
+
+	createResp := createAccount(t, srv, accessToken, "alice", "temp-secret")
+	defer createResp.Body.Close()
+	var created accountResponse
+	if err := json.NewDecoder(createResp.Body).Decode(&created); err != nil {
+		t.Fatalf("decode create response: %v", err)
+	}
+
+	renameResp := setUsername(t, srv, accessToken, created.ID, "alicia")
+	renameResp.Body.Close()
+	if renameResp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", renameResp.StatusCode)
+	}
+
+	oldLoginResp := login(t, srv, "alice", "temp-secret")
+	defer oldLoginResp.Body.Close()
+	if oldLoginResp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected the old username to no longer log in, got %d", oldLoginResp.StatusCode)
+	}
+
+	newLoginResp := login(t, srv, "alicia", "temp-secret")
+	defer newLoginResp.Body.Close()
+	if newLoginResp.StatusCode != http.StatusOK {
+		t.Fatalf("expected the new username to log in, got %d", newLoginResp.StatusCode)
+	}
+}
+
+func TestAccountUsernameImpact_ReportsAppPasswordCount(t *testing.T) {
+	srv, accessToken := newAccountTestServer(t)
+
+	createResp := createAccount(t, srv, accessToken, "alice", "temp-secret")
+	defer createResp.Body.Close()
+	var alice accountResponse
+	if err := json.NewDecoder(createResp.Body).Decode(&alice); err != nil {
+		t.Fatalf("decode create response: %v", err)
+	}
+
+	req, err := http.NewRequest(http.MethodGet, fmt.Sprintf("%s/api/accounts/%d/username-impact", srv.URL, alice.ID), nil)
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET username-impact: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	var impact usernameImpactResponse
+	if err := json.NewDecoder(resp.Body).Decode(&impact); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if impact.AppPasswordCount != 0 {
+		t.Fatalf("expected 0 app passwords for a fresh account, got %d", impact.AppPasswordCount)
+	}
+}
+
+func TestAccountUsernameImpact_NonAdmin_Returns403(t *testing.T) {
+	srv, accessToken := newAccountTestServer(t)
+	aliceToken := nonAdminAccessToken(t, srv, accessToken)
+
+	req, err := http.NewRequest(http.MethodGet, srv.URL+"/api/accounts/1/username-impact", nil)
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+aliceToken)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET username-impact: %v", err)
 	}
 	defer resp.Body.Close()
 

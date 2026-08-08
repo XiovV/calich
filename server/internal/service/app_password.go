@@ -72,6 +72,17 @@ func (s *AppPasswordService) List(ctx context.Context, userID int64) ([]reposito
 	return appPasswords, nil
 }
 
+// CountForUser reports how many App passwords userID holds — used by
+// AccountService.UsernameImpact (#125) to decide whether a rename needs an
+// Admin-facing confirmation, without exposing the App passwords themselves.
+func (s *AppPasswordService) CountForUser(ctx context.Context, userID int64) (int, error) {
+	appPasswords, err := s.appPasswords.ListForUser(ctx, userID)
+	if err != nil {
+		return 0, fmt.Errorf("list app passwords: %w", err)
+	}
+	return len(appPasswords), nil
+}
+
 // Revoke deletes userID's app password with the given id. Revoking one app
 // password never affects the others or the web login (ADR-0024).
 func (s *AppPasswordService) Revoke(ctx context.Context, userID, id int64) error {

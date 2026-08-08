@@ -321,6 +321,27 @@ func (s *AuthService) UpdateEmail(ctx context.Context, userID int64, email strin
 	return user, nil
 }
 
+// UpdateUsername renames the caller's own account (#125), validated by the
+// same rule Create and AccountService.SetUsername use, so self-service
+// rename and Admin rename cannot drift. No current password is required —
+// the Access token already proves identity, and a username is not a secret,
+// matching UpdateEmail.
+func (s *AuthService) UpdateUsername(ctx context.Context, userID int64, username string) (repository.User, error) {
+	username, err := validateUsername(username)
+	if err != nil {
+		return repository.User{}, err
+	}
+
+	user, err := s.users.UpdateUsername(ctx, userID, username)
+	if err != nil {
+		if errors.Is(err, repository.ErrUsernameTaken) {
+			return repository.User{}, ErrUsernameTaken
+		}
+		return repository.User{}, fmt.Errorf("update username: %w", err)
+	}
+	return user, nil
+}
+
 // UpdateSyncedDeviceReminders sets userID's "let my synced devices show
 // reminder pop-ups (disable in-app reminder notifications)" preference
 // (ADR-0027).

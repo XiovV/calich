@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -24,8 +25,9 @@ func newTestAccountService(t *testing.T) *AccountService {
 	calendarRepo := repository.NewCalendarRepository(sqlDB)
 	shareRepo := repository.NewCalendarShareRepository(sqlDB)
 	calendars := NewCalendarService(calendarRepo, shareRepo, users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB))
+	appPasswords := NewAppPasswordService(repository.NewAppPasswordRepository(sqlDB), users)
 
-	return NewAccountService(sqlDB, users, sessions, calendarRepo, shareRepo, calendars)
+	return NewAccountService(sqlDB, users, sessions, calendarRepo, shareRepo, calendars, appPasswords)
 }
 
 func TestAccountService_Create_SeedsDefaultCalendarsAndForcesPasswordChange(t *testing.T) {
@@ -118,7 +120,8 @@ func TestAccountService_ResetPassword_ForcesPasswordChangeAndInvalidatesSessions
 	calendarRepo := repository.NewCalendarRepository(sqlDB)
 	shareRepo := repository.NewCalendarShareRepository(sqlDB)
 	calendars := NewCalendarService(calendarRepo, shareRepo, users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB))
-	accounts := NewAccountService(sqlDB, users, sessions, calendarRepo, shareRepo, calendars)
+	appPasswords := NewAppPasswordService(repository.NewAppPasswordRepository(sqlDB), users)
+	accounts := NewAccountService(sqlDB, users, sessions, calendarRepo, shareRepo, calendars, appPasswords)
 	ctx := context.Background()
 
 	user, err := accounts.Create(ctx, "alice", "temp-secret")
@@ -250,7 +253,8 @@ func TestAccountService_SetDisabled_DeletesLiveSessions(t *testing.T) {
 	calendarRepo := repository.NewCalendarRepository(sqlDB)
 	shareRepo := repository.NewCalendarShareRepository(sqlDB)
 	calendars := NewCalendarService(calendarRepo, shareRepo, users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB))
-	accounts := NewAccountService(sqlDB, users, sessions, calendarRepo, shareRepo, calendars)
+	appPasswords := NewAppPasswordService(repository.NewAppPasswordRepository(sqlDB), users)
+	accounts := NewAccountService(sqlDB, users, sessions, calendarRepo, shareRepo, calendars, appPasswords)
 	ctx := context.Background()
 
 	alice, err := accounts.Create(ctx, "alice", "temp-secret")
@@ -541,7 +545,8 @@ func TestAccountService_Delete_DispositionTransfer_KeepsEventsAndShares(t *testi
 	calendarRepo := repository.NewCalendarRepository(sqlDB)
 	shareRepo := repository.NewCalendarShareRepository(sqlDB)
 	calendarService := NewCalendarService(calendarRepo, shareRepo, users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB))
-	accounts := NewAccountService(sqlDB, users, sessions, calendarRepo, shareRepo, calendarService)
+	appPasswords := NewAppPasswordService(repository.NewAppPasswordRepository(sqlDB), users)
+	accounts := NewAccountService(sqlDB, users, sessions, calendarRepo, shareRepo, calendarService, appPasswords)
 
 	alice, err := accounts.Create(ctx, "alice", "temp-secret")
 	if err != nil {
@@ -697,5 +702,171 @@ func TestAccountService_DeleteImpact_ReportsShareCountsAndAffectedUsers(t *testi
 	}
 	if sharedImpact.ShareCount != 2 {
 		t.Fatalf("expected the shared calendar to report 2 shares, got %d", sharedImpact.ShareCount)
+	}
+}
+
+func TestValidateUsername(t *testing.T) {
+	tests := []struct {
+		name     string
+		username string
+		want     string
+		wantErr  bool
+	}{
+		{name: "trims surrounding whitespace", username: "  alice  ", want: "alice"},
+		{name: "empty is rejected", username: "", wantErr: true},
+		{name: "all whitespace is rejected", username: "   ", wantErr: true},
+		{name: "internal whitespace is rejected", username: "alice bob", wantErr: true},
+		{name: "a tab is rejected", username: "alice\tbob", wantErr: true},
+		{name: "a colon is rejected", username: "ali:ce", wantErr: true},
+		{name: "exactly 64 characters is allowed", username: strings.Repeat("a", 64), want: strings.Repeat("a", 64)},
+		{name: "65 characters is rejected", username: strings.Repeat("a", 65), wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := validateUsername(tt.username)
+			if tt.wantErr {
+				if !errors.Is(err, ErrInvalidUsername) {
+					t.Fatalf("expected ErrInvalidUsername, got %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("validateUsername(%q): %v", tt.username, err)
+			}
+			if got != tt.want {
+				t.Fatalf("validateUsername(%q) = %q, want %q", tt.username, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestAccountService_SetUsername_RenamesAccount(t *testing.T) {
+	accounts := newTestAccountService(t)
+	ctx := context.Background()
+
+	alice, err := accounts.Create(ctx, "alice", "temp-secret")
+	if err != nil {
+		t.Fatalf("create alice: %v", err)
+	}
+
+	renamed, err := accounts.SetUsername(ctx, alice.ID, "alicia")
+	if err != nil {
+		t.Fatalf("set username: %v", err)
+	}
+	if renamed.Username != "alicia" {
+		t.Fatalf("expected username alicia, got %q", renamed.Username)
+	}
+}
+
+func TestAccountService_SetUsername_InvalidUsername_ReturnsErrInvalidUsername(t *testing.T) {
+	accounts := newTestAccountService(t)
+	ctx := context.Background()
+
+	alice, err := accounts.Create(ctx, "alice", "temp-secret")
+	if err != nil {
+		t.Fatalf("create alice: %v", err)
+	}
+
+	if _, err := accounts.SetUsername(ctx, alice.ID, "ali:ce"); !errors.Is(err, ErrInvalidUsername) {
+		t.Fatalf("expected ErrInvalidUsername, got %v", err)
+	}
+}
+
+func TestAccountService_SetUsername_DuplicateUsername_ReturnsErrUsernameTaken(t *testing.T) {
+	accounts := newTestAccountService(t)
+	ctx := context.Background()
+
+	alice, err := accounts.Create(ctx, "alice", "temp-secret")
+	if err != nil {
+		t.Fatalf("create alice: %v", err)
+	}
+	if _, err := accounts.Create(ctx, "bob", "temp-secret"); err != nil {
+		t.Fatalf("create bob: %v", err)
+	}
+
+	if _, err := accounts.SetUsername(ctx, alice.ID, "bob"); !errors.Is(err, ErrUsernameTaken) {
+		t.Fatalf("expected ErrUsernameTaken, got %v", err)
+	}
+}
+
+func TestAccountService_SetUsername_UnknownID_ReturnsErrNotFound(t *testing.T) {
+	accounts := newTestAccountService(t)
+	ctx := context.Background()
+
+	if _, err := accounts.SetUsername(ctx, 999, "alicia"); !errors.Is(err, repository.ErrNotFound) {
+		t.Fatalf("expected ErrNotFound, got %v", err)
+	}
+}
+
+func TestAccountService_SetUsername_ExistingAppPasswordAuthenticatesUnderTheNewUsername(t *testing.T) {
+	accounts := newTestAccountService(t)
+	ctx := context.Background()
+
+	alice, err := accounts.Create(ctx, "alice", "temp-secret")
+	if err != nil {
+		t.Fatalf("create alice: %v", err)
+	}
+
+	created, err := accounts.appPasswords.Create(ctx, alice.ID, "phone")
+	if err != nil {
+		t.Fatalf("create app password: %v", err)
+	}
+
+	if _, err := accounts.SetUsername(ctx, alice.ID, "alicia"); err != nil {
+		t.Fatalf("set username: %v", err)
+	}
+
+	if _, err := accounts.appPasswords.Authenticate(ctx, "alice", created.Secret); err == nil {
+		t.Fatalf("expected the old username to no longer authenticate")
+	}
+	userID, err := accounts.appPasswords.Authenticate(ctx, "alicia", created.Secret)
+	if err != nil {
+		t.Fatalf("authenticate under new username: %v", err)
+	}
+	if userID != alice.ID {
+		t.Fatalf("expected authenticated user id %d, got %d", alice.ID, userID)
+	}
+}
+
+func TestAccountService_UsernameImpact_ReportsAppPasswordCount(t *testing.T) {
+	accounts := newTestAccountService(t)
+	ctx := context.Background()
+
+	alice, err := accounts.Create(ctx, "alice", "temp-secret")
+	if err != nil {
+		t.Fatalf("create alice: %v", err)
+	}
+
+	count, err := accounts.UsernameImpact(ctx, alice.ID)
+	if err != nil {
+		t.Fatalf("username impact: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("expected 0 app passwords for a fresh account, got %d", count)
+	}
+
+	if _, err := accounts.appPasswords.Create(ctx, alice.ID, "phone"); err != nil {
+		t.Fatalf("create app password: %v", err)
+	}
+	if _, err := accounts.appPasswords.Create(ctx, alice.ID, "laptop"); err != nil {
+		t.Fatalf("create second app password: %v", err)
+	}
+
+	count, err = accounts.UsernameImpact(ctx, alice.ID)
+	if err != nil {
+		t.Fatalf("username impact: %v", err)
+	}
+	if count != 2 {
+		t.Fatalf("expected 2 app passwords, got %d", count)
+	}
+}
+
+func TestAccountService_UsernameImpact_UnknownID_ReturnsErrNotFound(t *testing.T) {
+	accounts := newTestAccountService(t)
+	ctx := context.Background()
+
+	if _, err := accounts.UsernameImpact(ctx, 999); !errors.Is(err, repository.ErrNotFound) {
+		t.Fatalf("expected ErrNotFound, got %v", err)
 	}
 }

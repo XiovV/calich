@@ -1,4 +1,4 @@
-import { AccountEmailSection } from "./AccountEmailSection";
+import { AccountSection } from "./AccountSection";
 import { AccountsSection } from "./AccountsSection";
 import { AppPasswordsSection } from "./AppPasswordsSection";
 import { ReminderDeliverySection } from "./ReminderDeliverySection";
@@ -10,7 +10,7 @@ import { ImportExportSection } from "./ImportExportSection";
 // and has no route to reach it directly.
 export function getSettingsSections(isAdmin: boolean) {
   const sections = [
-    { path: "account", label: "Account email", element: <AccountEmailSection /> },
+    { path: "account", label: "Account", element: <AccountSection /> },
     { path: "app-passwords", label: "App passwords", element: <AppPasswordsSection /> },
     { path: "reminders", label: "Reminder delivery", element: <ReminderDeliverySection /> },
     { path: "import-export", label: "Import & export", element: <ImportExportSection /> },

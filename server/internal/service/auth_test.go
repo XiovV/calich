@@ -400,6 +400,52 @@ func TestUpdateEmail_EmptyStringClearsIt(t *testing.T) {
 	}
 }
 
+func TestUpdateUsername_RenamesTheCaller(t *testing.T) {
+	svc := newTestAuthService(t, "", "")
+	ctx := context.Background()
+	user, _, err := svc.Bootstrap(ctx)
+	if err != nil {
+		t.Fatalf("bootstrap: %v", err)
+	}
+
+	updated, err := svc.UpdateUsername(ctx, user.ID, "  newname  ")
+	if err != nil {
+		t.Fatalf("update username: %v", err)
+	}
+	if updated.Username != "newname" {
+		t.Fatalf("expected username newname, got %q", updated.Username)
+	}
+}
+
+func TestUpdateUsername_RejectsAColon(t *testing.T) {
+	svc := newTestAuthService(t, "", "")
+	ctx := context.Background()
+	user, _, err := svc.Bootstrap(ctx)
+	if err != nil {
+		t.Fatalf("bootstrap: %v", err)
+	}
+
+	if _, err := svc.UpdateUsername(ctx, user.ID, "ad:min"); !errors.Is(err, ErrInvalidUsername) {
+		t.Fatalf("expected ErrInvalidUsername, got %v", err)
+	}
+}
+
+func TestUpdateUsername_DuplicateUsername_ReturnsErrUsernameTaken(t *testing.T) {
+	svc := newTestAuthService(t, "", "")
+	ctx := context.Background()
+	user, _, err := svc.Bootstrap(ctx)
+	if err != nil {
+		t.Fatalf("bootstrap: %v", err)
+	}
+	if _, err := svc.users.Create(ctx, "bob", "hash", false); err != nil {
+		t.Fatalf("create bob: %v", err)
+	}
+
+	if _, err := svc.UpdateUsername(ctx, user.ID, "bob"); !errors.Is(err, ErrUsernameTaken) {
+		t.Fatalf("expected ErrUsernameTaken, got %v", err)
+	}
+}
+
 func TestChangePassword_NewPasswordWorksForLogin(t *testing.T) {
 	svc := newTestAuthService(t, "", "")
 	ctx := context.Background()

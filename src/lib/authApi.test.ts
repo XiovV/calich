@@ -219,6 +219,53 @@ describe("authApi.updateEmail", () => {
   });
 });
 
+describe("authApi.updateUsername", () => {
+  it("sends the username and bearer token, and maps the response", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(200, {
+        id: 1,
+        username: "newname",
+        must_change_password: false,
+        email: null,
+        email_reminder_channel_available: false,
+        is_admin: false,
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const user = await authApi.updateUsername("token-123", "newname");
+
+    expect(user).toEqual({
+      id: 1,
+      username: "newname",
+      mustChangePassword: false,
+      email: null,
+      emailReminderChannelAvailable: false,
+      isAdmin: false,
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/auth/username",
+      expect.objectContaining({
+        method: "PUT",
+        credentials: "include",
+        headers: expect.objectContaining({ Authorization: "Bearer token-123" }),
+        body: JSON.stringify({ username: "newname" }),
+      }),
+    );
+  });
+
+  it("throws username_taken on a conflict", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(409, { error: { code: "username_taken", message: "username is already taken" } }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(authApi.updateUsername("token-123", "bob")).rejects.toMatchObject({
+      code: "username_taken",
+    });
+  });
+});
+
 describe("authApi.updateSyncedDeviceReminders", () => {
   it("sends the preference and bearer token, and maps the response", async () => {
     const fetchMock = vi.fn().mockResolvedValue(

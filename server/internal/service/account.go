@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"unicode"
 
 	"golang.org/x/crypto/bcrypt"
 
@@ -20,10 +21,16 @@ const (
 	DispositionDelete   = "delete"
 )
 
+// maxUsernameLength bounds validateUsername (#125). Chosen as a generous
+// round number — nothing downstream (the users.username column, CalDAV
+// principal paths keyed on id rather than username) imposes a tighter limit.
+const maxUsernameLength = 64
+
 var (
-	// ErrInvalidUsername is returned when a username fails basic validation
-	// — empty, or all whitespace.
-	ErrInvalidUsername = errors.New("username must not be empty")
+	// ErrInvalidUsername is returned when a username fails validateUsername
+	// — empty (or all whitespace), containing a colon or other whitespace,
+	// or longer than maxUsernameLength.
+	ErrInvalidUsername = errors.New("username must not be empty, must not contain whitespace or a colon, and must be at most 64 characters")
 	// ErrUsernameTaken mirrors repository.ErrUsernameTaken so handlers only
 	// import the service package's sentinels, matching every other service.
 	ErrUsernameTaken = repository.ErrUsernameTaken
@@ -47,10 +54,11 @@ var (
 )
 
 // AccountService is account administration (ADR-0037): creating accounts,
-// listing them, resetting a password, granting or revoking Admin, disabling,
-// and deleting. It is deliberately separate from data access — an Admin's
-// authority here never extends to another User's Calendars or Events, which
-// stay behind the Access resolver (ADR-0034) like everyone else's.
+// listing them, resetting a password, granting or revoking Admin, renaming,
+// disabling, and deleting. It is deliberately separate from data access — an
+// Admin's authority here never extends to another User's Calendars or
+// Events, which stay behind the Access resolver (ADR-0034) like everyone
+// else's.
 type AccountService struct {
 	db           *sql.DB
 	users        *repository.UserRepository
@@ -58,10 +66,29 @@ type AccountService struct {
 	calendarRepo *repository.CalendarRepository
 	shareRepo    *repository.CalendarShareRepository
 	calendars    *CalendarService
+	appPasswords *AppPasswordService
 }
 
-func NewAccountService(db *sql.DB, users *repository.UserRepository, sessions *repository.SessionRepository, calendarRepo *repository.CalendarRepository, shareRepo *repository.CalendarShareRepository, calendars *CalendarService) *AccountService {
-	return &AccountService{db: db, users: users, sessions: sessions, calendarRepo: calendarRepo, shareRepo: shareRepo, calendars: calendars}
+func NewAccountService(db *sql.DB, users *repository.UserRepository, sessions *repository.SessionRepository, calendarRepo *repository.CalendarRepository, shareRepo *repository.CalendarShareRepository, calendars *CalendarService, appPasswords *AppPasswordService) *AccountService {
+	return &AccountService{db: db, users: users, sessions: sessions, calendarRepo: calendarRepo, shareRepo: shareRepo, calendars: calendars, appPasswords: appPasswords}
+}
+
+// validateUsername trims username and checks it against the one set of rules
+// shared by Create and both rename paths — self (AuthService.UpdateUsername)
+// and Admin (AccountService.SetUsername) — so account creation and account
+// rename cannot drift (#125). A colon is rejected because Go's
+// net/http.Request.BasicAuth splits credentials on the first colon: a
+// username containing one could create an account that can never
+// authenticate over CalDAV (AppPasswordService.Authenticate).
+func validateUsername(username string) (string, error) {
+	username = strings.TrimSpace(username)
+	if username == "" || len(username) > maxUsernameLength {
+		return "", ErrInvalidUsername
+	}
+	if strings.ContainsAny(username, ":") || strings.ContainsFunc(username, unicode.IsSpace) {
+		return "", ErrInvalidUsername
+	}
+	return username, nil
 }
 
 // Create makes a new account with username and a temporary password
@@ -70,9 +97,9 @@ func NewAccountService(db *sql.DB, users *repository.UserRepository, sessions *r
 // same default Calendars a bootstrapped account gets rather than an empty
 // sidebar.
 func (s *AccountService) Create(ctx context.Context, username, tempPassword string) (repository.User, error) {
-	username = strings.TrimSpace(username)
-	if username == "" {
-		return repository.User{}, ErrInvalidUsername
+	username, err := validateUsername(username)
+	if err != nil {
+		return repository.User{}, err
 	}
 	if tempPassword == "" {
 		return repository.User{}, ErrInvalidPassword
@@ -197,6 +224,47 @@ func (s *AccountService) SetDisabled(ctx context.Context, userID int64, isDisabl
 	}
 
 	return user, nil
+}
+
+// SetUsername renames userID's account (#125), validated the same way
+// Create validates one. The App passwords userID holds stay valid — CalDAV
+// auth is keyed by username (AppPasswordService.Authenticate), so every
+// device already configured with the old one gets 401 until it's
+// reconfigured with the new one. That is what UsernameImpact exists to warn
+// an Admin about before calling this; SetUsername itself does not guard
+// against it.
+func (s *AccountService) SetUsername(ctx context.Context, userID int64, username string) (repository.User, error) {
+	username, err := validateUsername(username)
+	if err != nil {
+		return repository.User{}, err
+	}
+
+	user, err := s.users.UpdateUsername(ctx, userID, username)
+	if err != nil {
+		if errors.Is(err, repository.ErrUsernameTaken) {
+			return repository.User{}, ErrUsernameTaken
+		}
+		return repository.User{}, fmt.Errorf("update username: %w", err)
+	}
+	return user, nil
+}
+
+// UsernameImpact reports how many App passwords userID holds — the
+// Admin-facing preview a rename UI shows before calling SetUsername, so the
+// Admin knows how many of that person's synced devices are about to start
+// failing to sync until reconfigured. Callers should only surface this as a
+// confirmation when the count is at least one; a fresh account with none
+// warrants no such interruption.
+func (s *AccountService) UsernameImpact(ctx context.Context, userID int64) (int, error) {
+	if _, err := s.users.GetByID(ctx, userID); err != nil {
+		return 0, fmt.Errorf("get user: %w", err)
+	}
+
+	count, err := s.appPasswords.CountForUser(ctx, userID)
+	if err != nil {
+		return 0, fmt.Errorf("count app passwords: %w", err)
+	}
+	return count, nil
 }
 
 // CalendarImpact is one owned Calendar's exposure to a Delete — how many

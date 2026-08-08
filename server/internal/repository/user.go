@@ -193,6 +193,19 @@ func (r *UserRepository) UpdateEmail(ctx context.Context, userID int64, email st
 	return r.GetByID(ctx, userID)
 }
 
+// UpdateUsername renames userID's account (#125). A unique-constraint
+// violation is surfaced as ErrUsernameTaken exactly like Create, since both
+// hit the same users.username UNIQUE column.
+func (r *UserRepository) UpdateUsername(ctx context.Context, userID int64, username string) (User, error) {
+	if _, err := r.db.ExecContext(ctx, `UPDATE users SET username = ? WHERE id = ?`, username, userID); err != nil {
+		if strings.Contains(err.Error(), "UNIQUE constraint failed") {
+			return User{}, ErrUsernameTaken
+		}
+		return User{}, fmt.Errorf("update username: %w", err)
+	}
+	return r.GetByID(ctx, userID)
+}
+
 // UpdateSyncedDeviceReminders sets userID's "let my synced devices show
 // reminder pop-ups" preference (ADR-0027).
 func (r *UserRepository) UpdateSyncedDeviceReminders(ctx context.Context, userID int64, enabled bool) (User, error) {

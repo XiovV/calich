@@ -107,6 +107,33 @@ export const accountsApi = {
     return fromWire(await response.json());
   },
 
+  async renameUsername(accessToken: string, id: number, username: string): Promise<Account> {
+    const response = await authedFetch(accessToken, `/api/accounts/${id}/username`, {
+      method: "PUT",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username }),
+    });
+    if (!response.ok) throw await errorFromResponse(response);
+
+    return fromWire(await response.json());
+  },
+
+  // How many App passwords id's account holds (#125) — shown before renaming
+  // somebody else's account, since CalDAV auth is keyed by username and every
+  // device already configured with the old one stops syncing until it's
+  // reconfigured. Fetched separately from deleteImpact, which asks a
+  // different question (Calendars and Shares).
+  async usernameImpact(accessToken: string, id: number): Promise<{ appPasswordCount: number }> {
+    const response = await authedFetch(accessToken, `/api/accounts/${id}/username-impact`, {
+      credentials: "include",
+    });
+    if (!response.ok) throw await errorFromResponse(response);
+
+    const body = (await response.json()) as { app_password_count: number };
+    return { appPasswordCount: body.app_password_count };
+  },
+
   async deleteImpact(accessToken: string, id: number): Promise<DeleteImpact> {
     const response = await authedFetch(accessToken, `/api/accounts/${id}/delete-impact`, {
       credentials: "include",
