@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { setSessionRefresher } from "./apiClient";
 import { ApiError, authApi, type User } from "./authApi";
+import { useShellStore, type ActiveView } from "./shellStore";
 
 export type AuthStatus = "loading" | "unauthenticated" | "must-change-password" | "authenticated";
 
@@ -21,6 +22,7 @@ interface AuthState {
   updateUsername: (username: string) => Promise<void>;
   updateSyncedDeviceReminders: (enabled: boolean) => Promise<void>;
   updateWeekStart: (weekStart: number) => Promise<void>;
+  updateDefaultView: (defaultView: ActiveView) => Promise<void>;
 }
 
 type AuthFields = Pick<AuthState, "status" | "user" | "pendingUsername" | "accessToken">;
@@ -67,6 +69,7 @@ export const useAuthStore = create<AuthState>((set, get) => {
       try {
         const user = await authApi.me(accessToken);
         set(authenticated(user, accessToken));
+        useShellStore.getState().setActiveView(user.defaultView);
       } catch (err) {
         if (err instanceof ApiError && err.code === "password_change_required") {
           set(mustChangePassword(accessToken, null));
@@ -86,6 +89,7 @@ export const useAuthStore = create<AuthState>((set, get) => {
 
       const user = await authApi.me(accessToken);
       set(authenticated(user, accessToken));
+      useShellStore.getState().setActiveView(user.defaultView);
     },
 
     logout: async () => {
@@ -107,6 +111,11 @@ export const useAuthStore = create<AuthState>((set, get) => {
 
       const user = await authApi.me(changed.accessToken);
       set(authenticated(user, changed.accessToken));
+      // A forced password change completes the login that was blocked on it
+      // (mustChangePassword), so it seeds the shell the same way bootstrap
+      // and login do (ADR-0039) — otherwise a User with a non-default
+      // Default view lands on the module-load "week" fallback instead.
+      useShellStore.getState().setActiveView(user.defaultView);
     },
 
     updateEmail: async (email) => {
@@ -137,7 +146,18 @@ export const useAuthStore = create<AuthState>((set, get) => {
       const { accessToken } = get();
       if (!accessToken) throw new Error("Not authenticated.");
 
-      const user = await authApi.updatePreferences(accessToken, weekStart);
+      const user = await authApi.updatePreferences(accessToken, { weekStart });
+      set(authenticated(user, accessToken));
+    },
+
+    // Sets the User's Default view Preference alone — Active view is
+    // untouched, since Default view only seeds a Session's Active view at
+    // bootstrap/login and is never written back to (ADR-0039).
+    updateDefaultView: async (defaultView) => {
+      const { accessToken } = get();
+      if (!accessToken) throw new Error("Not authenticated.");
+
+      const user = await authApi.updatePreferences(accessToken, { defaultView });
       set(authenticated(user, accessToken));
     },
   };

@@ -96,6 +96,7 @@ describe("authApi.me", () => {
         synced_device_reminders_enabled: false,
         is_admin: true,
         week_start: 1,
+        default_view: "week",
       }),
     );
     vi.stubGlobal("fetch", fetchMock);
@@ -111,6 +112,7 @@ describe("authApi.me", () => {
       syncedDeviceRemindersEnabled: false,
       isAdmin: true,
       weekStart: 1,
+      defaultView: "week",
     });
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/auth/me",
@@ -331,11 +333,12 @@ describe("authApi.updatePreferences", () => {
         synced_device_reminders_enabled: false,
         is_admin: false,
         week_start: 0,
+        default_view: "week",
       }),
     );
     vi.stubGlobal("fetch", fetchMock);
 
-    const user = await authApi.updatePreferences("token-123", 0);
+    const user = await authApi.updatePreferences("token-123", { weekStart: 0 });
 
     expect(user).toEqual({
       id: 1,
@@ -346,6 +349,7 @@ describe("authApi.updatePreferences", () => {
       syncedDeviceRemindersEnabled: false,
       isAdmin: false,
       weekStart: 0,
+      defaultView: "week",
     });
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/auth/preferences",
@@ -358,13 +362,43 @@ describe("authApi.updatePreferences", () => {
     );
   });
 
+  it("sends default_view and the bearer token, and maps the response", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(200, {
+        id: 1,
+        username: "admin",
+        must_change_password: false,
+        email: null,
+        email_reminder_channel_available: false,
+        synced_device_reminders_enabled: false,
+        is_admin: false,
+        week_start: 1,
+        default_view: "month",
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const user = await authApi.updatePreferences("token-123", { defaultView: "month" });
+
+    expect(user.defaultView).toBe("month");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/auth/preferences",
+      expect.objectContaining({
+        method: "PATCH",
+        credentials: "include",
+        headers: expect.objectContaining({ Authorization: "Bearer token-123" }),
+        body: JSON.stringify({ default_view: "month" }),
+      }),
+    );
+  });
+
   it("throws on failure", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       jsonResponse(400, { error: { code: "invalid_request", message: "week_start must be between 0 and 6" } }),
     );
     vi.stubGlobal("fetch", fetchMock);
 
-    await expect(authApi.updatePreferences("token-123", 7)).rejects.toMatchObject({
+    await expect(authApi.updatePreferences("token-123", { weekStart: 7 })).rejects.toMatchObject({
       code: "invalid_request",
     });
   });

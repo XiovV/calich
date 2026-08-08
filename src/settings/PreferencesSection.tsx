@@ -1,4 +1,5 @@
 import { useAuthStore } from "../lib/authStore";
+import type { ActiveView } from "../lib/shellStore";
 import { useAsyncAction } from "../hooks/useAsyncAction";
 import { useWeekStartsOn } from "../hooks/useWeekStartsOn";
 import { Select } from "../components/ui/Select";
@@ -11,18 +12,35 @@ const WEEK_START_OPTIONS: { value: WeekStartOption; label: string }[] = [
   { value: "6", label: "Saturday" },
 ];
 
-// The Settings page's Preferences section (#128, ADR-0039): per-User display
-// settings. Week start is the only one wired up so far — Default view, Time
-// format, and Working hours land in #129, #130, #131. Auto-saves on change,
-// matching ReminderDeliverySection: no Save button, here or in the follow-ups.
+const DEFAULT_VIEW_OPTIONS: { value: ActiveView; label: string }[] = [
+  { value: "day", label: "Day" },
+  { value: "week", label: "Week" },
+  { value: "month", label: "Month" },
+  { value: "year", label: "Year" },
+];
+
+// The Settings page's Preferences section (#128, #129, ADR-0039): per-User
+// display settings. Week start and Default view are wired up so far — Time
+// format and Working hours land in #130, #131. Auto-saves on change, matching
+// ReminderDeliverySection: no Save button, here or in the follow-ups.
+//
+// Default view seeds Active view only at the next Session's bootstrap/login
+// (authStore) — it deliberately does not change the Active view the caller
+// is looking at right now.
 export function PreferencesSection() {
   const weekStartsOn = useWeekStartsOn();
+  const defaultView = useAuthStore((state) => state.user?.defaultView ?? "week");
   const updateWeekStart = useAuthStore((state) => state.updateWeekStart);
+  const updateDefaultView = useAuthStore((state) => state.updateDefaultView);
 
   const { error, run } = useAsyncAction();
 
-  async function handleChange(value: WeekStartOption) {
+  async function handleWeekStartChange(value: WeekStartOption) {
     await run(() => updateWeekStart(Number(value)));
+  }
+
+  async function handleDefaultViewChange(value: ActiveView) {
+    await run(() => updateDefaultView(value));
   }
 
   return (
@@ -33,12 +51,19 @@ export function PreferencesSection() {
         in from.
       </p>
 
-      <div className="mt-4">
+      <div className="mt-4 space-y-4">
         <Select<WeekStartOption>
           label="Week start"
           value={String(weekStartsOn) as WeekStartOption}
-          onValueChange={handleChange}
+          onValueChange={handleWeekStartChange}
           options={WEEK_START_OPTIONS}
+        />
+
+        <Select<ActiveView>
+          label="Default view"
+          value={defaultView}
+          onValueChange={handleDefaultViewChange}
+          options={DEFAULT_VIEW_OPTIONS}
         />
       </div>
 

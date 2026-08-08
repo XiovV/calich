@@ -40,7 +40,18 @@ var (
 	// ErrInvalidWeekStart is returned by UpdatePreferences for a Week start
 	// outside the date-fns weekStartsOn range (ADR-0039).
 	ErrInvalidWeekStart = errors.New("week_start must be between 0 and 6")
+	// ErrInvalidDefaultView is returned by UpdatePreferences for a Default
+	// view outside day/week/month/year (ADR-0039).
+	ErrInvalidDefaultView = errors.New("default_view must be one of day, week, month, year")
 )
+
+// validDefaultViews are the Active views a Default view may seed (ADR-0039).
+var validDefaultViews = map[string]bool{
+	"day":   true,
+	"week":  true,
+	"month": true,
+	"year":  true,
+}
 
 type AuthService struct {
 	users           *repository.UserRepository
@@ -360,22 +371,31 @@ func (s *AuthService) UpdateSyncedDeviceReminders(ctx context.Context, userID in
 // (ADR-0039): a nil field is left untouched, so a Week start of 0 (Sunday)
 // can be told apart from an absent field.
 type PreferencesUpdate struct {
-	WeekStart *int
+	WeekStart   *int
+	DefaultView *string
 }
 
 // UpdatePreferences applies whichever Preferences are present in update,
-// leaving the rest untouched (ADR-0039).
+// leaving the rest untouched (ADR-0039). Every present field is validated
+// before any is written, so a request setting several Preferences at once
+// either applies all of them or none.
 func (s *AuthService) UpdatePreferences(ctx context.Context, userID int64, update PreferencesUpdate) (repository.User, error) {
-	if update.WeekStart != nil {
-		if *update.WeekStart < 0 || *update.WeekStart > 6 {
-			return repository.User{}, ErrInvalidWeekStart
-		}
+	if update.WeekStart != nil && (*update.WeekStart < 0 || *update.WeekStart > 6) {
+		return repository.User{}, ErrInvalidWeekStart
+	}
+	if update.DefaultView != nil && !validDefaultViews[*update.DefaultView] {
+		return repository.User{}, ErrInvalidDefaultView
+	}
 
-		user, err := s.users.UpdateWeekStart(ctx, userID, *update.WeekStart)
-		if err != nil {
+	if update.WeekStart != nil {
+		if _, err := s.users.UpdateWeekStart(ctx, userID, *update.WeekStart); err != nil {
 			return repository.User{}, fmt.Errorf("update week start preference: %w", err)
 		}
-		return user, nil
+	}
+	if update.DefaultView != nil {
+		if _, err := s.users.UpdateDefaultView(ctx, userID, *update.DefaultView); err != nil {
+			return repository.User{}, fmt.Errorf("update default view preference: %w", err)
+		}
 	}
 
 	return s.users.GetByID(ctx, userID)

@@ -35,6 +35,7 @@ vi.mock("./apiClient", async () => {
 
 const { authApi } = await import("./authApi");
 const { useAuthStore } = await import("./authStore");
+const { useShellStore } = await import("./shellStore");
 
 const adminUser = {
   id: 1,
@@ -44,6 +45,7 @@ const adminUser = {
   emailReminderChannelAvailable: false,
   syncedDeviceRemindersEnabled: false,
   weekStart: 1,
+  defaultView: "week" as const,
 };
 
 function resetStore() {
@@ -58,6 +60,7 @@ function resetStore() {
 beforeEach(() => {
   vi.clearAllMocks();
   resetStore();
+  useShellStore.setState({ activeView: "week" });
 });
 
 describe("bootstrap", () => {
@@ -175,6 +178,22 @@ describe("changePassword", () => {
     expect(state.pendingUsername).toBeNull();
     expect(state.accessToken).toBe("token-456");
   });
+
+  it("seeds the shell's Active view, completing the login that was blocked on the password change", async () => {
+    useAuthStore.setState({
+      status: "must-change-password",
+      user: null,
+      pendingUsername: "admin",
+      accessToken: "token-123",
+    });
+    useShellStore.setState({ activeView: "week" });
+    vi.mocked(authApi.changePassword).mockResolvedValue({ accessToken: "token-456" });
+    vi.mocked(authApi.me).mockResolvedValue({ ...adminUser, defaultView: "day" });
+
+    await useAuthStore.getState().changePassword("old-pw", "new-pw");
+
+    expect(useShellStore.getState().activeView).toBe("day");
+  });
 });
 
 describe("updateEmail", () => {
@@ -267,7 +286,62 @@ describe("updateWeekStart", () => {
     await useAuthStore.getState().updateWeekStart(0);
 
     expect(useAuthStore.getState().user).toEqual(updatedUser);
-    expect(authApi.updatePreferences).toHaveBeenCalledWith("token-123", 0);
+    expect(authApi.updatePreferences).toHaveBeenCalledWith("token-123", { weekStart: 0 });
+  });
+});
+
+describe("updateDefaultView", () => {
+  it("throws when there is no access token", async () => {
+    await expect(useAuthStore.getState().updateDefaultView("month")).rejects.toThrow(
+      "Not authenticated.",
+    );
+  });
+
+  it("stores the fresh user returned by the API without touching the shell's Active view", async () => {
+    useAuthStore.setState({
+      status: "authenticated",
+      user: adminUser,
+      pendingUsername: null,
+      accessToken: "token-123",
+    });
+    useShellStore.setState({ activeView: "day" });
+    const updatedUser = { ...adminUser, defaultView: "month" as const };
+    vi.mocked(authApi.updatePreferences).mockResolvedValue(updatedUser);
+
+    await useAuthStore.getState().updateDefaultView("month");
+
+    expect(useAuthStore.getState().user).toEqual(updatedUser);
+    expect(authApi.updatePreferences).toHaveBeenCalledWith("token-123", { defaultView: "month" });
+    // Settings only updates the Preference — it is not "last-used wins", so
+    // the caller's current Active view stays exactly where they left it.
+    expect(useShellStore.getState().activeView).toBe("day");
+  });
+});
+
+describe("shell seeding", () => {
+  it("bootstrap seeds the shell's Active view from the resolved user's Default view", async () => {
+    vi.mocked(authApi.refresh).mockResolvedValue({ accessToken: "token-123" });
+    vi.mocked(authApi.me).mockResolvedValue({ ...adminUser, defaultView: "month" });
+
+    await useAuthStore.getState().bootstrap();
+
+    expect(useShellStore.getState().activeView).toBe("month");
+  });
+
+  it("login seeds the shell's Active view from the resolved user's Default view", async () => {
+    vi.mocked(authApi.login).mockResolvedValue({ accessToken: "token-123", mustChangePassword: false });
+    vi.mocked(authApi.me).mockResolvedValue({ ...adminUser, defaultView: "year" });
+
+    await useAuthStore.getState().login("admin", "admin");
+
+    expect(useShellStore.getState().activeView).toBe("year");
+  });
+
+  it("switching the Active view mid-session does not PATCH the Default view preference", () => {
+    useShellStore.getState().setActiveView("month");
+
+    expect(useShellStore.getState().activeView).toBe("month");
+    expect(authApi.updatePreferences).not.toHaveBeenCalled();
   });
 });
 

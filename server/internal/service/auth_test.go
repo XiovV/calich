@@ -462,6 +462,78 @@ func TestUpdatePreferences_NilFieldLeavesWeekStartUntouched(t *testing.T) {
 	}
 }
 
+func TestUpdatePreferences_SetsDefaultView(t *testing.T) {
+	svc := newTestAuthService(t, "", "")
+	ctx := context.Background()
+	user, _, err := svc.Bootstrap(ctx)
+	if err != nil {
+		t.Fatalf("bootstrap: %v", err)
+	}
+
+	defaultView := "month"
+	updated, err := svc.UpdatePreferences(ctx, user.ID, PreferencesUpdate{DefaultView: &defaultView})
+	if err != nil {
+		t.Fatalf("update preferences: %v", err)
+	}
+	if updated.DefaultView != "month" {
+		t.Fatalf("expected default_view \"month\" to be stored, got %q", updated.DefaultView)
+	}
+}
+
+func TestUpdatePreferences_RejectsInvalidDefaultView(t *testing.T) {
+	svc := newTestAuthService(t, "", "")
+	ctx := context.Background()
+	user, _, err := svc.Bootstrap(ctx)
+	if err != nil {
+		t.Fatalf("bootstrap: %v", err)
+	}
+
+	defaultView := "fortnight"
+	_, err = svc.UpdatePreferences(ctx, user.ID, PreferencesUpdate{DefaultView: &defaultView})
+	if !errors.Is(err, ErrInvalidDefaultView) {
+		t.Fatalf("expected ErrInvalidDefaultView, got %v", err)
+	}
+}
+
+func TestUpdatePreferences_NilFieldLeavesDefaultViewUntouched(t *testing.T) {
+	svc := newTestAuthService(t, "", "")
+	ctx := context.Background()
+	user, _, err := svc.Bootstrap(ctx)
+	if err != nil {
+		t.Fatalf("bootstrap: %v", err)
+	}
+
+	updated, err := svc.UpdatePreferences(ctx, user.ID, PreferencesUpdate{})
+	if err != nil {
+		t.Fatalf("update preferences: %v", err)
+	}
+	if updated.DefaultView != "week" {
+		t.Fatalf("expected default_view to remain at its default of \"week\", got %q", updated.DefaultView)
+	}
+}
+
+func TestUpdatePreferences_SetsWeekStartAndDefaultViewTogether(t *testing.T) {
+	svc := newTestAuthService(t, "", "")
+	ctx := context.Background()
+	user, _, err := svc.Bootstrap(ctx)
+	if err != nil {
+		t.Fatalf("bootstrap: %v", err)
+	}
+
+	weekStart := 0
+	defaultView := "day"
+	updated, err := svc.UpdatePreferences(ctx, user.ID, PreferencesUpdate{WeekStart: &weekStart, DefaultView: &defaultView})
+	if err != nil {
+		t.Fatalf("update preferences: %v", err)
+	}
+	if updated.WeekStart != 0 {
+		t.Fatalf("expected week_start 0 to be stored, got %d", updated.WeekStart)
+	}
+	if updated.DefaultView != "day" {
+		t.Fatalf("expected default_view \"day\" to be stored, got %q", updated.DefaultView)
+	}
+}
+
 func TestUpdateUsername_RenamesTheCaller(t *testing.T) {
 	svc := newTestAuthService(t, "", "")
 	ctx := context.Background()

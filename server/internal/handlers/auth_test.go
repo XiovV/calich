@@ -672,6 +672,70 @@ func TestUpdatePreferences_RejectsWeekStartOutOfRange(t *testing.T) {
 	}
 }
 
+func TestUpdatePreferences_SetsDefaultView(t *testing.T) {
+	srv := newAuthTestServer(t)
+	accessToken := authenticatedAccessToken(t, srv)
+
+	body, _ := json.Marshal(updatePreferencesRequest{DefaultView: strPtr("month")})
+	req, _ := http.NewRequest(http.MethodPatch, srv.URL+"/api/auth/preferences", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("PATCH /api/auth/preferences: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	var me meResponse
+	if err := json.NewDecoder(resp.Body).Decode(&me); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if me.DefaultView != "month" {
+		t.Fatalf("expected default_view to be stored as \"month\", got %q", me.DefaultView)
+	}
+}
+
+func TestUpdatePreferences_RejectsInvalidDefaultView(t *testing.T) {
+	srv := newAuthTestServer(t)
+	accessToken := authenticatedAccessToken(t, srv)
+
+	body, _ := json.Marshal(updatePreferencesRequest{DefaultView: strPtr("fortnight")})
+	req, _ := http.NewRequest(http.MethodPatch, srv.URL+"/api/auth/preferences", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("PATCH /api/auth/preferences: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", resp.StatusCode)
+	}
+
+	req2, _ := http.NewRequest(http.MethodGet, srv.URL+"/api/auth/me", nil)
+	req2.Header.Set("Authorization", "Bearer "+accessToken)
+	resp2, err := http.DefaultClient.Do(req2)
+	if err != nil {
+		t.Fatalf("GET /api/auth/me: %v", err)
+	}
+	defer resp2.Body.Close()
+
+	var me meResponse
+	if err := json.NewDecoder(resp2.Body).Decode(&me); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if me.DefaultView != "week" {
+		t.Fatalf("expected an invalid default_view to store nothing, got %q", me.DefaultView)
+	}
+}
+
 func TestUpdatePreferences_RequiresAuthentication(t *testing.T) {
 	srv := newAuthTestServer(t)
 
@@ -691,6 +755,8 @@ func TestUpdatePreferences_RequiresAuthentication(t *testing.T) {
 }
 
 func intPtr(v int) *int { return &v }
+
+func strPtr(v string) *string { return &v }
 
 func TestChangePassword_AllowedEvenWhileMustChangePassword(t *testing.T) {
 	// change-password itself must stay reachable for a user who is otherwise

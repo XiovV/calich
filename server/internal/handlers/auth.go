@@ -51,6 +51,7 @@ var updateUsernameErrors = []errorCase{
 
 var updatePreferencesErrors = []errorCase{
 	{service.ErrInvalidWeekStart, badRequest("week_start must be between 0 and 6")},
+	{service.ErrInvalidDefaultView, badRequest("default_view must be one of day, week, month, year")},
 }
 
 var refreshErrors = []errorCase{
@@ -229,7 +230,8 @@ func (h *AuthHandler) UpdateSyncedDeviceReminders(w http.ResponseWriter, r *http
 // distinguishable from a zero value — `week_start: 0` is Sunday, not
 // "unset" (ADR-0039).
 type updatePreferencesRequest struct {
-	WeekStart *int `json:"week_start"`
+	WeekStart   *int    `json:"week_start"`
+	DefaultView *string `json:"default_view"`
 }
 
 // UpdatePreferences applies whichever Preferences (ADR-0039) are present in
@@ -247,7 +249,10 @@ func (h *AuthHandler) UpdatePreferences(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	user, err := h.auth.UpdatePreferences(r.Context(), userID, service.PreferencesUpdate{WeekStart: req.WeekStart})
+	user, err := h.auth.UpdatePreferences(r.Context(), userID, service.PreferencesUpdate{
+		WeekStart:   req.WeekStart,
+		DefaultView: req.DefaultView,
+	})
 	if respondError(w, err, updatePreferencesErrors, "failed to update preferences") {
 		return
 	}

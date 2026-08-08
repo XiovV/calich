@@ -241,6 +241,15 @@ func (r *UserRepository) UpdateWeekStart(ctx context.Context, userID int64, week
 	return r.GetByID(ctx, userID)
 }
 
+// UpdateDefaultView sets userID's Default view preference (ADR-0039) — one
+// of day/week/month/year. Validation happens in AuthService.UpdatePreferences.
+func (r *UserRepository) UpdateDefaultView(ctx context.Context, userID int64, defaultView string) (User, error) {
+	if _, err := r.db.ExecContext(ctx, `UPDATE users SET default_view = ? WHERE id = ?`, defaultView, userID); err != nil {
+		return User{}, fmt.Errorf("update default view preference: %w", err)
+	}
+	return r.GetByID(ctx, userID)
+}
+
 // UpdatePassword sets a new password hash and clears must_change_password.
 func (r *UserRepository) UpdatePassword(ctx context.Context, userID int64, passwordHash string) error {
 	_, err := r.db.ExecContext(ctx,

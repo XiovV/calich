@@ -1,4 +1,5 @@
 import { ApiError, authedFetch, errorFromResponse } from "./apiClient";
+import type { ActiveView } from "./shellStore";
 
 export { ApiError };
 
@@ -20,6 +21,9 @@ export interface User {
   // Week start (ADR-0039): a date-fns weekStartsOn index, 0 (Sunday) to 6
   // (Saturday). Never fed into a Recurrence rule's WKST.
   weekStart: number;
+  // Default view (ADR-0039): seeds Active view when a Session is
+  // established (authStore's bootstrap/login) and is never written back.
+  defaultView: ActiveView;
 }
 
 export interface LoginResult {
@@ -36,6 +40,7 @@ interface MeWire {
   synced_device_reminders_enabled: boolean;
   is_admin: boolean;
   week_start: number;
+  default_view: ActiveView;
 }
 
 function fromMeWire(wire: MeWire): User {
@@ -48,6 +53,7 @@ function fromMeWire(wire: MeWire): User {
     syncedDeviceRemindersEnabled: wire.synced_device_reminders_enabled,
     isAdmin: wire.is_admin,
     weekStart: wire.week_start,
+    defaultView: wire.default_view,
   };
 }
 
@@ -148,14 +154,21 @@ export const authApi = {
     return fromMeWire(await response.json());
   },
 
-  // Partial: only week_start is sent today, matching the only Preference
-  // (ADR-0039) wired up to the UI so far.
-  async updatePreferences(accessToken: string, weekStart: number): Promise<User> {
+  // Partial PATCH body: only the fields present in `updates` are sent, so a
+  // Week start update never touches Default view and vice versa (ADR-0039).
+  async updatePreferences(
+    accessToken: string,
+    updates: { weekStart?: number; defaultView?: ActiveView },
+  ): Promise<User> {
+    const body: Record<string, unknown> = {};
+    if (updates.weekStart !== undefined) body.week_start = updates.weekStart;
+    if (updates.defaultView !== undefined) body.default_view = updates.defaultView;
+
     const response = await authedFetch(accessToken, "/api/auth/preferences", {
       method: "PATCH",
       credentials: "include",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ week_start: weekStart }),
+      body: JSON.stringify(body),
     });
     if (!response.ok) throw await errorFromResponse(response);
 

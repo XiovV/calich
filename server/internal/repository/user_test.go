@@ -217,6 +217,36 @@ func TestUserRepository_UpdateWeekStart(t *testing.T) {
 	}
 }
 
+func TestUserRepository_Create_DefaultsDefaultViewToWeek(t *testing.T) {
+	repo := newTestUserRepository(t)
+
+	created, err := repo.Create(context.Background(), "admin", "hash", true)
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	if created.DefaultView != "week" {
+		t.Fatalf("expected default_view to default to \"week\", got %q", created.DefaultView)
+	}
+}
+
+func TestUserRepository_UpdateDefaultView(t *testing.T) {
+	repo := newTestUserRepository(t)
+	ctx := context.Background()
+
+	created, err := repo.Create(ctx, "admin", "hash", true)
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+
+	updated, err := repo.UpdateDefaultView(ctx, created.ID, "month")
+	if err != nil {
+		t.Fatalf("update default view: %v", err)
+	}
+	if updated.DefaultView != "month" {
+		t.Fatalf("expected default_view \"month\", got %q", updated.DefaultView)
+	}
+}
+
 func TestUserRepository_Create_DefaultsToNonAdmin(t *testing.T) {
 	repo := newTestUserRepository(t)
 
