@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import type { Event } from "./event";
 import { toFloating, viewerZone } from "./floatingTime";
 import {
+  hasFieldChanges,
   makeException,
   makeOverride,
   resolveReminders,
@@ -312,5 +313,73 @@ describe("shouldDiscardChildren", () => {
       shouldDiscardChildren("FREQ=DAILY", "FREQ=DAILY;UNTIL=20260101T085959Z"),
     ).toBe(false);
     expect(shouldDiscardChildren("FREQ=DAILY;COUNT=5", "FREQ=DAILY")).toBe(false);
+  });
+});
+
+describe("hasFieldChanges", () => {
+  const original = {
+    calendarId: "cal-1",
+    title: "Standup",
+    start: new Date(2026, 0, 1, 9, 0),
+    end: new Date(2026, 0, 1, 9, 30),
+    allDay: false,
+    rrule: "FREQ=DAILY",
+    reminders: [{ offsetMinutes: 10, channel: "notification" as const }],
+    description: "Daily sync",
+    location: "Room 1",
+  };
+
+  it("is false when nothing differs (#141)", () => {
+    expect(hasFieldChanges({ ...original }, original)).toBe(false);
+  });
+
+  it("ignores Reminders order (a reorder isn't a change)", () => {
+    const changes = {
+      ...original,
+      reminders: [
+        { offsetMinutes: 5, channel: "notification" as const },
+        { offsetMinutes: 10, channel: "notification" as const },
+      ],
+    };
+    const reordered = {
+      ...original,
+      reminders: [
+        { offsetMinutes: 10, channel: "notification" as const },
+        { offsetMinutes: 5, channel: "notification" as const },
+      ],
+    };
+    expect(hasFieldChanges(changes, reordered)).toBe(false);
+  });
+
+  it("is true when the title differs", () => {
+    expect(hasFieldChanges({ ...original, title: "Standup (renamed)" }, original)).toBe(
+      true,
+    );
+  });
+
+  it("is true when the start or end time differs", () => {
+    expect(
+      hasFieldChanges({ ...original, start: new Date(2026, 0, 1, 10, 0) }, original),
+    ).toBe(true);
+  });
+
+  it("is true when Reminders are actually added or removed", () => {
+    expect(hasFieldChanges({ ...original, reminders: [] }, original)).toBe(true);
+  });
+
+  it("is true when the rrule's end condition changes, even though shouldDiscardChildren ignores it", () => {
+    expect(
+      hasFieldChanges(
+        { ...original, rrule: "FREQ=DAILY;COUNT=5" },
+        original,
+      ),
+    ).toBe(true);
+  });
+
+  it("treats undefined and empty string description/location as unchanged", () => {
+    const withoutOptional = { ...original, description: undefined, location: undefined };
+    expect(hasFieldChanges({ ...original, description: "", location: "" }, withoutOptional)).toBe(
+      false,
+    );
   });
 });

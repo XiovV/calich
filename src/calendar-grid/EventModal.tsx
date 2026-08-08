@@ -10,6 +10,7 @@ import { errorMessage } from "../lib/errorMessage";
 import { isRecurringOccurrence, resolveMaster, type Occurrence } from "../lib/occurrence";
 import { viewerZone } from "../lib/floatingTime";
 import {
+  hasFieldChanges,
   shouldDiscardChildren,
   type EditScope,
   type EventFieldChanges,
@@ -542,7 +543,29 @@ export function EventModal(props: EventModalProps) {
       return;
     }
 
-    // The rule is unchanged — ask which Occurrences the edit applies to.
+    // The rule is unchanged — ask which Occurrences the edit applies to,
+    // but only if something actually differs from the Occurrence's current
+    // values. A no-op save (e.g. one where only an Attachment was
+    // added/removed — that applies to the Master immediately and
+    // independently of Save, ADR-0040) would otherwise misleadingly prompt
+    // for a scope that controls nothing (#141).
+    if (
+      master &&
+      !hasFieldChanges(changes, {
+        calendarId: initial.calendarId,
+        title: initial.title,
+        start: props.occurrence.start,
+        end: props.occurrence.end,
+        allDay: initial.allDay,
+        rrule: master.rrule,
+        reminders: initial.reminders,
+        description: initial.description,
+        location: initial.location,
+      })
+    ) {
+      onClose();
+      return;
+    }
     setPendingEditChanges(changes);
   }
 

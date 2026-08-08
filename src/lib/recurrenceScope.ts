@@ -214,3 +214,38 @@ export function shouldDiscardChildren(
 ): boolean {
   return stripEndCondition(oldRrule ?? "") !== stripEndCondition(newRrule ?? "");
 }
+
+/** Order-independent equality: a reordered but otherwise identical set of
+ * Reminders isn't a change worth surfacing. */
+function remindersEqual(a: Reminder[], b: Reminder[]): boolean {
+  if (a.length !== b.length) return false;
+  const key = (r: Reminder) => `${r.offsetMinutes}:${r.channel}`;
+  const sortedA = a.map(key).sort();
+  const sortedB = b.map(key).sort();
+  return sortedA.every((value, index) => value === sortedB[index]);
+}
+
+/**
+ * Whether `changes` actually differs from `original` in any field the Tier-3
+ * scope picker (This event / This and following / All events) applies to
+ * (#141). Used to skip the picker on a no-op save — e.g. one where only an
+ * Attachment was added/removed, which applies to the Master immediately and
+ * independently of Save (ADR-0040) and so isn't governed by any scope
+ * choice.
+ */
+export function hasFieldChanges(
+  changes: EventFieldChanges & { rrule?: string },
+  original: EventFieldChanges & { rrule?: string },
+): boolean {
+  return (
+    changes.calendarId !== original.calendarId ||
+    changes.title !== original.title ||
+    changes.start.getTime() !== original.start.getTime() ||
+    changes.end.getTime() !== original.end.getTime() ||
+    Boolean(changes.allDay) !== Boolean(original.allDay) ||
+    (changes.description ?? "") !== (original.description ?? "") ||
+    (changes.location ?? "") !== (original.location ?? "") ||
+    !remindersEqual(changes.reminders ?? [], original.reminders ?? []) ||
+    (changes.rrule ?? "") !== (original.rrule ?? "")
+  );
+}
