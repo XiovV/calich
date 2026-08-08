@@ -64,7 +64,7 @@ func newICSTestEnv(t *testing.T) icsTestEnv {
 		t.Fatalf("create calendar: %v", err)
 	}
 
-	events := service.NewEventService(sqlDB, repository.NewEventRepository(sqlDB), repository.NewEventExceptionRepository(sqlDB), repository.NewEventReminderRepository(sqlDB), repository.NewReminderOverrideRepository(sqlDB), repository.NewSyncRepository(sqlDB), calendars, users)
+	events := service.NewEventService(sqlDB, repository.NewEventRepository(sqlDB), repository.NewEventExceptionRepository(sqlDB), repository.NewEventReminderRepository(sqlDB), repository.NewReminderOverrideRepository(sqlDB), repository.NewSyncRepository(sqlDB), calendars, users, repository.NewAttachmentRepository(sqlDB))
 	eventHandler := NewEventHandler(events)
 	calendarHandler := NewCalendarHandler(calendars, events, service.NewImportService(events, calendars), service.NewSubscribeService(events, calendars, 0))
 

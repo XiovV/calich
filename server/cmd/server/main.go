@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/XiovV/calendar/server/internal/attachmentstore"
 	"github.com/XiovV/calendar/server/internal/caldavserver"
 	"github.com/XiovV/calendar/server/internal/config"
 	"github.com/XiovV/calendar/server/internal/db"
@@ -32,6 +33,12 @@ const reminderTickInterval = time.Minute
 // governs how promptly a due Calendar is noticed, not how often it's
 // actually refreshed.
 const subscriptionPollerTickInterval = time.Minute
+
+// attachmentSweepInterval is how often the Attachment sweeper reclaims
+// orphaned files on top of the startup sweep Run always does first
+// (#132, ADR-0040) — daily, since an orphan is only wasted disk, not a
+// correctness problem, so there is no reason to chase it more eagerly.
+const attachmentSweepInterval = 24 * time.Hour
 
 func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
@@ -58,7 +65,11 @@ func main() {
 	colorOverrideRepo := repository.NewCalendarUserColorRepository(sqlDB)
 	authService := service.NewAuthService(users, sessions, jwtSecret, cfg.InitialUsername, cfg.InitialPassword)
 	calendarService := service.NewCalendarService(calendarRepo, shareRepo, users, reminderOverrideRepo, colorOverrideRepo)
-	eventService := service.NewEventService(sqlDB, repository.NewEventRepository(sqlDB), repository.NewEventExceptionRepository(sqlDB), repository.NewEventReminderRepository(sqlDB), reminderOverrideRepo, repository.NewSyncRepository(sqlDB), calendarService, users)
+	attachmentRepo := repository.NewAttachmentRepository(sqlDB)
+	eventRepo := repository.NewEventRepository(sqlDB)
+	eventService := service.NewEventService(sqlDB, eventRepo, repository.NewEventExceptionRepository(sqlDB), repository.NewEventReminderRepository(sqlDB), reminderOverrideRepo, repository.NewSyncRepository(sqlDB), calendarService, users, attachmentRepo)
+	attachmentStore := attachmentstore.New(cfg.DataDir)
+	attachmentService := service.NewAttachmentService(attachmentRepo, eventRepo, calendarService, attachmentStore, cfg.MaxAttachmentsPerEvent)
 	notificationRepo := repository.NewNotificationRepository(sqlDB)
 	notificationService := service.NewNotificationService(notificationRepo)
 	appPasswordService := service.NewAppPasswordService(repository.NewAppPasswordRepository(sqlDB), users)
@@ -84,6 +95,7 @@ func main() {
 	authHandler := handlers.NewAuthHandler(authService, cfg.SMTPConfigured())
 	calendarHandler := handlers.NewCalendarHandler(calendarService, eventService, importService, subscribeService)
 	eventHandler := handlers.NewEventHandler(eventService)
+	attachmentHandler := handlers.NewAttachmentHandler(attachmentService, cfg.MaxAttachmentSize)
 	notificationHandler := handlers.NewNotificationHandler(notificationService)
 	appPasswordHandler := handlers.NewAppPasswordHandler(appPasswordService)
 	accountHandler := handlers.NewAccountHandler(accountService)
@@ -91,7 +103,7 @@ func main() {
 	userHandler := handlers.NewUserHandler(userService)
 	calDAVHandler := caldavserver.NewHTTPHandler(caldavserver.NewBackend(calendarService, eventService))
 
-	handler, err := router.New(logger, authHandler, calendarHandler, eventHandler, notificationHandler, appPasswordHandler, accountHandler, userHandler, calDAVHandler, authService, authService, appPasswordService, authService)
+	handler, err := router.New(logger, authHandler, calendarHandler, eventHandler, attachmentHandler, notificationHandler, appPasswordHandler, accountHandler, userHandler, calDAVHandler, authService, authService, appPasswordService, authService)
 	if err != nil {
 		logger.Error("failed to build router", "error", err)
 		os.Exit(1)
@@ -124,6 +136,13 @@ func main() {
 	poller := service.NewPoller(calendarService, subscribeService, time.Now)
 	go poller.Run(pollerCtx, subscriptionPollerTickInterval)
 
+	// The Attachment sweeper: reclaims files with no matching row, at
+	// startup and daily thereafter (#132, ADR-0040).
+	sweeperCtx, stopSweeper := context.WithCancel(context.Background())
+	defer stopSweeper()
+	sweeper := service.NewAttachmentSweeper(attachmentRepo, attachmentStore)
+	go sweeper.Run(sweeperCtx, attachmentSweepInterval)
+
 	go func() {
 		logger.Info("starting server", "port", cfg.Port, "data_dir", cfg.DataDir)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
@@ -139,6 +158,7 @@ func main() {
 	logger.Info("shutting down")
 	stopScheduler()
 	stopPoller()
+	stopSweeper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 

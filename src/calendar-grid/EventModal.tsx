@@ -1,9 +1,12 @@
-import { useState, type KeyboardEvent } from "react";
+import { useRef, useState, type DragEvent, type KeyboardEvent } from "react";
 import { addDays, format, setHours, setMinutes, startOfDay } from "date-fns";
 import { Dialog } from "@base-ui/react/dialog";
 import { Download } from "lucide-react";
 import type { DraftBlock } from "../lib/gridTime";
-import type { Event, Reminder } from "../lib/event";
+import type { Attachment, Event, Reminder } from "../lib/event";
+import { attachmentsApi } from "../lib/attachmentsApi";
+import { downloadBlob } from "../lib/downloadBlob";
+import { errorMessage } from "../lib/errorMessage";
 import { isRecurringOccurrence, resolveMaster, type Occurrence } from "../lib/occurrence";
 import { viewerZone } from "../lib/floatingTime";
 import {
@@ -51,6 +54,7 @@ import { ScopePicker } from "./ScopePicker";
 import { DiscardRecurrenceWarning } from "./DiscardRecurrenceWarning";
 import { ReminderRow } from "./ReminderRow";
 import { ReminderOverrideControl } from "./ReminderOverrideControl";
+import { AttachmentRow, type AttachmentDraft } from "./AttachmentRow";
 
 /** A Reminder plus a local id, so its row keeps stable identity across
  * add/remove/reorder in the Reminders section (Reminder itself has no id —
@@ -133,6 +137,7 @@ export function EventModal(props: EventModalProps) {
 
   const checkedCalendarIds = useShellStore((state) => state.checkedCalendarIds);
   const events = useEventsStore((state) => state.events);
+  const fetchEvents = useEventsStore((state) => state.fetchEvents);
   const addEvent = useEventsStore((state) => state.addEvent);
   const updateEvent = useEventsStore((state) => state.updateEvent);
   const removeEvent = useEventsStore((state) => state.removeEvent);
@@ -201,11 +206,30 @@ export function EventModal(props: EventModalProps) {
     mode === "edit" && calendarHasOtherRecipients(editedCalendar)
       ? props.occurrence.event.createdByUsername
       : undefined;
+  const showAttachmentUploader = mode === "edit" && calendarHasOtherRecipients(editedCalendar);
 
   const [initial] = useState(() =>
     deriveInitialFormState(props, master, defaultCalendarId(checkedCalendars)),
   );
   const { day } = initial;
+
+  // Attachments (#132, ADR-0040) belong to the Master, never an Override —
+  // master (not props.occurrence.event) is deliberately what every
+  // attachment action below targets, edit mode or create. createdEventId is
+  // set once a brand-new Event's create POST has succeeded, since an
+  // upload needs a row to reference; until then, a picked/dropped file just
+  // sits in attachmentDrafts as "pending" (ADR-0040).
+  const [createdEventId, setCreatedEventId] = useState<string | null>(null);
+  const attachmentEventId = mode === "edit" ? master?.id : (createdEventId ?? undefined);
+  const [attachmentDrafts, setAttachmentDrafts] = useState<AttachmentDraft[]>(() =>
+    (master?.attachments ?? []).map((attachment) => ({
+      draftId: attachment.id,
+      status: "uploaded" as const,
+      attachment,
+    })),
+  );
+  const [isDraggingOverAttachments, setIsDraggingOverAttachments] = useState(false);
+  const attachmentInputRef = useRef<HTMLInputElement>(null);
 
   const [title, setTitle] = useState(initial.title);
   const [startTime, setStartTime] = useState(initial.startTime);
@@ -283,6 +307,145 @@ export function EventModal(props: EventModalProps) {
     setReminders((current) => current.filter((r) => r.draftId !== draftId));
   }
 
+  // startAttachmentUpload drives one file's XHR upload (attachmentsApi —
+  // the app's one fetch-free call, for real progress, #132 ADR-0040),
+  // reusing existingDraftId so a retry updates the same row rather than
+  // adding a new one. Every state update first checks the draft is still
+  // present, since removing a row mid-upload doesn't cancel the request —
+  // there is nothing to write the result onto if it finishes anyway.
+  function startAttachmentUpload(file: File, eventId: string, existingDraftId?: string) {
+    const draftId = existingDraftId ?? crypto.randomUUID();
+    setAttachmentDrafts((current) => {
+      const uploading: AttachmentDraft = {
+        draftId,
+        status: "uploading",
+        filename: file.name,
+        sizeBytes: file.size,
+        progress: 0,
+      };
+      const index = current.findIndex((draft) => draft.draftId === draftId);
+      if (index === -1) return [...current, uploading];
+      return current.map((draft) => (draft.draftId === draftId ? uploading : draft));
+    });
+
+    attachmentsApi
+      .upload(accessToken!, eventId, file, (progress) => {
+        setAttachmentDrafts((current) =>
+          current.map((draft) =>
+            draft.draftId === draftId && draft.status === "uploading"
+              ? { ...draft, progress }
+              : draft,
+          ),
+        );
+      })
+      .then((attachment) => {
+        setAttachmentDrafts((current) => {
+          if (!current.some((draft) => draft.draftId === draftId)) return current;
+          return current.map((draft) =>
+            draft.draftId === draftId ? { draftId, status: "uploaded", attachment } : draft,
+          );
+        });
+        // Keeps the store's copy of the Event in sync, so reopening it later
+        // (or another view rendering it) sees the Attachment too, without a
+        // dedicated store mutation just for this one field.
+        void fetchEvents();
+      })
+      .catch((err) => {
+        setAttachmentDrafts((current) => {
+          if (!current.some((draft) => draft.draftId === draftId)) return current;
+          return current.map((draft) =>
+            draft.draftId === draftId
+              ? {
+                  draftId,
+                  status: "error",
+                  filename: file.name,
+                  sizeBytes: file.size,
+                  file,
+                  message: errorMessage(err),
+                }
+              : draft,
+          );
+        });
+      });
+  }
+
+  // Uploads immediately once attachmentEventId exists (an existing Event,
+  // or a just-created one); otherwise stages a "pending" draft, since
+  // there's no row yet to upload against — the create POST must succeed
+  // first (ADR-0040).
+  function handleAddAttachmentFiles(files: FileList | File[]) {
+    if (isReadOnlyEvent) return;
+    for (const file of Array.from(files)) {
+      if (attachmentEventId) {
+        startAttachmentUpload(file, attachmentEventId);
+      } else {
+        setAttachmentDrafts((current) => [
+          ...current,
+          {
+            draftId: crypto.randomUUID(),
+            status: "pending",
+            filename: file.name,
+            sizeBytes: file.size,
+            file,
+          },
+        ]);
+      }
+    }
+  }
+
+  function handleRetryAttachment(draft: AttachmentDraft) {
+    if (draft.status !== "error" || !attachmentEventId) return;
+    startAttachmentUpload(draft.file, attachmentEventId, draft.draftId);
+  }
+
+  // No confirmation dialog — inline remove, like ReminderRow (ADR-0040).
+  function handleRemoveAttachment(draft: AttachmentDraft) {
+    setAttachmentDrafts((current) => current.filter((d) => d.draftId !== draft.draftId));
+    if (draft.status === "uploaded" && attachmentEventId && accessToken) {
+      attachmentsApi
+        .remove(accessToken, attachmentEventId, draft.attachment.id)
+        .then(() => void fetchEvents())
+        .catch(() => {
+          toast.error("Failed to remove attachment.");
+          setAttachmentDrafts((current) => [...current, draft]);
+        });
+    }
+  }
+
+  async function handleDownloadAttachment(attachment: Attachment) {
+    if (!accessToken || !attachmentEventId) return;
+    try {
+      await downloadBlob(
+        accessToken,
+        attachmentsApi.downloadUrl(attachmentEventId, attachment.id),
+        attachment.filename,
+      );
+    } catch {
+      toast.error("Failed to download attachment.");
+    }
+  }
+
+  // Dropping anywhere on the modal attaches the file rather than letting the
+  // browser's default take over wherever it landed — including a text
+  // field, which would otherwise paste a path (#132, ADR-0040). Handlers
+  // live on the Popup itself so every child's drop bubbles here unless the
+  // child claims its own (none in this file do).
+  function handleModalDragOver(event: DragEvent<HTMLDivElement>) {
+    if (isReadOnlyEvent) return;
+    event.preventDefault();
+    setIsDraggingOverAttachments(true);
+  }
+
+  function handleModalDragLeave() {
+    setIsDraggingOverAttachments(false);
+  }
+
+  function handleModalDrop(event: DragEvent<HTMLDivElement>) {
+    event.preventDefault();
+    setIsDraggingOverAttachments(false);
+    handleAddAttachmentFiles(event.dataTransfer.files);
+  }
+
   // All-day skips the time-range check entirely — there's no time inputs to
   // validate (ADR-0017).
   const isTimeRangeValid =
@@ -290,8 +453,12 @@ export function EventModal(props: EventModalProps) {
   const canSave =
     !isReadOnlyEvent && title.trim() !== "" && calendarId !== "" && isTimeRangeValid;
 
-  function handleSave() {
+  async function handleSave() {
     if (!canSave) return;
+    // Once a create has already gone through and its Attachments are
+    // uploading, this Event is done — Enter shouldn't try to create a
+    // second one (the Save button is already hidden by then too).
+    if (mode !== "edit" && createdEventId) return;
 
     // An all-day Event's start/end are whole dates: start is the day itself,
     // end is the exclusive next day (ADR-0017).
@@ -318,8 +485,38 @@ export function EventModal(props: EventModalProps) {
       // A newly created Event is stamped with the creator's Viewer zone; an
       // all-day Event stays timezone-free (ADR-0017, ADR-0019).
       const tzid = allDay ? undefined : viewerZone();
-      addEvent({ id: crypto.randomUUID(), ...changes, tzid });
-      onClose();
+      const id = crypto.randomUUID();
+
+      const pendingFiles = attachmentDrafts.filter(
+        (draft): draft is Extract<AttachmentDraft, { status: "pending" }> =>
+          draft.status === "pending",
+      );
+      if (pendingFiles.length === 0) {
+        addEvent({ id, ...changes, tzid });
+        onClose();
+        return;
+      }
+
+      // The row must exist before an upload can reference it, so the
+      // create POST is awaited here rather than fired-and-forgotten like
+      // the branch above — cancelling the modal (closing without files
+      // staged) still uploads nothing, since this whole branch is skipped
+      // when there's nothing pending (#132, ADR-0040). The dialog stays
+      // open afterwards so per-file progress/retry has somewhere to live;
+      // its footer switches to a single Done button once createdEventId is
+      // set.
+      await addEvent({ id, ...changes, tzid });
+      if (!useEventsStore.getState().events.some((event) => event.id === id)) {
+        // addEvent already rolled back its optimistic add and toasted the
+        // failure — the Event was never saved, so there's nothing to
+        // upload against.
+        onClose();
+        return;
+      }
+      setCreatedEventId(id);
+      for (const draft of pendingFiles) {
+        startAttachmentUpload(draft.file, id, draft.draftId);
+      }
       return;
     }
 
@@ -427,7 +624,7 @@ export function EventModal(props: EventModalProps) {
       target.tagName !== "TEXTAREA"
     ) {
       event.preventDefault();
-      handleSave();
+      void handleSave();
     }
   }
 
@@ -443,7 +640,10 @@ export function EventModal(props: EventModalProps) {
           <Dialog.Backdrop className="fixed inset-0 z-40 bg-ink/20" />
           <Dialog.Popup
             onKeyDown={handleEnterToSave}
-            className="fixed top-1/2 left-1/2 z-50 w-[28rem] -translate-x-1/2 -translate-y-1/2 rounded-shell-lg bg-surface p-5 shadow-elevation-3"
+            onDragOver={handleModalDragOver}
+            onDragLeave={handleModalDragLeave}
+            onDrop={handleModalDrop}
+            className="fixed top-1/2 left-1/2 z-50 max-h-[85vh] w-[28rem] -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-shell-lg bg-surface p-5 shadow-elevation-3"
           >
             <div className="flex items-center justify-between gap-2">
               <Dialog.Title className="text-heading font-medium text-ink">
@@ -463,7 +663,7 @@ export function EventModal(props: EventModalProps) {
             <form
               onSubmit={(event) => {
                 event.preventDefault();
-                handleSave();
+                void handleSave();
               }}
             >
             <Input
@@ -612,6 +812,54 @@ export function EventModal(props: EventModalProps) {
               </p>
             )}
 
+            <div
+              className={`mt-4 rounded-shell-md p-1.5 transition-colors ${
+                isDraggingOverAttachments && !isReadOnlyEvent
+                  ? "bg-surface-hover outline-2 outline-dashed outline-accent"
+                  : ""
+              }`}
+            >
+              <p className="mb-1.5 text-label-sm text-ink-muted">Attachments</p>
+              {attachmentDrafts.length > 0 && (
+                <div className="flex flex-col gap-2">
+                  {attachmentDrafts.map((draft) => (
+                    <AttachmentRow
+                      key={draft.draftId}
+                      draft={draft}
+                      showUploader={showAttachmentUploader}
+                      onDownload={() =>
+                        draft.status === "uploaded" && handleDownloadAttachment(draft.attachment)
+                      }
+                      onRemove={() => handleRemoveAttachment(draft)}
+                      onRetry={() => handleRetryAttachment(draft)}
+                      disabled={isReadOnlyEvent}
+                    />
+                  ))}
+                </div>
+              )}
+              {!isReadOnlyEvent && (
+                <>
+                  <input
+                    ref={attachmentInputRef}
+                    type="file"
+                    multiple
+                    className="hidden"
+                    onChange={(event) => {
+                      if (event.target.files) handleAddAttachmentFiles(event.target.files);
+                      event.target.value = "";
+                    }}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => attachmentInputRef.current?.click()}
+                    className="mt-1.5 text-label-sm text-accent hover:underline"
+                  >
+                    Add attachment
+                  </button>
+                </>
+              )}
+            </div>
+
             <div className="mt-5 flex items-center justify-between gap-2">
               {mode === "edit" && !isReadOnlyEvent ? (
                 <Button
@@ -626,7 +874,9 @@ export function EventModal(props: EventModalProps) {
                 <span />
               )}
               <div className="flex gap-2">
-                {isReadOnlyEvent ? (
+                {mode !== "edit" && createdEventId ? (
+                  <Dialog.Close className={buttonClasses({ size: "small" })}>Done</Dialog.Close>
+                ) : isReadOnlyEvent ? (
                   <Dialog.Close
                     className={buttonClasses({
                       variant: "outline",

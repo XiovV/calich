@@ -1,5 +1,9 @@
 # React + TypeScript + Vite
 
+## Data & backups
+
+Everything this instance keeps is under `DATA_DIR` (default `/data`): `calendar.db` (SQLite) and, as of Attachments (#132, ADR-0040), an `attachments/` directory holding every uploaded file's bytes. A backup that copies only `calendar.db` silently loses every Attachment — back up the whole `DATA_DIR`, not just the database file.
+
 This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
 
 Currently, two official plugins are available:

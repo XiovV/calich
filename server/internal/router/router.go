@@ -15,7 +15,7 @@ import (
 	"github.com/XiovV/calendar/server/internal/static"
 )
 
-func New(logger *slog.Logger, authHandler *handlers.AuthHandler, calendarHandler *handlers.CalendarHandler, eventHandler *handlers.EventHandler, notificationHandler *handlers.NotificationHandler, appPasswordHandler *handlers.AppPasswordHandler, accountHandler *handlers.AccountHandler, userHandler *handlers.UserHandler, calDAVHandler http.Handler, authenticator httpauth.Authenticator, activeUserChecker httpauth.ActiveUserChecker, calDAVAuthenticator httpauth.CalDAVAuthenticator, adminChecker httpauth.AdminChecker) (http.Handler, error) {
+func New(logger *slog.Logger, authHandler *handlers.AuthHandler, calendarHandler *handlers.CalendarHandler, eventHandler *handlers.EventHandler, attachmentHandler *handlers.AttachmentHandler, notificationHandler *handlers.NotificationHandler, appPasswordHandler *handlers.AppPasswordHandler, accountHandler *handlers.AccountHandler, userHandler *handlers.UserHandler, calDAVHandler http.Handler, authenticator httpauth.Authenticator, activeUserChecker httpauth.ActiveUserChecker, calDAVAuthenticator httpauth.CalDAVAuthenticator, adminChecker httpauth.AdminChecker) (http.Handler, error) {
 	r := chi.NewRouter()
 	r.Use(requestLogger(logger))
 	r.Use(middleware.Recoverer)
@@ -85,6 +85,12 @@ func New(logger *slog.Logger, authHandler *handlers.AuthHandler, calendarHandler
 			r.Get("/{id}/reminder-override", eventHandler.GetReminderOverride)
 			r.Put("/{id}/reminder-override", eventHandler.SetReminderOverride)
 			r.Delete("/{id}/reminder-override", eventHandler.ClearReminderOverride)
+
+			// Attachments (#132, ADR-0040): list rides along on the Event
+			// itself (eventResponse.Attachments) rather than its own route.
+			r.Post("/{id}/attachments", attachmentHandler.Upload)
+			r.Get("/{id}/attachments/{attachmentId}", attachmentHandler.Download)
+			r.Delete("/{id}/attachments/{attachmentId}", attachmentHandler.Delete)
 		})
 
 		r.Route("/notifications", func(r chi.Router) {

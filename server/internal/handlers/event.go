@@ -78,6 +78,46 @@ func fromReminderWire(wire []reminderWire) []repository.Reminder {
 	return reminders
 }
 
+// attachmentWire is an Attachment's wire shape (#132, ADR-0040), shared by
+// the Event response's embedded list and the upload endpoint's own
+// response — an Attachment has no other representation.
+type attachmentWire struct {
+	ID          string `json:"id"`
+	Filename    string `json:"filename"`
+	ContentType string `json:"contentType"`
+	SizeBytes   int64  `json:"sizeBytes"`
+	// UploadedBy and UploadedByUsername are the Attachment's uploader, for
+	// display only — never consulted for authorization, which resolves
+	// through the Event's Calendar instead (ADR-0034). Both absent when the
+	// uploader's account has been deleted.
+	UploadedBy         *int64    `json:"uploadedBy,omitempty"`
+	UploadedByUsername string    `json:"uploadedByUsername,omitempty"`
+	CreatedAt          time.Time `json:"createdAt"`
+}
+
+func toAttachmentResponse(a repository.Attachment) attachmentWire {
+	return attachmentWire{
+		ID:                 a.ID,
+		Filename:           a.Filename,
+		ContentType:        a.ContentType,
+		SizeBytes:          a.SizeBytes,
+		UploadedBy:         a.UploadedBy,
+		UploadedByUsername: a.UploadedByUsername,
+		CreatedAt:          a.CreatedAt,
+	}
+}
+
+func toAttachmentResponses(attachments []repository.Attachment) []attachmentWire {
+	if len(attachments) == 0 {
+		return nil
+	}
+	wire := make([]attachmentWire, len(attachments))
+	for i, a := range attachments {
+		wire[i] = toAttachmentResponse(a)
+	}
+	return wire
+}
+
 // eventResponse is an Event's wire shape. Start and End are strings so their
 // format can branch on AllDay (ADR-0017); toEventResponse is the only thing
 // that builds one, and does that formatting. Field order here is the emitted
@@ -114,6 +154,9 @@ type eventResponse struct {
 	// account has been deleted or the Event predates this column.
 	CreatedBy         *int64 `json:"createdBy,omitempty"`
 	CreatedByUsername string `json:"createdByUsername,omitempty"`
+	// Attachments is this Event's Attachments (#132, ADR-0040) — present
+	// only on a Master; an Override never carries its own.
+	Attachments []attachmentWire `json:"attachments,omitempty"`
 }
 
 func toEventResponse(e repository.Event) eventResponse {
@@ -134,6 +177,7 @@ func toEventResponse(e repository.Event) eventResponse {
 		Location:          e.Location,
 		CreatedBy:         e.CreatedBy,
 		CreatedByUsername: e.CreatedByUsername,
+		Attachments:       toAttachmentResponses(e.Attachments),
 	}
 }
 

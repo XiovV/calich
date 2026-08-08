@@ -1,6 +1,6 @@
 import { format } from "date-fns";
 import { authedFetch, errorFromResponse } from "./apiClient";
-import type { Event, Reminder } from "./event";
+import type { Attachment, Event, Reminder } from "./event";
 
 interface EventWire {
   id: string;
@@ -25,6 +25,29 @@ interface EventWire {
   // createdByUsername is absent when the creator's account has been
   // deleted or the Event predates this column (#118).
   createdByUsername?: string;
+  // Present only on a Master with at least one Attachment (#132, ADR-0040).
+  attachments?: AttachmentWire[];
+}
+
+interface AttachmentWire {
+  id: string;
+  filename: string;
+  contentType: string;
+  sizeBytes: number;
+  uploadedBy?: number;
+  uploadedByUsername?: string;
+  createdAt: string;
+}
+
+export function attachmentFromWire(wire: AttachmentWire): Attachment {
+  return {
+    id: wire.id,
+    filename: wire.filename,
+    contentType: wire.contentType,
+    sizeBytes: wire.sizeBytes,
+    uploadedByUsername: wire.uploadedByUsername || undefined,
+    createdAt: new Date(wire.createdAt),
+  };
 }
 
 /**
@@ -69,6 +92,7 @@ function fromWire(wire: EventWire): Event {
     description: wire.description || undefined,
     location: wire.location || undefined,
     createdByUsername: wire.createdByUsername || undefined,
+    attachments: wire.attachments?.map(attachmentFromWire),
   };
 }
 

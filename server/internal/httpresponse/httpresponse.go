@@ -5,7 +5,9 @@ package httpresponse
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
+	"strconv"
 )
 
 type errorBody struct {
@@ -47,4 +49,23 @@ func ICS(w http.ResponseWriter, filename string, body []byte) {
 // download named filename.
 func Zip(w http.ResponseWriter, filename string, body []byte) {
 	File(w, http.StatusOK, "application/zip", filename, body)
+}
+
+// Attachment streams body (the caller Closes it) as an Attachment download
+// (#132, ADR-0040), preserving the stored contentType so a saved file keeps
+// its association. On top of Content-Disposition, every response carries
+// X-Content-Type-Options: nosniff and a sandboxed Content-Security-Policy —
+// nothing user-uploaded ever renders inline from this origin, since an
+// uploaded .html or .svg served inline would be stored XSS against the app
+// itself.
+func Attachment(w http.ResponseWriter, contentType, filename string, size int64, body io.Reader) {
+	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", filename))
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Content-Security-Policy", "sandbox")
+	if size >= 0 {
+		w.Header().Set("Content-Length", strconv.FormatInt(size, 10))
+	}
+	w.WriteHeader(http.StatusOK)
+	io.Copy(w, body)
 }

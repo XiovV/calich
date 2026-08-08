@@ -21,6 +21,12 @@ func Open(dataDir string) (*sql.DB, error) {
 		return nil, fmt.Errorf("create data dir: %w", err)
 	}
 
+	// Attachments' bytes (#132, ADR-0040) live under here too, so a backup
+	// of dataDir now needs more than calendar.db — see the README.
+	if err := os.MkdirAll(filepath.Join(dataDir, "attachments"), 0o755); err != nil {
+		return nil, fmt.Errorf("create attachments dir: %w", err)
+	}
+
 	// SQLite disables foreign key enforcement per-connection by default —
 	// without this, the ON DELETE CASCADE constraints in our schema (e.g.
 	// events cascading off their calendar) would silently do nothing.

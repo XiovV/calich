@@ -69,6 +69,11 @@ type Event struct {
 	// column — populated by the service layer from users, mirroring how
 	// Exdates and Reminders are attached. Empty whenever CreatedBy is nil.
 	CreatedByUsername string
+	// Attachments are this Event's Attachments (#132, ADR-0040) — set only
+	// on a Master; an Override never carries its own. Not a column —
+	// populated by the service layer from event_attachments, mirroring
+	// Reminders.
+	Attachments []Attachment
 }
 
 type EventRepository struct {

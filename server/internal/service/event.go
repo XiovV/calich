@@ -84,10 +84,11 @@ type EventService struct {
 	sync              *repository.SyncRepository
 	calendars         *CalendarService
 	users             *repository.UserRepository
+	attachments       *repository.AttachmentRepository
 }
 
-func NewEventService(db *sql.DB, events *repository.EventRepository, exceptions *repository.EventExceptionRepository, reminders *repository.EventReminderRepository, reminderOverrides *repository.ReminderOverrideRepository, sync *repository.SyncRepository, calendars *CalendarService, users *repository.UserRepository) *EventService {
-	return &EventService{db: db, events: events, exceptions: exceptions, reminders: reminders, reminderOverrides: reminderOverrides, sync: sync, calendars: calendars, users: users}
+func NewEventService(db *sql.DB, events *repository.EventRepository, exceptions *repository.EventExceptionRepository, reminders *repository.EventReminderRepository, reminderOverrides *repository.ReminderOverrideRepository, sync *repository.SyncRepository, calendars *CalendarService, users *repository.UserRepository, attachments *repository.AttachmentRepository) *EventService {
+	return &EventService{db: db, events: events, exceptions: exceptions, reminders: reminders, reminderOverrides: reminderOverrides, sync: sync, calendars: calendars, users: users, attachments: attachments}
 }
 
 // calendarByID resolves calendarID via s.calendars.Get, translating
@@ -356,6 +357,9 @@ func (s *EventService) Create(ctx context.Context, userID int64, id string, writ
 	if err := s.attachCreatedByUsernames(ctx, result); err != nil {
 		return repository.Event{}, err
 	}
+	if err := s.attachAttachments(ctx, result); err != nil {
+		return repository.Event{}, err
+	}
 	return result[0], nil
 }
 
@@ -424,6 +428,9 @@ func (s *EventService) List(ctx context.Context, userID int64, from, to *time.Ti
 		return nil, err
 	}
 	if err := s.attachCreatedByUsernames(ctx, events); err != nil {
+		return nil, err
+	}
+	if err := s.attachAttachments(ctx, events); err != nil {
 		return nil, err
 	}
 	return events, nil
@@ -549,6 +556,55 @@ func (s *EventService) attachRemindersTo(ctx context.Context, events []*reposito
 	return nil
 }
 
+// attachAttachments fills in Attachments on each Master in events (an
+// Override is left with none — it can never carry its own, ADR-0040),
+// plus UploadedByUsername on each of them, batching one Attachment lookup
+// and one user lookup across every Event rather than one per Event, the
+// same shape as attachReminders and attachCreatedByUsernames.
+func (s *EventService) attachAttachments(ctx context.Context, events []repository.Event) error {
+	masterIDs := make([]string, 0, len(events))
+	for _, e := range events {
+		if e.ParentID == nil {
+			masterIDs = append(masterIDs, e.ID)
+		}
+	}
+
+	attachmentsByEvent, err := s.attachments.ListByEventIDs(ctx, masterIDs)
+	if err != nil {
+		return fmt.Errorf("list attachments: %w", err)
+	}
+
+	uploaderIDs := make([]int64, 0)
+	seen := make(map[int64]bool)
+	for _, list := range attachmentsByEvent {
+		for _, a := range list {
+			if a.UploadedBy == nil || seen[*a.UploadedBy] {
+				continue
+			}
+			seen[*a.UploadedBy] = true
+			uploaderIDs = append(uploaderIDs, *a.UploadedBy)
+		}
+	}
+	uploaders, err := s.users.GetByIDs(ctx, uploaderIDs)
+	if err != nil {
+		return fmt.Errorf("list uploaders: %w", err)
+	}
+
+	for i := range events {
+		if events[i].ParentID != nil {
+			continue
+		}
+		list := attachmentsByEvent[events[i].ID]
+		for j := range list {
+			if list[j].UploadedBy != nil {
+				list[j].UploadedByUsername = uploaders[*list[j].UploadedBy].Username
+			}
+		}
+		events[i].Attachments = list
+	}
+	return nil
+}
+
 func (s *EventService) Get(ctx context.Context, userID int64, id string) (repository.Event, error) {
 	event, err := s.getOwnedEvent(ctx, userID, id)
 	if err != nil {
@@ -562,6 +618,9 @@ func (s *EventService) Get(ctx context.Context, userID int64, id string) (reposi
 		return repository.Event{}, err
 	}
 	if err := s.attachCreatedByUsernames(ctx, events); err != nil {
+		return repository.Event{}, err
+	}
+	if err := s.attachAttachments(ctx, events); err != nil {
 		return repository.Event{}, err
 	}
 	return events[0], nil
@@ -658,6 +717,9 @@ func (s *EventService) Update(ctx context.Context, userID int64, id string, writ
 		return repository.Event{}, err
 	}
 	if err := s.attachCreatedByUsernames(ctx, result); err != nil {
+		return repository.Event{}, err
+	}
+	if err := s.attachAttachments(ctx, result); err != nil {
 		return repository.Event{}, err
 	}
 	return result[0], nil

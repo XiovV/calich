@@ -3,6 +3,7 @@ package config
 import (
 	"log/slog"
 	"os"
+	"strconv"
 	"time"
 )
 
@@ -11,11 +12,25 @@ import (
 // SUBSCRIPTION_REFRESH_INTERVAL is unset (#86, ADR-0033).
 const defaultSubscriptionRefreshInterval = time.Hour
 
+// defaultMaxAttachmentSize and defaultMaxAttachmentsPerEvent are Attachments'
+// limits (#132, ADR-0040) when MAX_ATTACHMENT_SIZE/MAX_ATTACHMENTS_PER_EVENT
+// are unset. Env-configurable rather than a hardcoded const like
+// maxImportUploadBytes, because disk is the one resource that varies wildly
+// between self-hosters and is already the thing they configure.
+const (
+	defaultMaxAttachmentSize      int64 = 25 << 20
+	defaultMaxAttachmentsPerEvent       = 10
+)
+
 type Config struct {
 	Port            string
 	DataDir         string
 	InitialUsername string
 	InitialPassword string
+	// MaxAttachmentSize and MaxAttachmentsPerEvent are Attachments' limits
+	// (#132, ADR-0040).
+	MaxAttachmentSize      int64
+	MaxAttachmentsPerEvent int
 	// SMTP transport for Email-Channel Reminders (ADR-0021). Email delivery
 	// is only wired up when every one of these is set.
 	SMTPHost string
@@ -43,6 +58,8 @@ func Load() Config {
 		SMTPPass:                    getEnv("SMTP_PASS", ""),
 		SMTPFrom:                    getEnv("SMTP_FROM", ""),
 		SubscriptionRefreshInterval: getEnvDuration("SUBSCRIPTION_REFRESH_INTERVAL", defaultSubscriptionRefreshInterval),
+		MaxAttachmentSize:           getEnvInt64("MAX_ATTACHMENT_SIZE", defaultMaxAttachmentSize),
+		MaxAttachmentsPerEvent:      getEnvInt("MAX_ATTACHMENTS_PER_EVENT", defaultMaxAttachmentsPerEvent),
 	}
 }
 
@@ -57,6 +74,34 @@ func getEnvDuration(key string, fallback time.Duration) time.Duration {
 		return fallback
 	}
 	return d
+}
+
+// getEnvInt64 parses key as a base-10 integer (e.g. a byte count), falling
+// back to fallback when unset or unparseable.
+func getEnvInt64(key string, fallback int64) int64 {
+	v := os.Getenv(key)
+	if v == "" {
+		return fallback
+	}
+	n, err := strconv.ParseInt(v, 10, 64)
+	if err != nil {
+		slog.Warn("invalid integer env var, using default", "key", key, "value", v, "default", fallback)
+		return fallback
+	}
+	return n
+}
+
+func getEnvInt(key string, fallback int) int {
+	v := os.Getenv(key)
+	if v == "" {
+		return fallback
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		slog.Warn("invalid integer env var, using default", "key", key, "value", v, "default", fallback)
+		return fallback
+	}
+	return n
 }
 
 // SMTPConfigured reports whether every SMTP setting needed to send mail is

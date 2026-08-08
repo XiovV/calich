@@ -9,6 +9,19 @@ export interface Reminder {
   channel: ReminderChannel;
 }
 
+// A file held against a Master, shown on every Occurrence of its series —
+// an Override never carries its own (#132, ADR-0040).
+export interface Attachment {
+  id: string;
+  filename: string;
+  contentType: string;
+  sizeBytes: number;
+  // uploadedByUsername is who uploaded this Attachment, for display on a
+  // shared Calendar — absent when the uploader's account has been deleted.
+  uploadedByUsername?: string;
+  createdAt: Date;
+}
+
 export interface Event {
   id: string;
   calendarId: string;
@@ -49,4 +62,7 @@ export interface Event {
   // Undefined when the creator's account has been deleted, or the Event
   // predates this field.
   createdByUsername?: string;
+  // This Event's Attachments (#132, ADR-0040). Undefined/empty on an
+  // Override — it never carries its own — or when the Master has none.
+  attachments?: Attachment[];
 }
