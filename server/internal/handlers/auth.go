@@ -41,6 +41,15 @@ var loginErrors = []errorCase{
 	{service.ErrAccountDisabled, unauthorized("account_disabled", "this account has been disabled")},
 }
 
+var registerErrors = []errorCase{
+	{service.ErrSignupsDisabled, forbidden("self-registration is disabled on this instance")},
+	{service.ErrInvalidUsername, badRequest("username must not be empty, must not contain whitespace or a colon, and must be at most 64 characters")},
+	{service.ErrUsernameTaken, conflict("username_taken", "username is already taken")},
+	{service.ErrEmailRequired, badRequest("email is required")},
+	{service.ErrInvalidEmail, badRequest("email is not a valid address")},
+	{service.ErrInvalidPassword, badRequest("password must not be empty")},
+}
+
 var acceptInviteErrors = []errorCase{
 	{service.ErrInviteInvalid, unauthorized("invite_invalid", "invite is invalid or has expired")},
 	{service.ErrInvalidPassword, badRequest("password must not be empty")},
@@ -87,6 +96,40 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 
 	result, err := h.auth.Login(r.Context(), req.Username, req.Password)
 	if respondError(w, err, loginErrors, "failed to log in") {
+		return
+	}
+
+	setRefreshCookie(w, result.RefreshToken, result.RefreshTokenExpiresAt)
+
+	httpresponse.JSON(w, http.StatusOK, loginResponse{
+		AccessToken:        result.AccessToken,
+		MustChangePassword: result.MustChangePassword,
+	})
+}
+
+// registerRequest's Name doubles as the account's username (validateUsername
+// in the service layer): no whitespace or colon, since the same value is
+// what CalDAV Basic auth authenticates against.
+type registerRequest struct {
+	Name     string `json:"name"`
+	Email    string `json:"email"`
+	Password string `json:"password"`
+}
+
+// Register is the public, unauthenticated first-run bootstrap form and
+// self-registration endpoint (ADR-0044): it always succeeds for the very
+// first account on the instance, and otherwise only when ENABLE_SIGNUPS is
+// true. A successful call creates a brand-new Workspace owned by the
+// registrant and logs them straight in, matching AcceptInvite's shape.
+func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
+	var req registerRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httpresponse.Error(w, http.StatusBadRequest, "invalid_request", "request body must be valid JSON")
+		return
+	}
+
+	result, err := h.auth.Register(r.Context(), req.Name, req.Email, req.Password)
+	if respondError(w, err, registerErrors, "failed to register") {
 		return
 	}
 

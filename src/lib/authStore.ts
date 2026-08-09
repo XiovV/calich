@@ -16,6 +16,7 @@ interface AuthState {
   accessToken: string | null;
   bootstrap: () => Promise<void>;
   login: (username: string, password: string) => Promise<void>;
+  register: (name: string, email: string, password: string) => Promise<void>;
   acceptInvite: (token: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
   changePassword: (currentPassword: string, newPassword: string) => Promise<void>;
@@ -90,6 +91,16 @@ export const useAuthStore = create<AuthState>((set, get) => {
         return;
       }
 
+      const user = await authApi.me(accessToken);
+      set(authenticated(user, accessToken));
+      useShellStore.getState().setActiveView(user.defaultView);
+    },
+
+    // Registering (ADR-0044) always logs the caller straight in — there is
+    // no forced password-change step, unlike Bootstrap's now-retired fixed
+    // admin/admin fallback, since the registrant chose their own password.
+    register: async (name, email, password) => {
+      const { accessToken } = await authApi.register(name, email, password);
       const user = await authApi.me(accessToken);
       set(authenticated(user, accessToken));
       useShellStore.getState().setActiveView(user.defaultView);

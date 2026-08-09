@@ -5,12 +5,18 @@ import { useAsyncAction } from "../hooks/useAsyncAction";
 import { Button } from "../components/ui/Button";
 import { Input } from "../components/ui/Input";
 
-export function LoginPage() {
+// The first-run bootstrap form and self-registration page (ADR-0044): the
+// server decides whether the request is allowed — the very first account on
+// the instance always succeeds, and any later one only while ENABLE_SIGNUPS
+// is true — so this form doesn't need to know which case it's in, only show
+// the "self-registration is disabled" error the server returns otherwise.
+export function RegisterPage() {
   const status = useAuthStore((state) => state.status);
-  const login = useAuthStore((state) => state.login);
+  const register = useAuthStore((state) => state.register);
   const navigate = useNavigate();
 
-  const [username, setUsername] = useState("");
+  const [name, setName] = useState("");
+  const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const { isSubmitting, error, run } = useAsyncAction();
 
@@ -22,14 +28,14 @@ export function LoginPage() {
     return <Navigate to="/" replace />;
   }
 
-  const canSubmit = username.trim() !== "" && password.trim() !== "";
+  const canSubmit = name.trim() !== "" && email.trim() !== "" && password.trim() !== "";
 
   async function handleSubmit(domEvent: React.FormEvent) {
     domEvent.preventDefault();
     if (!canSubmit) return;
 
     await run(async () => {
-      await login(username, password);
+      await register(name, email, password);
       navigate("/", { replace: true });
     });
   }
@@ -40,18 +46,27 @@ export function LoginPage() {
         onSubmit={handleSubmit}
         className="w-80 rounded-shell-lg bg-surface p-6 shadow-elevation-2"
       >
-        <h1 className="text-heading font-medium text-ink">Sign in</h1>
+        <h1 className="text-heading font-medium text-ink">Create your account</h1>
         <p className="mt-1 text-body text-ink-muted">
-          Sign in to access your calendar.
+          Set up your account and workspace.
         </p>
 
         <Input
           label="Username"
           type="text"
-          value={username}
-          onChange={(domEvent) => setUsername(domEvent.target.value)}
-          placeholder="admin"
+          value={name}
+          onChange={(domEvent) => setName(domEvent.target.value)}
+          placeholder="jane"
           className="mt-5"
+        />
+
+        <Input
+          label="Email"
+          type="email"
+          value={email}
+          onChange={(domEvent) => setEmail(domEvent.target.value)}
+          placeholder="jane@example.com"
+          className="mt-4"
         />
 
         <Input
@@ -72,11 +87,11 @@ export function LoginPage() {
           loading={isSubmitting}
           className="mt-5"
         >
-          {isSubmitting ? "Signing in…" : "Sign in"}
+          {isSubmitting ? "Creating account…" : "Create account"}
         </Button>
 
         <p className="mt-4 text-label-sm text-ink-muted">
-          No account yet? <Link to="/register" className="text-accent">Create one</Link>
+          Already have an account? <Link to="/login" className="text-accent">Sign in</Link>
         </p>
       </form>
     </div>

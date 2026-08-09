@@ -52,7 +52,8 @@ func newTestCalDAVEnv(t *testing.T) testCalDAVEnv {
 
 	users := repository.NewUserRepository(sqlDB)
 	sessions := repository.NewSessionRepository(sqlDB)
-	authService := service.NewAuthService(users, sessions, []byte("test-secret"), "", "")
+	workspaces := service.NewWorkspaceService(sqlDB, repository.NewWorkspaceRepository(sqlDB))
+	authService := service.NewAuthService(users, sessions, workspaces, []byte("test-secret"), "admin", "admin", false)
 	user, _, err := authService.Bootstrap(context.Background())
 	if err != nil {
 		t.Fatalf("bootstrap: %v", err)

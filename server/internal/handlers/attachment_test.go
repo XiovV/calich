@@ -45,7 +45,7 @@ func newAttachmentTestServer(t *testing.T, maxAttachmentSize int64, maxAttachmen
 
 	users := repository.NewUserRepository(sqlDB)
 	sessions := repository.NewSessionRepository(sqlDB)
-	auth := service.NewAuthService(users, sessions, []byte("test-secret"), "owner", "hunter2")
+	auth := service.NewAuthService(users, sessions, service.NewWorkspaceService(sqlDB, repository.NewWorkspaceRepository(sqlDB)), []byte("test-secret"), "owner", "hunter2", false)
 	if _, _, err := auth.Bootstrap(ctx); err != nil {
 		t.Fatalf("bootstrap: %v", err)
 	}

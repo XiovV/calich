@@ -8,6 +8,7 @@ import { computeDefaultDraft, type DraftBlock } from "../../lib/gridTime";
 import { useCalendarsStore } from "../../lib/calendarsStore";
 import { useEventsStore } from "../../lib/eventsStore";
 import { useShellStore } from "../../lib/shellStore";
+import { useWorkspacesStore } from "../../lib/workspacesStore";
 import { occurrenceKey, type Occurrence } from "../../lib/occurrence";
 
 type EventModalState =
@@ -22,6 +23,11 @@ export function AppShell() {
   const reconcileCheckedCalendarIds = useShellStore(
     (state) => state.reconcileCheckedCalendarIds,
   );
+  const fetchWorkspaces = useWorkspacesStore((state) => state.fetchWorkspaces);
+
+  useEffect(() => {
+    fetchWorkspaces();
+  }, [fetchWorkspaces]);
 
   useEffect(() => {
     // Refetches on mount and whenever the tab regains focus, so a Share

@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/go-chi/chi/v5"
+	"golang.org/x/crypto/bcrypt"
 
 	"github.com/XiovV/calendar/server/internal/db"
 	"github.com/XiovV/calendar/server/internal/httpauth"
@@ -32,11 +33,13 @@ func newAuthTestServerWithSMTP(t *testing.T, smtpConfigured bool) *httptest.Serv
 
 	users := repository.NewUserRepository(sqlDB)
 	sessions := repository.NewSessionRepository(sqlDB)
-	auth := service.NewAuthService(users, sessions, []byte("test-secret"), "", "")
+	auth := service.NewAuthService(users, sessions, service.NewWorkspaceService(sqlDB, repository.NewWorkspaceRepository(sqlDB)), []byte("test-secret"), "", "", false)
 
-	if _, _, err := auth.Bootstrap(context.Background()); err != nil {
-		t.Fatalf("bootstrap: %v", err)
-	}
+	// A User requiring a password change (ADR-0037's must_change_password
+	// gate) is seeded directly rather than via Bootstrap, which no longer
+	// produces one — ADR-0044 retired Bootstrap's fixed admin/admin fallback,
+	// the only path that used to.
+	mustSeedUserRequiringPasswordChange(t, users, "admin", "admin")
 
 	h := NewAuthHandler(auth, smtpConfigured)
 
@@ -54,6 +57,32 @@ func newAuthTestServerWithSMTP(t *testing.T, smtpConfigured bool) *httptest.Serv
 	srv := httptest.NewServer(r)
 	t.Cleanup(srv.Close)
 	return srv
+}
+
+// mustSeedUserRequiringPasswordChange inserts an Admin User directly via the
+// repository with must_change_password set, standing in for what Bootstrap
+// used to produce unconditionally via its now-retired fixed admin/admin
+// fallback (ADR-0044) — an Admin (ADR-0037) forced to change a temporary
+// password, the shape most of this file's fixture-only setup still needs.
+func mustSeedUserRequiringPasswordChange(t *testing.T, users *repository.UserRepository, username, password string) repository.User {
+	t.Helper()
+
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	if err != nil {
+		t.Fatalf("hash password: %v", err)
+	}
+
+	user, err := users.Create(context.Background(), username, string(hash), true)
+	if err != nil {
+		t.Fatalf("seed user: %v", err)
+	}
+
+	user, err = users.SetAdmin(context.Background(), user.ID, true)
+	if err != nil {
+		t.Fatalf("grant seeded user admin: %v", err)
+	}
+
+	return user
 }
 
 func changePassword(t *testing.T, srv *httptest.Server, accessToken, currentPassword, newPassword string) *http.Response {
@@ -429,7 +458,7 @@ func TestUpdateUsername_DuplicateUsername_Returns409(t *testing.T) {
 
 	users := repository.NewUserRepository(sqlDB)
 	sessions := repository.NewSessionRepository(sqlDB)
-	auth := service.NewAuthService(users, sessions, []byte("test-secret"), "", "")
+	auth := service.NewAuthService(users, sessions, service.NewWorkspaceService(sqlDB, repository.NewWorkspaceRepository(sqlDB)), []byte("test-secret"), "admin", "admin", false)
 	bootstrapUser, _, err := auth.Bootstrap(context.Background())
 	if err != nil {
 		t.Fatalf("bootstrap: %v", err)

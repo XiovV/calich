@@ -89,6 +89,24 @@ export const authApi = {
     return { accessToken: body.access_token, mustChangePassword: body.must_change_password };
   },
 
+  // Self-registers a new account (ADR-0044) and logs the caller straight in
+  // — the public, unauthenticated first-run bootstrap form and
+  // self-registration endpoint. Always succeeds for the very first account
+  // on the instance; otherwise only while ENABLE_SIGNUPS is true, in which
+  // case the server returns a "forbidden" ApiError.
+  async register(name: string, email: string, password: string): Promise<LoginResult> {
+    const response = await fetch("/api/auth/register", {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, email, password }),
+    });
+    if (!response.ok) throw await errorFromResponse(response);
+
+    const body = (await response.json()) as { access_token: string; must_change_password: boolean };
+    return { accessToken: body.access_token, mustChangePassword: body.must_change_password };
+  },
+
   // Sets a password for the Pending account token names and logs the caller
   // straight in (ADR-0042) — the public, unauthenticated counterpart to
   // login for an Invite link.

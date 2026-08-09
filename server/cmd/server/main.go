@@ -63,7 +63,9 @@ func main() {
 	shareRepo := repository.NewCalendarShareRepository(sqlDB)
 	reminderOverrideRepo := repository.NewReminderOverrideRepository(sqlDB)
 	colorOverrideRepo := repository.NewCalendarUserColorRepository(sqlDB)
-	authService := service.NewAuthService(users, sessions, jwtSecret, cfg.InitialUsername, cfg.InitialPassword)
+	workspaceRepo := repository.NewWorkspaceRepository(sqlDB)
+	workspaceService := service.NewWorkspaceService(sqlDB, workspaceRepo)
+	authService := service.NewAuthService(users, sessions, workspaceService, jwtSecret, cfg.InitialUsername, cfg.InitialPassword, cfg.EnableSignups)
 	calendarService := service.NewCalendarService(calendarRepo, shareRepo, users, reminderOverrideRepo, colorOverrideRepo)
 	attachmentRepo := repository.NewAttachmentRepository(sqlDB)
 	eventRepo := repository.NewEventRepository(sqlDB)
@@ -112,9 +114,10 @@ func main() {
 	accountHandler := handlers.NewAccountHandler(accountService, cfg.SMTPConfigured())
 	userService := service.NewUserService(users)
 	userHandler := handlers.NewUserHandler(userService)
+	workspaceHandler := handlers.NewWorkspaceHandler(workspaceService)
 	calDAVHandler := caldavserver.NewHTTPHandler(caldavserver.NewBackend(calendarService, eventService, attachmentService, cfg.MaxAttachmentSize, cfg.MaxAttachmentsPerEvent))
 
-	handler, err := router.New(logger, authHandler, calendarHandler, eventHandler, attachmentHandler, notificationHandler, appPasswordHandler, accountHandler, userHandler, calDAVHandler, authService, authService, appPasswordService, authService)
+	handler, err := router.New(logger, authHandler, calendarHandler, eventHandler, attachmentHandler, notificationHandler, appPasswordHandler, accountHandler, userHandler, workspaceHandler, calDAVHandler, authService, authService, appPasswordService, authService)
 	if err != nil {
 		logger.Error("failed to build router", "error", err)
 		os.Exit(1)

@@ -44,6 +44,11 @@ type Config struct {
 	// (e.g. "1h", "30m"), or defaultSubscriptionRefreshInterval when unset
 	// or unparseable (#86, ADR-0033).
 	SubscriptionRefreshInterval time.Duration
+	// EnableSignups gates self-registration (ADR-0044): when false (the
+	// default), a registration attempt is rejected for everyone except the
+	// very first account on the instance, which Bootstrap or a first-run
+	// Register call always creates regardless of this setting.
+	EnableSignups bool
 }
 
 func Load() Config {
@@ -60,6 +65,7 @@ func Load() Config {
 		SubscriptionRefreshInterval: getEnvDuration("SUBSCRIPTION_REFRESH_INTERVAL", defaultSubscriptionRefreshInterval),
 		MaxAttachmentSize:           getEnvInt64("MAX_ATTACHMENT_SIZE", defaultMaxAttachmentSize),
 		MaxAttachmentsPerEvent:      getEnvInt("MAX_ATTACHMENTS_PER_EVENT", defaultMaxAttachmentsPerEvent),
+		EnableSignups:               getEnvBool("ENABLE_SIGNUPS", false),
 	}
 }
 
@@ -109,6 +115,21 @@ func getEnvInt(key string, fallback int) int {
 // (ADR-0021).
 func (c Config) SMTPConfigured() bool {
 	return c.SMTPHost != "" && c.SMTPPort != "" && c.SMTPUser != "" && c.SMTPPass != "" && c.SMTPFrom != ""
+}
+
+// getEnvBool parses key as a bool (e.g. "true"/"false", "1"/"0"), falling
+// back to fallback when unset or unparseable.
+func getEnvBool(key string, fallback bool) bool {
+	v := os.Getenv(key)
+	if v == "" {
+		return fallback
+	}
+	b, err := strconv.ParseBool(v)
+	if err != nil {
+		slog.Warn("invalid boolean env var, using default", "key", key, "value", v, "default", fallback)
+		return fallback
+	}
+	return b
 }
 
 func getEnv(key, fallback string) string {

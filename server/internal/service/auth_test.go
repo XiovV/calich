@@ -3,16 +3,23 @@ package service
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+	"golang.org/x/crypto/bcrypt"
 
 	"github.com/XiovV/calendar/server/internal/db"
 	"github.com/XiovV/calendar/server/internal/repository"
 )
 
 func newTestAuthService(t *testing.T, initialUsername, initialPassword string) *AuthService {
+	t.Helper()
+	return newTestAuthServiceWithSignups(t, initialUsername, initialPassword, false)
+}
+
+func newTestAuthServiceWithSignups(t *testing.T, initialUsername, initialPassword string, enableSignups bool) *AuthService {
 	t.Helper()
 
 	sqlDB, err := db.OpenInMemory()
@@ -23,12 +30,68 @@ func newTestAuthService(t *testing.T, initialUsername, initialPassword string) *
 
 	users := repository.NewUserRepository(sqlDB)
 	sessions := repository.NewSessionRepository(sqlDB)
+	workspaces := NewWorkspaceService(sqlDB, repository.NewWorkspaceRepository(sqlDB))
 
-	return NewAuthService(users, sessions, []byte("test-secret"), initialUsername, initialPassword)
+	return NewAuthService(users, sessions, workspaces, []byte("test-secret"), initialUsername, initialPassword, enableSignups)
 }
 
-func TestBootstrap_CreatesDefaultAdminWhenNoUsersAndNoEnvVars(t *testing.T) {
+// mustSeedUserRequiringPasswordChange inserts a User directly via the
+// repository, bypassing both Bootstrap and Register — neither of which ever
+// produces a User with must_change_password set anymore (ADR-0044 retires
+// the fixed bootstrap default that used to). Used only by tests exercising
+// AuthService's must-change-password mechanics themselves, which is
+// otherwise exercised via AccountService.Create (ADR-0037)'s Admin-issued
+// temporary password.
+func mustSeedUserRequiringPasswordChange(t *testing.T, svc *AuthService, ctx context.Context, username, password string) repository.User {
+	t.Helper()
+
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	if err != nil {
+		t.Fatalf("hash password: %v", err)
+	}
+
+	user, err := svc.users.Create(ctx, username, string(hash), true)
+	if err != nil {
+		t.Fatalf("seed user: %v", err)
+	}
+	return user
+}
+
+// TestBootstrap_NoopWhenNoEnvVars asserts ADR-0044's replacement for the
+// retired fixed admin/admin default (ADR-0010): with neither
+// INITIAL_USERNAME nor INITIAL_PASSWORD set, Bootstrap leaves a fresh
+// install with no User at all, rather than falling back to a known
+// credential — the instance waits for Register (the first-run bootstrap
+// form) instead.
+func TestBootstrap_NoopWhenNoEnvVars(t *testing.T) {
 	svc := newTestAuthService(t, "", "")
+	ctx := context.Background()
+
+	user, created, err := svc.Bootstrap(ctx)
+	if err != nil {
+		t.Fatalf("bootstrap: %v", err)
+	}
+	if created {
+		t.Fatalf("expected bootstrap to report created=false with no env vars set")
+	}
+	if user != (repository.User{}) {
+		t.Fatalf("expected a zero-value user, got %+v", user)
+	}
+
+	count, err := svc.users.Count(ctx)
+	if err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("expected no user to have been created, got count %d", count)
+	}
+}
+
+// TestBootstrap_CreatesWorkspaceOwnedByTheBootstrappedUser covers #153's
+// acceptance criterion that Bootstrap's env-credentialed path creates a
+// Workspace owned by the resulting User (ADR-0044).
+func TestBootstrap_CreatesWorkspaceOwnedByTheBootstrappedUser(t *testing.T) {
+	svc := newTestAuthService(t, "admin", "admin")
 	ctx := context.Background()
 
 	user, created, err := svc.Bootstrap(ctx)
@@ -38,18 +101,16 @@ func TestBootstrap_CreatesDefaultAdminWhenNoUsersAndNoEnvVars(t *testing.T) {
 	if !created {
 		t.Fatalf("expected bootstrap to report created=true for a fresh install")
 	}
-	if user.Username != "admin" {
-		t.Fatalf("expected bootstrapped user to be admin, got %q", user.Username)
-	}
-	if !user.MustChangePassword {
-		t.Fatalf("expected default bootstrap user to require a password change")
-	}
-	if !user.IsAdmin {
-		t.Fatalf("expected the bootstrapped account to be the first admin (ADR-0037)")
-	}
 
-	if _, err := svc.Login(ctx, "admin", "admin"); err != nil {
-		t.Fatalf("expected default admin/admin credentials to work, got: %v", err)
+	workspaces, err := svc.workspaces.ListForUser(ctx, user.ID)
+	if err != nil {
+		t.Fatalf("list workspaces: %v", err)
+	}
+	if len(workspaces) != 1 {
+		t.Fatalf("expected the bootstrapped user to belong to exactly one workspace, got %d", len(workspaces))
+	}
+	if workspaces[0].OwnerUserID != user.ID {
+		t.Fatalf("expected the bootstrapped user to own their workspace, owner is %d", workspaces[0].OwnerUserID)
 	}
 }
 
@@ -81,7 +142,7 @@ func TestBootstrap_UsesEnvCredentialsWhenBothSet(t *testing.T) {
 }
 
 func TestBootstrap_NoopWhenUsersExist(t *testing.T) {
-	svc := newTestAuthService(t, "", "")
+	svc := newTestAuthService(t, "admin", "admin")
 	ctx := context.Background()
 
 	first, created, err := svc.Bootstrap(ctx)
@@ -118,8 +179,184 @@ func TestBootstrap_NoopWhenUsersExist(t *testing.T) {
 	}
 }
 
+// TestRegister_ConcurrentFirstRegistrations_OnlyOneBecomesAdmin guards
+// against a TOCTOU race: two Register calls hitting a fresh instance at the
+// same time must not both observe zero existing Users and both end up
+// treated as the first account (bypassing ENABLE_SIGNUPS and both granted
+// Admin) — see the transaction Register wraps its count check in.
+func TestRegister_ConcurrentFirstRegistrations_OnlyOneBecomesAdmin(t *testing.T) {
+	svc := newTestAuthServiceWithSignups(t, "", "", false)
+	ctx := context.Background()
+
+	var wg sync.WaitGroup
+	results := make([]error, 2)
+	for i, username := range []string{"alice", "bob"} {
+		wg.Add(1)
+		go func(i int, username string) {
+			defer wg.Done()
+			_, err := svc.Register(ctx, username, username+"@example.com", "hunter2")
+			results[i] = err
+		}(i, username)
+	}
+	wg.Wait()
+
+	successes := 0
+	for _, err := range results {
+		if err == nil {
+			successes++
+		} else if !errors.Is(err, ErrSignupsDisabled) {
+			t.Fatalf("expected either success or ErrSignupsDisabled, got %v", err)
+		}
+	}
+	if successes != 1 {
+		t.Fatalf("expected exactly one of the two concurrent registrations to succeed as the first account, got %d", successes)
+	}
+
+	adminCount, err := svc.users.CountAdmins(ctx)
+	if err != nil {
+		t.Fatalf("count admins: %v", err)
+	}
+	if adminCount != 1 {
+		t.Fatalf("expected exactly one Admin, got %d", adminCount)
+	}
+}
+
+// TestRegister_FirstAccountSucceedsEvenWithSignupsDisabled covers #153's
+// acceptance criterion that ENABLE_SIGNUPS=false rejects registration after
+// the first account, but never the very first one — Register is a web-based
+// alternative to env-configured Bootstrap for exactly this reason.
+func TestRegister_FirstAccountSucceedsEvenWithSignupsDisabled(t *testing.T) {
+	svc := newTestAuthServiceWithSignups(t, "", "", false)
+	ctx := context.Background()
+
+	result, err := svc.Register(ctx, "alice", "alice@example.com", "hunter2")
+	if err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	if result.AccessToken == "" {
+		t.Fatalf("expected a non-empty access token")
+	}
+
+	user, err := svc.users.GetByUsername(ctx, "alice")
+	if err != nil {
+		t.Fatalf("get user: %v", err)
+	}
+	if !user.IsAdmin {
+		t.Fatalf("expected the first-ever account to be the first Admin (ADR-0037)")
+	}
+
+	workspaces, err := svc.workspaces.ListForUser(ctx, user.ID)
+	if err != nil {
+		t.Fatalf("list workspaces: %v", err)
+	}
+	if len(workspaces) != 1 || workspaces[0].OwnerUserID != user.ID {
+		t.Fatalf("expected the registrant to own exactly one fresh workspace, got %+v", workspaces)
+	}
+}
+
+// TestRegister_SignupsDisabled_BlocksASecondRegistration covers #153's
+// acceptance criterion that ENABLE_SIGNUPS=false rejects any registration
+// attempt beyond the first account.
+func TestRegister_SignupsDisabled_BlocksASecondRegistration(t *testing.T) {
+	svc := newTestAuthServiceWithSignups(t, "", "", false)
+	ctx := context.Background()
+
+	if _, err := svc.Register(ctx, "alice", "alice@example.com", "hunter2"); err != nil {
+		t.Fatalf("register alice: %v", err)
+	}
+
+	if _, err := svc.Register(ctx, "bob", "bob@example.com", "hunter2"); !errors.Is(err, ErrSignupsDisabled) {
+		t.Fatalf("expected ErrSignupsDisabled, got %v", err)
+	}
+}
+
+// TestRegister_SignupsEnabled_AlwaysCreatesAFreshWorkspace covers #153's
+// acceptance criterion that ENABLE_SIGNUPS=true self-registration always
+// creates a brand-new Workspace owned by the registrant, never joining an
+// existing one.
+func TestRegister_SignupsEnabled_AlwaysCreatesAFreshWorkspace(t *testing.T) {
+	svc := newTestAuthServiceWithSignups(t, "", "", true)
+	ctx := context.Background()
+
+	if _, err := svc.Register(ctx, "alice", "alice@example.com", "hunter2"); err != nil {
+		t.Fatalf("register alice: %v", err)
+	}
+	if _, err := svc.Register(ctx, "bob", "bob@example.com", "hunter2"); err != nil {
+		t.Fatalf("register bob: %v", err)
+	}
+
+	alice, err := svc.users.GetByUsername(ctx, "alice")
+	if err != nil {
+		t.Fatalf("get alice: %v", err)
+	}
+	bob, err := svc.users.GetByUsername(ctx, "bob")
+	if err != nil {
+		t.Fatalf("get bob: %v", err)
+	}
+	if bob.IsAdmin {
+		t.Fatalf("expected only the first-ever account to be Admin, bob should not be")
+	}
+
+	aliceWorkspaces, err := svc.workspaces.ListForUser(ctx, alice.ID)
+	if err != nil {
+		t.Fatalf("list alice's workspaces: %v", err)
+	}
+	bobWorkspaces, err := svc.workspaces.ListForUser(ctx, bob.ID)
+	if err != nil {
+		t.Fatalf("list bob's workspaces: %v", err)
+	}
+	if len(aliceWorkspaces) != 1 || len(bobWorkspaces) != 1 {
+		t.Fatalf("expected each registrant to own exactly one workspace, got alice=%d bob=%d", len(aliceWorkspaces), len(bobWorkspaces))
+	}
+	if aliceWorkspaces[0].ID == bobWorkspaces[0].ID {
+		t.Fatalf("expected bob to get a brand-new workspace rather than joining alice's")
+	}
+	if bobWorkspaces[0].OwnerUserID != bob.ID {
+		t.Fatalf("expected bob to own his own workspace, owner is %d", bobWorkspaces[0].OwnerUserID)
+	}
+}
+
+func TestRegister_RejectsEmptyEmail(t *testing.T) {
+	svc := newTestAuthServiceWithSignups(t, "", "", true)
+	ctx := context.Background()
+
+	if _, err := svc.Register(ctx, "alice", "", "hunter2"); !errors.Is(err, ErrEmailRequired) {
+		t.Fatalf("expected ErrEmailRequired, got %v", err)
+	}
+}
+
+func TestRegister_RejectsInvalidEmail(t *testing.T) {
+	svc := newTestAuthServiceWithSignups(t, "", "", true)
+	ctx := context.Background()
+
+	if _, err := svc.Register(ctx, "alice", "not-an-email", "hunter2"); !errors.Is(err, ErrInvalidEmail) {
+		t.Fatalf("expected ErrInvalidEmail, got %v", err)
+	}
+}
+
+func TestRegister_RejectsEmptyPassword(t *testing.T) {
+	svc := newTestAuthServiceWithSignups(t, "", "", true)
+	ctx := context.Background()
+
+	if _, err := svc.Register(ctx, "alice", "alice@example.com", ""); !errors.Is(err, ErrInvalidPassword) {
+		t.Fatalf("expected ErrInvalidPassword, got %v", err)
+	}
+}
+
+func TestRegister_DuplicateUsername_ReturnsErrUsernameTaken(t *testing.T) {
+	svc := newTestAuthServiceWithSignups(t, "", "", true)
+	ctx := context.Background()
+
+	if _, err := svc.Register(ctx, "alice", "alice@example.com", "hunter2"); err != nil {
+		t.Fatalf("register alice: %v", err)
+	}
+	if _, err := svc.Register(ctx, "alice", "alice2@example.com", "hunter2"); !errors.Is(err, ErrUsernameTaken) {
+		t.Fatalf("expected ErrUsernameTaken, got %v", err)
+	}
+}
+
 func TestLogin_Success(t *testing.T) {
-	svc := newTestAuthService(t, "", "")
+	svc := newTestAuthService(t, "admin", "admin")
 	ctx := context.Background()
 	if _, _, err := svc.Bootstrap(ctx); err != nil {
 		t.Fatalf("bootstrap: %v", err)
@@ -139,8 +376,8 @@ func TestLogin_Success(t *testing.T) {
 	if !result.RefreshTokenExpiresAt.After(time.Now()) {
 		t.Fatalf("expected refresh token expiry to be in the future")
 	}
-	if !result.MustChangePassword {
-		t.Fatalf("expected must_change_password to be true for the default bootstrap user")
+	if result.MustChangePassword {
+		t.Fatalf("expected must_change_password to be false for an env-configured bootstrap user")
 	}
 
 	userID, err := svc.Authenticate(ctx, result.AccessToken)
@@ -158,7 +395,7 @@ func TestLogin_Success(t *testing.T) {
 }
 
 func TestLogin_WrongPassword(t *testing.T) {
-	svc := newTestAuthService(t, "", "")
+	svc := newTestAuthService(t, "admin", "admin")
 	ctx := context.Background()
 	if _, _, err := svc.Bootstrap(ctx); err != nil {
 		t.Fatalf("bootstrap: %v", err)
@@ -171,7 +408,7 @@ func TestLogin_WrongPassword(t *testing.T) {
 }
 
 func TestLogin_UnknownUsername(t *testing.T) {
-	svc := newTestAuthService(t, "", "")
+	svc := newTestAuthService(t, "admin", "admin")
 	ctx := context.Background()
 	if _, _, err := svc.Bootstrap(ctx); err != nil {
 		t.Fatalf("bootstrap: %v", err)
@@ -184,7 +421,7 @@ func TestLogin_UnknownUsername(t *testing.T) {
 }
 
 func TestLogin_RejectsDisabledAccount(t *testing.T) {
-	svc := newTestAuthService(t, "", "")
+	svc := newTestAuthService(t, "admin", "admin")
 	ctx := context.Background()
 	if _, _, err := svc.Bootstrap(ctx); err != nil {
 		t.Fatalf("bootstrap: %v", err)
@@ -204,10 +441,10 @@ func TestLogin_RejectsDisabledAccount(t *testing.T) {
 }
 
 func TestAuthenticate_RejectsWrongSigningSecret(t *testing.T) {
-	svc := newTestAuthService(t, "", "")
+	svc := newTestAuthService(t, "admin", "admin")
 	ctx := context.Background()
 
-	other := NewAuthService(svc.users, svc.sessions, []byte("a-different-secret"), "", "")
+	other := NewAuthService(svc.users, svc.sessions, svc.workspaces, []byte("a-different-secret"), "admin", "admin", false)
 	if _, _, err := other.Bootstrap(ctx); err != nil {
 		t.Fatalf("bootstrap: %v", err)
 	}
@@ -223,7 +460,7 @@ func TestAuthenticate_RejectsWrongSigningSecret(t *testing.T) {
 }
 
 func TestAuthenticate_RejectsExpiredToken(t *testing.T) {
-	svc := newTestAuthService(t, "", "")
+	svc := newTestAuthService(t, "admin", "admin")
 	ctx := context.Background()
 	if _, _, err := svc.Bootstrap(ctx); err != nil {
 		t.Fatalf("bootstrap: %v", err)
@@ -250,7 +487,7 @@ func TestAuthenticate_RejectsExpiredToken(t *testing.T) {
 }
 
 func TestAuthenticate_RejectsGarbage(t *testing.T) {
-	svc := newTestAuthService(t, "", "")
+	svc := newTestAuthService(t, "admin", "admin")
 
 	if _, err := svc.Authenticate(context.Background(), "not-a-real-token"); err == nil {
 		t.Fatalf("expected an error authenticating a malformed token")
@@ -260,14 +497,7 @@ func TestAuthenticate_RejectsGarbage(t *testing.T) {
 func TestMustChangePassword_ReflectsUserFlag(t *testing.T) {
 	svc := newTestAuthService(t, "", "")
 	ctx := context.Background()
-	if _, _, err := svc.Bootstrap(ctx); err != nil {
-		t.Fatalf("bootstrap: %v", err)
-	}
-
-	user, err := svc.users.GetByUsername(ctx, "admin")
-	if err != nil {
-		t.Fatalf("get user: %v", err)
-	}
+	user := mustSeedUserRequiringPasswordChange(t, svc, ctx, "admin", "admin")
 
 	mustChange, err := svc.MustChangePassword(ctx, user.ID)
 	if err != nil {
@@ -293,24 +523,17 @@ func TestMustChangePassword_ReflectsUserFlag(t *testing.T) {
 func TestChangePassword_SkipsCurrentPasswordCheckWhileMustChangePassword(t *testing.T) {
 	svc := newTestAuthService(t, "", "")
 	ctx := context.Background()
-	if _, _, err := svc.Bootstrap(ctx); err != nil {
-		t.Fatalf("bootstrap: %v", err)
-	}
+	user := mustSeedUserRequiringPasswordChange(t, svc, ctx, "admin", "admin")
 
-	user, err := svc.users.GetByUsername(ctx, "admin")
-	if err != nil {
-		t.Fatalf("get user: %v", err)
-	}
-
-	// The bootstrap default is a publicly documented value — while
-	// must_change_password is true, the current password isn't checked at all.
+	// While must_change_password is true (e.g. a temporary password an Admin
+	// issued, ADR-0037), the current password isn't checked at all.
 	if _, err := svc.ChangePassword(ctx, user.ID, "this-is-not-the-current-password", "a-new-password"); err != nil {
 		t.Fatalf("expected the current password check to be skipped, got %v", err)
 	}
 }
 
 func TestChangePassword_RequiresCurrentPasswordOnceAlreadyChanged(t *testing.T) {
-	svc := newTestAuthService(t, "", "")
+	svc := newTestAuthService(t, "admin", "admin")
 	ctx := context.Background()
 	if _, _, err := svc.Bootstrap(ctx); err != nil {
 		t.Fatalf("bootstrap: %v", err)
@@ -332,7 +555,7 @@ func TestChangePassword_RequiresCurrentPasswordOnceAlreadyChanged(t *testing.T) 
 }
 
 func TestChangePassword_RejectsEmptyNewPassword(t *testing.T) {
-	svc := newTestAuthService(t, "", "")
+	svc := newTestAuthService(t, "admin", "admin")
 	ctx := context.Background()
 	if _, _, err := svc.Bootstrap(ctx); err != nil {
 		t.Fatalf("bootstrap: %v", err)
@@ -350,7 +573,7 @@ func TestChangePassword_RejectsEmptyNewPassword(t *testing.T) {
 }
 
 func TestUpdateEmail_SetsAValidEmail(t *testing.T) {
-	svc := newTestAuthService(t, "", "")
+	svc := newTestAuthService(t, "admin", "admin")
 	ctx := context.Background()
 	user, _, err := svc.Bootstrap(ctx)
 	if err != nil {
@@ -367,7 +590,7 @@ func TestUpdateEmail_SetsAValidEmail(t *testing.T) {
 }
 
 func TestUpdateEmail_RejectsAnInvalidAddress(t *testing.T) {
-	svc := newTestAuthService(t, "", "")
+	svc := newTestAuthService(t, "admin", "admin")
 	ctx := context.Background()
 	user, _, err := svc.Bootstrap(ctx)
 	if err != nil {
@@ -381,7 +604,7 @@ func TestUpdateEmail_RejectsAnInvalidAddress(t *testing.T) {
 }
 
 func TestUpdateEmail_EmptyStringClearsIt(t *testing.T) {
-	svc := newTestAuthService(t, "", "")
+	svc := newTestAuthService(t, "admin", "admin")
 	ctx := context.Background()
 	user, _, err := svc.Bootstrap(ctx)
 	if err != nil {
@@ -401,7 +624,7 @@ func TestUpdateEmail_EmptyStringClearsIt(t *testing.T) {
 }
 
 func TestBootstrap_FirstUserDefaultsToMondayWeekStart(t *testing.T) {
-	svc := newTestAuthService(t, "", "")
+	svc := newTestAuthService(t, "admin", "admin")
 	ctx := context.Background()
 	user, _, err := svc.Bootstrap(ctx)
 	if err != nil {
@@ -413,7 +636,7 @@ func TestBootstrap_FirstUserDefaultsToMondayWeekStart(t *testing.T) {
 }
 
 func TestUpdatePreferences_SetsWeekStart(t *testing.T) {
-	svc := newTestAuthService(t, "", "")
+	svc := newTestAuthService(t, "admin", "admin")
 	ctx := context.Background()
 	user, _, err := svc.Bootstrap(ctx)
 	if err != nil {
@@ -431,7 +654,7 @@ func TestUpdatePreferences_SetsWeekStart(t *testing.T) {
 }
 
 func TestUpdatePreferences_RejectsWeekStartOutOfRange(t *testing.T) {
-	svc := newTestAuthService(t, "", "")
+	svc := newTestAuthService(t, "admin", "admin")
 	ctx := context.Background()
 	user, _, err := svc.Bootstrap(ctx)
 	if err != nil {
@@ -446,7 +669,7 @@ func TestUpdatePreferences_RejectsWeekStartOutOfRange(t *testing.T) {
 }
 
 func TestUpdatePreferences_NilFieldLeavesWeekStartUntouched(t *testing.T) {
-	svc := newTestAuthService(t, "", "")
+	svc := newTestAuthService(t, "admin", "admin")
 	ctx := context.Background()
 	user, _, err := svc.Bootstrap(ctx)
 	if err != nil {
@@ -463,7 +686,7 @@ func TestUpdatePreferences_NilFieldLeavesWeekStartUntouched(t *testing.T) {
 }
 
 func TestUpdatePreferences_SetsDefaultView(t *testing.T) {
-	svc := newTestAuthService(t, "", "")
+	svc := newTestAuthService(t, "admin", "admin")
 	ctx := context.Background()
 	user, _, err := svc.Bootstrap(ctx)
 	if err != nil {
@@ -481,7 +704,7 @@ func TestUpdatePreferences_SetsDefaultView(t *testing.T) {
 }
 
 func TestUpdatePreferences_RejectsInvalidDefaultView(t *testing.T) {
-	svc := newTestAuthService(t, "", "")
+	svc := newTestAuthService(t, "admin", "admin")
 	ctx := context.Background()
 	user, _, err := svc.Bootstrap(ctx)
 	if err != nil {
@@ -496,7 +719,7 @@ func TestUpdatePreferences_RejectsInvalidDefaultView(t *testing.T) {
 }
 
 func TestUpdatePreferences_NilFieldLeavesDefaultViewUntouched(t *testing.T) {
-	svc := newTestAuthService(t, "", "")
+	svc := newTestAuthService(t, "admin", "admin")
 	ctx := context.Background()
 	user, _, err := svc.Bootstrap(ctx)
 	if err != nil {
@@ -513,7 +736,7 @@ func TestUpdatePreferences_NilFieldLeavesDefaultViewUntouched(t *testing.T) {
 }
 
 func TestBootstrap_FirstUserDefaultsTo24hTimeFormat(t *testing.T) {
-	svc := newTestAuthService(t, "", "")
+	svc := newTestAuthService(t, "admin", "admin")
 	ctx := context.Background()
 	user, _, err := svc.Bootstrap(ctx)
 	if err != nil {
@@ -525,7 +748,7 @@ func TestBootstrap_FirstUserDefaultsTo24hTimeFormat(t *testing.T) {
 }
 
 func TestUpdatePreferences_SetsTimeFormat(t *testing.T) {
-	svc := newTestAuthService(t, "", "")
+	svc := newTestAuthService(t, "admin", "admin")
 	ctx := context.Background()
 	user, _, err := svc.Bootstrap(ctx)
 	if err != nil {
@@ -543,7 +766,7 @@ func TestUpdatePreferences_SetsTimeFormat(t *testing.T) {
 }
 
 func TestUpdatePreferences_RejectsInvalidTimeFormat(t *testing.T) {
-	svc := newTestAuthService(t, "", "")
+	svc := newTestAuthService(t, "admin", "admin")
 	ctx := context.Background()
 	user, _, err := svc.Bootstrap(ctx)
 	if err != nil {
@@ -558,7 +781,7 @@ func TestUpdatePreferences_RejectsInvalidTimeFormat(t *testing.T) {
 }
 
 func TestUpdatePreferences_NilFieldLeavesTimeFormatUntouched(t *testing.T) {
-	svc := newTestAuthService(t, "", "")
+	svc := newTestAuthService(t, "admin", "admin")
 	ctx := context.Background()
 	user, _, err := svc.Bootstrap(ctx)
 	if err != nil {
@@ -575,7 +798,7 @@ func TestUpdatePreferences_NilFieldLeavesTimeFormatUntouched(t *testing.T) {
 }
 
 func TestUpdatePreferences_SetsWeekStartAndDefaultViewTogether(t *testing.T) {
-	svc := newTestAuthService(t, "", "")
+	svc := newTestAuthService(t, "admin", "admin")
 	ctx := context.Background()
 	user, _, err := svc.Bootstrap(ctx)
 	if err != nil {
@@ -597,7 +820,7 @@ func TestUpdatePreferences_SetsWeekStartAndDefaultViewTogether(t *testing.T) {
 }
 
 func TestUpdatePreferences_SetsWorkingHours(t *testing.T) {
-	svc := newTestAuthService(t, "", "")
+	svc := newTestAuthService(t, "admin", "admin")
 	ctx := context.Background()
 	user, _, err := svc.Bootstrap(ctx)
 	if err != nil {
@@ -620,7 +843,7 @@ func TestUpdatePreferences_SetsWorkingHours(t *testing.T) {
 }
 
 func TestUpdatePreferences_SetsWorkingHoursToMinuteOfDayPrecision(t *testing.T) {
-	svc := newTestAuthService(t, "", "")
+	svc := newTestAuthService(t, "admin", "admin")
 	ctx := context.Background()
 	user, _, err := svc.Bootstrap(ctx)
 	if err != nil {
@@ -643,7 +866,7 @@ func TestUpdatePreferences_SetsWorkingHoursToMinuteOfDayPrecision(t *testing.T) 
 }
 
 func TestUpdatePreferences_RejectsWorkingHoursOutOfMinuteOfDayRange(t *testing.T) {
-	svc := newTestAuthService(t, "", "")
+	svc := newTestAuthService(t, "admin", "admin")
 	ctx := context.Background()
 	user, _, err := svc.Bootstrap(ctx)
 	if err != nil {
@@ -660,7 +883,7 @@ func TestUpdatePreferences_RejectsWorkingHoursOutOfMinuteOfDayRange(t *testing.T
 }
 
 func TestUpdatePreferences_ClearsWorkingHoursWithBothNil(t *testing.T) {
-	svc := newTestAuthService(t, "", "")
+	svc := newTestAuthService(t, "admin", "admin")
 	ctx := context.Background()
 	user, _, err := svc.Bootstrap(ctx)
 	if err != nil {
@@ -686,7 +909,7 @@ func TestUpdatePreferences_ClearsWorkingHoursWithBothNil(t *testing.T) {
 }
 
 func TestUpdatePreferences_RejectsWorkingHoursStartNotBeforeEnd(t *testing.T) {
-	svc := newTestAuthService(t, "", "")
+	svc := newTestAuthService(t, "admin", "admin")
 	ctx := context.Background()
 	user, _, err := svc.Bootstrap(ctx)
 	if err != nil {
@@ -703,7 +926,7 @@ func TestUpdatePreferences_RejectsWorkingHoursStartNotBeforeEnd(t *testing.T) {
 }
 
 func TestUpdatePreferences_RejectsWorkingHoursOneBoundNil(t *testing.T) {
-	svc := newTestAuthService(t, "", "")
+	svc := newTestAuthService(t, "admin", "admin")
 	ctx := context.Background()
 	user, _, err := svc.Bootstrap(ctx)
 	if err != nil {
@@ -728,7 +951,7 @@ func TestUpdatePreferences_RejectsWorkingHoursOneBoundNil(t *testing.T) {
 }
 
 func TestUpdatePreferences_NilWorkingHoursLeavesItUntouched(t *testing.T) {
-	svc := newTestAuthService(t, "", "")
+	svc := newTestAuthService(t, "admin", "admin")
 	ctx := context.Background()
 	user, _, err := svc.Bootstrap(ctx)
 	if err != nil {
@@ -756,7 +979,7 @@ func TestUpdatePreferences_NilWorkingHoursLeavesItUntouched(t *testing.T) {
 }
 
 func TestUpdateUsername_RenamesTheCaller(t *testing.T) {
-	svc := newTestAuthService(t, "", "")
+	svc := newTestAuthService(t, "admin", "admin")
 	ctx := context.Background()
 	user, _, err := svc.Bootstrap(ctx)
 	if err != nil {
@@ -773,7 +996,7 @@ func TestUpdateUsername_RenamesTheCaller(t *testing.T) {
 }
 
 func TestUpdateUsername_RejectsAColon(t *testing.T) {
-	svc := newTestAuthService(t, "", "")
+	svc := newTestAuthService(t, "admin", "admin")
 	ctx := context.Background()
 	user, _, err := svc.Bootstrap(ctx)
 	if err != nil {
@@ -786,7 +1009,7 @@ func TestUpdateUsername_RejectsAColon(t *testing.T) {
 }
 
 func TestUpdateUsername_DuplicateUsername_ReturnsErrUsernameTaken(t *testing.T) {
-	svc := newTestAuthService(t, "", "")
+	svc := newTestAuthService(t, "admin", "admin")
 	ctx := context.Background()
 	user, _, err := svc.Bootstrap(ctx)
 	if err != nil {
@@ -802,7 +1025,7 @@ func TestUpdateUsername_DuplicateUsername_ReturnsErrUsernameTaken(t *testing.T) 
 }
 
 func TestChangePassword_NewPasswordWorksForLogin(t *testing.T) {
-	svc := newTestAuthService(t, "", "")
+	svc := newTestAuthService(t, "admin", "admin")
 	ctx := context.Background()
 	if _, _, err := svc.Bootstrap(ctx); err != nil {
 		t.Fatalf("bootstrap: %v", err)
@@ -827,7 +1050,7 @@ func TestChangePassword_NewPasswordWorksForLogin(t *testing.T) {
 }
 
 func TestChangePassword_InvalidatesExistingSessions(t *testing.T) {
-	svc := newTestAuthService(t, "", "")
+	svc := newTestAuthService(t, "admin", "admin")
 	ctx := context.Background()
 	if _, _, err := svc.Bootstrap(ctx); err != nil {
 		t.Fatalf("bootstrap: %v", err)
@@ -852,7 +1075,7 @@ func TestChangePassword_InvalidatesExistingSessions(t *testing.T) {
 // to any Session, not just an expired one) and exactly one new Session must
 // exist in its place.
 func TestChangePassword_ReissuesExactlyOneNewSession(t *testing.T) {
-	svc := newTestAuthService(t, "", "")
+	svc := newTestAuthService(t, "admin", "admin")
 	ctx := context.Background()
 	if _, _, err := svc.Bootstrap(ctx); err != nil {
 		t.Fatalf("bootstrap: %v", err)
@@ -901,7 +1124,7 @@ func mustUserID(t *testing.T, svc *AuthService, username string) int64 {
 }
 
 func TestRefresh_ReturnsNewAccessTokenForValidRefreshToken(t *testing.T) {
-	svc := newTestAuthService(t, "", "")
+	svc := newTestAuthService(t, "admin", "admin")
 	ctx := context.Background()
 	if _, _, err := svc.Bootstrap(ctx); err != nil {
 		t.Fatalf("bootstrap: %v", err)
@@ -935,7 +1158,7 @@ func TestRefresh_ReturnsNewAccessTokenForValidRefreshToken(t *testing.T) {
 }
 
 func TestRefresh_RejectsUnknownToken(t *testing.T) {
-	svc := newTestAuthService(t, "", "")
+	svc := newTestAuthService(t, "admin", "admin")
 
 	_, err := svc.Refresh(context.Background(), "not-a-real-refresh-token")
 	if !errors.Is(err, ErrInvalidSession) {
@@ -944,7 +1167,7 @@ func TestRefresh_RejectsUnknownToken(t *testing.T) {
 }
 
 func TestRefresh_RejectsExpiredSession(t *testing.T) {
-	svc := newTestAuthService(t, "", "")
+	svc := newTestAuthService(t, "admin", "admin")
 	ctx := context.Background()
 	if _, _, err := svc.Bootstrap(ctx); err != nil {
 		t.Fatalf("bootstrap: %v", err)
@@ -969,7 +1192,7 @@ func TestRefresh_RejectsExpiredSession(t *testing.T) {
 }
 
 func TestRefresh_RejectsDisabledAccount(t *testing.T) {
-	svc := newTestAuthService(t, "", "")
+	svc := newTestAuthService(t, "admin", "admin")
 	ctx := context.Background()
 	if _, _, err := svc.Bootstrap(ctx); err != nil {
 		t.Fatalf("bootstrap: %v", err)
@@ -994,7 +1217,7 @@ func TestRefresh_RejectsDisabledAccount(t *testing.T) {
 }
 
 func TestLogout_DeletesSessionSoRefreshNoLongerWorks(t *testing.T) {
-	svc := newTestAuthService(t, "", "")
+	svc := newTestAuthService(t, "admin", "admin")
 	ctx := context.Background()
 	if _, _, err := svc.Bootstrap(ctx); err != nil {
 		t.Fatalf("bootstrap: %v", err)
@@ -1015,7 +1238,7 @@ func TestLogout_DeletesSessionSoRefreshNoLongerWorks(t *testing.T) {
 }
 
 func TestLogout_NoopForUnknownToken(t *testing.T) {
-	svc := newTestAuthService(t, "", "")
+	svc := newTestAuthService(t, "admin", "admin")
 
 	if err := svc.Logout(context.Background(), "not-a-real-refresh-token"); err != nil {
 		t.Fatalf("expected logout to be a no-op for an unknown token, got %v", err)
@@ -1036,7 +1259,7 @@ func createPendingUser(t *testing.T, svc *AuthService, username, rawToken string
 }
 
 func TestLogin_RejectsPendingAccount(t *testing.T) {
-	svc := newTestAuthService(t, "", "")
+	svc := newTestAuthService(t, "admin", "admin")
 	ctx := context.Background()
 
 	createPendingUser(t, svc, "alice", "raw-token", time.Now().Add(time.Hour))
@@ -1050,7 +1273,7 @@ func TestLogin_RejectsPendingAccount(t *testing.T) {
 }
 
 func TestRefresh_RejectsPendingAccount(t *testing.T) {
-	svc := newTestAuthService(t, "", "")
+	svc := newTestAuthService(t, "admin", "admin")
 	ctx := context.Background()
 
 	user := createPendingUser(t, svc, "alice", "raw-token", time.Now().Add(time.Hour))
@@ -1072,7 +1295,7 @@ func TestRefresh_RejectsPendingAccount(t *testing.T) {
 }
 
 func TestAcceptInvite_ActivatesAccountAndIssuesSession(t *testing.T) {
-	svc := newTestAuthService(t, "", "")
+	svc := newTestAuthService(t, "admin", "admin")
 	ctx := context.Background()
 
 	createPendingUser(t, svc, "alice", "raw-token", time.Now().Add(time.Hour))
@@ -1109,7 +1332,7 @@ func TestAcceptInvite_ActivatesAccountAndIssuesSession(t *testing.T) {
 }
 
 func TestAcceptInvite_EmptyPassword_ReturnsErrInvalidPassword(t *testing.T) {
-	svc := newTestAuthService(t, "", "")
+	svc := newTestAuthService(t, "admin", "admin")
 
 	createPendingUser(t, svc, "alice", "raw-token", time.Now().Add(time.Hour))
 
@@ -1119,7 +1342,7 @@ func TestAcceptInvite_EmptyPassword_ReturnsErrInvalidPassword(t *testing.T) {
 }
 
 func TestAcceptInvite_UnknownToken_ReturnsErrInviteInvalid(t *testing.T) {
-	svc := newTestAuthService(t, "", "")
+	svc := newTestAuthService(t, "admin", "admin")
 
 	if _, err := svc.AcceptInvite(context.Background(), "not-a-real-token", "new-password"); !errors.Is(err, ErrInviteInvalid) {
 		t.Fatalf("expected ErrInviteInvalid, got %v", err)
@@ -1127,7 +1350,7 @@ func TestAcceptInvite_UnknownToken_ReturnsErrInviteInvalid(t *testing.T) {
 }
 
 func TestAcceptInvite_ExpiredToken_ReturnsErrInviteInvalid(t *testing.T) {
-	svc := newTestAuthService(t, "", "")
+	svc := newTestAuthService(t, "admin", "admin")
 
 	createPendingUser(t, svc, "alice", "raw-token", time.Now().Add(-time.Minute))
 
@@ -1137,7 +1360,7 @@ func TestAcceptInvite_ExpiredToken_ReturnsErrInviteInvalid(t *testing.T) {
 }
 
 func TestAcceptInvite_TokenCannotBeReused(t *testing.T) {
-	svc := newTestAuthService(t, "", "")
+	svc := newTestAuthService(t, "admin", "admin")
 	ctx := context.Background()
 
 	createPendingUser(t, svc, "alice", "raw-token", time.Now().Add(time.Hour))
@@ -1152,7 +1375,7 @@ func TestAcceptInvite_TokenCannotBeReused(t *testing.T) {
 }
 
 func TestPreviewInvite_ReturnsUsernameWithoutConsumingToken(t *testing.T) {
-	svc := newTestAuthService(t, "", "")
+	svc := newTestAuthService(t, "admin", "admin")
 	ctx := context.Background()
 
 	createPendingUser(t, svc, "alice", "raw-token", time.Now().Add(time.Hour))
@@ -1172,7 +1395,7 @@ func TestPreviewInvite_ReturnsUsernameWithoutConsumingToken(t *testing.T) {
 }
 
 func TestPreviewInvite_UnknownToken_ReturnsErrInviteInvalid(t *testing.T) {
-	svc := newTestAuthService(t, "", "")
+	svc := newTestAuthService(t, "admin", "admin")
 
 	if _, err := svc.PreviewInvite(context.Background(), "not-a-real-token"); !errors.Is(err, ErrInviteInvalid) {
 		t.Fatalf("expected ErrInviteInvalid, got %v", err)
@@ -1180,7 +1403,7 @@ func TestPreviewInvite_UnknownToken_ReturnsErrInviteInvalid(t *testing.T) {
 }
 
 func TestPreviewInvite_ExpiredToken_ReturnsErrInviteInvalid(t *testing.T) {
-	svc := newTestAuthService(t, "", "")
+	svc := newTestAuthService(t, "admin", "admin")
 
 	createPendingUser(t, svc, "alice", "raw-token", time.Now().Add(-time.Minute))
 
@@ -1190,7 +1413,7 @@ func TestPreviewInvite_ExpiredToken_ReturnsErrInviteInvalid(t *testing.T) {
 }
 
 func TestPreviewInvite_AlreadyAcceptedToken_ReturnsErrInviteInvalid(t *testing.T) {
-	svc := newTestAuthService(t, "", "")
+	svc := newTestAuthService(t, "admin", "admin")
 	ctx := context.Background()
 
 	createPendingUser(t, svc, "alice", "raw-token", time.Now().Add(time.Hour))

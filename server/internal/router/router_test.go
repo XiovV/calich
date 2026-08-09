@@ -29,11 +29,14 @@ func newTestRouter(t *testing.T) http.Handler {
 
 	users := repository.NewUserRepository(sqlDB)
 	sessions := repository.NewSessionRepository(sqlDB)
-	authService := service.NewAuthService(users, sessions, []byte("test-secret"), "", "")
+	workspaceRepo := repository.NewWorkspaceRepository(sqlDB)
+	workspaceService := service.NewWorkspaceService(sqlDB, workspaceRepo)
+	authService := service.NewAuthService(users, sessions, workspaceService, []byte("test-secret"), "admin", "admin", false)
 	if _, _, err := authService.Bootstrap(context.Background()); err != nil {
 		t.Fatalf("bootstrap: %v", err)
 	}
 	authHandler := handlers.NewAuthHandler(authService, false)
+	workspaceHandler := handlers.NewWorkspaceHandler(workspaceService)
 	calendarRepo := repository.NewCalendarRepository(sqlDB)
 	shareRepo := repository.NewCalendarShareRepository(sqlDB)
 	calendarService := service.NewCalendarService(calendarRepo, shareRepo, users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB))
@@ -50,7 +53,7 @@ func newTestRouter(t *testing.T) http.Handler {
 	userHandler := handlers.NewUserHandler(service.NewUserService(users))
 	calDAVHandler := &caldav.Handler{Backend: caldavserver.NewBackend(calendarService, eventService, attachmentService, 25<<20, 10), Prefix: "/dav"}
 
-	r, err := New(slog.New(slog.NewTextHandler(io.Discard, nil)), authHandler, calendarHandler, eventHandler, attachmentHandler, notificationHandler, appPasswordHandler, accountHandler, userHandler, calDAVHandler, authService, authService, appPasswordService, authService)
+	r, err := New(slog.New(slog.NewTextHandler(io.Discard, nil)), authHandler, calendarHandler, eventHandler, attachmentHandler, notificationHandler, appPasswordHandler, accountHandler, userHandler, workspaceHandler, calDAVHandler, authService, authService, appPasswordService, authService)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

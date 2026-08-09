@@ -6,6 +6,7 @@ import { navigateDate } from "../../lib/navigateDate";
 import { formatDateLabel } from "../../lib/formatDateLabel";
 import { UserMenu } from "../../auth/UserMenu";
 import { ViewSwitcher } from "./ViewSwitcher";
+import { WorkspaceSwitcher } from "./WorkspaceSwitcher";
 import { ThemeToggle } from "./ThemeToggle";
 import { NotificationBell } from "./NotificationBell";
 import { Button } from "../ui/Button";
@@ -51,6 +52,7 @@ export function TopBar() {
       </span>
 
       <div className="ml-auto flex items-center gap-2">
+        <WorkspaceSwitcher />
         <ViewSwitcher />
         <ThemeToggle />
         <NotificationBell />

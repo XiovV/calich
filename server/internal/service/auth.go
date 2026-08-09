@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
@@ -23,9 +24,6 @@ import (
 const (
 	accessTokenTTL  = 15 * time.Minute
 	refreshTokenTTL = 30 * 24 * time.Hour
-
-	defaultBootstrapUsername = "admin"
-	defaultBootstrapPassword = "admin"
 )
 
 var (
@@ -56,6 +54,16 @@ var (
 	// hours pair that isn't both-set-or-both-null, isn't 0..1439 minutes
 	// since midnight, or has start >= end (ADR-0039).
 	ErrInvalidWorkingHours = errors.New("working_hours_start and working_hours_end must both be set (0-1439 minutes since midnight, start < end) or both be null")
+	// ErrEmailRequired is returned by Register when email is empty — unlike
+	// UpdateEmail, where it is optional and clearable, Register requires one
+	// since it names who the freshly created Workspace's Owner is.
+	ErrEmailRequired = errors.New("email is required")
+	// ErrSignupsDisabled is returned by Register for any registration
+	// attempt beyond the very first account on the instance while
+	// ENABLE_SIGNUPS is false (ADR-0044) — the first account always
+	// succeeds regardless, since it's how a fresh instance without
+	// INITIAL_USERNAME/INITIAL_PASSWORD set gets bootstrapped.
+	ErrSignupsDisabled = errors.New("self-registration is disabled on this instance")
 )
 
 // validDefaultViews are the Active views a Default view may seed (ADR-0039).
@@ -79,29 +87,37 @@ const maxWorkingHoursMinute = 1439
 type AuthService struct {
 	users           *repository.UserRepository
 	sessions        *repository.SessionRepository
+	workspaces      *WorkspaceService
 	jwtSecret       []byte
 	initialUsername string
 	initialPassword string
+	enableSignups   bool
 }
 
-func NewAuthService(users *repository.UserRepository, sessions *repository.SessionRepository, jwtSecret []byte, initialUsername, initialPassword string) *AuthService {
+func NewAuthService(users *repository.UserRepository, sessions *repository.SessionRepository, workspaces *WorkspaceService, jwtSecret []byte, initialUsername, initialPassword string, enableSignups bool) *AuthService {
 	return &AuthService{
 		users:           users,
 		sessions:        sessions,
+		workspaces:      workspaces,
 		jwtSecret:       jwtSecret,
 		initialUsername: initialUsername,
 		initialPassword: initialPassword,
+		enableSignups:   enableSignups,
 	}
 }
 
-// Bootstrap creates the first user if none exist yet: the env-configured
-// initial credentials if both are set, otherwise a fixed admin/admin user
-// that must change its password before anything else can be done (ADR-0010).
-// It returns the resulting sole user either way, along with whether this
-// call is what created them — callers that only want to act on a genuinely
-// fresh install (e.g. seeding default calendars) should gate on that flag
-// rather than re-derive freshness from the user's current state, which can
-// drift after bootstrap (e.g. the user deletes their own data later).
+// Bootstrap creates the first user if none exist yet and INITIAL_USERNAME /
+// INITIAL_PASSWORD are both set, owning a freshly created Workspace of their
+// own (ADR-0044). There is no fixed fallback credential (ADR-0010,
+// superseded): an instance with neither env var set simply has no user until
+// someone completes Register — the first-run bootstrap form that collects a
+// name, email, and password — which is allowed unconditionally for exactly
+// this reason. It returns the resulting sole user either way, along with
+// whether this call is what created them — callers that only want to act on
+// a genuinely fresh install (e.g. seeding default calendars) should gate on
+// that flag rather than re-derive freshness from the user's current state,
+// which can drift after bootstrap (e.g. the user deletes their own data
+// later).
 func (s *AuthService) Bootstrap(ctx context.Context) (user repository.User, created bool, err error) {
 	count, err := s.users.Count(ctx)
 	if err != nil {
@@ -115,29 +131,130 @@ func (s *AuthService) Bootstrap(ctx context.Context) (user repository.User, crea
 		return existing, false, nil
 	}
 
-	username, password, mustChangePassword := defaultBootstrapUsername, defaultBootstrapPassword, true
-	if s.initialUsername != "" && s.initialPassword != "" {
-		username, password, mustChangePassword = s.initialUsername, s.initialPassword, false
+	if s.initialUsername == "" || s.initialPassword == "" {
+		return repository.User{}, false, nil
 	}
 
-	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	hash, err := bcrypt.GenerateFromPassword([]byte(s.initialPassword), bcrypt.DefaultCost)
 	if err != nil {
 		return repository.User{}, false, fmt.Errorf("hash bootstrap password: %w", err)
 	}
 
-	newUser, err := s.users.Create(ctx, username, string(hash), mustChangePassword)
+	newUser, err := s.users.Create(ctx, s.initialUsername, string(hash), false)
 	if err != nil {
 		return repository.User{}, false, fmt.Errorf("create bootstrap user: %w", err)
 	}
 
 	// The bootstrapped account is the first Admin (ADR-0037), so the
-	// instance is never unadministrable.
+	// instance is never unadministrable — unchanged by ADR-0044, which only
+	// retires the fixed admin/admin fallback credential, not the Admin role
+	// itself (that's #150's broader scope).
 	newUser, err = s.users.SetAdmin(ctx, newUser.ID, true)
 	if err != nil {
 		return repository.User{}, false, fmt.Errorf("grant bootstrap user admin: %w", err)
 	}
 
+	if _, err := s.workspaces.CreateForOwner(ctx, newUser.ID, workspaceNameFor(newUser.Username)); err != nil {
+		return repository.User{}, false, fmt.Errorf("create bootstrap workspace: %w", err)
+	}
+
 	return newUser, true, nil
+}
+
+// workspaceNameFor is the default name a Workspace gets when Bootstrap or
+// Register creates one automatically, rather than leaving it blank — the
+// User can rename it later (ADR-0044).
+func workspaceNameFor(name string) string {
+	return fmt.Sprintf("%s's Workspace", name)
+}
+
+// Register self-registers a new User (ADR-0044): it always succeeds for the
+// very first account on the instance — the first-run bootstrap form, an
+// alternative to env-configured Bootstrap for an operator who'd rather set
+// their name (used as the account's username), email, and password through
+// the UI — and otherwise only when ENABLE_SIGNUPS is true. Every successful
+// call creates a brand-new Workspace owned by the registrant; it never
+// joins an existing one.
+//
+// The "is this the very first account" count check and every write it gates
+// run inside one transaction (via WorkspaceService.WithTx) rather than as
+// separate statements: two Register calls racing against a fresh instance
+// could otherwise both observe zero existing Users and both end up treated
+// as the first account, bypassing ENABLE_SIGNUPS and both being granted
+// Admin. SQLite allows only one writer at a time, so the second transaction
+// re-reads the count only once the first has committed.
+func (s *AuthService) Register(ctx context.Context, name, email, password string) (LoginResult, error) {
+	name, err := validateUsername(name)
+	if err != nil {
+		return LoginResult{}, err
+	}
+
+	email = strings.TrimSpace(email)
+	if email == "" {
+		return LoginResult{}, ErrEmailRequired
+	}
+	if _, err := mail.ParseAddress(email); err != nil {
+		return LoginResult{}, ErrInvalidEmail
+	}
+
+	if password == "" {
+		return LoginResult{}, ErrInvalidPassword
+	}
+
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	if err != nil {
+		return LoginResult{}, fmt.Errorf("hash password: %w", err)
+	}
+
+	var newUser repository.User
+	err = s.workspaces.WithTx(ctx, func(tx *sql.Tx) error {
+		txUsers := s.users.WithTx(tx)
+
+		count, err := txUsers.Count(ctx)
+		if err != nil {
+			return fmt.Errorf("count users: %w", err)
+		}
+		if count > 0 && !s.enableSignups {
+			return ErrSignupsDisabled
+		}
+
+		newUser, err = txUsers.Create(ctx, name, string(hash), false)
+		if err != nil {
+			if errors.Is(err, repository.ErrUsernameTaken) {
+				return ErrUsernameTaken
+			}
+			return fmt.Errorf("create user: %w", err)
+		}
+
+		if _, err := txUsers.UpdateEmail(ctx, newUser.ID, email); err != nil {
+			return fmt.Errorf("set email: %w", err)
+		}
+
+		// A Register call against an instance with no accounts yet is a
+		// web-based Bootstrap (ADR-0044) — it inherits Bootstrap's guarantee
+		// of the first Admin (ADR-0037) for the same reason.
+		if count == 0 {
+			if _, err := txUsers.SetAdmin(ctx, newUser.ID, true); err != nil {
+				return fmt.Errorf("grant first account admin: %w", err)
+			}
+		}
+
+		if _, err := s.workspaces.createForOwnerTx(ctx, tx, newUser.ID, workspaceNameFor(name)); err != nil {
+			return fmt.Errorf("create workspace: %w", err)
+		}
+
+		return nil
+	})
+	if err != nil {
+		return LoginResult{}, err
+	}
+
+	tokens, err := s.issueSession(ctx, newUser.ID)
+	if err != nil {
+		return LoginResult{}, err
+	}
+
+	return LoginResult{sessionTokens: tokens, MustChangePassword: false}, nil
 }
 
 // sessionTokens is the access/refresh token pair issued whenever a Session is

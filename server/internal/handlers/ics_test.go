@@ -48,7 +48,7 @@ func newICSTestEnv(t *testing.T) icsTestEnv {
 
 	users := repository.NewUserRepository(sqlDB)
 	sessions := repository.NewSessionRepository(sqlDB)
-	auth := service.NewAuthService(users, sessions, []byte("test-secret"), "alice", "hunter2")
+	auth := service.NewAuthService(users, sessions, service.NewWorkspaceService(sqlDB, repository.NewWorkspaceRepository(sqlDB)), []byte("test-secret"), "alice", "hunter2", false)
 	if _, _, err := auth.Bootstrap(context.Background()); err != nil {
 		t.Fatalf("bootstrap: %v", err)
 	}

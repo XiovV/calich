@@ -15,7 +15,7 @@ import (
 	"github.com/XiovV/calendar/server/internal/static"
 )
 
-func New(logger *slog.Logger, authHandler *handlers.AuthHandler, calendarHandler *handlers.CalendarHandler, eventHandler *handlers.EventHandler, attachmentHandler *handlers.AttachmentHandler, notificationHandler *handlers.NotificationHandler, appPasswordHandler *handlers.AppPasswordHandler, accountHandler *handlers.AccountHandler, userHandler *handlers.UserHandler, calDAVHandler http.Handler, authenticator httpauth.Authenticator, activeUserChecker httpauth.ActiveUserChecker, calDAVAuthenticator httpauth.CalDAVAuthenticator, adminChecker httpauth.AdminChecker) (http.Handler, error) {
+func New(logger *slog.Logger, authHandler *handlers.AuthHandler, calendarHandler *handlers.CalendarHandler, eventHandler *handlers.EventHandler, attachmentHandler *handlers.AttachmentHandler, notificationHandler *handlers.NotificationHandler, appPasswordHandler *handlers.AppPasswordHandler, accountHandler *handlers.AccountHandler, userHandler *handlers.UserHandler, workspaceHandler *handlers.WorkspaceHandler, calDAVHandler http.Handler, authenticator httpauth.Authenticator, activeUserChecker httpauth.ActiveUserChecker, calDAVAuthenticator httpauth.CalDAVAuthenticator, adminChecker httpauth.AdminChecker) (http.Handler, error) {
 	r := chi.NewRouter()
 	r.Use(requestLogger(logger))
 	r.Use(middleware.Recoverer)
@@ -27,6 +27,11 @@ func New(logger *slog.Logger, authHandler *handlers.AuthHandler, calendarHandler
 			r.Post("/login", authHandler.Login)
 			r.Post("/refresh", authHandler.Refresh)
 			r.Post("/logout", authHandler.Logout)
+			// Register (ADR-0044) is public like the three routes above it: it
+			// establishes a Session rather than requiring one, either
+			// bootstrapping the very first account or self-registering a new
+			// one while ENABLE_SIGNUPS is true.
+			r.Post("/register", authHandler.Register)
 			// Accept-invite (ADR-0042) is public like the three routes above
 			// it: it establishes a Session rather than requiring one, proving
 			// identity via a single-use token instead of a bearer token.
@@ -127,6 +132,15 @@ func New(logger *slog.Logger, authHandler *handlers.AuthHandler, calendarHandler
 			r.Use(httpauth.RequireActiveUser(activeUserChecker))
 
 			r.Get("/", userHandler.Directory)
+		})
+
+		// Workspace switcher (ADR-0044): every Workspace the caller belongs
+		// to.
+		r.Route("/workspaces", func(r chi.Router) {
+			r.Use(httpauth.RequireAuth(authenticator))
+			r.Use(httpauth.RequireActiveUser(activeUserChecker))
+
+			r.Get("/", workspaceHandler.List)
 		})
 
 		// Account administration (ADR-0037): who exists, never what they can
