@@ -132,6 +132,19 @@ func TestAttachmentSweeper_ReclaimsFilesLeftByAccountDeletion(t *testing.T) {
 		t.Fatalf("upload: %v", err)
 	}
 
+	// The owner's personal Workspace (created by the fixture so Calendar
+	// Create can pass its membership guard, #155) has no ON DELETE behavior
+	// on workspaces.owner_user_id (ADR-0044: ownership must transfer before
+	// a User can be deleted) — clear it directly here since this test
+	// exercises the users -> calendars -> events -> event_attachments
+	// cascade specifically, not Workspace lifecycle.
+	if _, err := f.sqlDB.ExecContext(ctx, "DELETE FROM workspace_members WHERE user_id = ?", f.ownerID); err != nil {
+		t.Fatalf("delete owner's workspace membership: %v", err)
+	}
+	if _, err := f.sqlDB.ExecContext(ctx, "DELETE FROM workspaces WHERE owner_user_id = ?", f.ownerID); err != nil {
+		t.Fatalf("delete owner's workspace: %v", err)
+	}
+
 	if _, err := f.sqlDB.ExecContext(ctx, "DELETE FROM users WHERE id = ?", f.ownerID); err != nil {
 		t.Fatalf("delete owner: %v", err)
 	}

@@ -3,6 +3,7 @@ package handlers
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -17,6 +18,22 @@ import (
 	"github.com/XiovV/calendar/server/internal/service"
 )
 
+// clearSoleWorkspaceOwnership deletes userID's own Workspace and their
+// Membership in it via raw SQL, standing in for the Workspace-transfer step
+// ADR-0044's sole-Owner guard says must happen before a User can be deleted
+// (workspaces.owner_user_id carries no ON DELETE behaviour). Mirrors
+// internal/service/account_test.go's helper of the same name — see its doc
+// comment for why AccountService.Delete needs this stood in for here.
+func clearSoleWorkspaceOwnership(t *testing.T, sqlDB *sql.DB, userID int64) {
+	t.Helper()
+	if _, err := sqlDB.Exec("DELETE FROM workspace_members WHERE user_id = ?", userID); err != nil {
+		t.Fatalf("clear workspace membership for user %d: %v", userID, err)
+	}
+	if _, err := sqlDB.Exec("DELETE FROM workspaces WHERE owner_user_id = ?", userID); err != nil {
+		t.Fatalf("clear workspace ownership for user %d: %v", userID, err)
+	}
+}
+
 func newAccountTestServer(t *testing.T) (*httptest.Server, string) {
 	t.Helper()
 	return newAccountTestServerWithMailer(t, nil, false)
@@ -27,6 +44,19 @@ func newAccountTestServer(t *testing.T) (*httptest.Server, string) {
 // (ADR-0042).
 func newAccountTestServerWithMailer(t *testing.T, mailer service.Mailer, smtpConfigured bool) (*httptest.Server, string) {
 	t.Helper()
+	srv, accessToken, _ := newAccountTestServerWithDB(t, mailer, smtpConfigured)
+	return srv, accessToken
+}
+
+// newAccountTestServerWithDB is newAccountTestServerWithMailer plus the
+// underlying *sql.DB, for tests that need to reach past the HTTP surface —
+// e.g. clearing an account's sole Workspace ownership before deleting it
+// (see clearSoleWorkspaceOwnership in internal/service/account_test.go;
+// AccountService.Create now always mints a personal Workspace, #155,
+// ADR-0045, but AccountService.Delete's disposition handling doesn't yet
+// transfer or retire one).
+func newAccountTestServerWithDB(t *testing.T, mailer service.Mailer, smtpConfigured bool) (*httptest.Server, string, *sql.DB) {
+	t.Helper()
 
 	sqlDB, err := db.OpenInMemory()
 	if err != nil {
@@ -36,16 +66,18 @@ func newAccountTestServerWithMailer(t *testing.T, mailer service.Mailer, smtpCon
 
 	users := repository.NewUserRepository(sqlDB)
 	sessions := repository.NewSessionRepository(sqlDB)
-	auth := service.NewAuthService(users, sessions, service.NewWorkspaceService(sqlDB, repository.NewWorkspaceRepository(sqlDB), repository.NewWorkspaceInviteRepository(sqlDB)), repository.NewWorkspaceInviteRepository(sqlDB), []byte("test-secret"), "admin", "admin", false)
+	workspaceRepo := repository.NewWorkspaceRepository(sqlDB)
+	workspaces := service.NewWorkspaceService(sqlDB, workspaceRepo, repository.NewWorkspaceInviteRepository(sqlDB))
+	auth := service.NewAuthService(users, sessions, workspaces, repository.NewWorkspaceInviteRepository(sqlDB), []byte("test-secret"), "admin", "admin", false)
 	if _, _, err := auth.Bootstrap(context.Background()); err != nil {
 		t.Fatalf("bootstrap: %v", err)
 	}
 
 	calendarRepo := repository.NewCalendarRepository(sqlDB)
 	shareRepo := repository.NewCalendarShareRepository(sqlDB)
-	calendars := service.NewCalendarService(calendarRepo, shareRepo, users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB))
+	calendars := service.NewCalendarService(calendarRepo, shareRepo, users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo)
 	appPasswords := service.NewAppPasswordService(repository.NewAppPasswordRepository(sqlDB), users)
-	accounts := service.NewAccountService(sqlDB, users, sessions, calendarRepo, shareRepo, calendars, appPasswords, mailer)
+	accounts := service.NewAccountService(sqlDB, users, sessions, calendarRepo, shareRepo, calendars, appPasswords, mailer, workspaces)
 	h := NewAccountHandler(accounts, smtpConfigured)
 	authHandler := NewAuthHandler(auth, false)
 
@@ -82,7 +114,7 @@ func newAccountTestServerWithMailer(t *testing.T, mailer service.Mailer, smtpCon
 		t.Fatalf("decode login response: %v", err)
 	}
 
-	return srv, loggedIn.AccessToken
+	return srv, loggedIn.AccessToken, sqlDB
 }
 
 func createAccount(t *testing.T, srv *httptest.Server, accessToken, username, password string) *http.Response {
@@ -668,7 +700,7 @@ func deleteAccount(t *testing.T, srv *httptest.Server, accessToken string, id in
 }
 
 func TestAccountDelete_DispositionDelete_RemovesAccount(t *testing.T) {
-	srv, accessToken := newAccountTestServer(t)
+	srv, accessToken, sqlDB := newAccountTestServerWithDB(t, nil, false)
 
 	createResp := createAccount(t, srv, accessToken, "alice", "temp-secret")
 	defer createResp.Body.Close()
@@ -676,6 +708,8 @@ func TestAccountDelete_DispositionDelete_RemovesAccount(t *testing.T) {
 	if err := json.NewDecoder(createResp.Body).Decode(&created); err != nil {
 		t.Fatalf("decode create response: %v", err)
 	}
+
+	clearSoleWorkspaceOwnership(t, sqlDB, created.ID)
 
 	resp := deleteAccount(t, srv, accessToken, created.ID, deleteAccountRequest{OwnedCalendars: "delete"})
 	defer resp.Body.Close()
@@ -692,7 +726,7 @@ func TestAccountDelete_DispositionDelete_RemovesAccount(t *testing.T) {
 }
 
 func TestAccountDelete_DispositionTransfer_ReassignsCalendars(t *testing.T) {
-	srv, accessToken := newAccountTestServer(t)
+	srv, accessToken, sqlDB := newAccountTestServerWithDB(t, nil, false)
 
 	createResp := createAccount(t, srv, accessToken, "alice", "temp-secret")
 	defer createResp.Body.Close()
@@ -705,6 +739,16 @@ func TestAccountDelete_DispositionTransfer_ReassignsCalendars(t *testing.T) {
 	var bob accountResponse
 	if err := json.NewDecoder(bobResp.Body).Decode(&bob); err != nil {
 		t.Fatalf("decode bob create response: %v", err)
+	}
+
+	// Reassign alice's Workspace to bob rather than deleting it outright —
+	// the Calendars this test transfers to bob live in it, and
+	// workspace_id carries ON DELETE CASCADE (#155).
+	if _, err := sqlDB.Exec("UPDATE workspaces SET owner_user_id = ? WHERE owner_user_id = ?", bob.ID, alice.ID); err != nil {
+		t.Fatalf("reassign alice's workspace ownership to bob: %v", err)
+	}
+	if _, err := sqlDB.Exec("DELETE FROM workspace_members WHERE user_id = ?", alice.ID); err != nil {
+		t.Fatalf("clear alice's workspace membership: %v", err)
 	}
 
 	resp := deleteAccount(t, srv, accessToken, alice.ID, deleteAccountRequest{OwnedCalendars: "transfer", TransferTo: &bob.ID})
@@ -1380,7 +1424,7 @@ func TestAccountReissueInvite_NotPending_Returns409(t *testing.T) {
 }
 
 func TestAccountCancelInvite_DeletesAccount(t *testing.T) {
-	srv, accessToken := newAccountTestServer(t)
+	srv, accessToken, sqlDB := newAccountTestServerWithDB(t, nil, false)
 
 	createResp := createInvite(t, srv, accessToken, "alice")
 	defer createResp.Body.Close()
@@ -1388,6 +1432,8 @@ func TestAccountCancelInvite_DeletesAccount(t *testing.T) {
 	if err := json.NewDecoder(createResp.Body).Decode(&created); err != nil {
 		t.Fatalf("decode invite response: %v", err)
 	}
+
+	clearSoleWorkspaceOwnership(t, sqlDB, created.Account.ID)
 
 	req, err := http.NewRequest(http.MethodDelete, fmt.Sprintf("%s/api/accounts/%d/invite", srv.URL, created.Account.ID), nil)
 	if err != nil {

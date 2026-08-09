@@ -34,6 +34,8 @@ var importErrors = []errorCase{
 	{service.ErrInvalidReminderChannel, badRequest(`reminder channel must be "notification" or "email"`)},
 }
 
+var importErrorsWithWorkspaceMembership = alsoHandling(importErrors, workspaceMembershipErrors...)
+
 type importTargetRequest struct {
 	Filename   string `json:"filename"`
 	Action     string `json:"action"`
@@ -55,6 +57,12 @@ func (h *CalendarHandler) Import(w http.ResponseWriter, r *http.Request) {
 	userID, ok := httpauth.UserIDFromContext(r.Context())
 	if !ok {
 		httpresponse.Error(w, http.StatusUnauthorized, "unauthorized", "authentication required")
+		return
+	}
+
+	workspaceID, ok := httpauth.WorkspaceIDFromContext(r.Context())
+	if !ok {
+		httpresponse.Error(w, http.StatusForbidden, "forbidden", "not a member of this workspace")
 		return
 	}
 
@@ -100,8 +108,8 @@ func (h *CalendarHandler) Import(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	summary, err := h.imports.Import(r.Context(), userID, header.Filename, data, targets, dryRun)
-	if respondError(w, err, importErrors, "failed to import calendar file") {
+	summary, err := h.imports.Import(r.Context(), userID, workspaceID, header.Filename, data, targets, dryRun)
+	if respondError(w, err, importErrorsWithWorkspaceMembership, "failed to import calendar file") {
 		return
 	}
 

@@ -32,8 +32,17 @@ func newTestShareService(t *testing.T) (svc *CalendarService, users *repository.
 		t.Fatalf("create other user: %v", err)
 	}
 
-	svc = NewCalendarService(repository.NewCalendarRepository(sqlDB), repository.NewCalendarShareRepository(sqlDB), users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB))
-	calendar, err := svc.Create(context.Background(), owner.ID, "cal-1", CalendarWrite{Name: "Family", Color: "#12809CFF"})
+	workspaceRepo := repository.NewWorkspaceRepository(sqlDB)
+	workspace, err := workspaceRepo.Create(context.Background(), "Test Workspace", owner.ID)
+	if err != nil {
+		t.Fatalf("create workspace: %v", err)
+	}
+	if err := workspaceRepo.AddMember(context.Background(), workspace.ID, owner.ID, repository.WorkspaceRoleOwner); err != nil {
+		t.Fatalf("add workspace member: %v", err)
+	}
+
+	svc = NewCalendarService(repository.NewCalendarRepository(sqlDB), repository.NewCalendarShareRepository(sqlDB), users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo)
+	calendar, err := svc.Create(context.Background(), owner.ID, workspace.ID, "cal-1", CalendarWrite{Name: "Family", Color: "#12809CFF"})
 	if err != nil {
 		t.Fatalf("create calendar: %v", err)
 	}
@@ -278,7 +287,16 @@ func TestCalendarService_ListAccessible(t *testing.T) {
 	if _, err := svc.Share(ctx, ownerID, calendarID, "other", repository.RoleEditor); err != nil {
 		t.Fatalf("share: %v", err)
 	}
-	own, err := svc.Create(ctx, otherID, "cal-own", CalendarWrite{Name: "Personal", Color: "#12809CFF"})
+
+	otherWorkspace, err := svc.workspaces.Create(ctx, "Other's Workspace", otherID)
+	if err != nil {
+		t.Fatalf("create other's workspace: %v", err)
+	}
+	if err := svc.workspaces.AddMember(ctx, otherWorkspace.ID, otherID, repository.WorkspaceRoleOwner); err != nil {
+		t.Fatalf("add other's workspace member: %v", err)
+	}
+
+	own, err := svc.Create(ctx, otherID, otherWorkspace.ID, "cal-own", CalendarWrite{Name: "Personal", Color: "#12809CFF"})
 	if err != nil {
 		t.Fatalf("create other's own calendar: %v", err)
 	}

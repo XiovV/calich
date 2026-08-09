@@ -104,10 +104,11 @@ type AccountService struct {
 	calendars    *CalendarService
 	appPasswords *AppPasswordService
 	mailer       Mailer
+	workspaces   *WorkspaceService
 }
 
-func NewAccountService(db *sql.DB, users *repository.UserRepository, sessions *repository.SessionRepository, calendarRepo *repository.CalendarRepository, shareRepo *repository.CalendarShareRepository, calendars *CalendarService, appPasswords *AppPasswordService, mailer Mailer) *AccountService {
-	return &AccountService{db: db, users: users, sessions: sessions, calendarRepo: calendarRepo, shareRepo: shareRepo, calendars: calendars, appPasswords: appPasswords, mailer: mailer}
+func NewAccountService(db *sql.DB, users *repository.UserRepository, sessions *repository.SessionRepository, calendarRepo *repository.CalendarRepository, shareRepo *repository.CalendarShareRepository, calendars *CalendarService, appPasswords *AppPasswordService, mailer Mailer, workspaces *WorkspaceService) *AccountService {
+	return &AccountService{db: db, users: users, sessions: sessions, calendarRepo: calendarRepo, shareRepo: shareRepo, calendars: calendars, appPasswords: appPasswords, mailer: mailer, workspaces: workspaces}
 }
 
 // validateUsername trims username and checks it against the one set of rules
@@ -126,6 +127,24 @@ func validateUsername(username string) (string, error) {
 		return "", ErrInvalidUsername
 	}
 	return username, nil
+}
+
+// seedWorkspaceAndDefaults gives a newly created account its own personal
+// Workspace (ADR-0044) — exactly like Bootstrap/Register create for a
+// self-registered one — and seeds it with the default Calendars, since
+// EnsureDefaults needs a Workspace to create them in. Shared by Create and
+// CreateInvite, the two AccountService paths that mint a brand-new User.
+func (s *AccountService) seedWorkspaceAndDefaults(ctx context.Context, user repository.User) error {
+	workspace, err := s.workspaces.CreateForOwner(ctx, user.ID, workspaceNameFor(user.Username))
+	if err != nil {
+		return fmt.Errorf("create workspace: %w", err)
+	}
+
+	if err := s.calendars.EnsureDefaults(ctx, user.ID, workspace.ID); err != nil {
+		return fmt.Errorf("seed default calendars: %w", err)
+	}
+
+	return nil
 }
 
 // Create makes a new account with username and a temporary password
@@ -155,8 +174,8 @@ func (s *AccountService) Create(ctx context.Context, username, tempPassword stri
 		return repository.User{}, fmt.Errorf("create user: %w", err)
 	}
 
-	if err := s.calendars.EnsureDefaults(ctx, user.ID); err != nil {
-		return repository.User{}, fmt.Errorf("seed default calendars: %w", err)
+	if err := s.seedWorkspaceAndDefaults(ctx, user); err != nil {
+		return repository.User{}, err
 	}
 
 	return user, nil
@@ -209,8 +228,8 @@ func (s *AccountService) CreateInvite(ctx context.Context, username, email strin
 		return InviteResult{}, fmt.Errorf("create pending user: %w", err)
 	}
 
-	if err := s.calendars.EnsureDefaults(ctx, user.ID); err != nil {
-		return InviteResult{}, fmt.Errorf("seed default calendars: %w", err)
+	if err := s.seedWorkspaceAndDefaults(ctx, user); err != nil {
+		return InviteResult{}, err
 	}
 
 	if email != "" {

@@ -15,6 +15,15 @@ function requireAccessToken(): string {
   return accessToken;
 }
 
+// requireActiveWorkspaceId synchronously reads activeWorkspaceId outside of
+// React, throwing if it's missing — a caller with no active Workspace is a
+// caller bug, not a recoverable state (mirrors requireAccessToken above).
+export function requireActiveWorkspaceId(): number {
+  const activeWorkspaceId = useWorkspacesStore.getState().activeWorkspaceId;
+  if (activeWorkspaceId === null) throw new Error("No active workspace.");
+  return activeWorkspaceId;
+}
+
 // A minimal workspace switcher (#153): every User currently belongs to
 // exactly one Workspace, so there is nothing to persist about which is
 // "active" beyond this session — later tickets adding ways to join more than

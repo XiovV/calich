@@ -31,12 +31,28 @@ func newTestEventRepository(t *testing.T) (repo *EventRepository, userID int64, 
 		t.Fatalf("create other user: %v", err)
 	}
 
+	workspaces := NewWorkspaceRepository(sqlDB)
+	workspace, err := workspaces.Create(context.Background(), "workspace-a", user.ID)
+	if err != nil {
+		t.Fatalf("create workspace: %v", err)
+	}
+	if err := workspaces.AddMember(context.Background(), workspace.ID, user.ID, WorkspaceRoleOwner); err != nil {
+		t.Fatalf("add workspace member: %v", err)
+	}
+	otherWorkspace, err := workspaces.Create(context.Background(), "workspace-b", other.ID)
+	if err != nil {
+		t.Fatalf("create other workspace: %v", err)
+	}
+	if err := workspaces.AddMember(context.Background(), otherWorkspace.ID, other.ID, WorkspaceRoleOwner); err != nil {
+		t.Fatalf("add other workspace member: %v", err)
+	}
+
 	calendars := NewCalendarRepository(sqlDB)
-	cal, err := calendars.Create(context.Background(), user.ID, "cal-1", CalendarFields{Name: "Personal", Color: "peacock"})
+	cal, err := calendars.Create(context.Background(), user.ID, workspace.ID, "cal-1", CalendarFields{Name: "Personal", Color: "peacock"})
 	if err != nil {
 		t.Fatalf("create calendar: %v", err)
 	}
-	otherCal, err := calendars.Create(context.Background(), other.ID, "cal-2", CalendarFields{Name: "Other", Color: "tomato"})
+	otherCal, err := calendars.Create(context.Background(), other.ID, otherWorkspace.ID, "cal-2", CalendarFields{Name: "Other", Color: "tomato"})
 	if err != nil {
 		t.Fatalf("create other calendar: %v", err)
 	}
@@ -389,8 +405,17 @@ func TestEventRepository_CascadeDeletesWhenCalendarDeleted(t *testing.T) {
 		t.Fatalf("create user: %v", err)
 	}
 
+	workspaces := NewWorkspaceRepository(sqlDB)
+	workspace, err := workspaces.Create(context.Background(), "workspace-a", user.ID)
+	if err != nil {
+		t.Fatalf("create workspace: %v", err)
+	}
+	if err := workspaces.AddMember(context.Background(), workspace.ID, user.ID, WorkspaceRoleOwner); err != nil {
+		t.Fatalf("add workspace member: %v", err)
+	}
+
 	calendars := NewCalendarRepository(sqlDB)
-	cal, err := calendars.Create(context.Background(), user.ID, "cal-1", CalendarFields{Name: "Personal", Color: "peacock"})
+	cal, err := calendars.Create(context.Background(), user.ID, workspace.ID, "cal-1", CalendarFields{Name: "Personal", Color: "peacock"})
 	if err != nil {
 		t.Fatalf("create calendar: %v", err)
 	}
@@ -431,8 +456,17 @@ func TestEventRepository_CreatedByPreservedWhenCreatingUserDeleted(t *testing.T)
 		t.Fatalf("create creator: %v", err)
 	}
 
+	workspaces := NewWorkspaceRepository(sqlDB)
+	workspace, err := workspaces.Create(ctx, "workspace-a", owner.ID)
+	if err != nil {
+		t.Fatalf("create workspace: %v", err)
+	}
+	if err := workspaces.AddMember(ctx, workspace.ID, owner.ID, WorkspaceRoleOwner); err != nil {
+		t.Fatalf("add workspace member: %v", err)
+	}
+
 	calendars := NewCalendarRepository(sqlDB)
-	cal, err := calendars.Create(ctx, owner.ID, "cal-1", CalendarFields{Name: "Family", Color: "peacock"})
+	cal, err := calendars.Create(ctx, owner.ID, workspace.ID, "cal-1", CalendarFields{Name: "Family", Color: "peacock"})
 	if err != nil {
 		t.Fatalf("create calendar: %v", err)
 	}
@@ -560,12 +594,28 @@ func TestEventRepository_ListAllWithReminders(t *testing.T) {
 		t.Fatalf("create user b: %v", err)
 	}
 
+	workspaces := NewWorkspaceRepository(sqlDB)
+	workspaceA, err := workspaces.Create(ctx, "workspace-a", userA.ID)
+	if err != nil {
+		t.Fatalf("create workspace a: %v", err)
+	}
+	if err := workspaces.AddMember(ctx, workspaceA.ID, userA.ID, WorkspaceRoleOwner); err != nil {
+		t.Fatalf("add workspace a member: %v", err)
+	}
+	workspaceB, err := workspaces.Create(ctx, "workspace-b", userB.ID)
+	if err != nil {
+		t.Fatalf("create workspace b: %v", err)
+	}
+	if err := workspaces.AddMember(ctx, workspaceB.ID, userB.ID, WorkspaceRoleOwner); err != nil {
+		t.Fatalf("add workspace b member: %v", err)
+	}
+
 	calendars := NewCalendarRepository(sqlDB)
-	calA, err := calendars.Create(ctx, userA.ID, "cal-a", CalendarFields{Name: "A", Color: "peacock"})
+	calA, err := calendars.Create(ctx, userA.ID, workspaceA.ID, "cal-a", CalendarFields{Name: "A", Color: "peacock"})
 	if err != nil {
 		t.Fatalf("create calendar a: %v", err)
 	}
-	calB, err := calendars.Create(ctx, userB.ID, "cal-b", CalendarFields{Name: "B", Color: "tomato"})
+	calB, err := calendars.Create(ctx, userB.ID, workspaceB.ID, "cal-b", CalendarFields{Name: "B", Color: "tomato"})
 	if err != nil {
 		t.Fatalf("create calendar b: %v", err)
 	}
@@ -636,12 +686,28 @@ func TestEventRepository_ListAllWithReminders_RecipientUserIDsIncludeOwnerAndEve
 		t.Fatalf("create solo: %v", err)
 	}
 
+	workspaces := NewWorkspaceRepository(sqlDB)
+	ownerWorkspace, err := workspaces.Create(ctx, "workspace-owner", owner.ID)
+	if err != nil {
+		t.Fatalf("create owner workspace: %v", err)
+	}
+	if err := workspaces.AddMember(ctx, ownerWorkspace.ID, owner.ID, WorkspaceRoleOwner); err != nil {
+		t.Fatalf("add owner workspace member: %v", err)
+	}
+	soloWorkspace, err := workspaces.Create(ctx, "workspace-solo", solo.ID)
+	if err != nil {
+		t.Fatalf("create solo workspace: %v", err)
+	}
+	if err := workspaces.AddMember(ctx, soloWorkspace.ID, solo.ID, WorkspaceRoleOwner); err != nil {
+		t.Fatalf("add solo workspace member: %v", err)
+	}
+
 	calendars := NewCalendarRepository(sqlDB)
-	shared, err := calendars.Create(ctx, owner.ID, "cal-shared", CalendarFields{Name: "Family", Color: "peacock"})
+	shared, err := calendars.Create(ctx, owner.ID, ownerWorkspace.ID, "cal-shared", CalendarFields{Name: "Family", Color: "peacock"})
 	if err != nil {
 		t.Fatalf("create shared calendar: %v", err)
 	}
-	unshared, err := calendars.Create(ctx, solo.ID, "cal-unshared", CalendarFields{Name: "Solo", Color: "tomato"})
+	unshared, err := calendars.Create(ctx, solo.ID, soloWorkspace.ID, "cal-unshared", CalendarFields{Name: "Solo", Color: "tomato"})
 	if err != nil {
 		t.Fatalf("create unshared calendar: %v", err)
 	}

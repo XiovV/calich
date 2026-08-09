@@ -11,8 +11,12 @@ import (
 type Calendar struct {
 	ID     string
 	UserID int64
-	Name   string
-	Color  string
+	// WorkspaceID is the Workspace this Calendar belongs to (#155, ADR-0045)
+	// — set once at creation time from whichever Workspace was active, and
+	// never changes.
+	WorkspaceID int64
+	Name        string
+	Color       string
 	// SourceURL is non-nil only on a Subscribed Calendar (#83, ADR-0032):
 	// the external .ics feed URL it was created from. Editable later via
 	// UpdateSourceURL (#88), which also resets the conditional-GET
@@ -102,10 +106,10 @@ func (r *CalendarRepository) WithTx(tx *sql.Tx) *CalendarRepository {
 	return &CalendarRepository{db: tx}
 }
 
-func (r *CalendarRepository) Create(ctx context.Context, userID int64, id string, fields CalendarFields) (Calendar, error) {
+func (r *CalendarRepository) Create(ctx context.Context, userID, workspaceID int64, id string, fields CalendarFields) (Calendar, error) {
 	if _, err := r.db.ExecContext(ctx,
-		`INSERT INTO calendars (id, user_id, name, color, source_url, keep_alarms, feed_name, feed_color) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		id, userID, fields.Name, fields.Color, fields.SourceURL, fields.KeepAlarms, fields.FeedName, fields.FeedColor,
+		`INSERT INTO calendars (id, user_id, workspace_id, name, color, source_url, keep_alarms, feed_name, feed_color) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		id, userID, workspaceID, fields.Name, fields.Color, fields.SourceURL, fields.KeepAlarms, fields.FeedName, fields.FeedColor,
 	); err != nil {
 		return Calendar{}, fmt.Errorf("insert calendar: %w", err)
 	}
@@ -113,7 +117,7 @@ func (r *CalendarRepository) Create(ctx context.Context, userID int64, id string
 	return r.GetByID(ctx, userID, id)
 }
 
-const calendarColumns = `id, user_id, name, color, source_url, created_at, last_synced_at, etag, last_modified, content_hash, next_refresh_at, refresh_interval_seconds, failure_count, error_class, error_message, keep_alarms, feed_name, feed_color`
+const calendarColumns = `id, user_id, workspace_id, name, color, source_url, created_at, last_synced_at, etag, last_modified, content_hash, next_refresh_at, refresh_interval_seconds, failure_count, error_class, error_message, keep_alarms, feed_name, feed_color`
 
 func (r *CalendarRepository) GetByID(ctx context.Context, userID int64, id string) (Calendar, error) {
 	return r.scanCalendar(r.db.QueryRowContext(ctx,
@@ -156,6 +160,35 @@ func (r *CalendarRepository) ListByUser(ctx context.Context, userID int64) ([]Ca
 	return calendars, nil
 }
 
+// ListByUserAndWorkspace returns a user's calendars scoped to workspaceID,
+// ordered by creation time, oldest first — the workspace-scoped sibling of
+// ListByUser (#155, ADR-0045), for call sites that need "everything this
+// User owns inside the Workspace that's currently active" rather than
+// everything they own across every Workspace they belong to.
+func (r *CalendarRepository) ListByUserAndWorkspace(ctx context.Context, userID, workspaceID int64) ([]Calendar, error) {
+	rows, err := r.db.QueryContext(ctx,
+		`SELECT `+calendarColumns+` FROM calendars WHERE user_id = ? AND workspace_id = ? ORDER BY created_at, id`, userID, workspaceID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list calendars: %w", err)
+	}
+	defer rows.Close()
+
+	calendars := []Calendar{}
+	for rows.Next() {
+		c, err := scanCalendarRow(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan calendar: %w", err)
+		}
+		calendars = append(calendars, c)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate calendars: %w", err)
+	}
+
+	return calendars, nil
+}
+
 // CalendarWithRole pairs a Calendar with the Role a Share grants on it. Only
 // produced by ListSharedWithUser, whose rows are all Shares by construction
 // — there is no Owner case to represent, unlike ResolveAccess's role
@@ -172,7 +205,7 @@ type CalendarWithRole struct {
 // merge the two without re-sorting by anything Share-specific.
 func (r *CalendarRepository) ListSharedWithUser(ctx context.Context, userID int64) ([]CalendarWithRole, error) {
 	rows, err := r.db.QueryContext(ctx,
-		`SELECT c.id, c.user_id, c.name, c.color, c.source_url, c.created_at, c.last_synced_at, c.etag, c.last_modified, c.content_hash,
+		`SELECT c.id, c.user_id, c.workspace_id, c.name, c.color, c.source_url, c.created_at, c.last_synced_at, c.etag, c.last_modified, c.content_hash,
 		        c.next_refresh_at, c.refresh_interval_seconds, c.failure_count, c.error_class, c.error_message, c.keep_alarms, c.feed_name, c.feed_color,
 		        s.role
 		 FROM calendars c
@@ -189,7 +222,42 @@ func (r *CalendarRepository) ListSharedWithUser(ctx context.Context, userID int6
 	calendars := []CalendarWithRole{}
 	for rows.Next() {
 		var c CalendarWithRole
-		if err := rows.Scan(&c.ID, &c.UserID, &c.Name, &c.Color, &c.SourceURL, &c.CreatedAt, &c.LastSyncedAt, &c.ETag, &c.LastModified, &c.ContentHash,
+		if err := rows.Scan(&c.ID, &c.UserID, &c.WorkspaceID, &c.Name, &c.Color, &c.SourceURL, &c.CreatedAt, &c.LastSyncedAt, &c.ETag, &c.LastModified, &c.ContentHash,
+			&c.NextRefreshAt, &c.RefreshIntervalSeconds, &c.FailureCount, &c.ErrorClass, &c.ErrorMessage, &c.KeepAlarms, &c.FeedName, &c.FeedColor,
+			&c.Role); err != nil {
+			return nil, fmt.Errorf("scan shared calendar: %w", err)
+		}
+		calendars = append(calendars, c)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate shared calendars: %w", err)
+	}
+	return calendars, nil
+}
+
+// ListSharedWithUserAndWorkspace returns every Calendar a Share grants
+// userID Access to, scoped to workspaceID — the workspace-scoped sibling of
+// ListSharedWithUser (#155, ADR-0045).
+func (r *CalendarRepository) ListSharedWithUserAndWorkspace(ctx context.Context, userID, workspaceID int64) ([]CalendarWithRole, error) {
+	rows, err := r.db.QueryContext(ctx,
+		`SELECT c.id, c.user_id, c.workspace_id, c.name, c.color, c.source_url, c.created_at, c.last_synced_at, c.etag, c.last_modified, c.content_hash,
+		        c.next_refresh_at, c.refresh_interval_seconds, c.failure_count, c.error_class, c.error_message, c.keep_alarms, c.feed_name, c.feed_color,
+		        s.role
+		 FROM calendars c
+		 JOIN calendar_shares s ON s.calendar_id = c.id
+		 WHERE s.user_id = ? AND c.workspace_id = ?
+		 ORDER BY c.created_at, c.id`,
+		userID, workspaceID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list shared calendars: %w", err)
+	}
+	defer rows.Close()
+
+	calendars := []CalendarWithRole{}
+	for rows.Next() {
+		var c CalendarWithRole
+		if err := rows.Scan(&c.ID, &c.UserID, &c.WorkspaceID, &c.Name, &c.Color, &c.SourceURL, &c.CreatedAt, &c.LastSyncedAt, &c.ETag, &c.LastModified, &c.ContentHash,
 			&c.NextRefreshAt, &c.RefreshIntervalSeconds, &c.FailureCount, &c.ErrorClass, &c.ErrorMessage, &c.KeepAlarms, &c.FeedName, &c.FeedColor,
 			&c.Role); err != nil {
 			return nil, fmt.Errorf("scan shared calendar: %w", err)
@@ -402,7 +470,7 @@ func (r *CalendarRepository) scanCalendar(row *sql.Row) (Calendar, error) {
 
 func scanCalendarRow(row rowScanner) (Calendar, error) {
 	var c Calendar
-	err := row.Scan(&c.ID, &c.UserID, &c.Name, &c.Color, &c.SourceURL, &c.CreatedAt, &c.LastSyncedAt, &c.ETag, &c.LastModified, &c.ContentHash,
+	err := row.Scan(&c.ID, &c.UserID, &c.WorkspaceID, &c.Name, &c.Color, &c.SourceURL, &c.CreatedAt, &c.LastSyncedAt, &c.ETag, &c.LastModified, &c.ContentHash,
 		&c.NextRefreshAt, &c.RefreshIntervalSeconds, &c.FailureCount, &c.ErrorClass, &c.ErrorMessage, &c.KeepAlarms, &c.FeedName, &c.FeedColor)
 	if err != nil {
 		return Calendar{}, err

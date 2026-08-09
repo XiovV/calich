@@ -1,4 +1,5 @@
 import { authedFetch, errorFromResponse } from "./apiClient";
+import { requireActiveWorkspaceId } from "./workspacesStore";
 
 export interface ImportTarget {
   filename: string;
@@ -109,6 +110,7 @@ async function upload(
   const response = await authedFetch(accessToken, `/api/calendars/import?dryRun=${dryRun ? "1" : "0"}`, {
     method: "POST",
     credentials: "include",
+    headers: { "X-Workspace-Id": String(requireActiveWorkspaceId()) },
     body: formData,
   });
   if (!response.ok) throw await errorFromResponse(response);

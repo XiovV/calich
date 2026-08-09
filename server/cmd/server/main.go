@@ -67,7 +67,7 @@ func main() {
 	workspaceInviteRepo := repository.NewWorkspaceInviteRepository(sqlDB)
 	workspaceService := service.NewWorkspaceService(sqlDB, workspaceRepo, workspaceInviteRepo)
 	authService := service.NewAuthService(users, sessions, workspaceService, workspaceInviteRepo, jwtSecret, cfg.InitialUsername, cfg.InitialPassword, cfg.EnableSignups)
-	calendarService := service.NewCalendarService(calendarRepo, shareRepo, users, reminderOverrideRepo, colorOverrideRepo)
+	calendarService := service.NewCalendarService(calendarRepo, shareRepo, users, reminderOverrideRepo, colorOverrideRepo, workspaceRepo)
 	attachmentRepo := repository.NewAttachmentRepository(sqlDB)
 	eventRepo := repository.NewEventRepository(sqlDB)
 	eventService := service.NewEventService(sqlDB, eventRepo, repository.NewEventExceptionRepository(sqlDB), repository.NewEventReminderRepository(sqlDB), reminderOverrideRepo, repository.NewSyncRepository(sqlDB), calendarService, users, attachmentRepo)
@@ -87,7 +87,7 @@ func main() {
 	if smtpMailer != nil {
 		accountMailer = smtpMailer
 	}
-	accountService := service.NewAccountService(sqlDB, users, sessions, calendarRepo, shareRepo, calendarService, appPasswordService, accountMailer)
+	accountService := service.NewAccountService(sqlDB, users, sessions, calendarRepo, shareRepo, calendarService, appPasswordService, accountMailer, workspaceService)
 
 	ctx := context.Background()
 	bootstrapUser, bootstrapCreatedUser, err := authService.Bootstrap(ctx)
@@ -97,7 +97,15 @@ func main() {
 	}
 
 	if bootstrapCreatedUser {
-		if err := calendarService.EnsureDefaults(ctx, bootstrapUser.ID); err != nil {
+		// Bootstrap just created bootstrapUser's own Workspace (AuthService.
+		// Bootstrap) — resolve it so the seeded default Calendars land inside
+		// it rather than nowhere (#155, ADR-0045).
+		bootstrapWorkspaces, err := workspaceService.ListForUser(ctx, bootstrapUser.ID)
+		if err != nil {
+			logger.Error("failed to look up bootstrap workspace", "error", err)
+			os.Exit(1)
+		}
+		if err := calendarService.EnsureDefaults(ctx, bootstrapUser.ID, bootstrapWorkspaces[0].ID); err != nil {
 			logger.Error("failed to seed default calendars", "error", err)
 			os.Exit(1)
 		}
@@ -118,7 +126,7 @@ func main() {
 	workspaceHandler := handlers.NewWorkspaceHandler(workspaceService)
 	calDAVHandler := caldavserver.NewHTTPHandler(caldavserver.NewBackend(calendarService, eventService, attachmentService, cfg.MaxAttachmentSize, cfg.MaxAttachmentsPerEvent))
 
-	handler, err := router.New(logger, authHandler, calendarHandler, eventHandler, attachmentHandler, notificationHandler, appPasswordHandler, accountHandler, userHandler, workspaceHandler, calDAVHandler, authService, authService, appPasswordService, authService)
+	handler, err := router.New(logger, authHandler, calendarHandler, eventHandler, attachmentHandler, notificationHandler, appPasswordHandler, accountHandler, userHandler, workspaceHandler, calDAVHandler, authService, authService, appPasswordService, authService, workspaceService)
 	if err != nil {
 		logger.Error("failed to build router", "error", err)
 		os.Exit(1)

@@ -1,6 +1,7 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "./apiClient";
 import { calendarsApi } from "./calendarsApi";
+import { useWorkspacesStore } from "./workspacesStore";
 
 function jsonResponse(status: number, body: unknown): Response {
   return new Response(JSON.stringify(body), {
@@ -13,8 +14,13 @@ function emptyResponse(status: number): Response {
   return new Response(null, { status });
 }
 
+beforeEach(() => {
+  useWorkspacesStore.setState({ activeWorkspaceId: 7 });
+});
+
 afterEach(() => {
   vi.unstubAllGlobals();
+  useWorkspacesStore.setState({ activeWorkspaceId: null });
 });
 
 describe("calendarsApi.list", () => {
@@ -31,14 +37,22 @@ describe("calendarsApi.list", () => {
       "/api/calendars/",
       expect.objectContaining({
         credentials: "include",
-        headers: { Authorization: "Bearer token-123" },
+        headers: { Authorization: "Bearer token-123", "X-Workspace-Id": "7" },
       }),
     );
   });
 
   it("throws an ApiError on failure", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(
-      jsonResponse(401, { error: { code: "unauthorized", message: "missing token" } }),
+    // A fresh Response per call: importing calendarsApi now pulls in
+    // workspacesStore -> authStore, which registers a real session
+    // refresher (apiClient) at module init. A 401 here triggers that
+    // refresher, which calls the same mocked fetch a second time (against
+    // the refresh endpoint) — a single shared Response instance would have
+    // its body already consumed by the second call.
+    const fetchMock = vi.fn().mockImplementation(() =>
+      Promise.resolve(
+        jsonResponse(401, { error: { code: "unauthorized", message: "missing token" } }),
+      ),
     );
     vi.stubGlobal("fetch", fetchMock);
 

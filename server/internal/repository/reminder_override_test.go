@@ -29,8 +29,17 @@ func newTestReminderOverrideRepository(t *testing.T) (events *EventRepository, o
 		t.Fatalf("create other user: %v", err)
 	}
 
+	workspaces := NewWorkspaceRepository(sqlDB)
+	workspace, err := workspaces.Create(context.Background(), "workspace-a", user.ID)
+	if err != nil {
+		t.Fatalf("create workspace: %v", err)
+	}
+	if err := workspaces.AddMember(context.Background(), workspace.ID, user.ID, WorkspaceRoleOwner); err != nil {
+		t.Fatalf("add workspace member: %v", err)
+	}
+
 	calendars := NewCalendarRepository(sqlDB)
-	cal, err := calendars.Create(context.Background(), user.ID, "cal-1", CalendarFields{Name: "Personal", Color: "peacock"})
+	cal, err := calendars.Create(context.Background(), user.ID, workspace.ID, "cal-1", CalendarFields{Name: "Personal", Color: "peacock"})
 	if err != nil {
 		t.Fatalf("create calendar: %v", err)
 	}

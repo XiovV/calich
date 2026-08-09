@@ -29,7 +29,7 @@ func crlf(s string) string { return strings.ReplaceAll(s, "\n", "\r\n") }
 // importRequest builds a multipart/form-data POST to /api/calendars/import
 // carrying a "file" part (named filename, containing data) and a "targets"
 // part carrying targetsJSON verbatim.
-func importRequest(t *testing.T, baseURL, accessToken, path, filename string, data []byte, targetsJSON string) *http.Response {
+func importRequest(t *testing.T, baseURL, accessToken, workspaceID, path, filename string, data []byte, targetsJSON string) *http.Response {
 	t.Helper()
 
 	var body bytes.Buffer
@@ -57,6 +57,7 @@ func importRequest(t *testing.T, baseURL, accessToken, path, filename string, da
 	}
 	req.Header.Set("Content-Type", w.FormDataContentType())
 	req.Header.Set("Authorization", "Bearer "+accessToken)
+	req.Header.Set("X-Workspace-Id", workspaceID)
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -66,9 +67,9 @@ func importRequest(t *testing.T, baseURL, accessToken, path, filename string, da
 }
 
 func TestCalendarHandler_Import_DryRun_DoesNotCreateCalendar(t *testing.T) {
-	baseURL, accessToken := newCalendarTestServer(t)
+	baseURL, accessToken, workspaceID := newCalendarTestServer(t)
 
-	resp := importRequest(t, baseURL, accessToken, "/api/calendars/import?dryRun=1", "invite.ics", []byte(crlf(importTestICS)),
+	resp := importRequest(t, baseURL, accessToken, workspaceID, "/api/calendars/import?dryRun=1", "invite.ics", []byte(crlf(importTestICS)),
 		`{"entries":[{"filename":"invite.ics","action":"new"}]}`)
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
@@ -93,7 +94,7 @@ func TestCalendarHandler_Import_DryRun_DoesNotCreateCalendar(t *testing.T) {
 		t.Fatalf("expected 1 event, got %d", summary.Files[0].EventCount)
 	}
 
-	listResp, err := authenticatedGet(baseURL+"/api/calendars/", accessToken)
+	listResp, err := authenticatedGetWithWorkspace(baseURL+"/api/calendars/", accessToken, workspaceID)
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
@@ -108,9 +109,9 @@ func TestCalendarHandler_Import_DryRun_DoesNotCreateCalendar(t *testing.T) {
 }
 
 func TestCalendarHandler_Import_RealRun_CreatesCalendarAndEvent(t *testing.T) {
-	baseURL, accessToken := newCalendarTestServer(t)
+	baseURL, accessToken, workspaceID := newCalendarTestServer(t)
 
-	resp := importRequest(t, baseURL, accessToken, "/api/calendars/import", "invite.ics", []byte(crlf(importTestICS)),
+	resp := importRequest(t, baseURL, accessToken, workspaceID, "/api/calendars/import", "invite.ics", []byte(crlf(importTestICS)),
 		`{"entries":[{"filename":"invite.ics","action":"new"}]}`)
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
@@ -126,7 +127,7 @@ func TestCalendarHandler_Import_RealRun_CreatesCalendarAndEvent(t *testing.T) {
 		t.Fatalf("expected a created calendar id, got %+v", summary.Files[0])
 	}
 
-	listResp, err := authenticatedGet(baseURL+"/api/calendars/", accessToken)
+	listResp, err := authenticatedGetWithWorkspace(baseURL+"/api/calendars/", accessToken, workspaceID)
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
@@ -141,7 +142,7 @@ func TestCalendarHandler_Import_RealRun_CreatesCalendarAndEvent(t *testing.T) {
 }
 
 func TestCalendarHandler_Import_MissingFilePart(t *testing.T) {
-	baseURL, accessToken := newCalendarTestServer(t)
+	baseURL, accessToken, workspaceID := newCalendarTestServer(t)
 
 	var body bytes.Buffer
 	w := multipart.NewWriter(&body)
@@ -158,6 +159,7 @@ func TestCalendarHandler_Import_MissingFilePart(t *testing.T) {
 	}
 	req.Header.Set("Content-Type", w.FormDataContentType())
 	req.Header.Set("Authorization", "Bearer "+accessToken)
+	req.Header.Set("X-Workspace-Id", workspaceID)
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -170,9 +172,9 @@ func TestCalendarHandler_Import_MissingFilePart(t *testing.T) {
 }
 
 func TestCalendarHandler_Import_InvalidDryRunValue(t *testing.T) {
-	baseURL, accessToken := newCalendarTestServer(t)
+	baseURL, accessToken, workspaceID := newCalendarTestServer(t)
 
-	resp := importRequest(t, baseURL, accessToken, "/api/calendars/import?dryRun=maybe", "invite.ics", []byte(crlf(importTestICS)), `{}`)
+	resp := importRequest(t, baseURL, accessToken, workspaceID, "/api/calendars/import?dryRun=maybe", "invite.ics", []byte(crlf(importTestICS)), `{}`)
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d", resp.StatusCode)
@@ -180,9 +182,9 @@ func TestCalendarHandler_Import_InvalidDryRunValue(t *testing.T) {
 }
 
 func TestCalendarHandler_Import_Zip_RejectsExistingTarget(t *testing.T) {
-	baseURL, accessToken := newCalendarTestServer(t)
+	baseURL, accessToken, workspaceID := newCalendarTestServer(t)
 
-	createResp := createCalendar(t, baseURL, accessToken, "11111111-1111-1111-1111-111111111111", "Personal", "#12809CFF")
+	createResp := createCalendar(t, baseURL, accessToken, workspaceID, "11111111-1111-1111-1111-111111111111", "Personal", "#12809CFF")
 	createResp.Body.Close()
 
 	var buf bytes.Buffer
@@ -198,7 +200,7 @@ func TestCalendarHandler_Import_Zip_RejectsExistingTarget(t *testing.T) {
 		t.Fatalf("close zip: %v", err)
 	}
 
-	resp := importRequest(t, baseURL, accessToken, "/api/calendars/import?dryRun=1", "export.zip", buf.Bytes(),
+	resp := importRequest(t, baseURL, accessToken, workspaceID, "/api/calendars/import?dryRun=1", "export.zip", buf.Bytes(),
 		`{"entries":[{"filename":"a.ics","action":"existing","calendarId":"11111111-1111-1111-1111-111111111111"}]}`)
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusBadRequest {
@@ -228,9 +230,9 @@ END:VCALENDAR
 // /api/events routes, so the imported Event/Attachment row themselves are
 // checked at the service layer (TestImportService_RealRun_WritesInlineAttachment).
 func TestCalendarHandler_Import_RealRun_IngestsInlineAttachment(t *testing.T) {
-	baseURL, accessToken := newCalendarTestServer(t)
+	baseURL, accessToken, workspaceID := newCalendarTestServer(t)
 
-	resp := importRequest(t, baseURL, accessToken, "/api/calendars/import", "invite.ics", []byte(crlf(importTestICSWithAttach)),
+	resp := importRequest(t, baseURL, accessToken, workspaceID, "/api/calendars/import", "invite.ics", []byte(crlf(importTestICSWithAttach)),
 		`{"entries":[{"filename":"invite.ics","action":"new"}]}`)
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
@@ -251,9 +253,9 @@ func TestCalendarHandler_Import_RealRun_IngestsInlineAttachment(t *testing.T) {
 }
 
 func TestCalendarHandler_Import_RequiresAuth(t *testing.T) {
-	baseURL, _ := newCalendarTestServer(t)
+	baseURL, _, _ := newCalendarTestServer(t)
 
-	resp := importRequest(t, baseURL, "", "/api/calendars/import?dryRun=1", "invite.ics", []byte(crlf(importTestICS)),
+	resp := importRequest(t, baseURL, "", "", "/api/calendars/import?dryRun=1", "invite.ics", []byte(crlf(importTestICS)),
 		`{"entries":[{"filename":"invite.ics","action":"new"}]}`)
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusUnauthorized {

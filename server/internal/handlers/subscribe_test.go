@@ -33,12 +33,12 @@ func icsFeedServer(t *testing.T) *httptest.Server {
 	return srv
 }
 
-func postSubscribe(t *testing.T, baseURL, accessToken, dryRun, url, name, color string) *http.Response {
+func postSubscribe(t *testing.T, baseURL, accessToken, workspaceID, dryRun, url, name, color string) *http.Response {
 	t.Helper()
-	return postSubscribeWithKeepAlarms(t, baseURL, accessToken, dryRun, url, name, color, false)
+	return postSubscribeWithKeepAlarms(t, baseURL, accessToken, workspaceID, dryRun, url, name, color, false)
 }
 
-func postSubscribeWithKeepAlarms(t *testing.T, baseURL, accessToken, dryRun, url, name, color string, keepAlarms bool) *http.Response {
+func postSubscribeWithKeepAlarms(t *testing.T, baseURL, accessToken, workspaceID, dryRun, url, name, color string, keepAlarms bool) *http.Response {
 	t.Helper()
 
 	body, err := json.Marshal(subscribeRequest{URL: url, Name: name, Color: color, KeepAlarms: keepAlarms})
@@ -52,6 +52,7 @@ func postSubscribeWithKeepAlarms(t *testing.T, baseURL, accessToken, dryRun, url
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+accessToken)
+	req.Header.Set("X-Workspace-Id", workspaceID)
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -111,10 +112,10 @@ func patchURL(t *testing.T, baseURL, accessToken, id, name, color, url string) *
 }
 
 func TestCalendarHandler_Subscribe_Preview(t *testing.T) {
-	baseURL, accessToken := newCalendarTestServer(t)
+	baseURL, accessToken, workspaceID := newCalendarTestServer(t)
 	feed := icsFeedServer(t)
 
-	resp := postSubscribe(t, baseURL, accessToken, "1", feed.URL+"/feed.ics", "", "")
+	resp := postSubscribe(t, baseURL, accessToken, workspaceID, "1", feed.URL+"/feed.ics", "", "")
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("expected 200, got %d", resp.StatusCode)
 	}
@@ -127,7 +128,7 @@ func TestCalendarHandler_Subscribe_Preview(t *testing.T) {
 		t.Fatalf("unexpected preview: %+v", preview)
 	}
 
-	listResp, err := authenticatedGet(baseURL+"/api/calendars/", accessToken)
+	listResp, err := authenticatedGetWithWorkspace(baseURL+"/api/calendars/", accessToken, workspaceID)
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
@@ -142,10 +143,10 @@ func TestCalendarHandler_Subscribe_Preview(t *testing.T) {
 }
 
 func TestCalendarHandler_Subscribe_Commit(t *testing.T) {
-	baseURL, accessToken := newCalendarTestServer(t)
+	baseURL, accessToken, workspaceID := newCalendarTestServer(t)
 	feed := icsFeedServer(t)
 
-	resp := postSubscribe(t, baseURL, accessToken, "0", feed.URL+"/feed.ics", "Team Holidays", "#8E44ADFF")
+	resp := postSubscribe(t, baseURL, accessToken, workspaceID, "0", feed.URL+"/feed.ics", "Team Holidays", "#8E44ADFF")
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("expected 201, got %d", resp.StatusCode)
 	}
@@ -163,12 +164,12 @@ func TestCalendarHandler_Subscribe_Commit(t *testing.T) {
 }
 
 func TestCalendarHandler_Subscribe_MasksPasswordInResponse(t *testing.T) {
-	baseURL, accessToken := newCalendarTestServer(t)
+	baseURL, accessToken, workspaceID := newCalendarTestServer(t)
 	feed := icsFeedServer(t)
 
 	feedURL := strings.Replace(feed.URL, "http://", "http://alice:s3cret@", 1) + "/feed.ics"
 
-	resp := postSubscribe(t, baseURL, accessToken, "0", feedURL, "Team Holidays", "#8E44ADFF")
+	resp := postSubscribe(t, baseURL, accessToken, workspaceID, "0", feedURL, "Team Holidays", "#8E44ADFF")
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("expected 201, got %d", resp.StatusCode)
 	}
@@ -186,16 +187,16 @@ func TestCalendarHandler_Subscribe_MasksPasswordInResponse(t *testing.T) {
 }
 
 func TestCalendarHandler_Subscribe_InvalidURL(t *testing.T) {
-	baseURL, accessToken := newCalendarTestServer(t)
+	baseURL, accessToken, workspaceID := newCalendarTestServer(t)
 
-	resp := postSubscribe(t, baseURL, accessToken, "1", "not a url", "", "")
+	resp := postSubscribe(t, baseURL, accessToken, workspaceID, "1", "not a url", "", "")
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d", resp.StatusCode)
 	}
 }
 
 func TestCalendarHandler_Subscribe_RequiresAuth(t *testing.T) {
-	baseURL, _ := newCalendarTestServer(t)
+	baseURL, _, _ := newCalendarTestServer(t)
 
 	resp, err := http.Post(baseURL+"/api/calendars/subscribe?dryRun=1", "application/json", bytes.NewReader([]byte(`{"url":"http://example.com/feed.ics"}`)))
 	if err != nil {
@@ -223,10 +224,10 @@ func postRefresh(t *testing.T, baseURL, accessToken, calendarID string) *http.Re
 }
 
 func TestCalendarHandler_Refresh_Success(t *testing.T) {
-	baseURL, accessToken := newCalendarTestServer(t)
+	baseURL, accessToken, workspaceID := newCalendarTestServer(t)
 	feed := icsFeedServer(t)
 
-	subscribeResp := postSubscribe(t, baseURL, accessToken, "0", feed.URL+"/feed.ics", "Team Holidays", "#8E44ADFF")
+	subscribeResp := postSubscribe(t, baseURL, accessToken, workspaceID, "0", feed.URL+"/feed.ics", "Team Holidays", "#8E44ADFF")
 	var calendar calendarResponse
 	if err := json.NewDecoder(subscribeResp.Body).Decode(&calendar); err != nil {
 		t.Fatalf("decode subscribe response: %v", err)
@@ -259,7 +260,7 @@ func TestCalendarHandler_Refresh_Success(t *testing.T) {
 }
 
 func TestCalendarHandler_Refresh_FailureSurfacesErrorClassAndMessage(t *testing.T) {
-	baseURL, accessToken := newCalendarTestServer(t)
+	baseURL, accessToken, workspaceID := newCalendarTestServer(t)
 
 	up := true
 	feed := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -272,7 +273,7 @@ func TestCalendarHandler_Refresh_FailureSurfacesErrorClassAndMessage(t *testing.
 	}))
 	t.Cleanup(feed.Close)
 
-	subscribeResp := postSubscribe(t, baseURL, accessToken, "0", feed.URL+"/feed.ics", "Team Holidays", "#8E44ADFF")
+	subscribeResp := postSubscribe(t, baseURL, accessToken, workspaceID, "0", feed.URL+"/feed.ics", "Team Holidays", "#8E44ADFF")
 	var calendar calendarResponse
 	if err := json.NewDecoder(subscribeResp.Body).Decode(&calendar); err != nil {
 		t.Fatalf("decode subscribe response: %v", err)
@@ -302,9 +303,9 @@ func TestCalendarHandler_Refresh_FailureSurfacesErrorClassAndMessage(t *testing.
 }
 
 func TestCalendarHandler_Refresh_RejectsOrdinaryCalendar(t *testing.T) {
-	baseURL, accessToken := newCalendarTestServer(t)
+	baseURL, accessToken, workspaceID := newCalendarTestServer(t)
 
-	createResp := createCalendar(t, baseURL, accessToken, "11111111-1111-1111-1111-111111111111", "Personal", "#12809CFF")
+	createResp := createCalendar(t, baseURL, accessToken, workspaceID, "11111111-1111-1111-1111-111111111111", "Personal", "#12809CFF")
 	var created calendarResponse
 	json.NewDecoder(createResp.Body).Decode(&created)
 
@@ -315,7 +316,7 @@ func TestCalendarHandler_Refresh_RejectsOrdinaryCalendar(t *testing.T) {
 }
 
 func TestCalendarHandler_Refresh_NotFound(t *testing.T) {
-	baseURL, accessToken := newCalendarTestServer(t)
+	baseURL, accessToken, _ := newCalendarTestServer(t)
 
 	resp := postRefresh(t, baseURL, accessToken, "does-not-exist")
 	if resp.StatusCode != http.StatusNotFound {
@@ -324,7 +325,7 @@ func TestCalendarHandler_Refresh_NotFound(t *testing.T) {
 }
 
 func TestCalendarHandler_Refresh_RequiresAuth(t *testing.T) {
-	baseURL, _ := newCalendarTestServer(t)
+	baseURL, _, _ := newCalendarTestServer(t)
 
 	resp, err := http.Post(baseURL+"/api/calendars/some-id/refresh", "application/json", nil)
 	if err != nil {
@@ -336,10 +337,10 @@ func TestCalendarHandler_Refresh_RequiresAuth(t *testing.T) {
 }
 
 func TestCalendarHandler_Subscribe_KeepAlarmsTrue_IsStoredAndReturned(t *testing.T) {
-	baseURL, accessToken := newCalendarTestServer(t)
+	baseURL, accessToken, workspaceID := newCalendarTestServer(t)
 	feed := icsFeedServer(t)
 
-	resp := postSubscribeWithKeepAlarms(t, baseURL, accessToken, "0", feed.URL+"/feed.ics", "Team Holidays", "#8E44ADFF", true)
+	resp := postSubscribeWithKeepAlarms(t, baseURL, accessToken, workspaceID, "0", feed.URL+"/feed.ics", "Team Holidays", "#8E44ADFF", true)
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("expected 201, got %d", resp.StatusCode)
 	}
@@ -354,10 +355,10 @@ func TestCalendarHandler_Subscribe_KeepAlarmsTrue_IsStoredAndReturned(t *testing
 }
 
 func TestCalendarHandler_UpdateKeepAlarms_TurningOffClearsReminders(t *testing.T) {
-	baseURL, accessToken := newCalendarTestServer(t)
+	baseURL, accessToken, workspaceID := newCalendarTestServer(t)
 	feed := icsFeedServer(t)
 
-	subscribeResp := postSubscribeWithKeepAlarms(t, baseURL, accessToken, "0", feed.URL+"/feed.ics", "Team Holidays", "#8E44ADFF", true)
+	subscribeResp := postSubscribeWithKeepAlarms(t, baseURL, accessToken, workspaceID, "0", feed.URL+"/feed.ics", "Team Holidays", "#8E44ADFF", true)
 	var calendar calendarResponse
 	if err := json.NewDecoder(subscribeResp.Body).Decode(&calendar); err != nil {
 		t.Fatalf("decode subscribe response: %v", err)
@@ -377,9 +378,9 @@ func TestCalendarHandler_UpdateKeepAlarms_TurningOffClearsReminders(t *testing.T
 }
 
 func TestCalendarHandler_UpdateKeepAlarms_RejectsOrdinaryCalendar(t *testing.T) {
-	baseURL, accessToken := newCalendarTestServer(t)
+	baseURL, accessToken, workspaceID := newCalendarTestServer(t)
 
-	createResp := createCalendar(t, baseURL, accessToken, "11111111-1111-1111-1111-111111111111", "Personal", "#12809CFF")
+	createResp := createCalendar(t, baseURL, accessToken, workspaceID, "11111111-1111-1111-1111-111111111111", "Personal", "#12809CFF")
 	var created calendarResponse
 	json.NewDecoder(createResp.Body).Decode(&created)
 
@@ -393,10 +394,10 @@ func TestCalendarHandler_UpdateKeepAlarms_RejectsOrdinaryCalendar(t *testing.T) 
 // ordinary name/color edit — which never sends keepAlarms — can't
 // accidentally turn a Subscription's alarms off.
 func TestCalendarHandler_Update_OmittingKeepAlarmsLeavesItUnchanged(t *testing.T) {
-	baseURL, accessToken := newCalendarTestServer(t)
+	baseURL, accessToken, workspaceID := newCalendarTestServer(t)
 	feed := icsFeedServer(t)
 
-	subscribeResp := postSubscribeWithKeepAlarms(t, baseURL, accessToken, "0", feed.URL+"/feed.ics", "Team Holidays", "#8E44ADFF", true)
+	subscribeResp := postSubscribeWithKeepAlarms(t, baseURL, accessToken, workspaceID, "0", feed.URL+"/feed.ics", "Team Holidays", "#8E44ADFF", true)
 	var calendar calendarResponse
 	if err := json.NewDecoder(subscribeResp.Body).Decode(&calendar); err != nil {
 		t.Fatalf("decode subscribe response: %v", err)
@@ -416,10 +417,10 @@ func TestCalendarHandler_Update_OmittingKeepAlarmsLeavesItUnchanged(t *testing.T
 }
 
 func TestCalendarHandler_UpdateURL_Success(t *testing.T) {
-	baseURL, accessToken := newCalendarTestServer(t)
+	baseURL, accessToken, workspaceID := newCalendarTestServer(t)
 	feed := icsFeedServer(t)
 
-	subscribeResp := postSubscribe(t, baseURL, accessToken, "0", feed.URL+"/feed.ics", "Team Holidays", "#8E44ADFF")
+	subscribeResp := postSubscribe(t, baseURL, accessToken, workspaceID, "0", feed.URL+"/feed.ics", "Team Holidays", "#8E44ADFF")
 	var calendar calendarResponse
 	if err := json.NewDecoder(subscribeResp.Body).Decode(&calendar); err != nil {
 		t.Fatalf("decode subscribe response: %v", err)
@@ -440,10 +441,10 @@ func TestCalendarHandler_UpdateURL_Success(t *testing.T) {
 }
 
 func TestCalendarHandler_UpdateURL_MasksPasswordInResponse(t *testing.T) {
-	baseURL, accessToken := newCalendarTestServer(t)
+	baseURL, accessToken, workspaceID := newCalendarTestServer(t)
 	feed := icsFeedServer(t)
 
-	subscribeResp := postSubscribe(t, baseURL, accessToken, "0", feed.URL+"/feed.ics", "Team Holidays", "#8E44ADFF")
+	subscribeResp := postSubscribe(t, baseURL, accessToken, workspaceID, "0", feed.URL+"/feed.ics", "Team Holidays", "#8E44ADFF")
 	var calendar calendarResponse
 	if err := json.NewDecoder(subscribeResp.Body).Decode(&calendar); err != nil {
 		t.Fatalf("decode subscribe response: %v", err)
@@ -467,9 +468,9 @@ func TestCalendarHandler_UpdateURL_MasksPasswordInResponse(t *testing.T) {
 }
 
 func TestCalendarHandler_UpdateURL_RejectsOrdinaryCalendar(t *testing.T) {
-	baseURL, accessToken := newCalendarTestServer(t)
+	baseURL, accessToken, workspaceID := newCalendarTestServer(t)
 
-	createResp := createCalendar(t, baseURL, accessToken, "11111111-1111-1111-1111-111111111111", "Personal", "#12809CFF")
+	createResp := createCalendar(t, baseURL, accessToken, workspaceID, "11111111-1111-1111-1111-111111111111", "Personal", "#12809CFF")
 	var created calendarResponse
 	json.NewDecoder(createResp.Body).Decode(&created)
 
@@ -480,10 +481,10 @@ func TestCalendarHandler_UpdateURL_RejectsOrdinaryCalendar(t *testing.T) {
 }
 
 func TestCalendarHandler_UpdateURL_InvalidURL(t *testing.T) {
-	baseURL, accessToken := newCalendarTestServer(t)
+	baseURL, accessToken, workspaceID := newCalendarTestServer(t)
 	feed := icsFeedServer(t)
 
-	subscribeResp := postSubscribe(t, baseURL, accessToken, "0", feed.URL+"/feed.ics", "Team Holidays", "#8E44ADFF")
+	subscribeResp := postSubscribe(t, baseURL, accessToken, workspaceID, "0", feed.URL+"/feed.ics", "Team Holidays", "#8E44ADFF")
 	var calendar calendarResponse
 	if err := json.NewDecoder(subscribeResp.Body).Decode(&calendar); err != nil {
 		t.Fatalf("decode subscribe response: %v", err)

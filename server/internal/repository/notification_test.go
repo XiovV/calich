@@ -30,8 +30,17 @@ func newTestNotificationRepository(t *testing.T) (repo *NotificationRepository, 
 		t.Fatalf("create other user: %v", err)
 	}
 
+	workspaces := NewWorkspaceRepository(sqlDB)
+	workspace, err := workspaces.Create(ctx, "workspace-a", user.ID)
+	if err != nil {
+		t.Fatalf("create workspace: %v", err)
+	}
+	if err := workspaces.AddMember(ctx, workspace.ID, user.ID, WorkspaceRoleOwner); err != nil {
+		t.Fatalf("add workspace member: %v", err)
+	}
+
 	calendars := NewCalendarRepository(sqlDB)
-	cal, err := calendars.Create(ctx, user.ID, "cal-1", CalendarFields{Name: "Personal", Color: "peacock"})
+	cal, err := calendars.Create(ctx, user.ID, workspace.ID, "cal-1", CalendarFields{Name: "Personal", Color: "peacock"})
 	if err != nil {
 		t.Fatalf("create calendar: %v", err)
 	}

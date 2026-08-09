@@ -15,7 +15,13 @@ func TestCalendarService_OwnershipMeta_UnclampedByAccess(t *testing.T) {
 	svc, _, ownerID, otherID, calendarID := newTestShareService(t)
 	ctx := context.Background()
 
-	subscribed, err := svc.Create(ctx, ownerID, "cal-sub", CalendarWrite{Name: "Feed", Color: "#12809CFF", SourceURL: strPtr("https://example.com/feed.ics")})
+	ownerWorkspaces, err := svc.workspaces.ListForUser(ctx, ownerID)
+	if err != nil || len(ownerWorkspaces) == 0 {
+		t.Fatalf("list owner workspaces: %v", err)
+	}
+	workspaceID := ownerWorkspaces[0].ID
+
+	subscribed, err := svc.Create(ctx, ownerID, workspaceID, "cal-sub", CalendarWrite{Name: "Feed", Color: "#12809CFF", SourceURL: strPtr("https://example.com/feed.ics")})
 	if err != nil {
 		t.Fatalf("create subscribed calendar: %v", err)
 	}

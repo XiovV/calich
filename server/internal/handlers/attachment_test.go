@@ -45,16 +45,28 @@ func newAttachmentTestServer(t *testing.T, maxAttachmentSize int64, maxAttachmen
 
 	users := repository.NewUserRepository(sqlDB)
 	sessions := repository.NewSessionRepository(sqlDB)
-	auth := service.NewAuthService(users, sessions, service.NewWorkspaceService(sqlDB, repository.NewWorkspaceRepository(sqlDB), repository.NewWorkspaceInviteRepository(sqlDB)), repository.NewWorkspaceInviteRepository(sqlDB), []byte("test-secret"), "owner", "hunter2", false)
-	if _, _, err := auth.Bootstrap(ctx); err != nil {
+	workspaceRepo := repository.NewWorkspaceRepository(sqlDB)
+	workspaces := service.NewWorkspaceService(sqlDB, workspaceRepo, repository.NewWorkspaceInviteRepository(sqlDB))
+	auth := service.NewAuthService(users, sessions, workspaces, repository.NewWorkspaceInviteRepository(sqlDB), []byte("test-secret"), "owner", "hunter2", false)
+	bootstrapUser, _, err := auth.Bootstrap(ctx)
+	if err != nil {
 		t.Fatalf("bootstrap: %v", err)
 	}
 
+	ownerWorkspaces, err := workspaces.ListForUser(ctx, bootstrapUser.ID)
+	if err != nil {
+		t.Fatalf("list workspaces: %v", err)
+	}
+	if len(ownerWorkspaces) != 1 {
+		t.Fatalf("expected owner to belong to exactly one workspace, got %d", len(ownerWorkspaces))
+	}
+	ownerWorkspaceID := ownerWorkspaces[0].ID
+
 	calendarRepo := repository.NewCalendarRepository(sqlDB)
 	shareRepo := repository.NewCalendarShareRepository(sqlDB)
-	calendars := service.NewCalendarService(calendarRepo, shareRepo, users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB))
+	calendars := service.NewCalendarService(calendarRepo, shareRepo, users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo)
 	appPasswords := service.NewAppPasswordService(repository.NewAppPasswordRepository(sqlDB), users)
-	accounts := service.NewAccountService(sqlDB, users, sessions, calendarRepo, shareRepo, calendars, appPasswords, nil)
+	accounts := service.NewAccountService(sqlDB, users, sessions, calendarRepo, shareRepo, calendars, appPasswords, nil, workspaces)
 
 	if _, err := accounts.Create(ctx, "editor", "temp-password"); err != nil {
 		t.Fatalf("create editor: %v", err)
@@ -88,7 +100,7 @@ func newAttachmentTestServer(t *testing.T, maxAttachmentSize int64, maxAttachmen
 		t.Fatalf("authenticate owner: %v", err)
 	}
 
-	cal, err := calendars.Create(ctx, ownerID, "cal-1", service.CalendarWrite{Name: "Family", Color: "#12809CFF"})
+	cal, err := calendars.Create(ctx, ownerID, ownerWorkspaceID, "cal-1", service.CalendarWrite{Name: "Family", Color: "#12809CFF"})
 	if err != nil {
 		t.Fatalf("create calendar: %v", err)
 	}

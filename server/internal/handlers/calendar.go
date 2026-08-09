@@ -132,6 +132,15 @@ var calendarNotFoundErrors = []errorCase{
 
 var updateCalendarErrors = alsoHandling(calendarWriteErrors, calendarNotFoundErrors...)
 
+// workspaceMembershipErrors renders service.ErrNotWorkspaceMember as a 403 —
+// the caller's active Workspace, resolved from the X-Workspace-Id header,
+// named a Workspace they don't belong to (#155, ADR-0045).
+var workspaceMembershipErrors = []errorCase{
+	{service.ErrNotWorkspaceMember, forbidden("not a member of this workspace")},
+}
+
+var createCalendarErrors = alsoHandling(calendarWriteErrors, workspaceMembershipErrors...)
+
 func (h *CalendarHandler) List(w http.ResponseWriter, r *http.Request) {
 	userID, ok := httpauth.UserIDFromContext(r.Context())
 	if !ok {
@@ -139,7 +148,13 @@ func (h *CalendarHandler) List(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	calendars, err := h.calendars.ListAccessible(r.Context(), userID)
+	workspaceID, ok := httpauth.WorkspaceIDFromContext(r.Context())
+	if !ok {
+		httpresponse.Error(w, http.StatusForbidden, "forbidden", "not a member of this workspace")
+		return
+	}
+
+	calendars, err := h.calendars.ListAccessibleInWorkspace(r.Context(), userID, workspaceID)
 	if err != nil {
 		httpresponse.Error(w, http.StatusInternalServerError, "internal_error", "failed to list calendars")
 		return
@@ -166,6 +181,12 @@ func (h *CalendarHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	workspaceID, ok := httpauth.WorkspaceIDFromContext(r.Context())
+	if !ok {
+		httpresponse.Error(w, http.StatusForbidden, "forbidden", "not a member of this workspace")
+		return
+	}
+
 	var req createCalendarRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		httpresponse.Error(w, http.StatusBadRequest, "invalid_request", "request body must be valid JSON")
@@ -177,8 +198,8 @@ func (h *CalendarHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	calendar, err := h.calendars.Create(r.Context(), userID, req.ID, service.CalendarWrite{Name: req.Name, Color: req.Color})
-	if respondError(w, err, calendarWriteErrors, "failed to create calendar") {
+	calendar, err := h.calendars.Create(r.Context(), userID, workspaceID, req.ID, service.CalendarWrite{Name: req.Name, Color: req.Color})
+	if respondError(w, err, createCalendarErrors, "failed to create calendar") {
 		return
 	}
 

@@ -30,8 +30,17 @@ func newTestCalendarShareRepository(t *testing.T) (repo *CalendarShareRepository
 		t.Fatalf("create other user: %v", err)
 	}
 
+	workspaces := NewWorkspaceRepository(sqlDB)
+	workspace, err := workspaces.Create(context.Background(), "workspace-a", owner.ID)
+	if err != nil {
+		t.Fatalf("create workspace: %v", err)
+	}
+	if err := workspaces.AddMember(context.Background(), workspace.ID, owner.ID, WorkspaceRoleOwner); err != nil {
+		t.Fatalf("add workspace member: %v", err)
+	}
+
 	calendars := NewCalendarRepository(sqlDB)
-	calendar, err := calendars.Create(context.Background(), owner.ID, "cal-1", CalendarFields{Name: "Family", Color: "sage"})
+	calendar, err := calendars.Create(context.Background(), owner.ID, workspace.ID, "cal-1", CalendarFields{Name: "Family", Color: "sage"})
 	if err != nil {
 		t.Fatalf("create calendar: %v", err)
 	}
@@ -191,8 +200,17 @@ func TestCalendarShareRepository_CascadesOnCalendarDelete(t *testing.T) {
 		t.Fatalf("create other user: %v", err)
 	}
 
+	workspaces := NewWorkspaceRepository(sqlDB)
+	workspace, err := workspaces.Create(ctx, "workspace-a", owner.ID)
+	if err != nil {
+		t.Fatalf("create workspace: %v", err)
+	}
+	if err := workspaces.AddMember(ctx, workspace.ID, owner.ID, WorkspaceRoleOwner); err != nil {
+		t.Fatalf("add workspace member: %v", err)
+	}
+
 	calendars := NewCalendarRepository(sqlDB)
-	calendar, err := calendars.Create(ctx, owner.ID, "cal-1", CalendarFields{Name: "Family", Color: "sage"})
+	calendar, err := calendars.Create(ctx, owner.ID, workspace.ID, "cal-1", CalendarFields{Name: "Family", Color: "sage"})
 	if err != nil {
 		t.Fatalf("create calendar: %v", err)
 	}

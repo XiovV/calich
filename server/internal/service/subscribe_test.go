@@ -23,7 +23,7 @@ import (
 // caller wanting the real address guard (#97, ADR-0032) back — as the
 // blocked-address tests do — passes WithHTTPClient(subscribeHTTPClient)
 // itself; NewSubscribeService applies options in order, so it wins.
-func newTestSubscribeService(t *testing.T, opts ...SubscribeOption) (svc *SubscribeService, events *EventService, calendars *CalendarService, userID int64) {
+func newTestSubscribeService(t *testing.T, opts ...SubscribeOption) (svc *SubscribeService, events *EventService, calendars *CalendarService, userID, workspaceID int64) {
 	t.Helper()
 
 	sqlDB, err := db.OpenInMemory()
@@ -38,14 +38,23 @@ func newTestSubscribeService(t *testing.T, opts ...SubscribeOption) (svc *Subscr
 		t.Fatalf("create user: %v", err)
 	}
 
-	calendarSvc := NewCalendarService(repository.NewCalendarRepository(sqlDB), repository.NewCalendarShareRepository(sqlDB), users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB))
+	workspaceRepo := repository.NewWorkspaceRepository(sqlDB)
+	workspace, err := workspaceRepo.Create(context.Background(), "Test Workspace", user.ID)
+	if err != nil {
+		t.Fatalf("create workspace: %v", err)
+	}
+	if err := workspaceRepo.AddMember(context.Background(), workspace.ID, user.ID, repository.WorkspaceRoleOwner); err != nil {
+		t.Fatalf("add workspace member: %v", err)
+	}
+
+	calendarSvc := NewCalendarService(repository.NewCalendarRepository(sqlDB), repository.NewCalendarShareRepository(sqlDB), users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo)
 	eventSvc := NewEventService(sqlDB, repository.NewEventRepository(sqlDB), repository.NewEventExceptionRepository(sqlDB), repository.NewEventReminderRepository(sqlDB), repository.NewReminderOverrideRepository(sqlDB), repository.NewSyncRepository(sqlDB), calendarSvc, users, repository.NewAttachmentRepository(sqlDB))
 
 	// The address guard (#97, ADR-0032) would otherwise refuse every fetch
 	// here: icsServer/redirect servers below are httptest.Server instances on
 	// 127.0.0.1, a loopback address the guard exists to block.
 	allOpts := append([]SubscribeOption{WithHTTPClient(&http.Client{})}, opts...)
-	return NewSubscribeService(eventSvc, calendarSvc, 0, allOpts...), eventSvc, calendarSvc, user.ID
+	return NewSubscribeService(eventSvc, calendarSvc, 0, allOpts...), eventSvc, calendarSvc, user.ID, workspace.ID
 }
 
 // subscribeFeedICS carries the feed's own name/color, a recurring timed
@@ -91,7 +100,7 @@ func icsServer(t *testing.T, body string) *httptest.Server {
 }
 
 func TestSubscribeService_Preview_ProposesNameColorAndCounts(t *testing.T) {
-	svc, events, calendars, userID := newTestSubscribeService(t)
+	svc, events, calendars, userID, _ :=  newTestSubscribeService(t)
 	srv := icsServer(t, subscribeFeedICS)
 	ctx := context.Background()
 
@@ -129,11 +138,11 @@ func TestSubscribeService_Preview_ProposesNameColorAndCounts(t *testing.T) {
 }
 
 func TestSubscribeService_Subscribe_Success(t *testing.T) {
-	svc, events, calendars, userID := newTestSubscribeService(t)
+	svc, events, calendars, userID, workspaceID := newTestSubscribeService(t)
 	srv := icsServer(t, subscribeFeedICS)
 	ctx := context.Background()
 
-	calendar, err := svc.Subscribe(ctx, userID, srv.URL+"/feed.ics", "Team Holidays", "#8E44ADFF", false)
+	calendar, err := svc.Subscribe(ctx, userID, workspaceID, srv.URL+"/feed.ics", "Team Holidays", "#8E44ADFF", false)
 	if err != nil {
 		t.Fatalf("subscribe: %v", err)
 	}
@@ -196,7 +205,7 @@ func TestSubscribeService_Subscribe_Success(t *testing.T) {
 }
 
 func TestSubscribeService_Subscribe_RedirectFollowed(t *testing.T) {
-	svc, events, _, userID := newTestSubscribeService(t)
+	svc, events, _, userID, workspaceID := newTestSubscribeService(t)
 	ctx := context.Background()
 
 	var srv *httptest.Server
@@ -210,7 +219,7 @@ func TestSubscribeService_Subscribe_RedirectFollowed(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	_, err := svc.Subscribe(ctx, userID, srv.URL+"/redirect.ics", "Team Holidays", "#8E44ADFF", false)
+	_, err := svc.Subscribe(ctx, userID, workspaceID, srv.URL+"/redirect.ics", "Team Holidays", "#8E44ADFF", false)
 	if err != nil {
 		t.Fatalf("subscribe: %v", err)
 	}
@@ -225,7 +234,7 @@ func TestSubscribeService_Subscribe_RedirectFollowed(t *testing.T) {
 }
 
 func TestSubscribeService_Subscribe_BasicAuthFromURLUserinfo(t *testing.T) {
-	svc, events, _, userID := newTestSubscribeService(t)
+	svc, events, _, userID, workspaceID := newTestSubscribeService(t)
 	ctx := context.Background()
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -246,7 +255,7 @@ func TestSubscribeService_Subscribe_BasicAuthFromURLUserinfo(t *testing.T) {
 	parsed.User = url.UserPassword("alice", "s3cret")
 	parsed.Path = "/feed.ics"
 
-	_, err = svc.Subscribe(ctx, userID, parsed.String(), "Team Holidays", "#8E44ADFF", false)
+	_, err = svc.Subscribe(ctx, userID, workspaceID, parsed.String(), "Team Holidays", "#8E44ADFF", false)
 	if err != nil {
 		t.Fatalf("subscribe: %v", err)
 	}
@@ -261,7 +270,7 @@ func TestSubscribeService_Subscribe_BasicAuthFromURLUserinfo(t *testing.T) {
 }
 
 func TestSubscribeService_Subscribe_AuthFailure(t *testing.T) {
-	svc, _, _, userID := newTestSubscribeService(t)
+	svc, _, _, userID, workspaceID := newTestSubscribeService(t)
 	ctx := context.Background()
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -269,14 +278,14 @@ func TestSubscribeService_Subscribe_AuthFailure(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	_, err := svc.Subscribe(ctx, userID, srv.URL+"/feed.ics", "Team Holidays", "#8E44ADFF", false)
+	_, err := svc.Subscribe(ctx, userID, workspaceID, srv.URL+"/feed.ics", "Team Holidays", "#8E44ADFF", false)
 	if err == nil || !errors.Is(err, ErrSubscribeAuthFailed) {
 		t.Fatalf("expected ErrSubscribeAuthFailed, got %v", err)
 	}
 }
 
 func TestSubscribeService_Subscribe_Timeout(t *testing.T) {
-	svc, _, _, userID := newTestSubscribeService(t)
+	svc, _, _, userID, workspaceID := newTestSubscribeService(t)
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(200 * time.Millisecond)
@@ -288,14 +297,14 @@ func TestSubscribeService_Subscribe_Timeout(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
 
-	_, err := svc.Subscribe(ctx, userID, srv.URL+"/feed.ics", "Team Holidays", "#8E44ADFF", false)
+	_, err := svc.Subscribe(ctx, userID, workspaceID, srv.URL+"/feed.ics", "Team Holidays", "#8E44ADFF", false)
 	if err == nil || !errors.Is(err, ErrSubscribeFetchFailed) {
 		t.Fatalf("expected ErrSubscribeFetchFailed on timeout, got %v", err)
 	}
 }
 
 func TestSubscribeService_Subscribe_OversizedResponseRejected(t *testing.T) {
-	svc, _, _, userID := newTestSubscribeService(t)
+	svc, _, _, userID, workspaceID := newTestSubscribeService(t)
 	ctx := context.Background()
 
 	oversized := strings.Repeat("A", maxSubscribeFetchBytes+1024)
@@ -304,14 +313,14 @@ func TestSubscribeService_Subscribe_OversizedResponseRejected(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	_, err := svc.Subscribe(ctx, userID, srv.URL+"/feed.ics", "Team Holidays", "#8E44ADFF", false)
+	_, err := svc.Subscribe(ctx, userID, workspaceID, srv.URL+"/feed.ics", "Team Holidays", "#8E44ADFF", false)
 	if err == nil || !errors.Is(err, ErrSubscribeTooLarge) {
 		t.Fatalf("expected ErrSubscribeTooLarge, got %v", err)
 	}
 }
 
 func TestSubscribeService_Subscribe_MalformedBodyUnparseable(t *testing.T) {
-	svc, _, _, userID := newTestSubscribeService(t)
+	svc, _, _, userID, workspaceID := newTestSubscribeService(t)
 	ctx := context.Background()
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -319,18 +328,18 @@ func TestSubscribeService_Subscribe_MalformedBodyUnparseable(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	_, err := svc.Subscribe(ctx, userID, srv.URL+"/feed.ics", "Team Holidays", "#8E44ADFF", false)
+	_, err := svc.Subscribe(ctx, userID, workspaceID, srv.URL+"/feed.ics", "Team Holidays", "#8E44ADFF", false)
 	if err == nil || !errors.Is(err, ErrSubscribeUnparseable) {
 		t.Fatalf("expected ErrSubscribeUnparseable, got %v", err)
 	}
 }
 
 func TestSubscribeService_Subscribe_InvalidURL(t *testing.T) {
-	svc, _, _, userID := newTestSubscribeService(t)
+	svc, _, _, userID, workspaceID := newTestSubscribeService(t)
 	ctx := context.Background()
 
 	for _, raw := range []string{"", "not a url", "ftp://example.com/feed.ics", "example.com/feed.ics"} {
-		_, err := svc.Subscribe(ctx, userID, raw, "Name", "#8E44ADFF", false)
+		_, err := svc.Subscribe(ctx, userID, workspaceID, raw, "Name", "#8E44ADFF", false)
 		if err == nil || !errors.Is(err, ErrSubscribeInvalidURL) {
 			t.Fatalf("url %q: expected ErrSubscribeInvalidURL, got %v", raw, err)
 		}
@@ -344,11 +353,11 @@ func TestSubscribeService_Subscribe_InvalidURL(t *testing.T) {
 // would refuse any other private/link-local address, and must not create a
 // Calendar in the process.
 func TestSubscribeService_Subscribe_BlocksPrivateAddress(t *testing.T) {
-	svc, _, calendars, userID := newTestSubscribeService(t, WithHTTPClient(subscribeHTTPClient))
+	svc, _, calendars, userID, workspaceID := newTestSubscribeService(t, WithHTTPClient(subscribeHTTPClient))
 	srv := icsServer(t, subscribeFeedICS)
 	ctx := context.Background()
 
-	_, err := svc.Subscribe(ctx, userID, "http://user:s3cret@127.0.0.1:"+srv.URL[len("http://127.0.0.1:"):]+"/feed.ics", "Name", "#8E44ADFF", false)
+	_, err := svc.Subscribe(ctx, userID, workspaceID, "http://user:s3cret@127.0.0.1:"+srv.URL[len("http://127.0.0.1:"):]+"/feed.ics", "Name", "#8E44ADFF", false)
 	if !errors.Is(err, ErrSubscribeURLBlocked) {
 		t.Fatalf("expected ErrSubscribeURLBlocked, got %v", err)
 	}
@@ -372,11 +381,11 @@ func TestSubscribeService_Subscribe_BlocksPrivateAddress(t *testing.T) {
 // rejected the same way Subscribe would reject it, classified
 // needs_attention rather than retrying since no amount of retrying fixes it.
 func TestSubscribeService_Refresh_BlocksPrivateAddress(t *testing.T) {
-	svc, _, calendars, userID := newTestSubscribeService(t, WithHTTPClient(subscribeHTTPClient))
+	svc, _, calendars, userID, workspaceID := newTestSubscribeService(t, WithHTTPClient(subscribeHTTPClient))
 	ctx := context.Background()
 
 	sourceURL := "http://127.0.0.1:9999/feed.ics"
-	cal, err := calendars.Create(ctx, userID, "cal-private", CalendarWrite{
+	cal, err := calendars.Create(ctx, userID, workspaceID, "cal-private", CalendarWrite{
 		Name: "Private", Color: "#12809CFF", SourceURL: &sourceURL,
 	})
 	if err != nil {
@@ -443,10 +452,10 @@ func twoSeriesFeed(seriesASummary string, seriesAHasDTStart bool, includeSeriesB
 }
 
 func TestSubscribeService_Refresh_RejectsNonSubscribedCalendar(t *testing.T) {
-	svc, _, calendars, userID := newTestSubscribeService(t)
+	svc, _, calendars, userID, workspaceID := newTestSubscribeService(t)
 	ctx := context.Background()
 
-	cal, err := calendars.Create(ctx, userID, "cal-1", CalendarWrite{Name: "Personal", Color: "#12809CFF"})
+	cal, err := calendars.Create(ctx, userID, workspaceID, "cal-1", CalendarWrite{Name: "Personal", Color: "#12809CFF"})
 	if err != nil {
 		t.Fatalf("create calendar: %v", err)
 	}
@@ -458,7 +467,7 @@ func TestSubscribeService_Refresh_RejectsNonSubscribedCalendar(t *testing.T) {
 }
 
 func TestSubscribeService_Refresh_ETagShortCircuitsUnchangedFeed(t *testing.T) {
-	svc, _, calendars, userID := newTestSubscribeService(t)
+	svc, _, calendars, userID, workspaceID := newTestSubscribeService(t)
 	ctx := context.Background()
 
 	const etag = `"v1"`
@@ -476,7 +485,7 @@ func TestSubscribeService_Refresh_ETagShortCircuitsUnchangedFeed(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	cal, err := svc.Subscribe(ctx, userID, srv.URL+"/feed.ics", "Feed", "#8E44ADFF", false)
+	cal, err := svc.Subscribe(ctx, userID, workspaceID, srv.URL+"/feed.ics", "Feed", "#8E44ADFF", false)
 	if err != nil {
 		t.Fatalf("subscribe: %v", err)
 	}
@@ -527,7 +536,7 @@ func TestSubscribeService_Refresh_ETagShortCircuitsUnchangedFeed(t *testing.T) {
 }
 
 func TestSubscribeService_Refresh_ForceBypassesConditionalGET(t *testing.T) {
-	svc, _, _, userID := newTestSubscribeService(t)
+	svc, _, _, userID, workspaceID := newTestSubscribeService(t)
 	ctx := context.Background()
 
 	const etag = `"v1"`
@@ -543,7 +552,7 @@ func TestSubscribeService_Refresh_ForceBypassesConditionalGET(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	cal, err := svc.Subscribe(ctx, userID, srv.URL+"/feed.ics", "Feed", "#8E44ADFF", false)
+	cal, err := svc.Subscribe(ctx, userID, workspaceID, srv.URL+"/feed.ics", "Feed", "#8E44ADFF", false)
 	if err != nil {
 		t.Fatalf("subscribe: %v", err)
 	}
@@ -561,7 +570,7 @@ func TestSubscribeService_Refresh_ForceBypassesConditionalGET(t *testing.T) {
 }
 
 func TestSubscribeService_Refresh_ContentHashShortCircuitsWhenNoValidators(t *testing.T) {
-	svc, _, _, userID := newTestSubscribeService(t)
+	svc, _, _, userID, workspaceID := newTestSubscribeService(t)
 	ctx := context.Background()
 
 	requests := 0
@@ -573,7 +582,7 @@ func TestSubscribeService_Refresh_ContentHashShortCircuitsWhenNoValidators(t *te
 	}))
 	t.Cleanup(srv.Close)
 
-	cal, err := svc.Subscribe(ctx, userID, srv.URL+"/feed.ics", "Feed", "#8E44ADFF", false)
+	cal, err := svc.Subscribe(ctx, userID, workspaceID, srv.URL+"/feed.ics", "Feed", "#8E44ADFF", false)
 	if err != nil {
 		t.Fatalf("subscribe: %v", err)
 	}
@@ -594,7 +603,7 @@ func TestSubscribeService_Refresh_ContentHashShortCircuitsWhenNoValidators(t *te
 }
 
 func TestSubscribeService_Refresh_ChangedSeriesUpdatedInPlaceUnchangedLeftAlone(t *testing.T) {
-	svc, events, _, userID := newTestSubscribeService(t)
+	svc, events, _, userID, workspaceID := newTestSubscribeService(t)
 	ctx := context.Background()
 
 	body := twoSeriesFeed("Standup", true, true)
@@ -605,7 +614,7 @@ func TestSubscribeService_Refresh_ChangedSeriesUpdatedInPlaceUnchangedLeftAlone(
 	}))
 	t.Cleanup(srv.Close)
 
-	cal, err := svc.Subscribe(ctx, userID, srv.URL+"/feed.ics", "Feed", "#8E44ADFF", false)
+	cal, err := svc.Subscribe(ctx, userID, workspaceID, srv.URL+"/feed.ics", "Feed", "#8E44ADFF", false)
 	if err != nil {
 		t.Fatalf("subscribe: %v", err)
 	}
@@ -649,7 +658,7 @@ func TestSubscribeService_Refresh_ChangedSeriesUpdatedInPlaceUnchangedLeftAlone(
 }
 
 func TestSubscribeService_Refresh_AbsentSeriesTombstoned(t *testing.T) {
-	svc, events, _, userID := newTestSubscribeService(t)
+	svc, events, _, userID, workspaceID := newTestSubscribeService(t)
 	ctx := context.Background()
 
 	body := twoSeriesFeed("Standup", true, true)
@@ -660,7 +669,7 @@ func TestSubscribeService_Refresh_AbsentSeriesTombstoned(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	cal, err := svc.Subscribe(ctx, userID, srv.URL+"/feed.ics", "Feed", "#8E44ADFF", false)
+	cal, err := svc.Subscribe(ctx, userID, workspaceID, srv.URL+"/feed.ics", "Feed", "#8E44ADFF", false)
 	if err != nil {
 		t.Fatalf("subscribe: %v", err)
 	}
@@ -702,14 +711,14 @@ func TestSubscribeService_Refresh_AbsentSeriesTombstoned(t *testing.T) {
 }
 
 func TestSubscribeService_Subscribe_SchedulesInitialNextRefresh(t *testing.T) {
-	svc, _, calendars, userID := newTestSubscribeService(t)
+	svc, _, calendars, userID, workspaceID := newTestSubscribeService(t)
 	ctx := context.Background()
 	fixedNow := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	svc.now = func() time.Time { return fixedNow }
 
 	srv := icsServer(t, subscribeFeedICS)
 
-	cal, err := svc.Subscribe(ctx, userID, srv.URL+"/feed.ics", "Feed", "#8E44ADFF", false)
+	cal, err := svc.Subscribe(ctx, userID, workspaceID, srv.URL+"/feed.ics", "Feed", "#8E44ADFF", false)
 	if err != nil {
 		t.Fatalf("subscribe: %v", err)
 	}
@@ -729,13 +738,13 @@ func TestSubscribeService_Subscribe_SchedulesInitialNextRefresh(t *testing.T) {
 }
 
 func TestSubscribeService_Refresh_SuccessSchedulesNextRefreshAndClearsPriorFailure(t *testing.T) {
-	svc, _, calendars, userID := newTestSubscribeService(t)
+	svc, _, calendars, userID, workspaceID := newTestSubscribeService(t)
 	ctx := context.Background()
 	fixedNow := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	svc.now = func() time.Time { return fixedNow }
 
 	srv := icsServer(t, subscribeFeedICS)
-	cal, err := svc.Subscribe(ctx, userID, srv.URL+"/feed.ics", "Feed", "#8E44ADFF", false)
+	cal, err := svc.Subscribe(ctx, userID, workspaceID, srv.URL+"/feed.ics", "Feed", "#8E44ADFF", false)
 	if err != nil {
 		t.Fatalf("subscribe: %v", err)
 	}
@@ -768,7 +777,7 @@ func TestSubscribeService_Refresh_SuccessSchedulesNextRefreshAndClearsPriorFailu
 }
 
 func TestSubscribeService_Refresh_AuthFailureClassifiedNeedsAttention(t *testing.T) {
-	svc, _, calendars, userID := newTestSubscribeService(t)
+	svc, _, calendars, userID, workspaceID := newTestSubscribeService(t)
 	ctx := context.Background()
 
 	credentialsValid := true
@@ -783,7 +792,7 @@ func TestSubscribeService_Refresh_AuthFailureClassifiedNeedsAttention(t *testing
 	}))
 	t.Cleanup(srv.Close)
 
-	cal, err := svc.Subscribe(ctx, userID, srv.URL+"/feed.ics", "Feed", "#8E44ADFF", false)
+	cal, err := svc.Subscribe(ctx, userID, workspaceID, srv.URL+"/feed.ics", "Feed", "#8E44ADFF", false)
 	if err != nil {
 		t.Fatalf("subscribe: %v", err)
 	}
@@ -809,7 +818,7 @@ func TestSubscribeService_Refresh_AuthFailureClassifiedNeedsAttention(t *testing
 }
 
 func TestSubscribeService_Refresh_NotFoundClassifiedNeedsAttention(t *testing.T) {
-	svc, _, calendars, userID := newTestSubscribeService(t)
+	svc, _, calendars, userID, workspaceID := newTestSubscribeService(t)
 	ctx := context.Background()
 
 	exists := true
@@ -824,7 +833,7 @@ func TestSubscribeService_Refresh_NotFoundClassifiedNeedsAttention(t *testing.T)
 	}))
 	t.Cleanup(srv.Close)
 
-	cal, err := svc.Subscribe(ctx, userID, srv.URL+"/feed.ics", "Feed", "#8E44ADFF", false)
+	cal, err := svc.Subscribe(ctx, userID, workspaceID, srv.URL+"/feed.ics", "Feed", "#8E44ADFF", false)
 	if err != nil {
 		t.Fatalf("subscribe: %v", err)
 	}
@@ -844,7 +853,7 @@ func TestSubscribeService_Refresh_NotFoundClassifiedNeedsAttention(t *testing.T)
 }
 
 func TestSubscribeService_Refresh_FeedGoesDown_ClassifiedRetryingAndBacksOff(t *testing.T) {
-	svc, _, calendars, userID := newTestSubscribeService(t)
+	svc, _, calendars, userID, workspaceID := newTestSubscribeService(t)
 	ctx := context.Background()
 	fixedNow := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	svc.now = func() time.Time { return fixedNow }
@@ -861,7 +870,7 @@ func TestSubscribeService_Refresh_FeedGoesDown_ClassifiedRetryingAndBacksOff(t *
 	}))
 	t.Cleanup(srv.Close)
 
-	cal, err := svc.Subscribe(ctx, userID, srv.URL+"/feed.ics", "Feed", "#8E44ADFF", false)
+	cal, err := svc.Subscribe(ctx, userID, workspaceID, srv.URL+"/feed.ics", "Feed", "#8E44ADFF", false)
 	if err != nil {
 		t.Fatalf("subscribe: %v", err)
 	}
@@ -920,7 +929,7 @@ func TestSubscribeService_Refresh_FeedGoesDown_ClassifiedRetryingAndBacksOff(t *
 }
 
 func TestSubscribeService_Refresh_UnparseableSeriesLeftAloneNotTombstoned(t *testing.T) {
-	svc, events, _, userID := newTestSubscribeService(t)
+	svc, events, _, userID, workspaceID := newTestSubscribeService(t)
 	ctx := context.Background()
 
 	body := twoSeriesFeed("Standup", true, true)
@@ -931,7 +940,7 @@ func TestSubscribeService_Refresh_UnparseableSeriesLeftAloneNotTombstoned(t *tes
 	}))
 	t.Cleanup(srv.Close)
 
-	cal, err := svc.Subscribe(ctx, userID, srv.URL+"/feed.ics", "Feed", "#8E44ADFF", false)
+	cal, err := svc.Subscribe(ctx, userID, workspaceID, srv.URL+"/feed.ics", "Feed", "#8E44ADFF", false)
 	if err != nil {
 		t.Fatalf("subscribe: %v", err)
 	}
@@ -978,11 +987,11 @@ func TestSubscribeService_Refresh_UnparseableSeriesLeftAloneNotTombstoned(t *tes
 // VALARM becomes a Reminder, matching ICS import's behaviour, rather than
 // being dropped as it is by default (TestSubscribeService_Subscribe_Success).
 func TestSubscribeService_Subscribe_KeepAlarmsTrue_ReminderKept(t *testing.T) {
-	svc, events, _, userID := newTestSubscribeService(t)
+	svc, events, _, userID, workspaceID := newTestSubscribeService(t)
 	srv := icsServer(t, subscribeFeedICS)
 	ctx := context.Background()
 
-	calendar, err := svc.Subscribe(ctx, userID, srv.URL+"/feed.ics", "Team Holidays", "#8E44ADFF", true)
+	calendar, err := svc.Subscribe(ctx, userID, workspaceID, srv.URL+"/feed.ics", "Team Holidays", "#8E44ADFF", true)
 	if err != nil {
 		t.Fatalf("subscribe: %v", err)
 	}
@@ -1017,10 +1026,10 @@ func TestSubscribeService_Subscribe_KeepAlarmsTrue_ReminderKept(t *testing.T) {
 }
 
 func TestSubscribeService_UpdateKeepAlarms_RejectsNonSubscribedCalendar(t *testing.T) {
-	svc, _, calendars, userID := newTestSubscribeService(t)
+	svc, _, calendars, userID, workspaceID := newTestSubscribeService(t)
 	ctx := context.Background()
 
-	cal, err := calendars.Create(ctx, userID, "cal-1", CalendarWrite{Name: "Personal", Color: "#12809CFF"})
+	cal, err := calendars.Create(ctx, userID, workspaceID, "cal-1", CalendarWrite{Name: "Personal", Color: "#12809CFF"})
 	if err != nil {
 		t.Fatalf("create calendar: %v", err)
 	}
@@ -1036,11 +1045,11 @@ func TestSubscribeService_UpdateKeepAlarms_RejectsNonSubscribedCalendar(t *testi
 // remove Reminders a prior Refresh created from the feed right away, not
 // merely stop a future Refresh from adding more.
 func TestSubscribeService_UpdateKeepAlarms_TurningOffClearsRemindersImmediately(t *testing.T) {
-	svc, events, _, userID := newTestSubscribeService(t)
+	svc, events, _, userID, workspaceID := newTestSubscribeService(t)
 	srv := icsServer(t, subscribeFeedICS)
 	ctx := context.Background()
 
-	calendar, err := svc.Subscribe(ctx, userID, srv.URL+"/feed.ics", "Team Holidays", "#8E44ADFF", true)
+	calendar, err := svc.Subscribe(ctx, userID, workspaceID, srv.URL+"/feed.ics", "Team Holidays", "#8E44ADFF", true)
 	if err != nil {
 		t.Fatalf("subscribe: %v", err)
 	}
@@ -1087,11 +1096,11 @@ func TestSubscribeService_UpdateKeepAlarms_TurningOffClearsRemindersImmediately(
 // (reconcile.go) — a forced "Refresh now" always reaches that diff even
 // against a feed whose bytes haven't changed.
 func TestSubscribeService_UpdateKeepAlarms_TurningOnTakesEffectOnNextForcedRefresh(t *testing.T) {
-	svc, events, _, userID := newTestSubscribeService(t)
+	svc, events, _, userID, workspaceID := newTestSubscribeService(t)
 	srv := icsServer(t, subscribeFeedICS)
 	ctx := context.Background()
 
-	calendar, err := svc.Subscribe(ctx, userID, srv.URL+"/feed.ics", "Team Holidays", "#8E44ADFF", false)
+	calendar, err := svc.Subscribe(ctx, userID, workspaceID, srv.URL+"/feed.ics", "Team Holidays", "#8E44ADFF", false)
 	if err != nil {
 		t.Fatalf("subscribe: %v", err)
 	}
@@ -1185,13 +1194,13 @@ func switchableICSServer(t *testing.T, body *string) *httptest.Server {
 }
 
 func TestSubscribeService_Subscribe_FeedNameColorShadowTracksFeedNotUsersChoice(t *testing.T) {
-	svc, _, calendars, userID := newTestSubscribeService(t)
+	svc, _, calendars, userID, workspaceID := newTestSubscribeService(t)
 	srv := icsServer(t, subscribeFeedICS)
 	ctx := context.Background()
 
 	// The User picks a name/color different from what the feed proposes —
 	// diverging right from Subscribe, same as a later rename would.
-	calendar, err := svc.Subscribe(ctx, userID, srv.URL+"/feed.ics", "My Calendar", "#123456FF", false)
+	calendar, err := svc.Subscribe(ctx, userID, workspaceID, srv.URL+"/feed.ics", "My Calendar", "#123456FF", false)
 	if err != nil {
 		t.Fatalf("subscribe: %v", err)
 	}
@@ -1216,14 +1225,14 @@ func TestSubscribeService_Subscribe_FeedNameColorShadowTracksFeedNotUsersChoice(
 }
 
 func TestSubscribeService_Refresh_UntouchedNameFollowsPublisherRename(t *testing.T) {
-	svc, _, calendars, userID := newTestSubscribeService(t)
+	svc, _, calendars, userID, workspaceID := newTestSubscribeService(t)
 	body := subscribeFeedICS
 	srv := switchableICSServer(t, &body)
 	ctx := context.Background()
 
 	// Accepting the feed's proposed name/color, as Preview would suggest,
 	// means Name/Color start out equal to the shadow — "untouched".
-	calendar, err := svc.Subscribe(ctx, userID, srv.URL+"/feed.ics", "Team Holidays", "#8E44ADFF", false)
+	calendar, err := svc.Subscribe(ctx, userID, workspaceID, srv.URL+"/feed.ics", "Team Holidays", "#8E44ADFF", false)
 	if err != nil {
 		t.Fatalf("subscribe: %v", err)
 	}
@@ -1252,14 +1261,14 @@ func TestSubscribeService_Refresh_UntouchedNameFollowsPublisherRename(t *testing
 }
 
 func TestSubscribeService_Refresh_CustomizedNameNeverOverwritten(t *testing.T) {
-	svc, _, calendars, userID := newTestSubscribeService(t)
+	svc, _, calendars, userID, workspaceID := newTestSubscribeService(t)
 	body := subscribeFeedICS
 	srv := switchableICSServer(t, &body)
 	ctx := context.Background()
 
 	// The User picks their own name/color at Subscribe time — diverged
 	// from the shadow immediately.
-	calendar, err := svc.Subscribe(ctx, userID, srv.URL+"/feed.ics", "My Calendar", "#123456FF", false)
+	calendar, err := svc.Subscribe(ctx, userID, workspaceID, srv.URL+"/feed.ics", "My Calendar", "#123456FF", false)
 	if err != nil {
 		t.Fatalf("subscribe: %v", err)
 	}
@@ -1291,12 +1300,12 @@ func TestSubscribeService_Refresh_CustomizedNameNeverOverwritten(t *testing.T) {
 }
 
 func TestSubscribeService_Refresh_FeedStopsSupplyingNameColor_DoesNotBlank(t *testing.T) {
-	svc, _, calendars, userID := newTestSubscribeService(t)
+	svc, _, calendars, userID, workspaceID := newTestSubscribeService(t)
 	body := subscribeFeedICS
 	srv := switchableICSServer(t, &body)
 	ctx := context.Background()
 
-	calendar, err := svc.Subscribe(ctx, userID, srv.URL+"/feed.ics", "Team Holidays", "#8E44ADFF", false)
+	calendar, err := svc.Subscribe(ctx, userID, workspaceID, srv.URL+"/feed.ics", "Team Holidays", "#8E44ADFF", false)
 	if err != nil {
 		t.Fatalf("subscribe: %v", err)
 	}
@@ -1327,11 +1336,11 @@ func TestSubscribeService_Refresh_FeedStopsSupplyingNameColor_DoesNotBlank(t *te
 // --- Editing a Subscription's URL (#88, ADR-0032) ---
 
 func TestSubscribeService_UpdateSourceURL_ReconcilesAgainstNewSourceOnNextRefresh(t *testing.T) {
-	svc, events, calendars, userID := newTestSubscribeService(t)
+	svc, events, calendars, userID, workspaceID := newTestSubscribeService(t)
 	oldSrv := icsServer(t, subscribeFeedICS)
 	ctx := context.Background()
 
-	calendar, err := svc.Subscribe(ctx, userID, oldSrv.URL+"/feed.ics", "Team Holidays", "#8E44ADFF", false)
+	calendar, err := svc.Subscribe(ctx, userID, workspaceID, oldSrv.URL+"/feed.ics", "Team Holidays", "#8E44ADFF", false)
 	if err != nil {
 		t.Fatalf("subscribe: %v", err)
 	}
@@ -1377,10 +1386,10 @@ func TestSubscribeService_UpdateSourceURL_ReconcilesAgainstNewSourceOnNextRefres
 }
 
 func TestSubscribeService_UpdateSourceURL_RejectsNonSubscribedCalendar(t *testing.T) {
-	svc, _, calendars, userID := newTestSubscribeService(t)
+	svc, _, calendars, userID, workspaceID := newTestSubscribeService(t)
 	ctx := context.Background()
 
-	cal, err := calendars.Create(ctx, userID, "cal-1", CalendarWrite{Name: "Personal", Color: "#12809CFF"})
+	cal, err := calendars.Create(ctx, userID, workspaceID, "cal-1", CalendarWrite{Name: "Personal", Color: "#12809CFF"})
 	if err != nil {
 		t.Fatalf("create calendar: %v", err)
 	}
@@ -1392,11 +1401,11 @@ func TestSubscribeService_UpdateSourceURL_RejectsNonSubscribedCalendar(t *testin
 }
 
 func TestSubscribeService_UpdateSourceURL_RejectsInvalidURL(t *testing.T) {
-	svc, _, _, userID := newTestSubscribeService(t)
+	svc, _, _, userID, workspaceID := newTestSubscribeService(t)
 	srv := icsServer(t, subscribeFeedICS)
 	ctx := context.Background()
 
-	calendar, err := svc.Subscribe(ctx, userID, srv.URL+"/feed.ics", "Team Holidays", "#8E44ADFF", false)
+	calendar, err := svc.Subscribe(ctx, userID, workspaceID, srv.URL+"/feed.ics", "Team Holidays", "#8E44ADFF", false)
 	if err != nil {
 		t.Fatalf("subscribe: %v", err)
 	}

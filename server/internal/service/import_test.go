@@ -28,7 +28,7 @@ const (
 // newTestImportService returns an ImportService plus a real user id and an
 // existing calendar id (for action "existing" targets) to satisfy events'
 // foreign keys.
-func newTestImportService(t *testing.T) (svc *ImportService, events *EventService, calendars *CalendarService, store *attachmentstore.Store, userID int64, existingCalendarID string) {
+func newTestImportService(t *testing.T) (svc *ImportService, events *EventService, calendars *CalendarService, store *attachmentstore.Store, userID, workspaceID int64, existingCalendarID string) {
 	t.Helper()
 	return newTestImportServiceWithAttachmentLimits(t, testMaxAttachmentSize, testMaxAttachmentsPerEvent)
 }
@@ -36,7 +36,7 @@ func newTestImportService(t *testing.T) (svc *ImportService, events *EventServic
 // newTestImportServiceWithAttachmentLimits is newTestImportService with
 // caller-chosen MAX_ATTACHMENT_SIZE/MAX_ATTACHMENTS_PER_EVENT, for tests
 // exercising those caps directly (#135).
-func newTestImportServiceWithAttachmentLimits(t *testing.T, maxAttachmentSize int64, maxAttachmentsPerEvent int) (svc *ImportService, events *EventService, calendars *CalendarService, store *attachmentstore.Store, userID int64, existingCalendarID string) {
+func newTestImportServiceWithAttachmentLimits(t *testing.T, maxAttachmentSize int64, maxAttachmentsPerEvent int) (svc *ImportService, events *EventService, calendars *CalendarService, store *attachmentstore.Store, userID, workspaceID int64, existingCalendarID string) {
 	t.Helper()
 
 	sqlDB, err := db.OpenInMemory()
@@ -51,9 +51,18 @@ func newTestImportServiceWithAttachmentLimits(t *testing.T, maxAttachmentSize in
 		t.Fatalf("create user: %v", err)
 	}
 
+	workspaceRepo := repository.NewWorkspaceRepository(sqlDB)
+	workspace, err := workspaceRepo.Create(context.Background(), "Test Workspace", user.ID)
+	if err != nil {
+		t.Fatalf("create workspace: %v", err)
+	}
+	if err := workspaceRepo.AddMember(context.Background(), workspace.ID, user.ID, repository.WorkspaceRoleOwner); err != nil {
+		t.Fatalf("add workspace member: %v", err)
+	}
+
 	calendarRepo := repository.NewCalendarRepository(sqlDB)
-	calendarSvc := NewCalendarService(calendarRepo, repository.NewCalendarShareRepository(sqlDB), users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB))
-	cal, err := calendarRepo.Create(context.Background(), user.ID, "cal-1", repository.CalendarFields{Name: "Existing", Color: "#12809CFF"})
+	calendarSvc := NewCalendarService(calendarRepo, repository.NewCalendarShareRepository(sqlDB), users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo)
+	cal, err := calendarRepo.Create(context.Background(), user.ID, workspace.ID, "cal-1", repository.CalendarFields{Name: "Existing", Color: "#12809CFF"})
 	if err != nil {
 		t.Fatalf("create calendar: %v", err)
 	}
@@ -61,7 +70,7 @@ func newTestImportServiceWithAttachmentLimits(t *testing.T, maxAttachmentSize in
 	eventSvc := NewEventService(sqlDB, repository.NewEventRepository(sqlDB), repository.NewEventExceptionRepository(sqlDB), repository.NewEventReminderRepository(sqlDB), repository.NewReminderOverrideRepository(sqlDB), repository.NewSyncRepository(sqlDB), calendarSvc, users, repository.NewAttachmentRepository(sqlDB))
 	attachmentStore := attachmentstore.New(t.TempDir())
 
-	return NewImportService(eventSvc, calendarSvc, attachmentStore, maxAttachmentSize, maxAttachmentsPerEvent), eventSvc, calendarSvc, attachmentStore, user.ID, cal.ID
+	return NewImportService(eventSvc, calendarSvc, attachmentStore, maxAttachmentSize, maxAttachmentsPerEvent), eventSvc, calendarSvc, attachmentStore, user.ID, workspace.ID, cal.ID
 }
 
 const singleEventICS = `BEGIN:VCALENDAR
@@ -88,10 +97,10 @@ END:VCALENDAR
 func crlf(s string) string { return strings.ReplaceAll(s, "\n", "\r\n") }
 
 func TestImportService_DryRun_NewCalendar_DoesNotWrite(t *testing.T) {
-	svc, events, calendars, _, userID, _ := newTestImportService(t)
+	svc, events, calendars, _, userID, workspaceID, _ := newTestImportService(t)
 	ctx := context.Background()
 
-	summary, err := svc.Import(ctx, userID, "invite.ics", []byte(crlf(singleEventICS)), []ImportTarget{
+	summary, err := svc.Import(ctx, userID, workspaceID, "invite.ics", []byte(crlf(singleEventICS)), []ImportTarget{
 		{Filename: "invite.ics", Action: ImportTargetNew},
 	}, true)
 	if err != nil {
@@ -132,10 +141,10 @@ func TestImportService_DryRun_NewCalendar_DoesNotWrite(t *testing.T) {
 }
 
 func TestImportService_RealRun_NewCalendar_Writes(t *testing.T) {
-	svc, events, calendars, _, userID, _ := newTestImportService(t)
+	svc, events, calendars, _, userID, workspaceID, _ := newTestImportService(t)
 	ctx := context.Background()
 
-	summary, err := svc.Import(ctx, userID, "invite.ics", []byte(crlf(singleEventICS)), []ImportTarget{
+	summary, err := svc.Import(ctx, userID, workspaceID, "invite.ics", []byte(crlf(singleEventICS)), []ImportTarget{
 		{Filename: "invite.ics", Action: ImportTargetNew},
 	}, false)
 	if err != nil {
@@ -163,10 +172,10 @@ func TestImportService_RealRun_NewCalendar_Writes(t *testing.T) {
 }
 
 func TestImportService_ExistingCalendar_WritesIntoIt(t *testing.T) {
-	svc, events, _, _, userID, existingCalendarID := newTestImportService(t)
+	svc, events, _, _, userID, workspaceID, existingCalendarID := newTestImportService(t)
 	ctx := context.Background()
 
-	summary, err := svc.Import(ctx, userID, "invite.ics", []byte(crlf(singleEventICS)), []ImportTarget{
+	summary, err := svc.Import(ctx, userID, workspaceID, "invite.ics", []byte(crlf(singleEventICS)), []ImportTarget{
 		{Filename: "invite.ics", Action: ImportTargetExisting, CalendarID: existingCalendarID},
 	}, false)
 	if err != nil {
@@ -186,10 +195,10 @@ func TestImportService_ExistingCalendar_WritesIntoIt(t *testing.T) {
 }
 
 func TestImportService_ExistingCalendar_UnknownID(t *testing.T) {
-	svc, _, _, _, userID, _ := newTestImportService(t)
+	svc, _, _, _, userID, workspaceID, _ := newTestImportService(t)
 	ctx := context.Background()
 
-	_, err := svc.Import(ctx, userID, "invite.ics", []byte(crlf(singleEventICS)), []ImportTarget{
+	_, err := svc.Import(ctx, userID, workspaceID, "invite.ics", []byte(crlf(singleEventICS)), []ImportTarget{
 		{Filename: "invite.ics", Action: ImportTargetExisting, CalendarID: "does-not-exist"},
 	}, false)
 	if !errors.Is(err, ErrCalendarNotFound) {
@@ -202,16 +211,16 @@ func TestImportService_ExistingCalendar_UnknownID(t *testing.T) {
 // User importing a file into it would silently disappear on the next
 // Refresh.
 func TestImportService_ExistingCalendar_RejectsSubscribedTarget(t *testing.T) {
-	svc, _, calendars, _, userID, _ := newTestImportService(t)
+	svc, _, calendars, _, userID, workspaceID, _ := newTestImportService(t)
 	ctx := context.Background()
 
 	sourceURL := "https://example.com/feed.ics"
-	subCalendar, err := calendars.Create(ctx, userID, "sub-cal-1", CalendarWrite{Name: "Feed", Color: "#123456FF", SourceURL: &sourceURL})
+	subCalendar, err := calendars.Create(ctx, userID, workspaceID, "sub-cal-1", CalendarWrite{Name: "Feed", Color: "#123456FF", SourceURL: &sourceURL})
 	if err != nil {
 		t.Fatalf("create subscribed calendar: %v", err)
 	}
 
-	_, err = svc.Import(ctx, userID, "invite.ics", []byte(crlf(singleEventICS)), []ImportTarget{
+	_, err = svc.Import(ctx, userID, workspaceID, "invite.ics", []byte(crlf(singleEventICS)), []ImportTarget{
 		{Filename: "invite.ics", Action: ImportTargetExisting, CalendarID: subCalendar.ID},
 	}, false)
 	if !errors.Is(err, ErrImportTargetSubscribed) {
@@ -220,7 +229,7 @@ func TestImportService_ExistingCalendar_RejectsSubscribedTarget(t *testing.T) {
 }
 
 func TestImportService_Zip_RejectsExistingAction(t *testing.T) {
-	svc, _, _, _, userID, existingCalendarID := newTestImportService(t)
+	svc, _, _, _, userID, workspaceID, existingCalendarID := newTestImportService(t)
 	ctx := context.Background()
 
 	var buf bytes.Buffer
@@ -236,7 +245,7 @@ func TestImportService_Zip_RejectsExistingAction(t *testing.T) {
 		t.Fatalf("close zip: %v", err)
 	}
 
-	_, err = svc.Import(ctx, userID, "export.zip", buf.Bytes(), []ImportTarget{
+	_, err = svc.Import(ctx, userID, workspaceID, "export.zip", buf.Bytes(), []ImportTarget{
 		{Filename: "a.ics", Action: ImportTargetExisting, CalendarID: existingCalendarID},
 	}, true)
 	if !errors.Is(err, ErrImportExistingNotAllowedForZip) {
@@ -245,7 +254,7 @@ func TestImportService_Zip_RejectsExistingAction(t *testing.T) {
 }
 
 func TestImportService_Zip_OneCalendarPerEntry(t *testing.T) {
-	svc, _, calendars, _, userID, _ := newTestImportService(t)
+	svc, _, calendars, _, userID, workspaceID, _ := newTestImportService(t)
 	ctx := context.Background()
 
 	otherICS := strings.ReplaceAll(singleEventICS, "foreign-uid-1", "foreign-uid-2")
@@ -266,7 +275,7 @@ func TestImportService_Zip_OneCalendarPerEntry(t *testing.T) {
 		t.Fatalf("close zip: %v", err)
 	}
 
-	summary, err := svc.Import(ctx, userID, "export.zip", buf.Bytes(), []ImportTarget{
+	summary, err := svc.Import(ctx, userID, workspaceID, "export.zip", buf.Bytes(), []ImportTarget{
 		{Filename: "a.ics", Action: ImportTargetNew},
 		{Filename: "b.ics", Action: ImportTargetNew},
 	}, false)
@@ -290,20 +299,20 @@ func TestImportService_Zip_OneCalendarPerEntry(t *testing.T) {
 }
 
 func TestImportService_MissingTarget(t *testing.T) {
-	svc, _, _, _, userID, _ := newTestImportService(t)
+	svc, _, _, _, userID, workspaceID, _ := newTestImportService(t)
 	ctx := context.Background()
 
-	_, err := svc.Import(ctx, userID, "invite.ics", []byte(crlf(singleEventICS)), nil, true)
+	_, err := svc.Import(ctx, userID, workspaceID, "invite.ics", []byte(crlf(singleEventICS)), nil, true)
 	if !errors.Is(err, ErrImportTargetMissing) {
 		t.Fatalf("expected ErrImportTargetMissing, got %v", err)
 	}
 }
 
 func TestImportService_SkipAction_NotImported(t *testing.T) {
-	svc, events, calendars, _, userID, _ := newTestImportService(t)
+	svc, events, calendars, _, userID, workspaceID, _ := newTestImportService(t)
 	ctx := context.Background()
 
-	summary, err := svc.Import(ctx, userID, "invite.ics", []byte(crlf(singleEventICS)), []ImportTarget{
+	summary, err := svc.Import(ctx, userID, workspaceID, "invite.ics", []byte(crlf(singleEventICS)), []ImportTarget{
 		{Filename: "invite.ics", Action: ImportTargetSkip},
 	}, false)
 	if err != nil {
@@ -324,7 +333,7 @@ func TestImportService_SkipAction_NotImported(t *testing.T) {
 }
 
 func TestImportService_SkippedAndAdjustedCountsSurfaceInSummary(t *testing.T) {
-	svc, _, _, _, userID, _ := newTestImportService(t)
+	svc, _, _, _, userID, workspaceID, _ := newTestImportService(t)
 	ctx := context.Background()
 
 	ics := `BEGIN:VCALENDAR
@@ -345,7 +354,7 @@ SUMMARY:Outlook event
 END:VEVENT
 END:VCALENDAR
 `
-	summary, err := svc.Import(ctx, userID, "mixed.ics", []byte(crlf(ics)), []ImportTarget{
+	summary, err := svc.Import(ctx, userID, workspaceID, "mixed.ics", []byte(crlf(ics)), []ImportTarget{
 		{Filename: "mixed.ics", Action: ImportTargetNew},
 	}, true)
 	if err != nil {
@@ -364,10 +373,10 @@ END:VCALENDAR
 }
 
 func TestImportService_UnsupportedFileType(t *testing.T) {
-	svc, _, _, _, userID, _ := newTestImportService(t)
+	svc, _, _, _, userID, workspaceID, _ := newTestImportService(t)
 	ctx := context.Background()
 
-	_, err := svc.Import(ctx, userID, "notes.txt", []byte("hello"), nil, true)
+	_, err := svc.Import(ctx, userID, workspaceID, "notes.txt", []byte("hello"), nil, true)
 	if !errors.Is(err, ErrImportUnsupportedFileType) {
 		t.Fatalf("expected ErrImportUnsupportedFileType, got %v", err)
 	}
@@ -389,24 +398,24 @@ END:VCALENDAR
 `
 
 func TestImportService_DryRun_ReportsSameValidationErrorAsRealRun(t *testing.T) {
-	svc, _, _, _, userID, _ := newTestImportService(t)
+	svc, _, _, _, userID, workspaceID, _ := newTestImportService(t)
 	ctx := context.Background()
 
 	target := []ImportTarget{{Filename: "invite.ics", Action: ImportTargetNew}}
 
-	_, dryErr := svc.Import(ctx, userID, "invite.ics", []byte(crlf(blankTitleICS)), target, true)
+	_, dryErr := svc.Import(ctx, userID, workspaceID, "invite.ics", []byte(crlf(blankTitleICS)), target, true)
 	if !errors.Is(dryErr, ErrInvalidTitle) {
 		t.Fatalf("expected a dry run to surface ErrInvalidTitle, got %v", dryErr)
 	}
 
-	_, realErr := svc.Import(ctx, userID, "invite.ics", []byte(crlf(blankTitleICS)), target, false)
+	_, realErr := svc.Import(ctx, userID, workspaceID, "invite.ics", []byte(crlf(blankTitleICS)), target, false)
 	if !errors.Is(realErr, ErrInvalidTitle) {
 		t.Fatalf("expected a real run to surface ErrInvalidTitle, got %v", realErr)
 	}
 }
 
 func TestImportService_LaterFileInvalid_EarlierFileNotWritten(t *testing.T) {
-	svc, events, calendars, _, userID, _ := newTestImportService(t)
+	svc, events, calendars, _, userID, workspaceID, _ := newTestImportService(t)
 	ctx := context.Background()
 
 	var buf bytes.Buffer
@@ -424,7 +433,7 @@ func TestImportService_LaterFileInvalid_EarlierFileNotWritten(t *testing.T) {
 		t.Fatalf("close zip: %v", err)
 	}
 
-	_, err := svc.Import(ctx, userID, "export.zip", buf.Bytes(), []ImportTarget{
+	_, err := svc.Import(ctx, userID, workspaceID, "export.zip", buf.Bytes(), []ImportTarget{
 		{Filename: "a.ics", Action: ImportTargetNew},
 		{Filename: "b.ics", Action: ImportTargetNew},
 	}, false)
@@ -467,10 +476,10 @@ END:VCALENDAR
 `
 
 func TestImportService_MethodRequestInvite_ImportsNormally(t *testing.T) {
-	svc, events, _, _, userID, _ := newTestImportService(t)
+	svc, events, _, _, userID, workspaceID, _ := newTestImportService(t)
 	ctx := context.Background()
 
-	summary, err := svc.Import(ctx, userID, "invite.ics", []byte(crlf(methodRequestICS)), []ImportTarget{
+	summary, err := svc.Import(ctx, userID, workspaceID, "invite.ics", []byte(crlf(methodRequestICS)), []ImportTarget{
 		{Filename: "invite.ics", Action: ImportTargetNew},
 	}, false)
 	if err != nil {
@@ -507,10 +516,10 @@ END:VCALENDAR
 `
 
 func TestImportService_RealRun_WritesInlineAttachment(t *testing.T) {
-	svc, events, _, store, userID, _ := newTestImportService(t)
+	svc, events, _, store, userID, workspaceID, _ := newTestImportService(t)
 	ctx := context.Background()
 
-	summary, err := svc.Import(ctx, userID, "invite.ics", []byte(crlf(singleEventWithAttachICS)), []ImportTarget{
+	summary, err := svc.Import(ctx, userID, workspaceID, "invite.ics", []byte(crlf(singleEventWithAttachICS)), []ImportTarget{
 		{Filename: "invite.ics", Action: ImportTargetNew},
 	}, false)
 	if err != nil {
@@ -560,12 +569,20 @@ func TestImportService_DryRun_DoesNotSaveAttachmentBytes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create user: %v", err)
 	}
-	calendarSvc := NewCalendarService(repository.NewCalendarRepository(sqlDB), repository.NewCalendarShareRepository(sqlDB), users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB))
+	workspaceRepo := repository.NewWorkspaceRepository(sqlDB)
+	workspace, err := workspaceRepo.Create(context.Background(), "Test Workspace", user.ID)
+	if err != nil {
+		t.Fatalf("create workspace: %v", err)
+	}
+	if err := workspaceRepo.AddMember(context.Background(), workspace.ID, user.ID, repository.WorkspaceRoleOwner); err != nil {
+		t.Fatalf("add workspace member: %v", err)
+	}
+	calendarSvc := NewCalendarService(repository.NewCalendarRepository(sqlDB), repository.NewCalendarShareRepository(sqlDB), users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo)
 	eventSvc := NewEventService(sqlDB, repository.NewEventRepository(sqlDB), repository.NewEventExceptionRepository(sqlDB), repository.NewEventReminderRepository(sqlDB), repository.NewReminderOverrideRepository(sqlDB), repository.NewSyncRepository(sqlDB), calendarSvc, users, repository.NewAttachmentRepository(sqlDB))
 	svc := NewImportService(eventSvc, calendarSvc, store, testMaxAttachmentSize, testMaxAttachmentsPerEvent)
 	ctx := context.Background()
 
-	summary, err := svc.Import(ctx, user.ID, "invite.ics", []byte(crlf(singleEventWithAttachICS)), []ImportTarget{
+	summary, err := svc.Import(ctx, user.ID, workspace.ID, "invite.ics", []byte(crlf(singleEventWithAttachICS)), []ImportTarget{
 		{Filename: "invite.ics", Action: ImportTargetNew},
 	}, true)
 	if err != nil {
@@ -629,10 +646,10 @@ ATTACH;ENCODING=BASE64;VALUE=BINARY;FMTTYPE=text/plain;FILENAME=notes.txt:` + he
 END:VEVENT
 END:VCALENDAR
 `
-	svc, events, _, _, userID, _ := newTestImportService(t)
+	svc, events, _, _, userID, workspaceID, _ := newTestImportService(t)
 	ctx := context.Background()
 
-	summary, err := svc.Import(ctx, userID, "invite.ics", []byte(crlf(ics)), []ImportTarget{
+	summary, err := svc.Import(ctx, userID, workspaceID, "invite.ics", []byte(crlf(ics)), []ImportTarget{
 		{Filename: "invite.ics", Action: ImportTargetNew},
 	}, false)
 	if err != nil {
@@ -659,10 +676,10 @@ END:VCALENDAR
 
 func TestImportService_Attachment_OverMaxSize_SkippedButSeriesImports(t *testing.T) {
 	// "hello world" is 11 bytes; cap it at 5 so it's declined.
-	svc, events, _, _, userID, _ := newTestImportServiceWithAttachmentLimits(t, 5, testMaxAttachmentsPerEvent)
+	svc, events, _, _, userID, workspaceID, _ := newTestImportServiceWithAttachmentLimits(t, 5, testMaxAttachmentsPerEvent)
 	ctx := context.Background()
 
-	summary, err := svc.Import(ctx, userID, "invite.ics", []byte(crlf(singleEventWithAttachICS)), []ImportTarget{
+	summary, err := svc.Import(ctx, userID, workspaceID, "invite.ics", []byte(crlf(singleEventWithAttachICS)), []ImportTarget{
 		{Filename: "invite.ics", Action: ImportTargetNew},
 	}, false)
 	if err != nil {
@@ -699,10 +716,10 @@ ATTACH;ENCODING=BASE64;VALUE=BINARY;FMTTYPE=text/plain;FILENAME=two.txt:aGVsbG8=
 END:VEVENT
 END:VCALENDAR
 `
-	svc, events, _, _, userID, _ := newTestImportServiceWithAttachmentLimits(t, testMaxAttachmentSize, 1)
+	svc, events, _, _, userID, workspaceID, _ := newTestImportServiceWithAttachmentLimits(t, testMaxAttachmentSize, 1)
 	ctx := context.Background()
 
-	summary, err := svc.Import(ctx, userID, "invite.ics", []byte(crlf(ics)), []ImportTarget{
+	summary, err := svc.Import(ctx, userID, workspaceID, "invite.ics", []byte(crlf(ics)), []ImportTarget{
 		{Filename: "invite.ics", Action: ImportTargetNew},
 	}, false)
 	if err != nil {
@@ -735,10 +752,10 @@ ATTACH:https://example.com/private/plan.pdf
 END:VEVENT
 END:VCALENDAR
 `
-	svc, events, _, _, userID, _ := newTestImportService(t)
+	svc, events, _, _, userID, workspaceID, _ := newTestImportService(t)
 	ctx := context.Background()
 
-	summary, err := svc.Import(ctx, userID, "invite.ics", []byte(crlf(ics)), []ImportTarget{
+	summary, err := svc.Import(ctx, userID, workspaceID, "invite.ics", []byte(crlf(ics)), []ImportTarget{
 		{Filename: "invite.ics", Action: ImportTargetNew},
 	}, false)
 	if err != nil {
@@ -766,7 +783,7 @@ END:VCALENDAR
 // saved to disk (#135) — nothing for the sweeper to reclaim, since nothing
 // was written in the first place.
 func TestImportService_FailedTransaction_LeavesNoAttachmentRows(t *testing.T) {
-	svc, events, calendars, store, userID, _ := newTestImportService(t)
+	svc, events, calendars, store, userID, workspaceID, _ := newTestImportService(t)
 	ctx := context.Background()
 
 	var buf bytes.Buffer
@@ -784,7 +801,7 @@ func TestImportService_FailedTransaction_LeavesNoAttachmentRows(t *testing.T) {
 		t.Fatalf("close zip: %v", err)
 	}
 
-	_, err := svc.Import(ctx, userID, "export.zip", buf.Bytes(), []ImportTarget{
+	_, err := svc.Import(ctx, userID, workspaceID, "export.zip", buf.Bytes(), []ImportTarget{
 		{Filename: "a.ics", Action: ImportTargetNew},
 		{Filename: "b.ics", Action: ImportTargetNew},
 	}, false)
@@ -829,7 +846,7 @@ func TestImportService_FailedTransaction_LeavesNoAttachmentRows(t *testing.T) {
 // SQLite rolling back a row is unrelated to attachmentstore.Store, which has
 // already renamed the first series' attachment bytes into place by then.
 func TestEventServiceImportSeries_WriteTimeFailure_OrphansBytesReclaimedBySweeper(t *testing.T) {
-	_, events, _, store, userID, calendarID := newTestImportService(t)
+	_, events, _, store, userID, _, calendarID := newTestImportService(t)
 	ctx := context.Background()
 
 	const attachmentID = "pre-saved-attachment"

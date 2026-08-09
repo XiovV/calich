@@ -79,10 +79,10 @@ func TestEventHandler_Create_RejectsInvalidColor(t *testing.T) {
 // 403 mapping TestEventHandler_Create_RejectsSubscribedCalendarWith403 uses
 // for title/time, now carrying a color too.
 func TestEventHandler_Create_RejectsColorOnReadOnlyCalendarWith403(t *testing.T) {
-	baseURL, accessToken, _, userID, calendars, _ := newEventTestServerWithServices(t)
+	baseURL, accessToken, _, userID, workspaceID, calendars, _ := newEventTestServerWithServices(t)
 
 	sourceURL := "https://example.com/feed.ics"
-	subCalendar, err := calendars.Create(context.Background(), userID, "33333333-3333-3333-3333-333333333333", service.CalendarWrite{
+	subCalendar, err := calendars.Create(context.Background(), userID, workspaceID, "33333333-3333-3333-3333-333333333333", service.CalendarWrite{
 		Name: "Feed", Color: "#123456FF", SourceURL: &sourceURL,
 	})
 	if err != nil {

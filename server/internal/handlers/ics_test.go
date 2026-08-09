@@ -31,6 +31,7 @@ type icsTestEnv struct {
 	accessToken    string
 	calendarID     string
 	userID         int64
+	workspaceID    int64
 	events         *service.EventService
 	calendars      *service.CalendarService
 	attachments    *service.AttachmentService
@@ -48,10 +49,22 @@ func newICSTestEnv(t *testing.T) icsTestEnv {
 
 	users := repository.NewUserRepository(sqlDB)
 	sessions := repository.NewSessionRepository(sqlDB)
-	auth := service.NewAuthService(users, sessions, service.NewWorkspaceService(sqlDB, repository.NewWorkspaceRepository(sqlDB), repository.NewWorkspaceInviteRepository(sqlDB)), repository.NewWorkspaceInviteRepository(sqlDB), []byte("test-secret"), "alice", "hunter2", false)
-	if _, _, err := auth.Bootstrap(context.Background()); err != nil {
+	workspaceRepo := repository.NewWorkspaceRepository(sqlDB)
+	workspaces := service.NewWorkspaceService(sqlDB, workspaceRepo, repository.NewWorkspaceInviteRepository(sqlDB))
+	auth := service.NewAuthService(users, sessions, workspaces, repository.NewWorkspaceInviteRepository(sqlDB), []byte("test-secret"), "alice", "hunter2", false)
+	bootstrapUser, _, err := auth.Bootstrap(context.Background())
+	if err != nil {
 		t.Fatalf("bootstrap: %v", err)
 	}
+
+	aliceWorkspaces, err := workspaces.ListForUser(context.Background(), bootstrapUser.ID)
+	if err != nil {
+		t.Fatalf("list workspaces: %v", err)
+	}
+	if len(aliceWorkspaces) != 1 {
+		t.Fatalf("expected alice to belong to exactly one workspace, got %d", len(aliceWorkspaces))
+	}
+	workspaceID := aliceWorkspaces[0].ID
 
 	loginResult, err := auth.Login(context.Background(), "alice", "hunter2")
 	if err != nil {
@@ -63,8 +76,8 @@ func newICSTestEnv(t *testing.T) icsTestEnv {
 	}
 
 	calendarRepo := repository.NewCalendarRepository(sqlDB)
-	calendars := service.NewCalendarService(calendarRepo, repository.NewCalendarShareRepository(sqlDB), users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB))
-	cal, err := calendars.Create(context.Background(), userID, "11111111-1111-1111-1111-111111111111", service.CalendarWrite{Name: "Personal", Color: "#12809CFF"})
+	calendars := service.NewCalendarService(calendarRepo, repository.NewCalendarShareRepository(sqlDB), users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo)
+	cal, err := calendars.Create(context.Background(), userID, workspaceID, "11111111-1111-1111-1111-111111111111", service.CalendarWrite{Name: "Personal", Color: "#12809CFF"})
 	if err != nil {
 		t.Fatalf("create calendar: %v", err)
 	}
@@ -93,7 +106,7 @@ func newICSTestEnv(t *testing.T) icsTestEnv {
 	srv := httptest.NewServer(r)
 	t.Cleanup(srv.Close)
 
-	return icsTestEnv{baseURL: srv.URL, accessToken: loginResult.AccessToken, calendarID: cal.ID, userID: userID, events: events, calendars: calendars, attachments: attachments, attachmentRepo: attachmentRepo}
+	return icsTestEnv{baseURL: srv.URL, accessToken: loginResult.AccessToken, calendarID: cal.ID, userID: userID, workspaceID: workspaceID, events: events, calendars: calendars, attachments: attachments, attachmentRepo: attachmentRepo}
 }
 
 func (env icsTestEnv) get(t *testing.T, path string) *http.Response {
@@ -365,7 +378,7 @@ func TestCalendarHandler_ICS_SubscribedCalendarIsForbidden(t *testing.T) {
 	env := newICSTestEnv(t)
 
 	sourceURL := "https://user:hunter2@example.com/feed.ics"
-	subCalendar, err := env.calendars.Create(context.Background(), 1, "33333333-3333-3333-3333-333333333333", service.CalendarWrite{
+	subCalendar, err := env.calendars.Create(context.Background(), env.userID, env.workspaceID, "33333333-3333-3333-3333-333333333333", service.CalendarWrite{
 		Name: "Feed", Color: "#123456FF", SourceURL: &sourceURL,
 	})
 	if err != nil {
@@ -423,7 +436,7 @@ func TestCalendarHandler_ICSAll_ReturnsOneZipEntryPerCalendar(t *testing.T) {
 	if _, err := env.events.Create(ctx, 1, "evt-1", service.EventWrite{CalendarID: env.calendarID, Title: "Standup", Start: start, End: end}); err != nil {
 		t.Fatalf("create event: %v", err)
 	}
-	secondCal, err := env.calendars.Create(ctx, 1, "22222222-2222-2222-2222-222222222222", service.CalendarWrite{Name: "Work", Color: "#E2483DFF"})
+	secondCal, err := env.calendars.Create(ctx, env.userID, env.workspaceID, "22222222-2222-2222-2222-222222222222", service.CalendarWrite{Name: "Work", Color: "#E2483DFF"})
 	if err != nil {
 		t.Fatalf("create second calendar: %v", err)
 	}
@@ -468,7 +481,7 @@ func TestCalendarHandler_ICSAll_EmptyOwnedCalendar_StillGetsAnEntry(t *testing.T
 	end := time.Date(2026, 6, 2, 9, 30, 0, 0, time.UTC)
 
 	// env.calendarID ("Personal") is left with no events.
-	secondCal, err := env.calendars.Create(ctx, 1, "22222222-2222-2222-2222-222222222222", service.CalendarWrite{Name: "Work", Color: "#E2483DFF"})
+	secondCal, err := env.calendars.Create(ctx, env.userID, env.workspaceID, "22222222-2222-2222-2222-222222222222", service.CalendarWrite{Name: "Work", Color: "#E2483DFF"})
 	if err != nil {
 		t.Fatalf("create second calendar: %v", err)
 	}
@@ -546,7 +559,7 @@ func TestCalendarHandler_ICSAll_ExcludesSubscribedCalendarsAndListsThemInsteadWi
 	}
 
 	sourceURL := "https://user:hunter2@example.com/feed.ics"
-	if _, err := env.calendars.Create(ctx, 1, "33333333-3333-3333-3333-333333333333", service.CalendarWrite{
+	if _, err := env.calendars.Create(ctx, env.userID, env.workspaceID, "33333333-3333-3333-3333-333333333333", service.CalendarWrite{
 		Name: "Feed", Color: "#123456FF", SourceURL: &sourceURL,
 	}); err != nil {
 		t.Fatalf("create subscribed calendar: %v", err)
@@ -631,7 +644,7 @@ func TestCalendarHandler_ICSAll_OnlySubscribedCalendars_StillProducesValidArchiv
 	}
 
 	sourceURL := "https://example.com/feed.ics"
-	if _, err := env.calendars.Create(ctx, 1, "33333333-3333-3333-3333-333333333333", service.CalendarWrite{
+	if _, err := env.calendars.Create(ctx, env.userID, env.workspaceID, "33333333-3333-3333-3333-333333333333", service.CalendarWrite{
 		Name: "Feed", Color: "#123456FF", SourceURL: &sourceURL,
 	}); err != nil {
 		t.Fatalf("create subscribed calendar: %v", err)

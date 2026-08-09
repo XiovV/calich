@@ -39,7 +39,7 @@ func newTestRouter(t *testing.T) http.Handler {
 	workspaceHandler := handlers.NewWorkspaceHandler(workspaceService)
 	calendarRepo := repository.NewCalendarRepository(sqlDB)
 	shareRepo := repository.NewCalendarShareRepository(sqlDB)
-	calendarService := service.NewCalendarService(calendarRepo, shareRepo, users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB))
+	calendarService := service.NewCalendarService(calendarRepo, shareRepo, users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo)
 	eventService := service.NewEventService(sqlDB, repository.NewEventRepository(sqlDB), repository.NewEventExceptionRepository(sqlDB), repository.NewEventReminderRepository(sqlDB), repository.NewReminderOverrideRepository(sqlDB), repository.NewSyncRepository(sqlDB), calendarService, users, repository.NewAttachmentRepository(sqlDB))
 	attachmentStore := attachmentstore.New(t.TempDir())
 	calendarHandler := handlers.NewCalendarHandler(calendarService, eventService, service.NewImportService(eventService, calendarService, attachmentStore, 25<<20, 10), service.NewSubscribeService(eventService, calendarService, 0), attachmentStore)
@@ -49,11 +49,11 @@ func newTestRouter(t *testing.T) http.Handler {
 	notificationHandler := handlers.NewNotificationHandler(service.NewNotificationService(repository.NewNotificationRepository(sqlDB)))
 	appPasswordService := service.NewAppPasswordService(repository.NewAppPasswordRepository(sqlDB), users)
 	appPasswordHandler := handlers.NewAppPasswordHandler(appPasswordService)
-	accountHandler := handlers.NewAccountHandler(service.NewAccountService(sqlDB, users, sessions, calendarRepo, shareRepo, calendarService, appPasswordService, nil), false)
+	accountHandler := handlers.NewAccountHandler(service.NewAccountService(sqlDB, users, sessions, calendarRepo, shareRepo, calendarService, appPasswordService, nil, workspaceService), false)
 	userHandler := handlers.NewUserHandler(service.NewUserService(users))
 	calDAVHandler := &caldav.Handler{Backend: caldavserver.NewBackend(calendarService, eventService, attachmentService, 25<<20, 10), Prefix: "/dav"}
 
-	r, err := New(slog.New(slog.NewTextHandler(io.Discard, nil)), authHandler, calendarHandler, eventHandler, attachmentHandler, notificationHandler, appPasswordHandler, accountHandler, userHandler, workspaceHandler, calDAVHandler, authService, authService, appPasswordService, authService)
+	r, err := New(slog.New(slog.NewTextHandler(io.Discard, nil)), authHandler, calendarHandler, eventHandler, attachmentHandler, notificationHandler, appPasswordHandler, accountHandler, userHandler, workspaceHandler, calDAVHandler, authService, authService, appPasswordService, authService, workspaceService)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

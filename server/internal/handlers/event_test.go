@@ -83,14 +83,15 @@ func (d *decodedEvent) UnmarshalJSON(data []byte) error {
 
 func newEventTestServer(t *testing.T) (baseURL, accessToken, calendarID string) {
 	t.Helper()
-	baseURL, accessToken, calendarID, _, _, _ = newEventTestServerWithServices(t)
+	baseURL, accessToken, calendarID, _, _, _, _ = newEventTestServerWithServices(t)
 	return baseURL, accessToken, calendarID
 }
 
-// newEventTestServerWithServices is newEventTestServer plus the userID and
-// the raw CalendarService/EventService, for tests that need to seed state
-// (e.g. a Subscribed Calendar, ADR-0032) no REST endpoint can produce.
-func newEventTestServerWithServices(t *testing.T) (baseURL, accessToken, calendarID string, userID int64, calendars *service.CalendarService, events *service.EventService) {
+// newEventTestServerWithServices is newEventTestServer plus the userID,
+// workspaceID, and the raw CalendarService/EventService, for tests that need
+// to seed state (e.g. a Subscribed Calendar, ADR-0032) no REST endpoint can
+// produce.
+func newEventTestServerWithServices(t *testing.T) (baseURL, accessToken, calendarID string, userID int64, workspaceID int64, calendars *service.CalendarService, events *service.EventService) {
 	t.Helper()
 
 	sqlDB, err := db.OpenInMemory()
@@ -101,10 +102,22 @@ func newEventTestServerWithServices(t *testing.T) (baseURL, accessToken, calenda
 
 	users := repository.NewUserRepository(sqlDB)
 	sessions := repository.NewSessionRepository(sqlDB)
-	auth := service.NewAuthService(users, sessions, service.NewWorkspaceService(sqlDB, repository.NewWorkspaceRepository(sqlDB), repository.NewWorkspaceInviteRepository(sqlDB)), repository.NewWorkspaceInviteRepository(sqlDB), []byte("test-secret"), "alice", "hunter2", false)
-	if _, _, err := auth.Bootstrap(context.Background()); err != nil {
+	workspaceRepo := repository.NewWorkspaceRepository(sqlDB)
+	workspaces := service.NewWorkspaceService(sqlDB, workspaceRepo, repository.NewWorkspaceInviteRepository(sqlDB))
+	auth := service.NewAuthService(users, sessions, workspaces, repository.NewWorkspaceInviteRepository(sqlDB), []byte("test-secret"), "alice", "hunter2", false)
+	bootstrapUser, _, err := auth.Bootstrap(context.Background())
+	if err != nil {
 		t.Fatalf("bootstrap: %v", err)
 	}
+
+	aliceWorkspaces, err := workspaces.ListForUser(context.Background(), bootstrapUser.ID)
+	if err != nil {
+		t.Fatalf("list workspaces: %v", err)
+	}
+	if len(aliceWorkspaces) != 1 {
+		t.Fatalf("expected alice to belong to exactly one workspace, got %d", len(aliceWorkspaces))
+	}
+	workspaceID = aliceWorkspaces[0].ID
 
 	loginResult, err := auth.Login(context.Background(), "alice", "hunter2")
 	if err != nil {
@@ -117,8 +130,8 @@ func newEventTestServerWithServices(t *testing.T) (baseURL, accessToken, calenda
 	}
 
 	calendarRepo := repository.NewCalendarRepository(sqlDB)
-	calendars = service.NewCalendarService(calendarRepo, repository.NewCalendarShareRepository(sqlDB), users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB))
-	cal, err := calendars.Create(context.Background(), userID, "11111111-1111-1111-1111-111111111111", service.CalendarWrite{Name: "Personal", Color: "#12809CFF"})
+	calendars = service.NewCalendarService(calendarRepo, repository.NewCalendarShareRepository(sqlDB), users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo)
+	cal, err := calendars.Create(context.Background(), userID, workspaceID, "11111111-1111-1111-1111-111111111111", service.CalendarWrite{Name: "Personal", Color: "#12809CFF"})
 	if err != nil {
 		t.Fatalf("create calendar: %v", err)
 	}
@@ -141,7 +154,7 @@ func newEventTestServerWithServices(t *testing.T) (baseURL, accessToken, calenda
 
 	srv := httptest.NewServer(r)
 	t.Cleanup(srv.Close)
-	return srv.URL, loginResult.AccessToken, cal.ID, userID, calendars, events
+	return srv.URL, loginResult.AccessToken, cal.ID, userID, workspaceID, calendars, events
 }
 
 func TestEventHandler_CreateAndList(t *testing.T) {
@@ -368,7 +381,7 @@ func TestEventHandler_RoundTripsDescriptionAndLocation(t *testing.T) {
 // from the accompanying repository.User rather than dropped by
 // toEventResponse.
 func TestEventHandler_RoundTripsCreatorAttribution(t *testing.T) {
-	baseURL, accessToken, calendarID, userID, _, _ := newEventTestServerWithServices(t)
+	baseURL, accessToken, calendarID, userID, _, _, _ := newEventTestServerWithServices(t)
 
 	createResp := postJSON(t, baseURL, accessToken, "/api/events/", createEventRequest{
 		ID:         "22222222-2222-2222-2222-222222222222",
@@ -502,10 +515,10 @@ func TestEventHandler_Create_RejectsUnknownCalendar(t *testing.T) {
 // (ADR-0032); every REST write against one names the reason as a 403, not a
 // plain validation 400.
 func TestEventHandler_Create_RejectsSubscribedCalendarWith403(t *testing.T) {
-	baseURL, accessToken, _, userID, calendars, _ := newEventTestServerWithServices(t)
+	baseURL, accessToken, _, userID, workspaceID, calendars, _ := newEventTestServerWithServices(t)
 
 	sourceURL := "https://example.com/feed.ics"
-	subCalendar, err := calendars.Create(context.Background(), userID, "33333333-3333-3333-3333-333333333333", service.CalendarWrite{
+	subCalendar, err := calendars.Create(context.Background(), userID, workspaceID, "33333333-3333-3333-3333-333333333333", service.CalendarWrite{
 		Name: "Feed", Color: "#123456FF", SourceURL: &sourceURL,
 	})
 	if err != nil {

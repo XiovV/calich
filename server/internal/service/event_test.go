@@ -27,13 +27,22 @@ func newTestEventService(t *testing.T) (svc *EventService, userID int64, calenda
 		t.Fatalf("create user: %v", err)
 	}
 
+	workspaceRepo := repository.NewWorkspaceRepository(sqlDB)
+	workspace, err := workspaceRepo.Create(context.Background(), "Test Workspace", user.ID)
+	if err != nil {
+		t.Fatalf("create workspace: %v", err)
+	}
+	if err := workspaceRepo.AddMember(context.Background(), workspace.ID, user.ID, repository.WorkspaceRoleOwner); err != nil {
+		t.Fatalf("add workspace member: %v", err)
+	}
+
 	calendarRepo := repository.NewCalendarRepository(sqlDB)
-	cal, err := calendarRepo.Create(context.Background(), user.ID, "cal-1", repository.CalendarFields{Name: "Personal", Color: "peacock"})
+	cal, err := calendarRepo.Create(context.Background(), user.ID, workspace.ID, "cal-1", repository.CalendarFields{Name: "Personal", Color: "peacock"})
 	if err != nil {
 		t.Fatalf("create calendar: %v", err)
 	}
 
-	return NewEventService(sqlDB, repository.NewEventRepository(sqlDB), repository.NewEventExceptionRepository(sqlDB), repository.NewEventReminderRepository(sqlDB), repository.NewReminderOverrideRepository(sqlDB), repository.NewSyncRepository(sqlDB), NewCalendarService(calendarRepo, repository.NewCalendarShareRepository(sqlDB), users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB)), users, repository.NewAttachmentRepository(sqlDB)), user.ID, cal.ID
+	return NewEventService(sqlDB, repository.NewEventRepository(sqlDB), repository.NewEventExceptionRepository(sqlDB), repository.NewEventReminderRepository(sqlDB), repository.NewReminderOverrideRepository(sqlDB), repository.NewSyncRepository(sqlDB), NewCalendarService(calendarRepo, repository.NewCalendarShareRepository(sqlDB), users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo), users, repository.NewAttachmentRepository(sqlDB)), user.ID, cal.ID
 }
 
 func TestEventService_Create(t *testing.T) {
@@ -381,7 +390,15 @@ func TestEventService_Update_AnotherUsersEventIsNotFound(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create attacker: %v", err)
 	}
-	attackerCalendar, err := repository.NewCalendarRepository(svc.db).Create(ctx, attacker.ID, "attacker-cal", repository.CalendarFields{Name: "Mine", Color: "peacock"})
+	attackerWorkspaceRepo := repository.NewWorkspaceRepository(svc.db)
+	attackerWorkspace, err := attackerWorkspaceRepo.Create(ctx, "Attacker Workspace", attacker.ID)
+	if err != nil {
+		t.Fatalf("create attacker workspace: %v", err)
+	}
+	if err := attackerWorkspaceRepo.AddMember(ctx, attackerWorkspace.ID, attacker.ID, repository.WorkspaceRoleOwner); err != nil {
+		t.Fatalf("add attacker workspace member: %v", err)
+	}
+	attackerCalendar, err := repository.NewCalendarRepository(svc.db).Create(ctx, attacker.ID, attackerWorkspace.ID, "attacker-cal", repository.CalendarFields{Name: "Mine", Color: "peacock"})
 	if err != nil {
 		t.Fatalf("create attacker calendar: %v", err)
 	}
@@ -1872,8 +1889,13 @@ func TestEventService_ImportSeries_UnknownCalendar(t *testing.T) {
 // into the unexported field since this test lives in package service.
 func newTestSubscribedCalendar(t *testing.T, svc *EventService, userID int64) string {
 	t.Helper()
+	ctx := context.Background()
+	workspaces, err := svc.calendars.workspaces.ListForUser(ctx, userID)
+	if err != nil || len(workspaces) == 0 {
+		t.Fatalf("list user workspaces: %v", err)
+	}
 	sourceURL := "https://example.com/feed.ics"
-	cal, err := svc.calendars.Create(context.Background(), userID, "sub-cal-1", CalendarWrite{Name: "Feed", Color: "#123456FF", SourceURL: &sourceURL})
+	cal, err := svc.calendars.Create(ctx, userID, workspaces[0].ID, "sub-cal-1", CalendarWrite{Name: "Feed", Color: "#123456FF", SourceURL: &sourceURL})
 	if err != nil {
 		t.Fatalf("create subscribed calendar: %v", err)
 	}

@@ -8,7 +8,7 @@ import (
 	"github.com/XiovV/calendar/server/internal/repository"
 )
 
-func newTestCalendarServiceForUser(t *testing.T) (*CalendarService, int64) {
+func newTestCalendarServiceForUser(t *testing.T) (svc *CalendarService, userID, workspaceID int64) {
 	t.Helper()
 
 	sqlDB, err := db.OpenInMemory()
@@ -23,14 +23,23 @@ func newTestCalendarServiceForUser(t *testing.T) (*CalendarService, int64) {
 		t.Fatalf("create user: %v", err)
 	}
 
-	return NewCalendarService(repository.NewCalendarRepository(sqlDB), repository.NewCalendarShareRepository(sqlDB), users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB)), user.ID
+	workspaceRepo := repository.NewWorkspaceRepository(sqlDB)
+	workspace, err := workspaceRepo.Create(context.Background(), "Test Workspace", user.ID)
+	if err != nil {
+		t.Fatalf("create workspace: %v", err)
+	}
+	if err := workspaceRepo.AddMember(context.Background(), workspace.ID, user.ID, repository.WorkspaceRoleOwner); err != nil {
+		t.Fatalf("add workspace member: %v", err)
+	}
+
+	return NewCalendarService(repository.NewCalendarRepository(sqlDB), repository.NewCalendarShareRepository(sqlDB), users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo), user.ID, workspace.ID
 }
 
 func TestEnsureDefaultCalendars_SeedsPersonalWorkFamily(t *testing.T) {
-	calendars, userID := newTestCalendarServiceForUser(t)
+	calendars, userID, workspaceID := newTestCalendarServiceForUser(t)
 	ctx := context.Background()
 
-	if err := calendars.EnsureDefaults(ctx, userID); err != nil {
+	if err := calendars.EnsureDefaults(ctx, userID, workspaceID); err != nil {
 		t.Fatalf("ensure default calendars: %v", err)
 	}
 
@@ -60,14 +69,14 @@ func TestEnsureDefaultCalendars_SeedsPersonalWorkFamily(t *testing.T) {
 }
 
 func TestEnsureDefaultCalendars_NoOpWhenUserAlreadyHasCalendars(t *testing.T) {
-	calendars, userID := newTestCalendarServiceForUser(t)
+	calendars, userID, workspaceID := newTestCalendarServiceForUser(t)
 	ctx := context.Background()
 
-	if _, err := calendars.Create(ctx, userID, "existing-cal", CalendarWrite{Name: "Existing", Color: "#6B7280FF"}); err != nil {
+	if _, err := calendars.Create(ctx, userID, workspaceID, "existing-cal", CalendarWrite{Name: "Existing", Color: "#6B7280FF"}); err != nil {
 		t.Fatalf("create existing calendar: %v", err)
 	}
 
-	if err := calendars.EnsureDefaults(ctx, userID); err != nil {
+	if err := calendars.EnsureDefaults(ctx, userID, workspaceID); err != nil {
 		t.Fatalf("ensure default calendars: %v", err)
 	}
 
@@ -84,13 +93,13 @@ func TestEnsureDefaultCalendars_NoOpWhenUserAlreadyHasCalendars(t *testing.T) {
 }
 
 func TestEnsureDefaultCalendars_RepeatedCallsAreNoOps(t *testing.T) {
-	calendars, userID := newTestCalendarServiceForUser(t)
+	calendars, userID, workspaceID := newTestCalendarServiceForUser(t)
 	ctx := context.Background()
 
-	if err := calendars.EnsureDefaults(ctx, userID); err != nil {
+	if err := calendars.EnsureDefaults(ctx, userID, workspaceID); err != nil {
 		t.Fatalf("first ensure: %v", err)
 	}
-	if err := calendars.EnsureDefaults(ctx, userID); err != nil {
+	if err := calendars.EnsureDefaults(ctx, userID, workspaceID); err != nil {
 		t.Fatalf("second ensure: %v", err)
 	}
 
@@ -119,7 +128,7 @@ func TestBootstrapCreatedFlag_GatesSeedingSoDeletedCalendarsStayDeleted(t *testi
 	users := repository.NewUserRepository(sqlDB)
 	workspaces := NewWorkspaceService(sqlDB, repository.NewWorkspaceRepository(sqlDB), repository.NewWorkspaceInviteRepository(sqlDB))
 	authSvc := NewAuthService(users, repository.NewSessionRepository(sqlDB), workspaces, repository.NewWorkspaceInviteRepository(sqlDB), []byte("test-secret"), "admin", "admin", false)
-	calendarSvc := NewCalendarService(repository.NewCalendarRepository(sqlDB), repository.NewCalendarShareRepository(sqlDB), users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB))
+	calendarSvc := NewCalendarService(repository.NewCalendarRepository(sqlDB), repository.NewCalendarShareRepository(sqlDB), users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), repository.NewWorkspaceRepository(sqlDB))
 	ctx := context.Background()
 
 	user, created, err := authSvc.Bootstrap(ctx)
@@ -129,8 +138,15 @@ func TestBootstrapCreatedFlag_GatesSeedingSoDeletedCalendarsStayDeleted(t *testi
 	if !created {
 		t.Fatalf("expected the first bootstrap to report created=true")
 	}
+
+	userWorkspaces, err := workspaces.ListForUser(ctx, user.ID)
+	if err != nil || len(userWorkspaces) == 0 {
+		t.Fatalf("list user workspaces: %v", err)
+	}
+	workspaceID := userWorkspaces[0].ID
+
 	if created {
-		if err := calendarSvc.EnsureDefaults(ctx, user.ID); err != nil {
+		if err := calendarSvc.EnsureDefaults(ctx, user.ID, workspaceID); err != nil {
 			t.Fatalf("ensure default calendars: %v", err)
 		}
 	}
@@ -154,7 +170,7 @@ func TestBootstrapCreatedFlag_GatesSeedingSoDeletedCalendarsStayDeleted(t *testi
 		t.Fatalf("expected the second bootstrap to report created=false")
 	}
 	if created {
-		if err := calendarSvc.EnsureDefaults(ctx, user.ID); err != nil {
+		if err := calendarSvc.EnsureDefaults(ctx, user.ID, workspaceID); err != nil {
 			t.Fatalf("ensure default calendars: %v", err)
 		}
 	}

@@ -276,7 +276,7 @@ type preparedFile struct {
 // once every file has passed validation does it create Calendars and call
 // EventService.ImportSeries — once per file, since ImportSeries is scoped to
 // one destination Calendar and a .zip's entries each get their own.
-func (s *ImportService) Import(ctx context.Context, userID int64, filename string, data []byte, targets []ImportTarget, dryRun bool) (ImportSummary, error) {
+func (s *ImportService) Import(ctx context.Context, userID, workspaceID int64, filename string, data []byte, targets []ImportTarget, dryRun bool) (ImportSummary, error) {
 	files, isZip, err := ExtractFiles(filename, data)
 	if err != nil {
 		return ImportSummary{}, err
@@ -326,7 +326,7 @@ func (s *ImportService) Import(ctx context.Context, userID int64, filename strin
 	for _, p := range prepared {
 		calendarID := p.summary.CalendarID
 		if p.target.Action == ImportTargetNew && !dryRun {
-			calendar, err := s.calendars.Create(ctx, userID, uuid.NewString(), CalendarWrite{Name: p.summary.CalendarName, Color: p.color})
+			calendar, err := s.calendars.Create(ctx, userID, workspaceID, uuid.NewString(), CalendarWrite{Name: p.summary.CalendarName, Color: p.color})
 			if err != nil {
 				return ImportSummary{}, fmt.Errorf("create calendar %q: %w", p.summary.CalendarName, err)
 			}

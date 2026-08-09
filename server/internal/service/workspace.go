@@ -99,6 +99,19 @@ func (s *WorkspaceService) AddMemberInTx(ctx context.Context, tx *sql.Tx, worksp
 	return s.workspaces.WithTx(tx).AddMember(ctx, workspaceID, userID, role)
 }
 
+// IsMember reports whether userID belongs to workspaceID — the check
+// httpauth.RequireWorkspace runs before trusting a caller's claimed active
+// Workspace (#155, ADR-0045).
+func (s *WorkspaceService) IsMember(ctx context.Context, workspaceID, userID int64) (bool, error) {
+	if _, err := s.workspaces.GetMember(ctx, workspaceID, userID); err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			return false, nil
+		}
+		return false, fmt.Errorf("get workspace member: %w", err)
+	}
+	return true, nil
+}
+
 // ListForUser returns every Workspace userID belongs to (ADR-0044) — the
 // workspace switcher's data source.
 func (s *WorkspaceService) ListForUser(ctx context.Context, userID int64) ([]repository.Workspace, error) {

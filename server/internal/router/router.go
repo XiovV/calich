@@ -15,7 +15,7 @@ import (
 	"github.com/XiovV/calendar/server/internal/static"
 )
 
-func New(logger *slog.Logger, authHandler *handlers.AuthHandler, calendarHandler *handlers.CalendarHandler, eventHandler *handlers.EventHandler, attachmentHandler *handlers.AttachmentHandler, notificationHandler *handlers.NotificationHandler, appPasswordHandler *handlers.AppPasswordHandler, accountHandler *handlers.AccountHandler, userHandler *handlers.UserHandler, workspaceHandler *handlers.WorkspaceHandler, calDAVHandler http.Handler, authenticator httpauth.Authenticator, activeUserChecker httpauth.ActiveUserChecker, calDAVAuthenticator httpauth.CalDAVAuthenticator, adminChecker httpauth.AdminChecker) (http.Handler, error) {
+func New(logger *slog.Logger, authHandler *handlers.AuthHandler, calendarHandler *handlers.CalendarHandler, eventHandler *handlers.EventHandler, attachmentHandler *handlers.AttachmentHandler, notificationHandler *handlers.NotificationHandler, appPasswordHandler *handlers.AppPasswordHandler, accountHandler *handlers.AccountHandler, userHandler *handlers.UserHandler, workspaceHandler *handlers.WorkspaceHandler, calDAVHandler http.Handler, authenticator httpauth.Authenticator, activeUserChecker httpauth.ActiveUserChecker, calDAVAuthenticator httpauth.CalDAVAuthenticator, adminChecker httpauth.AdminChecker, workspaceMembershipChecker httpauth.WorkspaceMembershipChecker) (http.Handler, error) {
 	r := chi.NewRouter()
 	r.Use(requestLogger(logger))
 	r.Use(middleware.Recoverer)
@@ -63,12 +63,19 @@ func New(logger *slog.Logger, authHandler *handlers.AuthHandler, calendarHandler
 			r.Use(httpauth.RequireAuth(authenticator))
 			r.Use(httpauth.RequireActiveUser(activeUserChecker))
 
-			r.Get("/", calendarHandler.List)
-			r.Post("/", calendarHandler.Create)
+			// List/Create/Import/Subscribe create or read Calendars scoped to
+			// the caller's active Workspace (#155, ADR-0045) — RequireWorkspace
+			// runs after this group's RequireAuth/RequireActiveUser, which
+			// .With() on each route already guarantees. Every other
+			// /calendars/... route below operates on an already-existing
+			// Calendar, which already carries its own workspace_id, so none of
+			// them need this.
+			r.With(httpauth.RequireWorkspace(workspaceMembershipChecker)).Get("/", calendarHandler.List)
+			r.With(httpauth.RequireWorkspace(workspaceMembershipChecker)).Post("/", calendarHandler.Create)
 			r.Get("/ics", calendarHandler.ICSAll)
 			r.Get("/ics/oversized-attachments", calendarHandler.ICSAllOversizedAttachments)
-			r.Post("/import", calendarHandler.Import)
-			r.Post("/subscribe", calendarHandler.Subscribe)
+			r.With(httpauth.RequireWorkspace(workspaceMembershipChecker)).Post("/import", calendarHandler.Import)
+			r.With(httpauth.RequireWorkspace(workspaceMembershipChecker)).Post("/subscribe", calendarHandler.Subscribe)
 			r.Get("/{id}", calendarHandler.Get)
 			r.Patch("/{id}", calendarHandler.Update)
 			r.Delete("/{id}", calendarHandler.Delete)

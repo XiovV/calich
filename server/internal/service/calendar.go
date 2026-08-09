@@ -27,6 +27,11 @@ var (
 	// own Owner — ownership already grants everything a Share could, and
 	// an Owner can never hold a Share row of their own (ADR-0034).
 	ErrCannotShareWithSelf = errors.New("cannot share a calendar with its owner")
+	// ErrNotWorkspaceMember is returned by Create when the caller isn't a
+	// Member of the Workspace they're trying to create a Calendar in (#155,
+	// ADR-0045) — a Calendar's Workspace is set from the caller's active
+	// Workspace, which they must actually belong to.
+	ErrNotWorkspaceMember = errors.New("user is not a member of this workspace")
 )
 
 type CalendarService struct {
@@ -35,10 +40,24 @@ type CalendarService struct {
 	users             *repository.UserRepository
 	reminderOverrides *repository.ReminderOverrideRepository
 	colorOverrides    *repository.CalendarUserColorRepository
+	workspaces        *repository.WorkspaceRepository
 }
 
-func NewCalendarService(calendars *repository.CalendarRepository, shares *repository.CalendarShareRepository, users *repository.UserRepository, reminderOverrides *repository.ReminderOverrideRepository, colorOverrides *repository.CalendarUserColorRepository) *CalendarService {
-	return &CalendarService{calendars: calendars, shares: shares, users: users, reminderOverrides: reminderOverrides, colorOverrides: colorOverrides}
+func NewCalendarService(calendars *repository.CalendarRepository, shares *repository.CalendarShareRepository, users *repository.UserRepository, reminderOverrides *repository.ReminderOverrideRepository, colorOverrides *repository.CalendarUserColorRepository, workspaces *repository.WorkspaceRepository) *CalendarService {
+	return &CalendarService{calendars: calendars, shares: shares, users: users, reminderOverrides: reminderOverrides, colorOverrides: colorOverrides, workspaces: workspaces}
+}
+
+// requireMember refuses userID unless they're a Member of workspaceID (#155,
+// ADR-0045) — Create's guard against a caller asserting an active Workspace
+// they don't actually belong to.
+func (s *CalendarService) requireMember(ctx context.Context, userID, workspaceID int64) error {
+	if _, err := s.workspaces.GetMember(ctx, workspaceID, userID); err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			return ErrNotWorkspaceMember
+		}
+		return fmt.Errorf("get workspace member: %w", err)
+	}
+	return nil
 }
 
 // CalendarWrite is a Calendar's writable fields, gathered into one value the
@@ -73,7 +92,7 @@ func (w CalendarWrite) fields() repository.CalendarFields {
 	}
 }
 
-func (s *CalendarService) Create(ctx context.Context, userID int64, id string, write CalendarWrite) (repository.Calendar, error) {
+func (s *CalendarService) Create(ctx context.Context, userID, workspaceID int64, id string, write CalendarWrite) (repository.Calendar, error) {
 	write.Name = strings.TrimSpace(write.Name)
 	if write.Name == "" {
 		return repository.Calendar{}, ErrInvalidName
@@ -84,7 +103,11 @@ func (s *CalendarService) Create(ctx context.Context, userID int64, id string, w
 	}
 	write.Color = color
 
-	calendar, err := s.calendars.Create(ctx, userID, id, write.fields())
+	if err := s.requireMember(ctx, userID, workspaceID); err != nil {
+		return repository.Calendar{}, err
+	}
+
+	calendar, err := s.calendars.Create(ctx, userID, workspaceID, id, write.fields())
 	if err != nil {
 		return repository.Calendar{}, fmt.Errorf("create calendar: %w", err)
 	}
@@ -145,6 +168,56 @@ func (s *CalendarService) ListAccessible(ctx context.Context, userID int64) ([]C
 		return nil, fmt.Errorf("list owned calendars: %w", err)
 	}
 	shared, err := s.calendars.ListSharedWithUser(ctx, userID)
+	if err != nil {
+		return nil, fmt.Errorf("list shared calendars: %w", err)
+	}
+
+	result := make([]CalendarWithAccess, 0, len(owned)+len(shared))
+	for _, c := range owned {
+		color, err := s.resolveDisplayColor(ctx, userID, c)
+		if err != nil {
+			return nil, err
+		}
+		isOwner, ownerUsername, shareCount, err := s.OwnershipMeta(ctx, userID, c)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, CalendarWithAccess{Calendar: c, Access: ResolveAccess(userID, c, nil), Color: color, IsOwner: isOwner, OwnerUsername: ownerUsername, ShareCount: shareCount})
+	}
+	for _, c := range shared {
+		role := c.Role
+		color, err := s.resolveDisplayColor(ctx, userID, c.Calendar)
+		if err != nil {
+			return nil, err
+		}
+		isOwner, ownerUsername, shareCount, err := s.OwnershipMeta(ctx, userID, c.Calendar)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, CalendarWithAccess{Calendar: c.Calendar, Access: ResolveAccess(userID, c.Calendar, &role), Color: color, IsOwner: isOwner, OwnerUsername: ownerUsername, ShareCount: shareCount})
+	}
+
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].CreatedAt.Equal(result[j].CreatedAt) {
+			return result[i].ID < result[j].ID
+		}
+		return result[i].CreatedAt.Before(result[j].CreatedAt)
+	})
+	return result, nil
+}
+
+// ListAccessibleInWorkspace returns every Calendar userID has any Access to
+// within workspaceID — owned and shared alike, scoped to the active
+// Workspace (#155, ADR-0045) — the workspace-scoped sibling of
+// ListAccessible. This is what the web app's Calendar List endpoint calls,
+// unlike CalDAV's home-set and other cross-workspace callers, which keep
+// calling ListAccessible.
+func (s *CalendarService) ListAccessibleInWorkspace(ctx context.Context, userID, workspaceID int64) ([]CalendarWithAccess, error) {
+	owned, err := s.calendars.ListByUserAndWorkspace(ctx, userID, workspaceID)
+	if err != nil {
+		return nil, fmt.Errorf("list owned calendars: %w", err)
+	}
+	shared, err := s.calendars.ListSharedWithUserAndWorkspace(ctx, userID, workspaceID)
 	if err != nil {
 		return nil, fmt.Errorf("list shared calendars: %w", err)
 	}
@@ -536,7 +609,7 @@ var defaultCalendars = []defaultCalendar{
 // seed a genuinely fresh install should still gate the call on that signal
 // (see AuthService.Bootstrap's created return value), since a user who
 // deletes all their calendars would otherwise have them silently resurrected.
-func (s *CalendarService) EnsureDefaults(ctx context.Context, userID int64) error {
+func (s *CalendarService) EnsureDefaults(ctx context.Context, userID, workspaceID int64) error {
 	existing, err := s.List(ctx, userID)
 	if err != nil {
 		return fmt.Errorf("list calendars: %w", err)
@@ -545,8 +618,15 @@ func (s *CalendarService) EnsureDefaults(ctx context.Context, userID int64) erro
 		return nil
 	}
 
+	// Checked once here rather than left to each Create call below — every
+	// default calendar shares one workspaceID, so there's nothing more to
+	// learn by re-resolving membership three times over.
+	if err := s.requireMember(ctx, userID, workspaceID); err != nil {
+		return err
+	}
+
 	for _, d := range defaultCalendars {
-		if _, err := s.Create(ctx, userID, uuid.NewString(), CalendarWrite{Name: d.name, Color: d.color}); err != nil {
+		if _, err := s.calendars.Create(ctx, userID, workspaceID, uuid.NewString(), CalendarWrite{Name: d.name, Color: d.color}.fields()); err != nil {
 			return fmt.Errorf("create default calendar %q: %w", d.name, err)
 		}
 	}

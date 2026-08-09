@@ -49,8 +49,16 @@ func newTestLedger(t *testing.T) (ledger *repository.FiredReminderRepository, re
 	if err != nil {
 		t.Fatalf("create user: %v", err)
 	}
+	workspaces := repository.NewWorkspaceRepository(sqlDB)
+	workspace, err := workspaces.Create(ctx, "workspace-a", user.ID)
+	if err != nil {
+		t.Fatalf("create workspace: %v", err)
+	}
+	if err := workspaces.AddMember(ctx, workspace.ID, user.ID, repository.WorkspaceRoleOwner); err != nil {
+		t.Fatalf("add workspace member: %v", err)
+	}
 	calendars := repository.NewCalendarRepository(sqlDB)
-	cal, err := calendars.Create(ctx, user.ID, "cal-1", repository.CalendarFields{Name: "Personal", Color: "peacock"})
+	cal, err := calendars.Create(ctx, user.ID, workspace.ID, "cal-1", repository.CalendarFields{Name: "Personal", Color: "peacock"})
 	if err != nil {
 		t.Fatalf("create calendar: %v", err)
 	}
@@ -93,8 +101,16 @@ func newTestLedgerWithSecondUser(t *testing.T) (ledger *repository.FiredReminder
 	if err != nil {
 		t.Fatalf("create other user: %v", err)
 	}
+	workspaces := repository.NewWorkspaceRepository(sqlDB)
+	workspace, err := workspaces.Create(ctx, "workspace-a", owner.ID)
+	if err != nil {
+		t.Fatalf("create workspace: %v", err)
+	}
+	if err := workspaces.AddMember(ctx, workspace.ID, owner.ID, repository.WorkspaceRoleOwner); err != nil {
+		t.Fatalf("add workspace member: %v", err)
+	}
 	calendars := repository.NewCalendarRepository(sqlDB)
-	cal, err := calendars.Create(ctx, owner.ID, "cal-1", repository.CalendarFields{Name: "Family", Color: "peacock"})
+	cal, err := calendars.Create(ctx, owner.ID, workspace.ID, "cal-1", repository.CalendarFields{Name: "Family", Color: "peacock"})
 	if err != nil {
 		t.Fatalf("create calendar: %v", err)
 	}

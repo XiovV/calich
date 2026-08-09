@@ -32,6 +32,7 @@ const (
 type testCalDAVEnv struct {
 	srv                *httptest.Server
 	userID             int64
+	workspaceID        int64
 	calendarID         string
 	appPasswordSecret  string
 	appPasswordService *service.AppPasswordService
@@ -59,9 +60,19 @@ func newTestCalDAVEnv(t *testing.T) testCalDAVEnv {
 		t.Fatalf("bootstrap: %v", err)
 	}
 
-	calendarService := service.NewCalendarService(repository.NewCalendarRepository(sqlDB), repository.NewCalendarShareRepository(sqlDB), users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB))
+	workspaceRepo := repository.NewWorkspaceRepository(sqlDB)
+	userWorkspaces, err := workspaceRepo.ListForUser(context.Background(), user.ID)
+	if err != nil {
+		t.Fatalf("list workspaces for user: %v", err)
+	}
+	if len(userWorkspaces) == 0 {
+		t.Fatalf("expected bootstrap to create a workspace for the user")
+	}
+	workspaceID := userWorkspaces[0].ID
+
+	calendarService := service.NewCalendarService(repository.NewCalendarRepository(sqlDB), repository.NewCalendarShareRepository(sqlDB), users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo)
 	const calendarID = "cal-1"
-	if _, err := calendarService.Create(context.Background(), user.ID, calendarID, service.CalendarWrite{Name: "Personal", Color: "#12809CFF"}); err != nil {
+	if _, err := calendarService.Create(context.Background(), user.ID, workspaceID, calendarID, service.CalendarWrite{Name: "Personal", Color: "#12809CFF"}); err != nil {
 		t.Fatalf("create calendar: %v", err)
 	}
 
@@ -92,6 +103,7 @@ func newTestCalDAVEnv(t *testing.T) testCalDAVEnv {
 	return testCalDAVEnv{
 		srv:                srv,
 		userID:             user.ID,
+		workspaceID:        workspaceID,
 		calendarID:         calendarID,
 		appPasswordSecret:  created.Secret,
 		appPasswordService: appPasswordService,

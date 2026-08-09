@@ -35,7 +35,7 @@ func TestPropfind_CurrentUserPrivilegeSet_SubscribedCalendarIsReadOnly(t *testin
 	env := newTestCalDAVEnv(t)
 
 	sourceURL := "https://example.com/feed.ics"
-	subCalendar, err := env.calendarService.Create(t.Context(), env.userID, "sub-cal-1", service.CalendarWrite{
+	subCalendar, err := env.calendarService.Create(t.Context(), env.userID, env.workspaceID, "sub-cal-1", service.CalendarWrite{
 		Name: "Feed", Color: "#123456FF", SourceURL: &sourceURL,
 	})
 	if err != nil {

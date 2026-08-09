@@ -451,8 +451,28 @@ func TestUserRepository_Delete_CascadesOwnedCalendarsAndSharesGrantedToThem(t *t
 		t.Fatalf("create other: %v", err)
 	}
 
+	// The Workspace is owned by a separate User: Workspace ownership blocks
+	// deletion (ADR-0044's sole-Owner guard — owner_user_id has no ON DELETE
+	// behaviour), and this test is about a Calendar Owner's deletion cascade,
+	// not Workspace ownership, so "owner" is only a Member here.
+	workspaceOwner, err := users.Create(ctx, "workspace-owner", "hash", false)
+	if err != nil {
+		t.Fatalf("create workspace owner: %v", err)
+	}
+	workspaces := NewWorkspaceRepository(sqlDB)
+	workspace, err := workspaces.Create(ctx, "workspace-a", workspaceOwner.ID)
+	if err != nil {
+		t.Fatalf("create workspace: %v", err)
+	}
+	if err := workspaces.AddMember(ctx, workspace.ID, workspaceOwner.ID, WorkspaceRoleOwner); err != nil {
+		t.Fatalf("add workspace owner member: %v", err)
+	}
+	if err := workspaces.AddMember(ctx, workspace.ID, owner.ID, WorkspaceRoleMember); err != nil {
+		t.Fatalf("add owner as workspace member: %v", err)
+	}
+
 	calendars := NewCalendarRepository(sqlDB)
-	if _, err := calendars.Create(ctx, owner.ID, "cal-1", CalendarFields{Name: "Family", Color: "blue"}); err != nil {
+	if _, err := calendars.Create(ctx, owner.ID, workspace.ID, "cal-1", CalendarFields{Name: "Family", Color: "blue"}); err != nil {
 		t.Fatalf("create calendar: %v", err)
 	}
 
@@ -500,8 +520,17 @@ func TestUserRepository_Delete_CascadesSharesGrantedToTheDeletedUser(t *testing.
 		t.Fatalf("create holder: %v", err)
 	}
 
+	workspaces := NewWorkspaceRepository(sqlDB)
+	workspace, err := workspaces.Create(ctx, "workspace-a", owner.ID)
+	if err != nil {
+		t.Fatalf("create workspace: %v", err)
+	}
+	if err := workspaces.AddMember(ctx, workspace.ID, owner.ID, WorkspaceRoleOwner); err != nil {
+		t.Fatalf("add workspace member: %v", err)
+	}
+
 	calendars := NewCalendarRepository(sqlDB)
-	if _, err := calendars.Create(ctx, owner.ID, "cal-1", CalendarFields{Name: "Family", Color: "blue"}); err != nil {
+	if _, err := calendars.Create(ctx, owner.ID, workspace.ID, "cal-1", CalendarFields{Name: "Family", Color: "blue"}); err != nil {
 		t.Fatalf("create calendar: %v", err)
 	}
 

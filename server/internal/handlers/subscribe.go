@@ -29,7 +29,7 @@ var subscribeErrors = []errorCase{
 	{service.ErrInvalidRecurrenceRule, badRequest("recurrence rule is invalid")},
 }
 
-var subscribeCommitErrors = alsoHandling(subscribeErrors, calendarWriteErrors...)
+var subscribeCommitErrors = alsoHandling(alsoHandling(subscribeErrors, calendarWriteErrors...), workspaceMembershipErrors...)
 
 type subscribeRequest struct {
 	URL   string `json:"url"`
@@ -57,6 +57,15 @@ func (h *CalendarHandler) Subscribe(w http.ResponseWriter, r *http.Request) {
 	userID, ok := httpauth.UserIDFromContext(r.Context())
 	if !ok {
 		httpresponse.Error(w, http.StatusUnauthorized, "unauthorized", "authentication required")
+		return
+	}
+
+	// Resolved for both branches, even though only the commit path below
+	// actually needs it — cheap, and keeps this handler's shape simple
+	// (#155, ADR-0045).
+	workspaceID, ok := httpauth.WorkspaceIDFromContext(r.Context())
+	if !ok {
+		httpresponse.Error(w, http.StatusForbidden, "forbidden", "not a member of this workspace")
 		return
 	}
 
@@ -88,7 +97,7 @@ func (h *CalendarHandler) Subscribe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	calendar, err := h.subscriptions.Subscribe(r.Context(), userID, req.URL, req.Name, req.Color, req.KeepAlarms)
+	calendar, err := h.subscriptions.Subscribe(r.Context(), userID, workspaceID, req.URL, req.Name, req.Color, req.KeepAlarms)
 	if respondError(w, err, subscribeCommitErrors, "failed to subscribe to calendar") {
 		return
 	}

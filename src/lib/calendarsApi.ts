@@ -1,5 +1,6 @@
 import { authedFetch, errorFromResponse } from "./apiClient";
 import type { Calendar } from "./calendar";
+import { requireActiveWorkspaceId } from "./workspacesStore";
 
 export interface SubscriptionPreview {
   name: string;
@@ -35,6 +36,7 @@ export const calendarsApi = {
   async list(accessToken: string): Promise<Calendar[]> {
     const response = await authedFetch(accessToken, "/api/calendars/", {
       credentials: "include",
+      headers: { "X-Workspace-Id": String(requireActiveWorkspaceId()) },
     });
     if (!response.ok) throw await errorFromResponse(response);
 
@@ -48,7 +50,10 @@ export const calendarsApi = {
     const response = await authedFetch(accessToken, "/api/calendars/", {
       method: "POST",
       credentials: "include",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        "X-Workspace-Id": String(requireActiveWorkspaceId()),
+      },
       body: JSON.stringify(calendar),
     });
     if (!response.ok) throw await errorFromResponse(response);
@@ -166,7 +171,10 @@ export const calendarsApi = {
     const response = await authedFetch(accessToken, "/api/calendars/subscribe?dryRun=0", {
       method: "POST",
       credentials: "include",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        "X-Workspace-Id": String(requireActiveWorkspaceId()),
+      },
       body: JSON.stringify(subscription),
     });
     if (!response.ok) throw await errorFromResponse(response);

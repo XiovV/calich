@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
 
 	"github.com/go-chi/chi/v5"
@@ -37,9 +38,12 @@ func newReminderOverrideTestServer(t *testing.T) reminderOverrideTestServer {
 
 	users := repository.NewUserRepository(sqlDB)
 	sessions := repository.NewSessionRepository(sqlDB)
-	auth := service.NewAuthService(users, sessions, service.NewWorkspaceService(sqlDB, repository.NewWorkspaceRepository(sqlDB), repository.NewWorkspaceInviteRepository(sqlDB)), repository.NewWorkspaceInviteRepository(sqlDB), []byte("test-secret"), "owner", "hunter2", false)
+	workspaceRepo := repository.NewWorkspaceRepository(sqlDB)
+	workspaceSvc := service.NewWorkspaceService(sqlDB, workspaceRepo, repository.NewWorkspaceInviteRepository(sqlDB))
+	auth := service.NewAuthService(users, sessions, workspaceSvc, repository.NewWorkspaceInviteRepository(sqlDB), []byte("test-secret"), "owner", "hunter2", false)
 	ctx := context.Background()
-	if _, _, err := auth.Bootstrap(ctx); err != nil {
+	ownerUser, _, err := auth.Bootstrap(ctx)
+	if err != nil {
 		t.Fatalf("bootstrap: %v", err)
 	}
 	if _, err := users.Create(ctx, "other", "hash", false); err != nil {
@@ -48,9 +52,9 @@ func newReminderOverrideTestServer(t *testing.T) reminderOverrideTestServer {
 
 	calendarRepo := repository.NewCalendarRepository(sqlDB)
 	shareRepo := repository.NewCalendarShareRepository(sqlDB)
-	calendars := service.NewCalendarService(calendarRepo, shareRepo, users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB))
+	calendars := service.NewCalendarService(calendarRepo, shareRepo, users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo)
 	appPasswords := service.NewAppPasswordService(repository.NewAppPasswordRepository(sqlDB), users)
-	accounts := service.NewAccountService(sqlDB, users, sessions, calendarRepo, shareRepo, calendars, appPasswords, nil)
+	accounts := service.NewAccountService(sqlDB, users, sessions, calendarRepo, shareRepo, calendars, appPasswords, nil, workspaceSvc)
 	if _, err := accounts.ResetPassword(ctx, 2, "temp-password"); err != nil {
 		t.Fatalf("reset other user's password: %v", err)
 	}
@@ -64,6 +68,12 @@ func newReminderOverrideTestServer(t *testing.T) reminderOverrideTestServer {
 		t.Fatalf("other login: %v", err)
 	}
 
+	ownerWorkspaces, err := workspaceSvc.ListForUser(ctx, ownerUser.ID)
+	if err != nil || len(ownerWorkspaces) == 0 {
+		t.Fatalf("list owner's workspaces: %v", err)
+	}
+	ownerWorkspaceID := strconv.FormatInt(ownerWorkspaces[0].ID, 10)
+
 	events := service.NewEventService(sqlDB, repository.NewEventRepository(sqlDB), repository.NewEventExceptionRepository(sqlDB), repository.NewEventReminderRepository(sqlDB), repository.NewReminderOverrideRepository(sqlDB), repository.NewSyncRepository(sqlDB), calendars, users, repository.NewAttachmentRepository(sqlDB))
 	attachmentStore := attachmentstore.New(t.TempDir())
 	imports := service.NewImportService(events, calendars, attachmentStore, testMaxAttachmentSize, testMaxAttachmentsPerEvent)
@@ -76,7 +86,7 @@ func newReminderOverrideTestServer(t *testing.T) reminderOverrideTestServer {
 		r.Use(httpauth.RequireAuth(auth))
 
 		r.Route("/calendars", func(r chi.Router) {
-			r.Post("/", calendarHandler.Create)
+			r.With(httpauth.RequireWorkspace(workspaceSvc)).Post("/", calendarHandler.Create)
 			r.Post("/{id}/shares", calendarHandler.Share)
 			r.Delete("/{id}/shares/{userId}", calendarHandler.RevokeShare)
 			r.Post("/{id}/leave", calendarHandler.LeaveShare)
@@ -94,7 +104,7 @@ func newReminderOverrideTestServer(t *testing.T) reminderOverrideTestServer {
 	srv := httptest.NewServer(r)
 	t.Cleanup(srv.Close)
 
-	calResp := createCalendar(t, srv.URL, ownerLogin.AccessToken, "11111111-1111-1111-1111-111111111111", "Family", "#12809CFF")
+	calResp := createCalendar(t, srv.URL, ownerLogin.AccessToken, ownerWorkspaceID, "11111111-1111-1111-1111-111111111111", "Family", "#12809CFF")
 	if calResp.StatusCode != http.StatusCreated {
 		t.Fatalf("create calendar: expected 201, got %d", calResp.StatusCode)
 	}

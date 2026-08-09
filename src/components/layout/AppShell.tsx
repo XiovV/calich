@@ -24,18 +24,22 @@ export function AppShell() {
     (state) => state.reconcileCheckedCalendarIds,
   );
   const fetchWorkspaces = useWorkspacesStore((state) => state.fetchWorkspaces);
+  const activeWorkspaceId = useWorkspacesStore((state) => state.activeWorkspaceId);
 
   useEffect(() => {
     fetchWorkspaces();
   }, [fetchWorkspaces]);
 
   useEffect(() => {
-    // Refetches on mount and whenever the tab regains focus, so a Share
-    // granted or revoked while it was in the background is reflected without
-    // a reload (#116). reconcileCheckedCalendarIds (rather than replacing the
-    // checked set outright) is what keeps a deliberately-unchecked Calendar
-    // unchecked across a later refetch while still auto-checking one seen
-    // for the first time.
+    // Refetches on mount, whenever the tab regains focus (so a Share granted
+    // or revoked while it was in the background is reflected without a
+    // reload, #116), and whenever the active Workspace changes (#155,
+    // ADR-0045) — switching Workspaces must change the visible Calendar list
+    // without a reload, same as any other externally-caused change to it.
+    // reconcileCheckedCalendarIds (rather than replacing the checked set
+    // outright) is what keeps a deliberately-unchecked Calendar unchecked
+    // across a later refetch while still auto-checking one seen for the
+    // first time.
     function refetch() {
       fetchCalendars().then(() => {
         reconcileCheckedCalendarIds(
@@ -45,6 +49,7 @@ export function AppShell() {
       fetchEvents();
     }
 
+    if (activeWorkspaceId === null) return;
     refetch();
 
     function handleVisibilityChange() {
@@ -53,7 +58,7 @@ export function AppShell() {
     document.addEventListener("visibilitychange", handleVisibilityChange);
     return () =>
       document.removeEventListener("visibilitychange", handleVisibilityChange);
-  }, [fetchCalendars, fetchEvents, reconcileCheckedCalendarIds]);
+  }, [fetchCalendars, fetchEvents, reconcileCheckedCalendarIds, activeWorkspaceId]);
 
   function handleCreateClick() {
     const draft = computeDefaultDraft(new Date());

@@ -13,7 +13,7 @@ import (
 // ids to satisfy calendars.user_id's foreign key — SQLite enforces it, so
 // tests can't use arbitrary literal ids the way they could before FK
 // enforcement was turned on.
-func newTestCalendarRepository(t *testing.T) (repo *CalendarRepository, userID, otherUserID int64) {
+func newTestCalendarRepository(t *testing.T) (repo *CalendarRepository, userID, otherUserID, workspaceID, otherWorkspaceID int64) {
 	t.Helper()
 
 	sqlDB, err := db.OpenInMemory()
@@ -21,30 +21,47 @@ func newTestCalendarRepository(t *testing.T) (repo *CalendarRepository, userID, 
 		t.Fatalf("open in-memory db: %v", err)
 	}
 	t.Cleanup(func() { sqlDB.Close() })
+	ctx := context.Background()
 
 	users := NewUserRepository(sqlDB)
-	user, err := users.Create(context.Background(), "user-a", "hash", false)
+	user, err := users.Create(ctx, "user-a", "hash", false)
 	if err != nil {
 		t.Fatalf("create user: %v", err)
 	}
-	other, err := users.Create(context.Background(), "user-b", "hash", false)
+	other, err := users.Create(ctx, "user-b", "hash", false)
 	if err != nil {
 		t.Fatalf("create other user: %v", err)
 	}
 
-	return NewCalendarRepository(sqlDB), user.ID, other.ID
+	workspaces := NewWorkspaceRepository(sqlDB)
+	workspace, err := workspaces.Create(ctx, "workspace-a", user.ID)
+	if err != nil {
+		t.Fatalf("create workspace: %v", err)
+	}
+	if err := workspaces.AddMember(ctx, workspace.ID, user.ID, WorkspaceRoleOwner); err != nil {
+		t.Fatalf("add workspace member: %v", err)
+	}
+	otherWorkspace, err := workspaces.Create(ctx, "workspace-b", other.ID)
+	if err != nil {
+		t.Fatalf("create other workspace: %v", err)
+	}
+	if err := workspaces.AddMember(ctx, otherWorkspace.ID, other.ID, WorkspaceRoleOwner); err != nil {
+		t.Fatalf("add other workspace member: %v", err)
+	}
+
+	return NewCalendarRepository(sqlDB), user.ID, other.ID, workspace.ID, otherWorkspace.ID
 }
 
 func TestCalendarRepository_CreateAndGetByID(t *testing.T) {
-	repo, userID, _ := newTestCalendarRepository(t)
+	repo, userID, _, workspaceID, _ := newTestCalendarRepository(t)
 	ctx := context.Background()
 
-	created, err := repo.Create(ctx, userID, "cal-1", CalendarFields{Name: "Personal", Color: "peacock"})
+	created, err := repo.Create(ctx, userID, workspaceID, "cal-1", CalendarFields{Name: "Personal", Color: "peacock"})
 	if err != nil {
 		t.Fatalf("create calendar: %v", err)
 	}
 
-	if created != (Calendar{ID: "cal-1", UserID: userID, Name: "Personal", Color: "peacock", CreatedAt: created.CreatedAt}) {
+	if created != (Calendar{ID: "cal-1", UserID: userID, WorkspaceID: workspaceID, Name: "Personal", Color: "peacock", CreatedAt: created.CreatedAt}) {
 		t.Fatalf("unexpected created calendar: %+v", created)
 	}
 
@@ -58,7 +75,7 @@ func TestCalendarRepository_CreateAndGetByID(t *testing.T) {
 }
 
 func TestCalendarRepository_GetByID_NotFound(t *testing.T) {
-	repo, userID, _ := newTestCalendarRepository(t)
+	repo, userID, _, _, _ := newTestCalendarRepository(t)
 
 	_, err := repo.GetByID(context.Background(), userID, "nope")
 	if !errors.Is(err, ErrNotFound) {
@@ -67,10 +84,10 @@ func TestCalendarRepository_GetByID_NotFound(t *testing.T) {
 }
 
 func TestCalendarRepository_GetByID_ScopedToUser(t *testing.T) {
-	repo, userID, otherUserID := newTestCalendarRepository(t)
+	repo, userID, otherUserID, workspaceID, _ := newTestCalendarRepository(t)
 	ctx := context.Background()
 
-	if _, err := repo.Create(ctx, userID, "cal-1", CalendarFields{Name: "Personal", Color: "peacock"}); err != nil {
+	if _, err := repo.Create(ctx, userID, workspaceID, "cal-1", CalendarFields{Name: "Personal", Color: "peacock"}); err != nil {
 		t.Fatalf("create calendar: %v", err)
 	}
 
@@ -81,16 +98,16 @@ func TestCalendarRepository_GetByID_ScopedToUser(t *testing.T) {
 }
 
 func TestCalendarRepository_ListByUser(t *testing.T) {
-	repo, userID, otherUserID := newTestCalendarRepository(t)
+	repo, userID, otherUserID, workspaceID, otherWorkspaceID := newTestCalendarRepository(t)
 	ctx := context.Background()
 
-	if _, err := repo.Create(ctx, userID, "cal-1", CalendarFields{Name: "Personal", Color: "peacock"}); err != nil {
+	if _, err := repo.Create(ctx, userID, workspaceID, "cal-1", CalendarFields{Name: "Personal", Color: "peacock"}); err != nil {
 		t.Fatalf("create calendar 1: %v", err)
 	}
-	if _, err := repo.Create(ctx, userID, "cal-2", CalendarFields{Name: "Work", Color: "tomato"}); err != nil {
+	if _, err := repo.Create(ctx, userID, workspaceID, "cal-2", CalendarFields{Name: "Work", Color: "tomato"}); err != nil {
 		t.Fatalf("create calendar 2: %v", err)
 	}
-	if _, err := repo.Create(ctx, otherUserID, "cal-3", CalendarFields{Name: "Other user", Color: "sage"}); err != nil {
+	if _, err := repo.Create(ctx, otherUserID, otherWorkspaceID, "cal-3", CalendarFields{Name: "Other user", Color: "sage"}); err != nil {
 		t.Fatalf("create calendar for other user: %v", err)
 	}
 
@@ -108,10 +125,10 @@ func TestCalendarRepository_ListByUser(t *testing.T) {
 }
 
 func TestCalendarRepository_Update(t *testing.T) {
-	repo, userID, _ := newTestCalendarRepository(t)
+	repo, userID, _, workspaceID, _ := newTestCalendarRepository(t)
 	ctx := context.Background()
 
-	if _, err := repo.Create(ctx, userID, "cal-1", CalendarFields{Name: "Personal", Color: "peacock"}); err != nil {
+	if _, err := repo.Create(ctx, userID, workspaceID, "cal-1", CalendarFields{Name: "Personal", Color: "peacock"}); err != nil {
 		t.Fatalf("create calendar: %v", err)
 	}
 
@@ -125,7 +142,7 @@ func TestCalendarRepository_Update(t *testing.T) {
 }
 
 func TestCalendarRepository_Update_NotFound(t *testing.T) {
-	repo, userID, _ := newTestCalendarRepository(t)
+	repo, userID, _, _, _ := newTestCalendarRepository(t)
 
 	_, err := repo.Update(context.Background(), userID, "nope", CalendarFields{Name: "Renamed", Color: "tomato"})
 	if !errors.Is(err, ErrNotFound) {
@@ -134,10 +151,10 @@ func TestCalendarRepository_Update_NotFound(t *testing.T) {
 }
 
 func TestCalendarRepository_Update_ScopedToUser(t *testing.T) {
-	repo, userID, otherUserID := newTestCalendarRepository(t)
+	repo, userID, otherUserID, workspaceID, _ := newTestCalendarRepository(t)
 	ctx := context.Background()
 
-	if _, err := repo.Create(ctx, userID, "cal-1", CalendarFields{Name: "Personal", Color: "peacock"}); err != nil {
+	if _, err := repo.Create(ctx, userID, workspaceID, "cal-1", CalendarFields{Name: "Personal", Color: "peacock"}); err != nil {
 		t.Fatalf("create calendar: %v", err)
 	}
 
@@ -148,11 +165,11 @@ func TestCalendarRepository_Update_ScopedToUser(t *testing.T) {
 }
 
 func TestCalendarRepository_UpdateKeepAlarms(t *testing.T) {
-	repo, userID, _ := newTestCalendarRepository(t)
+	repo, userID, _, workspaceID, _ := newTestCalendarRepository(t)
 	ctx := context.Background()
 	sourceURL := "https://example.com/feed.ics"
 
-	if _, err := repo.Create(ctx, userID, "cal-1", CalendarFields{Name: "Feed", Color: "peacock", SourceURL: &sourceURL}); err != nil {
+	if _, err := repo.Create(ctx, userID, workspaceID, "cal-1", CalendarFields{Name: "Feed", Color: "peacock", SourceURL: &sourceURL}); err != nil {
 		t.Fatalf("create calendar: %v", err)
 	}
 
@@ -174,7 +191,7 @@ func TestCalendarRepository_UpdateKeepAlarms(t *testing.T) {
 }
 
 func TestCalendarRepository_UpdateKeepAlarms_NotFound(t *testing.T) {
-	repo, userID, _ := newTestCalendarRepository(t)
+	repo, userID, _, _, _ := newTestCalendarRepository(t)
 
 	_, err := repo.UpdateKeepAlarms(context.Background(), userID, "nope", true)
 	if !errors.Is(err, ErrNotFound) {
@@ -183,11 +200,11 @@ func TestCalendarRepository_UpdateKeepAlarms_NotFound(t *testing.T) {
 }
 
 func TestCalendarRepository_UpdateKeepAlarms_ScopedToUser(t *testing.T) {
-	repo, userID, otherUserID := newTestCalendarRepository(t)
+	repo, userID, otherUserID, workspaceID, _ := newTestCalendarRepository(t)
 	ctx := context.Background()
 	sourceURL := "https://example.com/feed.ics"
 
-	if _, err := repo.Create(ctx, userID, "cal-1", CalendarFields{Name: "Feed", Color: "peacock", SourceURL: &sourceURL}); err != nil {
+	if _, err := repo.Create(ctx, userID, workspaceID, "cal-1", CalendarFields{Name: "Feed", Color: "peacock", SourceURL: &sourceURL}); err != nil {
 		t.Fatalf("create calendar: %v", err)
 	}
 
@@ -198,10 +215,10 @@ func TestCalendarRepository_UpdateKeepAlarms_ScopedToUser(t *testing.T) {
 }
 
 func TestCalendarRepository_RecordRefreshSuccess(t *testing.T) {
-	repo, userID, _ := newTestCalendarRepository(t)
+	repo, userID, _, workspaceID, _ := newTestCalendarRepository(t)
 	ctx := context.Background()
 
-	if _, err := repo.Create(ctx, userID, "cal-1", CalendarFields{Name: "Feed", Color: "peacock"}); err != nil {
+	if _, err := repo.Create(ctx, userID, workspaceID, "cal-1", CalendarFields{Name: "Feed", Color: "peacock"}); err != nil {
 		t.Fatalf("create calendar: %v", err)
 	}
 	if err := repo.RecordRefreshFailure(ctx, userID, "cal-1", RefreshFailure{
@@ -260,11 +277,11 @@ func TestCalendarRepository_RecordRefreshSuccess(t *testing.T) {
 }
 
 func TestCalendarRepository_UpdateSourceURL(t *testing.T) {
-	repo, userID, _ := newTestCalendarRepository(t)
+	repo, userID, _, workspaceID, _ := newTestCalendarRepository(t)
 	ctx := context.Background()
 	sourceURL := "https://old.example.com/feed.ics"
 
-	created, err := repo.Create(ctx, userID, "cal-1", CalendarFields{Name: "Feed", Color: "peacock", SourceURL: &sourceURL})
+	created, err := repo.Create(ctx, userID, workspaceID, "cal-1", CalendarFields{Name: "Feed", Color: "peacock", SourceURL: &sourceURL})
 	if err != nil {
 		t.Fatalf("create calendar: %v", err)
 	}
@@ -291,7 +308,7 @@ func TestCalendarRepository_UpdateSourceURL(t *testing.T) {
 }
 
 func TestCalendarRepository_UpdateSourceURL_NotFound(t *testing.T) {
-	repo, userID, _ := newTestCalendarRepository(t)
+	repo, userID, _, _, _ := newTestCalendarRepository(t)
 
 	_, err := repo.UpdateSourceURL(context.Background(), userID, "nope", "https://example.com/feed.ics")
 	if !errors.Is(err, ErrNotFound) {
@@ -300,11 +317,11 @@ func TestCalendarRepository_UpdateSourceURL_NotFound(t *testing.T) {
 }
 
 func TestCalendarRepository_UpdateSourceURL_ScopedToUser(t *testing.T) {
-	repo, userID, otherUserID := newTestCalendarRepository(t)
+	repo, userID, otherUserID, workspaceID, _ := newTestCalendarRepository(t)
 	ctx := context.Background()
 	sourceURL := "https://example.com/feed.ics"
 
-	if _, err := repo.Create(ctx, userID, "cal-1", CalendarFields{Name: "Feed", Color: "peacock", SourceURL: &sourceURL}); err != nil {
+	if _, err := repo.Create(ctx, userID, workspaceID, "cal-1", CalendarFields{Name: "Feed", Color: "peacock", SourceURL: &sourceURL}); err != nil {
 		t.Fatalf("create calendar: %v", err)
 	}
 
@@ -315,7 +332,7 @@ func TestCalendarRepository_UpdateSourceURL_ScopedToUser(t *testing.T) {
 }
 
 func TestCalendarRepository_RecordRefreshSuccess_NotFound(t *testing.T) {
-	repo, userID, _ := newTestCalendarRepository(t)
+	repo, userID, _, _, _ := newTestCalendarRepository(t)
 
 	err := repo.RecordRefreshSuccess(context.Background(), userID, "nope", RefreshSuccess{SyncedAt: time.Now()})
 	if !errors.Is(err, ErrNotFound) {
@@ -324,10 +341,10 @@ func TestCalendarRepository_RecordRefreshSuccess_NotFound(t *testing.T) {
 }
 
 func TestCalendarRepository_RecordRefreshFailure(t *testing.T) {
-	repo, userID, _ := newTestCalendarRepository(t)
+	repo, userID, _, workspaceID, _ := newTestCalendarRepository(t)
 	ctx := context.Background()
 
-	if _, err := repo.Create(ctx, userID, "cal-1", CalendarFields{Name: "Feed", Color: "peacock"}); err != nil {
+	if _, err := repo.Create(ctx, userID, workspaceID, "cal-1", CalendarFields{Name: "Feed", Color: "peacock"}); err != nil {
 		t.Fatalf("create calendar: %v", err)
 	}
 
@@ -357,7 +374,7 @@ func TestCalendarRepository_RecordRefreshFailure(t *testing.T) {
 }
 
 func TestCalendarRepository_RecordRefreshFailure_NotFound(t *testing.T) {
-	repo, userID, _ := newTestCalendarRepository(t)
+	repo, userID, _, _, _ := newTestCalendarRepository(t)
 
 	err := repo.RecordRefreshFailure(context.Background(), userID, "nope", RefreshFailure{ErrorClass: "retrying", ErrorMessage: "x", FailureCount: 1, NextRefreshAt: time.Now()})
 	if !errors.Is(err, ErrNotFound) {
@@ -366,19 +383,19 @@ func TestCalendarRepository_RecordRefreshFailure_NotFound(t *testing.T) {
 }
 
 func TestCalendarRepository_ListDueForRefresh(t *testing.T) {
-	repo, userID, _ := newTestCalendarRepository(t)
+	repo, userID, _, workspaceID, _ := newTestCalendarRepository(t)
 	ctx := context.Background()
 
 	sourceURL := "https://example.com/feed.ics"
-	due, err := repo.Create(ctx, userID, "cal-due", CalendarFields{Name: "Due", Color: "peacock", SourceURL: &sourceURL})
+	due, err := repo.Create(ctx, userID, workspaceID, "cal-due", CalendarFields{Name: "Due", Color: "peacock", SourceURL: &sourceURL})
 	if err != nil {
 		t.Fatalf("create due calendar: %v", err)
 	}
-	notYetDue, err := repo.Create(ctx, userID, "cal-not-due", CalendarFields{Name: "Not due", Color: "peacock", SourceURL: &sourceURL})
+	notYetDue, err := repo.Create(ctx, userID, workspaceID, "cal-not-due", CalendarFields{Name: "Not due", Color: "peacock", SourceURL: &sourceURL})
 	if err != nil {
 		t.Fatalf("create not-due calendar: %v", err)
 	}
-	if _, err := repo.Create(ctx, userID, "cal-ordinary", CalendarFields{Name: "Ordinary", Color: "peacock"}); err != nil {
+	if _, err := repo.Create(ctx, userID, workspaceID, "cal-ordinary", CalendarFields{Name: "Ordinary", Color: "peacock"}); err != nil {
 		t.Fatalf("create ordinary calendar: %v", err)
 	}
 
@@ -400,10 +417,10 @@ func TestCalendarRepository_ListDueForRefresh(t *testing.T) {
 }
 
 func TestCalendarRepository_Delete(t *testing.T) {
-	repo, userID, _ := newTestCalendarRepository(t)
+	repo, userID, _, workspaceID, _ := newTestCalendarRepository(t)
 	ctx := context.Background()
 
-	if _, err := repo.Create(ctx, userID, "cal-1", CalendarFields{Name: "Personal", Color: "peacock"}); err != nil {
+	if _, err := repo.Create(ctx, userID, workspaceID, "cal-1", CalendarFields{Name: "Personal", Color: "peacock"}); err != nil {
 		t.Fatalf("create calendar: %v", err)
 	}
 
@@ -418,7 +435,7 @@ func TestCalendarRepository_Delete(t *testing.T) {
 }
 
 func TestCalendarRepository_Delete_NotFound(t *testing.T) {
-	repo, userID, _ := newTestCalendarRepository(t)
+	repo, userID, _, _, _ := newTestCalendarRepository(t)
 
 	err := repo.Delete(context.Background(), userID, "nope")
 	if !errors.Is(err, ErrNotFound) {
@@ -427,10 +444,10 @@ func TestCalendarRepository_Delete_NotFound(t *testing.T) {
 }
 
 func TestCalendarRepository_Delete_ScopedToUser(t *testing.T) {
-	repo, userID, otherUserID := newTestCalendarRepository(t)
+	repo, userID, otherUserID, workspaceID, _ := newTestCalendarRepository(t)
 	ctx := context.Background()
 
-	if _, err := repo.Create(ctx, userID, "cal-1", CalendarFields{Name: "Personal", Color: "peacock"}); err != nil {
+	if _, err := repo.Create(ctx, userID, workspaceID, "cal-1", CalendarFields{Name: "Personal", Color: "peacock"}); err != nil {
 		t.Fatalf("create calendar: %v", err)
 	}
 
@@ -445,13 +462,13 @@ func TestCalendarRepository_Delete_ScopedToUser(t *testing.T) {
 }
 
 func TestCalendarRepository_TransferOwnership(t *testing.T) {
-	repo, userID, otherUserID := newTestCalendarRepository(t)
+	repo, userID, otherUserID, workspaceID, _ := newTestCalendarRepository(t)
 	ctx := context.Background()
 
-	if _, err := repo.Create(ctx, userID, "cal-1", CalendarFields{Name: "Personal", Color: "peacock"}); err != nil {
+	if _, err := repo.Create(ctx, userID, workspaceID, "cal-1", CalendarFields{Name: "Personal", Color: "peacock"}); err != nil {
 		t.Fatalf("create cal-1: %v", err)
 	}
-	if _, err := repo.Create(ctx, userID, "cal-2", CalendarFields{Name: "Family", Color: "blue"}); err != nil {
+	if _, err := repo.Create(ctx, userID, workspaceID, "cal-2", CalendarFields{Name: "Family", Color: "blue"}); err != nil {
 		t.Fatalf("create cal-2: %v", err)
 	}
 
@@ -475,7 +492,7 @@ func TestCalendarRepository_TransferOwnership(t *testing.T) {
 }
 
 func TestCalendarRepository_TransferOwnership_NoopWhenOwnerHasNoCalendars(t *testing.T) {
-	repo, userID, otherUserID := newTestCalendarRepository(t)
+	repo, userID, otherUserID, _, _ := newTestCalendarRepository(t)
 
 	if err := repo.TransferOwnership(context.Background(), userID, otherUserID); err != nil {
 		t.Fatalf("expected no error transferring an empty set of calendars, got %v", err)
@@ -501,12 +518,21 @@ func TestCalendarRepository_ListSharedWithUser(t *testing.T) {
 		t.Fatalf("create other user: %v", err)
 	}
 
+	workspaces := NewWorkspaceRepository(sqlDB)
+	workspace, err := workspaces.Create(ctx, "workspace-a", owner.ID)
+	if err != nil {
+		t.Fatalf("create workspace: %v", err)
+	}
+	if err := workspaces.AddMember(ctx, workspace.ID, owner.ID, WorkspaceRoleOwner); err != nil {
+		t.Fatalf("add workspace member: %v", err)
+	}
+
 	repo := NewCalendarRepository(sqlDB)
-	owned, err := repo.Create(ctx, owner.ID, "cal-owned", CalendarFields{Name: "Personal", Color: "peacock"})
+	owned, err := repo.Create(ctx, owner.ID, workspace.ID, "cal-owned", CalendarFields{Name: "Personal", Color: "peacock"})
 	if err != nil {
 		t.Fatalf("create owned calendar: %v", err)
 	}
-	shared, err := repo.Create(ctx, owner.ID, "cal-shared", CalendarFields{Name: "Family", Color: "sage"})
+	shared, err := repo.Create(ctx, owner.ID, workspace.ID, "cal-shared", CalendarFields{Name: "Family", Color: "sage"})
 	if err != nil {
 		t.Fatalf("create shared calendar: %v", err)
 	}

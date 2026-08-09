@@ -57,8 +57,17 @@ func newAttachmentTestFixture(t *testing.T, maxPerEvent int) attachmentTestFixtu
 		t.Fatalf("create stranger: %v", err)
 	}
 
-	calendars := NewCalendarService(repository.NewCalendarRepository(sqlDB), repository.NewCalendarShareRepository(sqlDB), users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB))
-	cal, err := calendars.Create(ctx, owner.ID, "cal-1", CalendarWrite{Name: "Family", Color: "#12809CFF"})
+	workspaceRepo := repository.NewWorkspaceRepository(sqlDB)
+	workspace, err := workspaceRepo.Create(ctx, "Test Workspace", owner.ID)
+	if err != nil {
+		t.Fatalf("create workspace: %v", err)
+	}
+	if err := workspaceRepo.AddMember(ctx, workspace.ID, owner.ID, repository.WorkspaceRoleOwner); err != nil {
+		t.Fatalf("add workspace member: %v", err)
+	}
+
+	calendars := NewCalendarService(repository.NewCalendarRepository(sqlDB), repository.NewCalendarShareRepository(sqlDB), users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo)
+	cal, err := calendars.Create(ctx, owner.ID, workspace.ID, "cal-1", CalendarWrite{Name: "Family", Color: "#12809CFF"})
 	if err != nil {
 		t.Fatalf("create calendar: %v", err)
 	}
@@ -278,14 +287,23 @@ func TestAttachmentService_Upload_SubscribedCalendarRefused(t *testing.T) {
 		t.Fatalf("create owner: %v", err)
 	}
 
+	workspaceRepo := repository.NewWorkspaceRepository(sqlDB)
+	workspace, err := workspaceRepo.Create(ctx, "Test Workspace", owner.ID)
+	if err != nil {
+		t.Fatalf("create workspace: %v", err)
+	}
+	if err := workspaceRepo.AddMember(ctx, workspace.ID, owner.ID, repository.WorkspaceRoleOwner); err != nil {
+		t.Fatalf("add workspace member: %v", err)
+	}
+
 	calendarRepo := repository.NewCalendarRepository(sqlDB)
 	sourceURL := "https://example.com/feed.ics"
-	cal, err := calendarRepo.Create(ctx, owner.ID, "cal-1", repository.CalendarFields{Name: "Feed", Color: "peacock", SourceURL: &sourceURL})
+	cal, err := calendarRepo.Create(ctx, owner.ID, workspace.ID, "cal-1", repository.CalendarFields{Name: "Feed", Color: "peacock", SourceURL: &sourceURL})
 	if err != nil {
 		t.Fatalf("create subscribed calendar: %v", err)
 	}
 
-	calendars := NewCalendarService(calendarRepo, repository.NewCalendarShareRepository(sqlDB), users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB))
+	calendars := NewCalendarService(calendarRepo, repository.NewCalendarShareRepository(sqlDB), users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo)
 	attachmentsRepo := repository.NewAttachmentRepository(sqlDB)
 	eventsRepo := repository.NewEventRepository(sqlDB)
 	events := NewEventService(sqlDB, eventsRepo, repository.NewEventExceptionRepository(sqlDB), repository.NewEventReminderRepository(sqlDB), repository.NewReminderOverrideRepository(sqlDB), repository.NewSyncRepository(sqlDB), calendars, users, attachmentsRepo)

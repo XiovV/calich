@@ -163,7 +163,7 @@ func (s *SubscribeService) Preview(ctx context.Context, userID int64, rawURL str
 // is the Subscription's opt-in to honouring the feed's VALARMs on both
 // Channels, off by default — the dialog offering it must state plainly
 // that this includes email alarms the instance will send (#87, ADR-0032).
-func (s *SubscribeService) Subscribe(ctx context.Context, userID int64, rawURL, name, color string, keepAlarms bool) (repository.Calendar, error) {
+func (s *SubscribeService) Subscribe(ctx context.Context, userID, workspaceID int64, rawURL, name, color string, keepAlarms bool) (repository.Calendar, error) {
 	writes, parsed, normalized, err := s.fetchAndParse(ctx, rawURL, keepAlarms)
 	if err != nil {
 		return repository.Calendar{}, err
@@ -183,7 +183,7 @@ func (s *SubscribeService) Subscribe(ctx context.Context, userID int64, rawURL, 
 		feedColor = &normalizedFeedColor
 	}
 
-	calendar, err := s.calendars.Create(ctx, userID, uuid.NewString(), CalendarWrite{
+	calendar, err := s.calendars.Create(ctx, userID, workspaceID, uuid.NewString(), CalendarWrite{
 		Name:       name,
 		Color:      color,
 		SourceURL:  &normalized,

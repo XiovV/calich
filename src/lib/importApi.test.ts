@@ -1,6 +1,7 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "./apiClient";
 import { importApi } from "./importApi";
+import { useWorkspacesStore } from "./workspacesStore";
 
 function jsonResponse(status: number, body: unknown): Response {
   return new Response(JSON.stringify(body), {
@@ -27,8 +28,13 @@ const wireSummary = {
   ],
 };
 
+beforeEach(() => {
+  useWorkspacesStore.setState({ activeWorkspaceId: 7 });
+});
+
 afterEach(() => {
   vi.unstubAllGlobals();
+  useWorkspacesStore.setState({ activeWorkspaceId: null });
 });
 
 describe("importApi.preview", () => {
@@ -61,7 +67,7 @@ describe("importApi.preview", () => {
     expect(url).toBe("/api/calendars/import?dryRun=1");
     expect(init.method).toBe("POST");
     expect(init.credentials).toBe("include");
-    expect(init.headers).toEqual({ Authorization: "Bearer token-123" });
+    expect(init.headers).toEqual({ Authorization: "Bearer token-123", "X-Workspace-Id": "7" });
 
     const body = init.body as FormData;
     expect(body.get("file")).toBeInstanceOf(File);

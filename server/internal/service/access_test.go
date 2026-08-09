@@ -137,9 +137,18 @@ func TestCalendarService_Access(t *testing.T) {
 		t.Fatalf("create stranger: %v", err)
 	}
 
-	svc := NewCalendarService(repository.NewCalendarRepository(sqlDB), repository.NewCalendarShareRepository(sqlDB), users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB))
+	workspaceRepo := repository.NewWorkspaceRepository(sqlDB)
+	workspace, err := workspaceRepo.Create(context.Background(), "Test Workspace", owner.ID)
+	if err != nil {
+		t.Fatalf("create workspace: %v", err)
+	}
+	if err := workspaceRepo.AddMember(context.Background(), workspace.ID, owner.ID, repository.WorkspaceRoleOwner); err != nil {
+		t.Fatalf("add workspace member: %v", err)
+	}
+
+	svc := NewCalendarService(repository.NewCalendarRepository(sqlDB), repository.NewCalendarShareRepository(sqlDB), users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo)
 	ctx := context.Background()
-	calendar, err := svc.Create(ctx, owner.ID, "cal-1", CalendarWrite{Name: "Personal", Color: "#12809CFF"})
+	calendar, err := svc.Create(ctx, owner.ID, workspace.ID, "cal-1", CalendarWrite{Name: "Personal", Color: "#12809CFF"})
 	if err != nil {
 		t.Fatalf("create calendar: %v", err)
 	}
@@ -151,7 +160,7 @@ func TestCalendarService_Access(t *testing.T) {
 		t.Fatalf("stranger Access = %v, %v; want AccessNone, nil err", access, err)
 	}
 
-	subscribed, err := svc.Create(ctx, owner.ID, "cal-2", CalendarWrite{Name: "Feed", Color: "#12809CFF", SourceURL: strPtr("https://example.com/feed.ics")})
+	subscribed, err := svc.Create(ctx, owner.ID, workspace.ID, "cal-2", CalendarWrite{Name: "Feed", Color: "#12809CFF", SourceURL: strPtr("https://example.com/feed.ics")})
 	if err != nil {
 		t.Fatalf("create subscribed calendar: %v", err)
 	}

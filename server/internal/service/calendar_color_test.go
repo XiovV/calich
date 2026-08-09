@@ -244,10 +244,10 @@ func TestCalendarService_ListAccessible_ResolvesColorPerCaller(t *testing.T) {
 // resolved colour is simply the Calendar's stored colour, with no override
 // machinery in play.
 func TestCalendarService_UnsharedCalendar_ResolvedColorIsJustTheCalendarsColor(t *testing.T) {
-	svc, userID := newTestCalendarService(t)
+	svc, userID, workspaceID := newTestCalendarService(t)
 	ctx := context.Background()
 
-	if _, err := svc.Create(ctx, userID, "cal-1", CalendarWrite{Name: "Personal", Color: "#12809CFF"}); err != nil {
+	if _, err := svc.Create(ctx, userID, workspaceID, "cal-1", CalendarWrite{Name: "Personal", Color: "#12809CFF"}); err != nil {
 		t.Fatalf("create: %v", err)
 	}
 

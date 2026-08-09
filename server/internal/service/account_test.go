@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"strings"
 	"testing"
@@ -10,6 +11,27 @@ import (
 	"github.com/XiovV/calendar/server/internal/db"
 	"github.com/XiovV/calendar/server/internal/repository"
 )
+
+// clearSoleWorkspaceOwnership deletes userID's own Workspace and their
+// Membership in it via raw SQL, standing in for the Workspace-transfer step
+// ADR-0044's sole-Owner guard says must happen "before a User can be
+// deleted" (workspaces.owner_user_id carries no ON DELETE behaviour,
+// mirrored in internal/repository/user_test.go). AccountService.Create now
+// always mints a personal Workspace for a new account (#155, ADR-0045), but
+// AccountService.Delete's disposition handling predates Workspaces and
+// doesn't yet transfer or retire one — so a test exercising Delete/
+// CancelInvite against an account that owns nothing but its own solo
+// Workspace clears it first, the same way a real caller would need to
+// before Workspace lifecycle management exists.
+func clearSoleWorkspaceOwnership(t *testing.T, db *sql.DB, userID int64) {
+	t.Helper()
+	if _, err := db.Exec("DELETE FROM workspace_members WHERE user_id = ?", userID); err != nil {
+		t.Fatalf("clear workspace membership for user %d: %v", userID, err)
+	}
+	if _, err := db.Exec("DELETE FROM workspaces WHERE owner_user_id = ?", userID); err != nil {
+		t.Fatalf("clear workspace ownership for user %d: %v", userID, err)
+	}
+}
 
 func newTestAccountService(t *testing.T) *AccountService {
 	t.Helper()
@@ -24,10 +46,12 @@ func newTestAccountService(t *testing.T) *AccountService {
 	sessions := repository.NewSessionRepository(sqlDB)
 	calendarRepo := repository.NewCalendarRepository(sqlDB)
 	shareRepo := repository.NewCalendarShareRepository(sqlDB)
-	calendars := NewCalendarService(calendarRepo, shareRepo, users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB))
+	workspaceRepo := repository.NewWorkspaceRepository(sqlDB)
+	calendars := NewCalendarService(calendarRepo, shareRepo, users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo)
 	appPasswords := NewAppPasswordService(repository.NewAppPasswordRepository(sqlDB), users)
+	workspaces := NewWorkspaceService(sqlDB, workspaceRepo, repository.NewWorkspaceInviteRepository(sqlDB))
 
-	return NewAccountService(sqlDB, users, sessions, calendarRepo, shareRepo, calendars, appPasswords, nil)
+	return NewAccountService(sqlDB, users, sessions, calendarRepo, shareRepo, calendars, appPasswords, nil, workspaces)
 }
 
 // fakeMailer records every Send call instead of delivering anything, for
@@ -55,10 +79,12 @@ func newTestAccountServiceWithMailer(t *testing.T, mailer Mailer) *AccountServic
 	sessions := repository.NewSessionRepository(sqlDB)
 	calendarRepo := repository.NewCalendarRepository(sqlDB)
 	shareRepo := repository.NewCalendarShareRepository(sqlDB)
-	calendars := NewCalendarService(calendarRepo, shareRepo, users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB))
+	workspaceRepo := repository.NewWorkspaceRepository(sqlDB)
+	calendars := NewCalendarService(calendarRepo, shareRepo, users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo)
 	appPasswords := NewAppPasswordService(repository.NewAppPasswordRepository(sqlDB), users)
+	workspaces := NewWorkspaceService(sqlDB, workspaceRepo, repository.NewWorkspaceInviteRepository(sqlDB))
 
-	return NewAccountService(sqlDB, users, sessions, calendarRepo, shareRepo, calendars, appPasswords, mailer)
+	return NewAccountService(sqlDB, users, sessions, calendarRepo, shareRepo, calendars, appPasswords, mailer, workspaces)
 }
 
 func TestAccountService_Create_SeedsDefaultCalendarsAndForcesPasswordChange(t *testing.T) {
@@ -150,9 +176,11 @@ func TestAccountService_ResetPassword_ForcesPasswordChangeAndInvalidatesSessions
 	sessions := repository.NewSessionRepository(sqlDB)
 	calendarRepo := repository.NewCalendarRepository(sqlDB)
 	shareRepo := repository.NewCalendarShareRepository(sqlDB)
-	calendars := NewCalendarService(calendarRepo, shareRepo, users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB))
+	workspaceRepo := repository.NewWorkspaceRepository(sqlDB)
+	calendars := NewCalendarService(calendarRepo, shareRepo, users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo)
 	appPasswords := NewAppPasswordService(repository.NewAppPasswordRepository(sqlDB), users)
-	accounts := NewAccountService(sqlDB, users, sessions, calendarRepo, shareRepo, calendars, appPasswords, nil)
+	workspaces := NewWorkspaceService(sqlDB, workspaceRepo, repository.NewWorkspaceInviteRepository(sqlDB))
+	accounts := NewAccountService(sqlDB, users, sessions, calendarRepo, shareRepo, calendars, appPasswords, nil, workspaces)
 	ctx := context.Background()
 
 	user, err := accounts.Create(ctx, "alice", "temp-secret")
@@ -283,9 +311,11 @@ func TestAccountService_SetDisabled_DeletesLiveSessions(t *testing.T) {
 	sessions := repository.NewSessionRepository(sqlDB)
 	calendarRepo := repository.NewCalendarRepository(sqlDB)
 	shareRepo := repository.NewCalendarShareRepository(sqlDB)
-	calendars := NewCalendarService(calendarRepo, shareRepo, users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB))
+	workspaceRepo := repository.NewWorkspaceRepository(sqlDB)
+	calendars := NewCalendarService(calendarRepo, shareRepo, users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo)
 	appPasswords := NewAppPasswordService(repository.NewAppPasswordRepository(sqlDB), users)
-	accounts := NewAccountService(sqlDB, users, sessions, calendarRepo, shareRepo, calendars, appPasswords, nil)
+	workspaces := NewWorkspaceService(sqlDB, workspaceRepo, repository.NewWorkspaceInviteRepository(sqlDB))
+	accounts := NewAccountService(sqlDB, users, sessions, calendarRepo, shareRepo, calendars, appPasswords, nil, workspaces)
 	ctx := context.Background()
 
 	alice, err := accounts.Create(ctx, "alice", "temp-secret")
@@ -522,6 +552,8 @@ func TestAccountService_Delete_AllowsDeletingAnAdminWhenAnotherAdminRemains(t *t
 		t.Fatalf("grant bob admin: %v", err)
 	}
 
+	clearSoleWorkspaceOwnership(t, accounts.db, alice.ID)
+
 	if err := accounts.Delete(ctx, alice.ID, DispositionDelete, nil); err != nil {
 		t.Fatalf("delete alice: %v", err)
 	}
@@ -549,6 +581,8 @@ func TestAccountService_Delete_DispositionDelete_RemovesOwnedCalendarsAndEvents(
 		t.Fatalf("expected alice to start with default calendars")
 	}
 
+	clearSoleWorkspaceOwnership(t, accounts.db, alice.ID)
+
 	if err := accounts.Delete(ctx, alice.ID, DispositionDelete, nil); err != nil {
 		t.Fatalf("delete alice: %v", err)
 	}
@@ -575,9 +609,11 @@ func TestAccountService_Delete_DispositionTransfer_KeepsEventsAndShares(t *testi
 	sessions := repository.NewSessionRepository(sqlDB)
 	calendarRepo := repository.NewCalendarRepository(sqlDB)
 	shareRepo := repository.NewCalendarShareRepository(sqlDB)
-	calendarService := NewCalendarService(calendarRepo, shareRepo, users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB))
+	workspaceRepo := repository.NewWorkspaceRepository(sqlDB)
+	calendarService := NewCalendarService(calendarRepo, shareRepo, users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo)
 	appPasswords := NewAppPasswordService(repository.NewAppPasswordRepository(sqlDB), users)
-	accounts := NewAccountService(sqlDB, users, sessions, calendarRepo, shareRepo, calendarService, appPasswords, nil)
+	workspaces := NewWorkspaceService(sqlDB, workspaceRepo, repository.NewWorkspaceInviteRepository(sqlDB))
+	accounts := NewAccountService(sqlDB, users, sessions, calendarRepo, shareRepo, calendarService, appPasswords, nil, workspaces)
 
 	alice, err := accounts.Create(ctx, "alice", "temp-secret")
 	if err != nil {
@@ -592,7 +628,12 @@ func TestAccountService_Delete_DispositionTransfer_KeepsEventsAndShares(t *testi
 		t.Fatalf("create carol: %v", err)
 	}
 
-	calendar, err := calendarService.Create(ctx, alice.ID, "cal-1", CalendarWrite{Name: "Family", Color: "#112233FF"})
+	aliceWorkspaces, err := workspaces.ListForUser(ctx, alice.ID)
+	if err != nil || len(aliceWorkspaces) == 0 {
+		t.Fatalf("list alice's workspaces: %v", err)
+	}
+
+	calendar, err := calendarService.Create(ctx, alice.ID, aliceWorkspaces[0].ID, "cal-1", CalendarWrite{Name: "Family", Color: "#112233FF"})
 	if err != nil {
 		t.Fatalf("create calendar: %v", err)
 	}
@@ -610,6 +651,20 @@ func TestAccountService_Delete_DispositionTransfer_KeepsEventsAndShares(t *testi
 	}, 1)
 	if err != nil {
 		t.Fatalf("create event authored by bob: %v", err)
+	}
+
+	// Unlike clearSoleWorkspaceOwnership's other call sites, this test's
+	// Calendar lives in alice's Workspace (workspace_id ON DELETE CASCADE,
+	// #155) and must survive the transfer — so reassign the Workspace's
+	// ownership to carol instead of deleting it outright, standing in for
+	// the Workspace-transfer step ADR-0044's sole-Owner guard requires
+	// before a User can be deleted (AccountService.Delete doesn't yet
+	// automate this — see clearSoleWorkspaceOwnership's doc comment).
+	if _, err := sqlDB.Exec("UPDATE workspaces SET owner_user_id = ? WHERE owner_user_id = ?", carol.ID, alice.ID); err != nil {
+		t.Fatalf("reassign alice's workspace ownership to carol: %v", err)
+	}
+	if _, err := sqlDB.Exec("DELETE FROM workspace_members WHERE user_id = ?", alice.ID); err != nil {
+		t.Fatalf("clear alice's workspace membership: %v", err)
 	}
 
 	if err := accounts.Delete(ctx, alice.ID, DispositionTransfer, &carol.ID); err != nil {
@@ -658,13 +713,20 @@ func TestAccountService_Delete_RemovesSharesGrantedToTheDeletedUser(t *testing.T
 		t.Fatalf("create holder: %v", err)
 	}
 
-	calendar, err := accounts.calendars.Create(ctx, owner.ID, "cal-1", CalendarWrite{Name: "Family", Color: "#112233FF"})
+	ownerWorkspaces, err := accounts.workspaces.ListForUser(ctx, owner.ID)
+	if err != nil || len(ownerWorkspaces) == 0 {
+		t.Fatalf("list owner's workspaces: %v", err)
+	}
+
+	calendar, err := accounts.calendars.Create(ctx, owner.ID, ownerWorkspaces[0].ID, "cal-1", CalendarWrite{Name: "Family", Color: "#112233FF"})
 	if err != nil {
 		t.Fatalf("create calendar: %v", err)
 	}
 	if _, err := accounts.calendars.Share(ctx, owner.ID, calendar.ID, "holder", repository.RoleViewer); err != nil {
 		t.Fatalf("share calendar with holder: %v", err)
 	}
+
+	clearSoleWorkspaceOwnership(t, accounts.db, holder.ID)
 
 	if err := accounts.Delete(ctx, holder.ID, DispositionDelete, nil); err != nil {
 		t.Fatalf("delete holder: %v", err)
@@ -696,7 +758,12 @@ func TestAccountService_DeleteImpact_ReportsShareCountsAndAffectedUsers(t *testi
 		t.Fatalf("create carol: %v", err)
 	}
 
-	shared, err := accounts.calendars.Create(ctx, owner.ID, "cal-shared", CalendarWrite{Name: "Shared", Color: "#112233FF"})
+	ownerWorkspaces, err := accounts.workspaces.ListForUser(ctx, owner.ID)
+	if err != nil || len(ownerWorkspaces) == 0 {
+		t.Fatalf("list owner's workspaces: %v", err)
+	}
+
+	shared, err := accounts.calendars.Create(ctx, owner.ID, ownerWorkspaces[0].ID, "cal-shared", CalendarWrite{Name: "Shared", Color: "#112233FF"})
 	if err != nil {
 		t.Fatalf("create shared calendar: %v", err)
 	}
@@ -706,7 +773,7 @@ func TestAccountService_DeleteImpact_ReportsShareCountsAndAffectedUsers(t *testi
 	if _, err := accounts.calendars.Share(ctx, owner.ID, shared.ID, "carol", repository.RoleViewer); err != nil {
 		t.Fatalf("share with carol: %v", err)
 	}
-	if _, err := accounts.calendars.Create(ctx, owner.ID, "cal-private", CalendarWrite{Name: "Private", Color: "#445566FF"}); err != nil {
+	if _, err := accounts.calendars.Create(ctx, owner.ID, ownerWorkspaces[0].ID, "cal-private", CalendarWrite{Name: "Private", Color: "#445566FF"}); err != nil {
 		t.Fatalf("create private calendar: %v", err)
 	}
 
@@ -1101,6 +1168,8 @@ func TestAccountService_CancelInvite_DeletesPendingUser(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create invite: %v", err)
 	}
+
+	clearSoleWorkspaceOwnership(t, accounts.db, invite.User.ID)
 
 	if err := accounts.CancelInvite(ctx, invite.User.ID); err != nil {
 		t.Fatalf("cancel invite: %v", err)

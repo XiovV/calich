@@ -34,7 +34,9 @@ func newUserDirectoryTestServer(t *testing.T) userDirectoryTestServer {
 
 	users := repository.NewUserRepository(sqlDB)
 	sessions := repository.NewSessionRepository(sqlDB)
-	auth := service.NewAuthService(users, sessions, service.NewWorkspaceService(sqlDB, repository.NewWorkspaceRepository(sqlDB), repository.NewWorkspaceInviteRepository(sqlDB)), repository.NewWorkspaceInviteRepository(sqlDB), []byte("test-secret"), "caller", "hunter2", false)
+	workspaceRepo := repository.NewWorkspaceRepository(sqlDB)
+	workspaceSvc := service.NewWorkspaceService(sqlDB, workspaceRepo, repository.NewWorkspaceInviteRepository(sqlDB))
+	auth := service.NewAuthService(users, sessions, workspaceSvc, repository.NewWorkspaceInviteRepository(sqlDB), []byte("test-secret"), "caller", "hunter2", false)
 	ctx := context.Background()
 	if _, _, err := auth.Bootstrap(ctx); err != nil {
 		t.Fatalf("bootstrap: %v", err)
@@ -42,9 +44,9 @@ func newUserDirectoryTestServer(t *testing.T) userDirectoryTestServer {
 
 	calendarRepo := repository.NewCalendarRepository(sqlDB)
 	shareRepo := repository.NewCalendarShareRepository(sqlDB)
-	calendars := service.NewCalendarService(calendarRepo, shareRepo, users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB))
+	calendars := service.NewCalendarService(calendarRepo, shareRepo, users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo)
 	appPasswords := service.NewAppPasswordService(repository.NewAppPasswordRepository(sqlDB), users)
-	accounts := service.NewAccountService(sqlDB, users, sessions, calendarRepo, shareRepo, calendars, appPasswords, nil)
+	accounts := service.NewAccountService(sqlDB, users, sessions, calendarRepo, shareRepo, calendars, appPasswords, nil, workspaceSvc)
 
 	if _, err := accounts.Create(ctx, "bob", "temp-password"); err != nil {
 		t.Fatalf("create bob: %v", err)

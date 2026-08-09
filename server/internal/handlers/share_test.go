@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
 
 	"github.com/go-chi/chi/v5"
@@ -25,6 +26,7 @@ type shareTestServer struct {
 	calendarID             string
 	otherUserID            int64
 	calendars              *service.CalendarService
+	workspaceID            string
 }
 
 func newShareTestServer(t *testing.T) shareTestServer {
@@ -38,9 +40,12 @@ func newShareTestServer(t *testing.T) shareTestServer {
 
 	users := repository.NewUserRepository(sqlDB)
 	sessions := repository.NewSessionRepository(sqlDB)
-	auth := service.NewAuthService(users, sessions, service.NewWorkspaceService(sqlDB, repository.NewWorkspaceRepository(sqlDB), repository.NewWorkspaceInviteRepository(sqlDB)), repository.NewWorkspaceInviteRepository(sqlDB), []byte("test-secret"), "owner", "hunter2", false)
+	workspaceRepo := repository.NewWorkspaceRepository(sqlDB)
+	workspaceSvc := service.NewWorkspaceService(sqlDB, workspaceRepo, repository.NewWorkspaceInviteRepository(sqlDB))
+	auth := service.NewAuthService(users, sessions, workspaceSvc, repository.NewWorkspaceInviteRepository(sqlDB), []byte("test-secret"), "owner", "hunter2", false)
 	ctx := context.Background()
-	if _, _, err := auth.Bootstrap(ctx); err != nil {
+	ownerUser, _, err := auth.Bootstrap(ctx)
+	if err != nil {
 		t.Fatalf("bootstrap: %v", err)
 	}
 	if _, err := users.Create(ctx, "other", "hash", false); err != nil {
@@ -52,9 +57,9 @@ func newShareTestServer(t *testing.T) shareTestServer {
 	// through an Admin-issued temporary password instead.
 	calendarRepo := repository.NewCalendarRepository(sqlDB)
 	shareRepo := repository.NewCalendarShareRepository(sqlDB)
-	calendars := service.NewCalendarService(calendarRepo, shareRepo, users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB))
+	calendars := service.NewCalendarService(calendarRepo, shareRepo, users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo)
 	appPasswords := service.NewAppPasswordService(repository.NewAppPasswordRepository(sqlDB), users)
-	accounts := service.NewAccountService(sqlDB, users, sessions, calendarRepo, shareRepo, calendars, appPasswords, nil)
+	accounts := service.NewAccountService(sqlDB, users, sessions, calendarRepo, shareRepo, calendars, appPasswords, nil, workspaceSvc)
 	other, err := accounts.ResetPassword(ctx, 2, "temp-password")
 	if err != nil {
 		t.Fatalf("reset other user's password: %v", err)
@@ -72,6 +77,23 @@ func newShareTestServer(t *testing.T) shareTestServer {
 		t.Fatalf("other login: %v", err)
 	}
 
+	ownerWorkspaces, err := workspaceSvc.ListForUser(ctx, ownerUser.ID)
+	if err != nil || len(ownerWorkspaces) == 0 {
+		t.Fatalf("list owner's workspaces: %v", err)
+	}
+	ownerWorkspaceID := strconv.FormatInt(ownerWorkspaces[0].ID, 10)
+
+	// "other" needs to belong to owner's Workspace too — GET /api/calendars
+	// is Workspace-scoped now (#155, ADR-0045): RequireWorkspace checks the
+	// caller is a Member of the X-Workspace-Id they claim, and List only
+	// surfaces Shared calendars whose own workspace_id matches it. A Share
+	// grant alone (ADR-0034) isn't restricted by Workspace membership, but
+	// seeing that share through the workspace-scoped List endpoint requires
+	// it.
+	if err := workspaceRepo.AddMember(ctx, ownerWorkspaces[0].ID, other.ID, repository.WorkspaceRoleMember); err != nil {
+		t.Fatalf("add other as owner's workspace member: %v", err)
+	}
+
 	events := service.NewEventService(sqlDB, repository.NewEventRepository(sqlDB), repository.NewEventExceptionRepository(sqlDB), repository.NewEventReminderRepository(sqlDB), repository.NewReminderOverrideRepository(sqlDB), repository.NewSyncRepository(sqlDB), calendars, users, repository.NewAttachmentRepository(sqlDB))
 	attachmentStore := attachmentstore.New(t.TempDir())
 	imports := service.NewImportService(events, calendars, attachmentStore, testMaxAttachmentSize, testMaxAttachmentsPerEvent)
@@ -81,8 +103,8 @@ func newShareTestServer(t *testing.T) shareTestServer {
 	r := chi.NewRouter()
 	r.Route("/api/calendars", func(r chi.Router) {
 		r.Use(httpauth.RequireAuth(auth))
-		r.Post("/", calendarHandler.Create)
-		r.Get("/", calendarHandler.List)
+		r.With(httpauth.RequireWorkspace(workspaceSvc)).Post("/", calendarHandler.Create)
+		r.With(httpauth.RequireWorkspace(workspaceSvc)).Get("/", calendarHandler.List)
 		r.Get("/{id}", calendarHandler.Get)
 		r.Patch("/{id}", calendarHandler.Update)
 		r.Get("/{id}/shares", calendarHandler.ListShares)
@@ -94,7 +116,7 @@ func newShareTestServer(t *testing.T) shareTestServer {
 	srv := httptest.NewServer(r)
 	t.Cleanup(srv.Close)
 
-	resp := createCalendar(t, srv.URL, ownerLogin.AccessToken, "11111111-1111-1111-1111-111111111111", "Family", "#12809CFF")
+	resp := createCalendar(t, srv.URL, ownerLogin.AccessToken, ownerWorkspaceID, "11111111-1111-1111-1111-111111111111", "Family", "#12809CFF")
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("create calendar: expected 201, got %d", resp.StatusCode)
 	}
@@ -104,7 +126,7 @@ func newShareTestServer(t *testing.T) shareTestServer {
 	}
 	resp.Body.Close()
 
-	return shareTestServer{baseURL: srv.URL, ownerToken: ownerLogin.AccessToken, otherToken: otherLogin.AccessToken, calendarID: created.ID, otherUserID: other.ID, calendars: calendars}
+	return shareTestServer{baseURL: srv.URL, ownerToken: ownerLogin.AccessToken, otherToken: otherLogin.AccessToken, calendarID: created.ID, otherUserID: other.ID, calendars: calendars, workspaceID: ownerWorkspaceID}
 }
 
 func doJSON(t *testing.T, method, url, accessToken string, body any) *http.Response {
@@ -164,7 +186,7 @@ func TestCalendarHandler_List_CarriesAccess(t *testing.T) {
 		t.Fatalf("share: expected 200, got %d", shareResp.StatusCode)
 	}
 
-	ownerList, err := authenticatedGet(s.baseURL+"/api/calendars/", s.ownerToken)
+	ownerList, err := authenticatedGetWithWorkspace(s.baseURL+"/api/calendars/", s.ownerToken, s.workspaceID)
 	if err != nil {
 		t.Fatalf("owner list: %v", err)
 	}
@@ -177,7 +199,7 @@ func TestCalendarHandler_List_CarriesAccess(t *testing.T) {
 		t.Fatalf("unexpected owner list: %+v", ownerCalendars)
 	}
 
-	otherList, err := authenticatedGet(s.baseURL+"/api/calendars/", s.otherToken)
+	otherList, err := authenticatedGetWithWorkspace(s.baseURL+"/api/calendars/", s.otherToken, s.workspaceID)
 	if err != nil {
 		t.Fatalf("other list: %v", err)
 	}
@@ -201,7 +223,7 @@ func TestCalendarHandler_List_CarriesOwnershipMeta(t *testing.T) {
 	shareResp := doJSON(t, http.MethodPost, s.baseURL+"/api/calendars/"+s.calendarID+"/shares", s.ownerToken, shareRequest{Username: "other", Role: repository.RoleViewer})
 	shareResp.Body.Close()
 
-	ownerList, err := authenticatedGet(s.baseURL+"/api/calendars/", s.ownerToken)
+	ownerList, err := authenticatedGetWithWorkspace(s.baseURL+"/api/calendars/", s.ownerToken, s.workspaceID)
 	if err != nil {
 		t.Fatalf("owner list: %v", err)
 	}
@@ -214,7 +236,7 @@ func TestCalendarHandler_List_CarriesOwnershipMeta(t *testing.T) {
 		t.Fatalf("unexpected owner list: %+v", ownerCalendars)
 	}
 
-	otherList, err := authenticatedGet(s.baseURL+"/api/calendars/", s.otherToken)
+	otherList, err := authenticatedGetWithWorkspace(s.baseURL+"/api/calendars/", s.otherToken, s.workspaceID)
 	if err != nil {
 		t.Fatalf("other list: %v", err)
 	}
@@ -270,7 +292,7 @@ func TestCalendarHandler_List_And_Get_ResolveColorPerCaller(t *testing.T) {
 		t.Fatalf("expected other's resolved colour to be their override, got %q", otherCalendar.Color)
 	}
 
-	otherList, err := authenticatedGet(s.baseURL+"/api/calendars/", s.otherToken)
+	otherList, err := authenticatedGetWithWorkspace(s.baseURL+"/api/calendars/", s.otherToken, s.workspaceID)
 	if err != nil {
 		t.Fatalf("other list: %v", err)
 	}

@@ -27,7 +27,8 @@ func newNotificationTestServer(t *testing.T) (baseURL, accessToken string, userI
 
 	users := repository.NewUserRepository(sqlDB)
 	sessions := repository.NewSessionRepository(sqlDB)
-	auth := service.NewAuthService(users, sessions, service.NewWorkspaceService(sqlDB, repository.NewWorkspaceRepository(sqlDB), repository.NewWorkspaceInviteRepository(sqlDB)), repository.NewWorkspaceInviteRepository(sqlDB), []byte("test-secret"), "alice", "hunter2", false)
+	workspaceSvc := service.NewWorkspaceService(sqlDB, repository.NewWorkspaceRepository(sqlDB), repository.NewWorkspaceInviteRepository(sqlDB))
+	auth := service.NewAuthService(users, sessions, workspaceSvc, repository.NewWorkspaceInviteRepository(sqlDB), []byte("test-secret"), "alice", "hunter2", false)
 	user, _, err := auth.Bootstrap(context.Background())
 	if err != nil {
 		t.Fatalf("bootstrap: %v", err)
@@ -38,8 +39,13 @@ func newNotificationTestServer(t *testing.T) (baseURL, accessToken string, userI
 		t.Fatalf("login: %v", err)
 	}
 
+	userWorkspaces, err := workspaceSvc.ListForUser(context.Background(), user.ID)
+	if err != nil || len(userWorkspaces) == 0 {
+		t.Fatalf("list user workspaces: %v", err)
+	}
+
 	calendars := repository.NewCalendarRepository(sqlDB)
-	cal, err := calendars.Create(context.Background(), user.ID, "cal-1", repository.CalendarFields{Name: "Personal", Color: "peacock"})
+	cal, err := calendars.Create(context.Background(), user.ID, userWorkspaces[0].ID, "cal-1", repository.CalendarFields{Name: "Personal", Color: "peacock"})
 	if err != nil {
 		t.Fatalf("create calendar: %v", err)
 	}
