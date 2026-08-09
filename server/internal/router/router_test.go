@@ -46,7 +46,7 @@ func newTestRouter(t *testing.T) http.Handler {
 	notificationHandler := handlers.NewNotificationHandler(service.NewNotificationService(repository.NewNotificationRepository(sqlDB)))
 	appPasswordService := service.NewAppPasswordService(repository.NewAppPasswordRepository(sqlDB), users)
 	appPasswordHandler := handlers.NewAppPasswordHandler(appPasswordService)
-	accountHandler := handlers.NewAccountHandler(service.NewAccountService(sqlDB, users, sessions, calendarRepo, shareRepo, calendarService, appPasswordService))
+	accountHandler := handlers.NewAccountHandler(service.NewAccountService(sqlDB, users, sessions, calendarRepo, shareRepo, calendarService, appPasswordService, nil), false)
 	userHandler := handlers.NewUserHandler(service.NewUserService(users))
 	calDAVHandler := &caldav.Handler{Backend: caldavserver.NewBackend(calendarService, eventService, attachmentService, 25<<20, 10), Prefix: "/dav"}
 

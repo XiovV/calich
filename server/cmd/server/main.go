@@ -73,7 +73,18 @@ func main() {
 	notificationRepo := repository.NewNotificationRepository(sqlDB)
 	notificationService := service.NewNotificationService(notificationRepo)
 	appPasswordService := service.NewAppPasswordService(repository.NewAppPasswordRepository(sqlDB), users)
-	accountService := service.NewAccountService(sqlDB, users, sessions, calendarRepo, shareRepo, calendarService, appPasswordService)
+	// smtpMailer is shared by Reminder email delivery (ADR-0021) and Invite
+	// email delivery (ADR-0042) — nil, and both features fall back
+	// accordingly, when this deployment has no SMTP transport configured.
+	var smtpMailer *mailer.SMTPMailer
+	if cfg.SMTPConfigured() {
+		smtpMailer = mailer.NewSMTPMailer(cfg.SMTPHost, cfg.SMTPPort, cfg.SMTPUser, cfg.SMTPPass, cfg.SMTPFrom)
+	}
+	var accountMailer service.Mailer
+	if smtpMailer != nil {
+		accountMailer = smtpMailer
+	}
+	accountService := service.NewAccountService(sqlDB, users, sessions, calendarRepo, shareRepo, calendarService, appPasswordService, accountMailer)
 
 	ctx := context.Background()
 	bootstrapUser, bootstrapCreatedUser, err := authService.Bootstrap(ctx)
@@ -98,7 +109,7 @@ func main() {
 	attachmentHandler := handlers.NewAttachmentHandler(attachmentService, cfg.MaxAttachmentSize)
 	notificationHandler := handlers.NewNotificationHandler(notificationService)
 	appPasswordHandler := handlers.NewAppPasswordHandler(appPasswordService)
-	accountHandler := handlers.NewAccountHandler(accountService)
+	accountHandler := handlers.NewAccountHandler(accountService, cfg.SMTPConfigured())
 	userService := service.NewUserService(users)
 	userHandler := handlers.NewUserHandler(userService)
 	calDAVHandler := caldavserver.NewHTTPHandler(caldavserver.NewBackend(calendarService, eventService, attachmentService, cfg.MaxAttachmentSize, cfg.MaxAttachmentsPerEvent))
@@ -119,8 +130,7 @@ func main() {
 	// Reminder sends over SMTP (#57) once the self-hoster has configured it,
 	// otherwise it falls back to the log sink.
 	var emailDispatcher reminder.Dispatcher = reminder.LogDispatcher{}
-	if cfg.SMTPConfigured() {
-		smtpMailer := mailer.NewSMTPMailer(cfg.SMTPHost, cfg.SMTPPort, cfg.SMTPUser, cfg.SMTPPass, cfg.SMTPFrom)
+	if smtpMailer != nil {
 		emailDispatcher = reminder.EmailDispatcher{Users: users, Mailer: smtpMailer, Fallback: reminder.LogDispatcher{}}
 	}
 	dispatcher := reminder.NotificationDispatcher{Notifications: notificationRepo, Users: users, Fallback: emailDispatcher, Now: time.Now}

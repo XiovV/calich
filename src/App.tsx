@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { BrowserRouter, Navigate, Route, Routes } from "react-router";
 import { AppShell } from "./components/layout/AppShell";
+import { AcceptInvitePage } from "./auth/AcceptInvitePage";
 import { LoginPage } from "./auth/LoginPage";
 import { ProtectedRoute } from "./auth/ProtectedRoute";
 import { SettingsPage } from "./settings/SettingsPage";
@@ -21,6 +22,7 @@ function App() {
     <BrowserRouter>
       <Routes>
         <Route path="/login" element={<LoginPage />} />
+        <Route path="/accept-invite" element={<AcceptInvitePage />} />
         <Route
           path="/"
           element={

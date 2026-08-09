@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"net/mail"
 	"strings"
 	"time"
 	"unicode"
@@ -65,6 +66,12 @@ var (
 	// ResetPassword, quietly turn it into an Active-but-still-flagged-disabled
 	// account. Use the Invite endpoints instead.
 	ErrUserIsPending = errors.New("account has an outstanding invite; use the invite endpoints instead")
+	// ErrNoInviteEmail is returned by SendInviteEmail when the Pending User
+	// has no email on file to send to (ADR-0042 leaves email optional).
+	ErrNoInviteEmail = errors.New("no email on file for this invite")
+	// ErrEmailNotConfigured is returned by SendInviteEmail when this
+	// deployment has no SMTP transport configured (ADR-0042, ADR-0021).
+	ErrEmailNotConfigured = errors.New("email delivery is not configured")
 )
 
 // inviteTokenTTL is how long an Invite token is valid for (ADR-0042) —
@@ -72,6 +79,15 @@ var (
 // doesn't extend a Session, it creates one: anyone holding a live link can
 // become the User outright.
 const inviteTokenTTL = 7 * 24 * time.Hour
+
+// Mailer sends a plain-text email — the Invite email delivery seam
+// (ADR-0042), matching reminder.Mailer's shape. Satisfied by
+// *mailer.SMTPMailer; nil when this deployment has no SMTP transport
+// configured, in which case SendInviteEmail always fails with
+// ErrEmailNotConfigured.
+type Mailer interface {
+	Send(to, subject, body string) error
+}
 
 // AccountService is account administration (ADR-0037): creating accounts,
 // listing them, resetting a password, granting or revoking Admin, renaming,
@@ -87,10 +103,11 @@ type AccountService struct {
 	shareRepo    *repository.CalendarShareRepository
 	calendars    *CalendarService
 	appPasswords *AppPasswordService
+	mailer       Mailer
 }
 
-func NewAccountService(db *sql.DB, users *repository.UserRepository, sessions *repository.SessionRepository, calendarRepo *repository.CalendarRepository, shareRepo *repository.CalendarShareRepository, calendars *CalendarService, appPasswords *AppPasswordService) *AccountService {
-	return &AccountService{db: db, users: users, sessions: sessions, calendarRepo: calendarRepo, shareRepo: shareRepo, calendars: calendars, appPasswords: appPasswords}
+func NewAccountService(db *sql.DB, users *repository.UserRepository, sessions *repository.SessionRepository, calendarRepo *repository.CalendarRepository, shareRepo *repository.CalendarShareRepository, calendars *CalendarService, appPasswords *AppPasswordService, mailer Mailer) *AccountService {
+	return &AccountService{db: db, users: users, sessions: sessions, calendarRepo: calendarRepo, shareRepo: shareRepo, calendars: calendars, appPasswords: appPasswords, mailer: mailer}
 }
 
 // validateUsername trims username and checks it against the one set of rules
@@ -161,10 +178,22 @@ type InviteResult struct {
 // — the invitee sets their own via AuthService.AcceptInvite — so the account
 // starts blocked from Login, Refresh, and CalDAV Basic auth the same way a
 // Disabled one is, until accepted.
-func (s *AccountService) CreateInvite(ctx context.Context, username string) (InviteResult, error) {
+//
+// email is optional (ADR-0042 leaves email optional for an Invite exactly as
+// it already is for direct creation) and, when supplied, is validated and
+// stored the same way AuthService.UpdateEmail does — it's what
+// SendInviteEmail later sends to.
+func (s *AccountService) CreateInvite(ctx context.Context, username, email string) (InviteResult, error) {
 	username, err := validateUsername(username)
 	if err != nil {
 		return InviteResult{}, err
+	}
+
+	email = strings.TrimSpace(email)
+	if email != "" {
+		if _, err := mail.ParseAddress(email); err != nil {
+			return InviteResult{}, ErrInvalidEmail
+		}
 	}
 
 	token, hash, err := newOpaqueToken()
@@ -182,6 +211,13 @@ func (s *AccountService) CreateInvite(ctx context.Context, username string) (Inv
 
 	if err := s.calendars.EnsureDefaults(ctx, user.ID); err != nil {
 		return InviteResult{}, fmt.Errorf("seed default calendars: %w", err)
+	}
+
+	if email != "" {
+		user, err = s.users.UpdateEmail(ctx, user.ID, email)
+		if err != nil {
+			return InviteResult{}, fmt.Errorf("set invite email: %w", err)
+		}
 	}
 
 	return InviteResult{User: user, Token: token}, nil
@@ -230,6 +266,34 @@ func (s *AccountService) CancelInvite(ctx context.Context, userID int64) error {
 
 	if err := s.users.Delete(ctx, userID); err != nil {
 		return fmt.Errorf("delete pending user: %w", err)
+	}
+	return nil
+}
+
+// SendInviteEmail emails userID's Pending invite link to the address on file
+// (ADR-0042). link is built by the caller (the Admin's own browser knows
+// this deployment's origin; the server does not track one) and is sent
+// verbatim — the token it embeds was already minted by CreateInvite or
+// ReissueInvite, whichever the caller called just before this.
+func (s *AccountService) SendInviteEmail(ctx context.Context, userID int64, link string) error {
+	user, err := s.users.GetByID(ctx, userID)
+	if err != nil {
+		return fmt.Errorf("get user: %w", err)
+	}
+	if !user.IsPending() {
+		return ErrUserNotPending
+	}
+	if user.Email == nil {
+		return ErrNoInviteEmail
+	}
+	if s.mailer == nil {
+		return ErrEmailNotConfigured
+	}
+
+	subject := "You've been invited"
+	body := fmt.Sprintf("An account has been set up for you. Set your password to get started:\n\n%s\n\nThis link expires in 7 days.", link)
+	if err := s.mailer.Send(*user.Email, subject, body); err != nil {
+		return fmt.Errorf("send invite email: %w", err)
 	}
 	return nil
 }

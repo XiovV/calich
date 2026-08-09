@@ -19,6 +19,14 @@ import (
 
 func newAccountTestServer(t *testing.T) (*httptest.Server, string) {
 	t.Helper()
+	return newAccountTestServerWithMailer(t, nil, false)
+}
+
+// newAccountTestServerWithMailer is newAccountTestServer with an injectable
+// Mailer and smtpConfigured flag, for exercising SendInviteEmail's gating
+// (ADR-0042).
+func newAccountTestServerWithMailer(t *testing.T, mailer service.Mailer, smtpConfigured bool) (*httptest.Server, string) {
+	t.Helper()
 
 	sqlDB, err := db.OpenInMemory()
 	if err != nil {
@@ -37,13 +45,14 @@ func newAccountTestServer(t *testing.T) (*httptest.Server, string) {
 	shareRepo := repository.NewCalendarShareRepository(sqlDB)
 	calendars := service.NewCalendarService(calendarRepo, shareRepo, users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB))
 	appPasswords := service.NewAppPasswordService(repository.NewAppPasswordRepository(sqlDB), users)
-	accounts := service.NewAccountService(sqlDB, users, sessions, calendarRepo, shareRepo, calendars, appPasswords)
-	h := NewAccountHandler(accounts)
+	accounts := service.NewAccountService(sqlDB, users, sessions, calendarRepo, shareRepo, calendars, appPasswords, mailer)
+	h := NewAccountHandler(accounts, smtpConfigured)
 	authHandler := NewAuthHandler(auth, false)
 
 	r := chi.NewRouter()
 	r.Post("/api/auth/login", authHandler.Login)
 	r.Post("/api/auth/accept-invite", authHandler.AcceptInvite)
+	r.Get("/api/auth/accept-invite", authHandler.PreviewInvite)
 	r.Route("/api/accounts", func(r chi.Router) {
 		r.Use(httpauth.RequireAuth(auth))
 		r.Use(httpauth.RequireAdmin(auth))
@@ -53,6 +62,7 @@ func newAccountTestServer(t *testing.T) (*httptest.Server, string) {
 		r.Post("/invite", h.CreateInvite)
 		r.Post("/{id}/invite/reissue", h.ReissueInvite)
 		r.Delete("/{id}/invite", h.CancelInvite)
+		r.Post("/{id}/invite/email", h.SendInviteEmail)
 		r.Post("/{id}/reset-password", h.ResetPassword)
 		r.Put("/{id}/admin", h.SetAdmin)
 		r.Put("/{id}/disabled", h.SetDisabled)
@@ -1071,6 +1081,60 @@ func createInvite(t *testing.T, srv *httptest.Server, accessToken, username stri
 	return resp
 }
 
+func createInviteWithEmail(t *testing.T, srv *httptest.Server, accessToken, username, email string) *http.Response {
+	t.Helper()
+
+	body, err := json.Marshal(createInviteRequest{Username: username, Email: email})
+	if err != nil {
+		t.Fatalf("marshal create invite request: %v", err)
+	}
+
+	req, err := http.NewRequest(http.MethodPost, srv.URL+"/api/accounts/invite", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST /api/accounts/invite: %v", err)
+	}
+	return resp
+}
+
+func sendInviteEmail(t *testing.T, srv *httptest.Server, accessToken string, accountID int64, link string) *http.Response {
+	t.Helper()
+
+	body, err := json.Marshal(sendInviteEmailRequest{Link: link})
+	if err != nil {
+		t.Fatalf("marshal send invite email request: %v", err)
+	}
+
+	req, err := http.NewRequest(http.MethodPost, fmt.Sprintf("%s/api/accounts/%d/invite/email", srv.URL, accountID), bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST invite/email: %v", err)
+	}
+	return resp
+}
+
+// fakeMailer records every Send call instead of delivering anything.
+type fakeMailer struct {
+	to, subject, body string
+}
+
+func (m *fakeMailer) Send(to, subject, body string) error {
+	m.to, m.subject, m.body = to, subject, body
+	return nil
+}
+
 func TestAccountCreateInvite_ReturnsPendingAccountAndToken(t *testing.T) {
 	srv, accessToken := newAccountTestServer(t)
 
@@ -1119,6 +1183,127 @@ func TestAccountCreateInvite_NonAdmin_Returns403(t *testing.T) {
 
 	if resp.StatusCode != http.StatusForbidden {
 		t.Fatalf("expected 403, got %d", resp.StatusCode)
+	}
+}
+
+func TestAccountCreateInvite_WithEmail_MarksInviteEmailAvailableWhenSMTPConfigured(t *testing.T) {
+	mailer := &fakeMailer{}
+	srv, accessToken := newAccountTestServerWithMailer(t, mailer, true)
+
+	resp := createInviteWithEmail(t, srv, accessToken, "alice", "alice@example.com")
+	defer resp.Body.Close()
+
+	var invite inviteResponse
+	if err := json.NewDecoder(resp.Body).Decode(&invite); err != nil {
+		t.Fatalf("decode invite response: %v", err)
+	}
+	if !invite.Account.InviteEmailAvailable {
+		t.Fatalf("expected invite_email_available to be true when SMTP is configured and an email is on file")
+	}
+}
+
+func TestAccountCreateInvite_NoEmail_InviteEmailAvailableIsFalse(t *testing.T) {
+	mailer := &fakeMailer{}
+	srv, accessToken := newAccountTestServerWithMailer(t, mailer, true)
+
+	resp := createInvite(t, srv, accessToken, "alice")
+	defer resp.Body.Close()
+
+	var invite inviteResponse
+	if err := json.NewDecoder(resp.Body).Decode(&invite); err != nil {
+		t.Fatalf("decode invite response: %v", err)
+	}
+	if invite.Account.InviteEmailAvailable {
+		t.Fatalf("expected invite_email_available to be false with no email on file")
+	}
+}
+
+func TestAccountCreateInvite_InvalidEmail_Returns400(t *testing.T) {
+	srv, accessToken := newAccountTestServer(t)
+
+	resp := createInviteWithEmail(t, srv, accessToken, "alice", "not-an-email")
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", resp.StatusCode)
+	}
+}
+
+func TestAccountSendInviteEmail_SendsAndReturns204(t *testing.T) {
+	mailer := &fakeMailer{}
+	srv, accessToken := newAccountTestServerWithMailer(t, mailer, true)
+
+	createResp := createInviteWithEmail(t, srv, accessToken, "alice", "alice@example.com")
+	defer createResp.Body.Close()
+	var created inviteResponse
+	if err := json.NewDecoder(createResp.Body).Decode(&created); err != nil {
+		t.Fatalf("decode invite response: %v", err)
+	}
+
+	resp := sendInviteEmail(t, srv, accessToken, created.Account.ID, "https://example.com/accept-invite?token=abc")
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("expected 204, got %d", resp.StatusCode)
+	}
+	if mailer.to != "alice@example.com" {
+		t.Fatalf("expected the email to go to alice@example.com, got %q", mailer.to)
+	}
+}
+
+func TestAccountSendInviteEmail_NoEmailOnFile_Returns409(t *testing.T) {
+	mailer := &fakeMailer{}
+	srv, accessToken := newAccountTestServerWithMailer(t, mailer, true)
+
+	createResp := createInvite(t, srv, accessToken, "alice")
+	defer createResp.Body.Close()
+	var created inviteResponse
+	if err := json.NewDecoder(createResp.Body).Decode(&created); err != nil {
+		t.Fatalf("decode invite response: %v", err)
+	}
+
+	resp := sendInviteEmail(t, srv, accessToken, created.Account.ID, "https://example.com/accept-invite?token=abc")
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("expected 409, got %d", resp.StatusCode)
+	}
+}
+
+func TestAccountSendInviteEmail_SMTPNotConfigured_Returns409(t *testing.T) {
+	srv, accessToken := newAccountTestServer(t)
+
+	createResp := createInviteWithEmail(t, srv, accessToken, "alice", "alice@example.com")
+	defer createResp.Body.Close()
+	var created inviteResponse
+	if err := json.NewDecoder(createResp.Body).Decode(&created); err != nil {
+		t.Fatalf("decode invite response: %v", err)
+	}
+
+	resp := sendInviteEmail(t, srv, accessToken, created.Account.ID, "https://example.com/accept-invite?token=abc")
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("expected 409, got %d", resp.StatusCode)
+	}
+}
+
+func TestAccountSendInviteEmail_EmptyLink_Returns400(t *testing.T) {
+	mailer := &fakeMailer{}
+	srv, accessToken := newAccountTestServerWithMailer(t, mailer, true)
+
+	createResp := createInviteWithEmail(t, srv, accessToken, "alice", "alice@example.com")
+	defer createResp.Body.Close()
+	var created inviteResponse
+	if err := json.NewDecoder(createResp.Body).Decode(&created); err != nil {
+		t.Fatalf("decode invite response: %v", err)
+	}
+
+	resp := sendInviteEmail(t, srv, accessToken, created.Account.ID, "")
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", resp.StatusCode)
 	}
 }
 
@@ -1312,6 +1497,59 @@ func TestAcceptInvite_InvalidToken_Returns401(t *testing.T) {
 		bytes.NewReader(mustMarshal(t, acceptInviteRequest{Token: "not-a-real-token", Password: "new-password"})))
 	if err != nil {
 		t.Fatalf("POST accept-invite: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", resp.StatusCode)
+	}
+}
+
+func TestPreviewInvite_ReturnsUsername(t *testing.T) {
+	srv, accessToken := newAccountTestServer(t)
+
+	createResp := createInvite(t, srv, accessToken, "alice")
+	defer createResp.Body.Close()
+	var created inviteResponse
+	if err := json.NewDecoder(createResp.Body).Decode(&created); err != nil {
+		t.Fatalf("decode invite response: %v", err)
+	}
+
+	resp, err := http.Get(srv.URL + "/api/auth/accept-invite?token=" + created.Token)
+	if err != nil {
+		t.Fatalf("GET accept-invite: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	var previewed previewInviteResponse
+	if err := json.NewDecoder(resp.Body).Decode(&previewed); err != nil {
+		t.Fatalf("decode preview response: %v", err)
+	}
+	if previewed.Username != "alice" {
+		t.Fatalf("expected username %q, got %q", "alice", previewed.Username)
+	}
+
+	// Previewing must not consume the token — accepting it afterwards still works.
+	acceptResp, err := http.Post(srv.URL+"/api/auth/accept-invite", "application/json",
+		bytes.NewReader(mustMarshal(t, acceptInviteRequest{Token: created.Token, Password: "new-password"})))
+	if err != nil {
+		t.Fatalf("POST accept-invite: %v", err)
+	}
+	defer acceptResp.Body.Close()
+	if acceptResp.StatusCode != http.StatusOK {
+		t.Fatalf("expected accept-invite to still succeed after preview, got %d", acceptResp.StatusCode)
+	}
+}
+
+func TestPreviewInvite_InvalidToken_Returns401(t *testing.T) {
+	srv, _ := newAccountTestServer(t)
+
+	resp, err := http.Get(srv.URL + "/api/auth/accept-invite?token=not-a-real-token")
+	if err != nil {
+		t.Fatalf("GET accept-invite: %v", err)
 	}
 	defer resp.Body.Close()
 

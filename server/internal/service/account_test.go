@@ -27,7 +27,38 @@ func newTestAccountService(t *testing.T) *AccountService {
 	calendars := NewCalendarService(calendarRepo, shareRepo, users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB))
 	appPasswords := NewAppPasswordService(repository.NewAppPasswordRepository(sqlDB), users)
 
-	return NewAccountService(sqlDB, users, sessions, calendarRepo, shareRepo, calendars, appPasswords)
+	return NewAccountService(sqlDB, users, sessions, calendarRepo, shareRepo, calendars, appPasswords, nil)
+}
+
+// fakeMailer records every Send call instead of delivering anything, for
+// tests exercising SendInviteEmail.
+type fakeMailer struct {
+	to, subject, body string
+	sendErr           error
+}
+
+func (m *fakeMailer) Send(to, subject, body string) error {
+	m.to, m.subject, m.body = to, subject, body
+	return m.sendErr
+}
+
+func newTestAccountServiceWithMailer(t *testing.T, mailer Mailer) *AccountService {
+	t.Helper()
+
+	sqlDB, err := db.OpenInMemory()
+	if err != nil {
+		t.Fatalf("open in-memory db: %v", err)
+	}
+	t.Cleanup(func() { sqlDB.Close() })
+
+	users := repository.NewUserRepository(sqlDB)
+	sessions := repository.NewSessionRepository(sqlDB)
+	calendarRepo := repository.NewCalendarRepository(sqlDB)
+	shareRepo := repository.NewCalendarShareRepository(sqlDB)
+	calendars := NewCalendarService(calendarRepo, shareRepo, users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB))
+	appPasswords := NewAppPasswordService(repository.NewAppPasswordRepository(sqlDB), users)
+
+	return NewAccountService(sqlDB, users, sessions, calendarRepo, shareRepo, calendars, appPasswords, mailer)
 }
 
 func TestAccountService_Create_SeedsDefaultCalendarsAndForcesPasswordChange(t *testing.T) {
@@ -121,7 +152,7 @@ func TestAccountService_ResetPassword_ForcesPasswordChangeAndInvalidatesSessions
 	shareRepo := repository.NewCalendarShareRepository(sqlDB)
 	calendars := NewCalendarService(calendarRepo, shareRepo, users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB))
 	appPasswords := NewAppPasswordService(repository.NewAppPasswordRepository(sqlDB), users)
-	accounts := NewAccountService(sqlDB, users, sessions, calendarRepo, shareRepo, calendars, appPasswords)
+	accounts := NewAccountService(sqlDB, users, sessions, calendarRepo, shareRepo, calendars, appPasswords, nil)
 	ctx := context.Background()
 
 	user, err := accounts.Create(ctx, "alice", "temp-secret")
@@ -254,7 +285,7 @@ func TestAccountService_SetDisabled_DeletesLiveSessions(t *testing.T) {
 	shareRepo := repository.NewCalendarShareRepository(sqlDB)
 	calendars := NewCalendarService(calendarRepo, shareRepo, users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB))
 	appPasswords := NewAppPasswordService(repository.NewAppPasswordRepository(sqlDB), users)
-	accounts := NewAccountService(sqlDB, users, sessions, calendarRepo, shareRepo, calendars, appPasswords)
+	accounts := NewAccountService(sqlDB, users, sessions, calendarRepo, shareRepo, calendars, appPasswords, nil)
 	ctx := context.Background()
 
 	alice, err := accounts.Create(ctx, "alice", "temp-secret")
@@ -546,7 +577,7 @@ func TestAccountService_Delete_DispositionTransfer_KeepsEventsAndShares(t *testi
 	shareRepo := repository.NewCalendarShareRepository(sqlDB)
 	calendarService := NewCalendarService(calendarRepo, shareRepo, users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB))
 	appPasswords := NewAppPasswordService(repository.NewAppPasswordRepository(sqlDB), users)
-	accounts := NewAccountService(sqlDB, users, sessions, calendarRepo, shareRepo, calendarService, appPasswords)
+	accounts := NewAccountService(sqlDB, users, sessions, calendarRepo, shareRepo, calendarService, appPasswords, nil)
 
 	alice, err := accounts.Create(ctx, "alice", "temp-secret")
 	if err != nil {
@@ -875,7 +906,7 @@ func TestAccountService_CreateInvite_CreatesPendingUserWithTokenAndDefaults(t *t
 	accounts := newTestAccountService(t)
 	ctx := context.Background()
 
-	result, err := accounts.CreateInvite(ctx, "alice")
+	result, err := accounts.CreateInvite(ctx, "alice", "")
 	if err != nil {
 		t.Fatalf("create invite: %v", err)
 	}
@@ -907,7 +938,7 @@ func TestAccountService_CreateInvite_CreatesPendingUserWithTokenAndDefaults(t *t
 func TestAccountService_CreateInvite_EmptyUsername_ReturnsErrInvalidUsername(t *testing.T) {
 	accounts := newTestAccountService(t)
 
-	if _, err := accounts.CreateInvite(context.Background(), "  "); !errors.Is(err, ErrInvalidUsername) {
+	if _, err := accounts.CreateInvite(context.Background(), "  ", ""); !errors.Is(err, ErrInvalidUsername) {
 		t.Fatalf("expected ErrInvalidUsername, got %v", err)
 	}
 }
@@ -920,8 +951,94 @@ func TestAccountService_CreateInvite_DuplicateUsername_ReturnsErrUsernameTaken(t
 		t.Fatalf("create alice: %v", err)
 	}
 
-	if _, err := accounts.CreateInvite(ctx, "alice"); !errors.Is(err, ErrUsernameTaken) {
+	if _, err := accounts.CreateInvite(ctx, "alice", ""); !errors.Is(err, ErrUsernameTaken) {
 		t.Fatalf("expected ErrUsernameTaken, got %v", err)
+	}
+}
+
+func TestAccountService_CreateInvite_WithEmail_StoresIt(t *testing.T) {
+	accounts := newTestAccountService(t)
+	ctx := context.Background()
+
+	result, err := accounts.CreateInvite(ctx, "alice", "alice@example.com")
+	if err != nil {
+		t.Fatalf("create invite: %v", err)
+	}
+	if result.User.Email == nil || *result.User.Email != "alice@example.com" {
+		t.Fatalf("expected the invite email to be stored, got %+v", result.User.Email)
+	}
+}
+
+func TestAccountService_CreateInvite_InvalidEmail_ReturnsErrInvalidEmail(t *testing.T) {
+	accounts := newTestAccountService(t)
+
+	if _, err := accounts.CreateInvite(context.Background(), "alice", "not-an-email"); !errors.Is(err, ErrInvalidEmail) {
+		t.Fatalf("expected ErrInvalidEmail, got %v", err)
+	}
+}
+
+func TestAccountService_SendInviteEmail_SendsToEmailOnFile(t *testing.T) {
+	mailer := &fakeMailer{}
+	accounts := newTestAccountServiceWithMailer(t, mailer)
+	ctx := context.Background()
+
+	invite, err := accounts.CreateInvite(ctx, "alice", "alice@example.com")
+	if err != nil {
+		t.Fatalf("create invite: %v", err)
+	}
+
+	if err := accounts.SendInviteEmail(ctx, invite.User.ID, "https://example.com/accept-invite?token=abc"); err != nil {
+		t.Fatalf("send invite email: %v", err)
+	}
+	if mailer.to != "alice@example.com" {
+		t.Fatalf("expected the email to go to alice@example.com, got %q", mailer.to)
+	}
+	if !strings.Contains(mailer.body, "https://example.com/accept-invite?token=abc") {
+		t.Fatalf("expected the body to contain the invite link, got %q", mailer.body)
+	}
+}
+
+func TestAccountService_SendInviteEmail_NoEmailOnFile_ReturnsErrNoInviteEmail(t *testing.T) {
+	mailer := &fakeMailer{}
+	accounts := newTestAccountServiceWithMailer(t, mailer)
+	ctx := context.Background()
+
+	invite, err := accounts.CreateInvite(ctx, "alice", "")
+	if err != nil {
+		t.Fatalf("create invite: %v", err)
+	}
+
+	if err := accounts.SendInviteEmail(ctx, invite.User.ID, "https://example.com/accept-invite?token=abc"); !errors.Is(err, ErrNoInviteEmail) {
+		t.Fatalf("expected ErrNoInviteEmail, got %v", err)
+	}
+}
+
+func TestAccountService_SendInviteEmail_NoMailerConfigured_ReturnsErrEmailNotConfigured(t *testing.T) {
+	accounts := newTestAccountService(t)
+	ctx := context.Background()
+
+	invite, err := accounts.CreateInvite(ctx, "alice", "alice@example.com")
+	if err != nil {
+		t.Fatalf("create invite: %v", err)
+	}
+
+	if err := accounts.SendInviteEmail(ctx, invite.User.ID, "https://example.com/accept-invite?token=abc"); !errors.Is(err, ErrEmailNotConfigured) {
+		t.Fatalf("expected ErrEmailNotConfigured, got %v", err)
+	}
+}
+
+func TestAccountService_SendInviteEmail_NotPending_ReturnsErrUserNotPending(t *testing.T) {
+	mailer := &fakeMailer{}
+	accounts := newTestAccountServiceWithMailer(t, mailer)
+	ctx := context.Background()
+
+	alice, err := accounts.Create(ctx, "alice", "temp-secret")
+	if err != nil {
+		t.Fatalf("create alice: %v", err)
+	}
+
+	if err := accounts.SendInviteEmail(ctx, alice.ID, "https://example.com/accept-invite?token=abc"); !errors.Is(err, ErrUserNotPending) {
+		t.Fatalf("expected ErrUserNotPending, got %v", err)
 	}
 }
 
@@ -929,7 +1046,7 @@ func TestAccountService_ReissueInvite_ReplacesTokenAndExtendsExpiry(t *testing.T
 	accounts := newTestAccountService(t)
 	ctx := context.Background()
 
-	first, err := accounts.CreateInvite(ctx, "alice")
+	first, err := accounts.CreateInvite(ctx, "alice", "")
 	if err != nil {
 		t.Fatalf("create invite: %v", err)
 	}
@@ -980,7 +1097,7 @@ func TestAccountService_CancelInvite_DeletesPendingUser(t *testing.T) {
 	accounts := newTestAccountService(t)
 	ctx := context.Background()
 
-	invite, err := accounts.CreateInvite(ctx, "alice")
+	invite, err := accounts.CreateInvite(ctx, "alice", "")
 	if err != nil {
 		t.Fatalf("create invite: %v", err)
 	}
@@ -1016,7 +1133,7 @@ func TestAccountService_SetDisabled_RefusesPendingAccount(t *testing.T) {
 	accounts := newTestAccountService(t)
 	ctx := context.Background()
 
-	invite, err := accounts.CreateInvite(ctx, "alice")
+	invite, err := accounts.CreateInvite(ctx, "alice", "")
 	if err != nil {
 		t.Fatalf("create invite: %v", err)
 	}
@@ -1033,7 +1150,7 @@ func TestAccountService_SetAdmin_RefusesPendingAccount(t *testing.T) {
 	accounts := newTestAccountService(t)
 	ctx := context.Background()
 
-	invite, err := accounts.CreateInvite(ctx, "alice")
+	invite, err := accounts.CreateInvite(ctx, "alice", "")
 	if err != nil {
 		t.Fatalf("create invite: %v", err)
 	}
@@ -1047,7 +1164,7 @@ func TestAccountService_ResetPassword_RefusesPendingAccount(t *testing.T) {
 	accounts := newTestAccountService(t)
 	ctx := context.Background()
 
-	invite, err := accounts.CreateInvite(ctx, "alice")
+	invite, err := accounts.CreateInvite(ctx, "alice", "")
 	if err != nil {
 		t.Fatalf("create invite: %v", err)
 	}

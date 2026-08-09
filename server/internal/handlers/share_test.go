@@ -54,7 +54,7 @@ func newShareTestServer(t *testing.T) shareTestServer {
 	shareRepo := repository.NewCalendarShareRepository(sqlDB)
 	calendars := service.NewCalendarService(calendarRepo, shareRepo, users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB))
 	appPasswords := service.NewAppPasswordService(repository.NewAppPasswordRepository(sqlDB), users)
-	accounts := service.NewAccountService(sqlDB, users, sessions, calendarRepo, shareRepo, calendars, appPasswords)
+	accounts := service.NewAccountService(sqlDB, users, sessions, calendarRepo, shareRepo, calendars, appPasswords, nil)
 	other, err := accounts.ResetPassword(ctx, 2, "temp-password")
 	if err != nil {
 		t.Fatalf("reset other user's password: %v", err)

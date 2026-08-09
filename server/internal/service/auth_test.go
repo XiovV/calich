@@ -1150,3 +1150,55 @@ func TestAcceptInvite_TokenCannotBeReused(t *testing.T) {
 		t.Fatalf("expected a reused token to be rejected with ErrInviteInvalid, got %v", err)
 	}
 }
+
+func TestPreviewInvite_ReturnsUsernameWithoutConsumingToken(t *testing.T) {
+	svc := newTestAuthService(t, "", "")
+	ctx := context.Background()
+
+	createPendingUser(t, svc, "alice", "raw-token", time.Now().Add(time.Hour))
+
+	username, err := svc.PreviewInvite(ctx, "raw-token")
+	if err != nil {
+		t.Fatalf("preview invite: %v", err)
+	}
+	if username != "alice" {
+		t.Fatalf("expected username %q, got %q", "alice", username)
+	}
+
+	// Previewing must not consume the token — accepting it afterwards still works.
+	if _, err := svc.AcceptInvite(ctx, "raw-token", "new-password"); err != nil {
+		t.Fatalf("accept invite after preview: %v", err)
+	}
+}
+
+func TestPreviewInvite_UnknownToken_ReturnsErrInviteInvalid(t *testing.T) {
+	svc := newTestAuthService(t, "", "")
+
+	if _, err := svc.PreviewInvite(context.Background(), "not-a-real-token"); !errors.Is(err, ErrInviteInvalid) {
+		t.Fatalf("expected ErrInviteInvalid, got %v", err)
+	}
+}
+
+func TestPreviewInvite_ExpiredToken_ReturnsErrInviteInvalid(t *testing.T) {
+	svc := newTestAuthService(t, "", "")
+
+	createPendingUser(t, svc, "alice", "raw-token", time.Now().Add(-time.Minute))
+
+	if _, err := svc.PreviewInvite(context.Background(), "raw-token"); !errors.Is(err, ErrInviteInvalid) {
+		t.Fatalf("expected ErrInviteInvalid, got %v", err)
+	}
+}
+
+func TestPreviewInvite_AlreadyAcceptedToken_ReturnsErrInviteInvalid(t *testing.T) {
+	svc := newTestAuthService(t, "", "")
+	ctx := context.Background()
+
+	createPendingUser(t, svc, "alice", "raw-token", time.Now().Add(time.Hour))
+	if _, err := svc.AcceptInvite(ctx, "raw-token", "new-password"); err != nil {
+		t.Fatalf("accept invite: %v", err)
+	}
+
+	if _, err := svc.PreviewInvite(ctx, "raw-token"); !errors.Is(err, ErrInviteInvalid) {
+		t.Fatalf("expected ErrInviteInvalid, got %v", err)
+	}
+}

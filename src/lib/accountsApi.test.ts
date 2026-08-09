@@ -27,6 +27,8 @@ describe("accountsApi.list", () => {
           is_disabled: false,
           must_change_password: false,
           created_at: "2026-01-01T00:00:00Z",
+          is_pending: false,
+          invite_email_available: false,
         },
       ]),
     );
@@ -42,6 +44,9 @@ describe("accountsApi.list", () => {
         isDisabled: false,
         mustChangePassword: false,
         createdAt: "2026-01-01T00:00:00Z",
+        isPending: false,
+        inviteExpiresAt: null,
+        inviteEmailAvailable: false,
       },
     ]);
     expect(fetchMock).toHaveBeenCalledWith(
@@ -73,6 +78,8 @@ describe("accountsApi.create", () => {
         is_disabled: false,
         must_change_password: true,
         created_at: "2026-01-01T00:00:00Z",
+        is_pending: false,
+        invite_email_available: false,
       }),
     );
     vi.stubGlobal("fetch", fetchMock);
@@ -86,6 +93,9 @@ describe("accountsApi.create", () => {
       isDisabled: false,
       mustChangePassword: true,
       createdAt: "2026-01-01T00:00:00Z",
+      isPending: false,
+      inviteExpiresAt: null,
+      inviteEmailAvailable: false,
     });
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/accounts/",
@@ -110,6 +120,175 @@ describe("accountsApi.create", () => {
   });
 });
 
+describe("accountsApi.createInvite", () => {
+  it("sends the username and email, and maps the response", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(201, {
+        account: {
+          id: 2,
+          username: "kid",
+          is_admin: false,
+          is_disabled: false,
+          must_change_password: false,
+          created_at: "2026-01-01T00:00:00Z",
+          is_pending: true,
+          invite_expires_at: "2026-01-08T00:00:00Z",
+          invite_email_available: true,
+        },
+        token: "invite-token-abc",
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await accountsApi.createInvite("token-123", "kid", "kid@example.com");
+
+    expect(result).toEqual({
+      account: {
+        id: 2,
+        username: "kid",
+        isAdmin: false,
+        isDisabled: false,
+        mustChangePassword: false,
+        createdAt: "2026-01-01T00:00:00Z",
+        isPending: true,
+        inviteExpiresAt: "2026-01-08T00:00:00Z",
+        inviteEmailAvailable: true,
+      },
+      token: "invite-token-abc",
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/accounts/invite",
+      expect.objectContaining({
+        method: "POST",
+        credentials: "include",
+        headers: expect.objectContaining({ Authorization: "Bearer token-123" }),
+        body: JSON.stringify({ username: "kid", email: "kid@example.com" }),
+      }),
+    );
+  });
+
+  it("throws an explanation on a duplicate username", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(409, { error: { code: "username_taken", message: "username is already taken" } }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(accountsApi.createInvite("token-123", "admin", "")).rejects.toMatchObject({
+      code: "username_taken",
+    });
+  });
+});
+
+describe("accountsApi.reissueInvite", () => {
+  it("replaces the invite and maps the response", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(200, {
+        account: {
+          id: 2,
+          username: "kid",
+          is_admin: false,
+          is_disabled: false,
+          must_change_password: false,
+          created_at: "2026-01-01T00:00:00Z",
+          is_pending: true,
+          invite_expires_at: "2026-01-15T00:00:00Z",
+          invite_email_available: false,
+        },
+        token: "invite-token-def",
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await accountsApi.reissueInvite("token-123", 2);
+
+    expect(result.token).toBe("invite-token-def");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/accounts/2/invite/reissue",
+      expect.objectContaining({
+        method: "POST",
+        credentials: "include",
+        headers: { Authorization: "Bearer token-123" },
+      }),
+    );
+  });
+
+  it("throws an explanation when the account has no outstanding invite", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(409, {
+        error: { code: "not_pending", message: "account does not have an outstanding invite" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(accountsApi.reissueInvite("token-123", 2)).rejects.toMatchObject({
+      code: "not_pending",
+    });
+  });
+});
+
+describe("accountsApi.cancelInvite", () => {
+  it("deletes the pending account", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(noContentResponse());
+    vi.stubGlobal("fetch", fetchMock);
+
+    await accountsApi.cancelInvite("token-123", 2);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/accounts/2/invite",
+      expect.objectContaining({
+        method: "DELETE",
+        credentials: "include",
+        headers: { Authorization: "Bearer token-123" },
+      }),
+    );
+  });
+
+  it("throws an explanation when the account has no outstanding invite", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(409, {
+        error: { code: "not_pending", message: "account does not have an outstanding invite" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(accountsApi.cancelInvite("token-123", 2)).rejects.toMatchObject({
+      code: "not_pending",
+    });
+  });
+});
+
+describe("accountsApi.sendInviteEmail", () => {
+  it("sends the link", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(noContentResponse());
+    vi.stubGlobal("fetch", fetchMock);
+
+    await accountsApi.sendInviteEmail("token-123", 2, "https://example.com/accept-invite?token=abc");
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/accounts/2/invite/email",
+      expect.objectContaining({
+        method: "POST",
+        credentials: "include",
+        headers: expect.objectContaining({ Authorization: "Bearer token-123" }),
+        body: JSON.stringify({ link: "https://example.com/accept-invite?token=abc" }),
+      }),
+    );
+  });
+
+  it("throws an explanation when no email is on file", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(409, {
+        error: { code: "no_invite_email", message: "no email on file for this invite" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      accountsApi.sendInviteEmail("token-123", 2, "https://example.com/accept-invite?token=abc"),
+    ).rejects.toMatchObject({ code: "no_invite_email" });
+  });
+});
+
 describe("accountsApi.resetPassword", () => {
   it("sends the new temporary password and maps the response", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
@@ -120,6 +299,8 @@ describe("accountsApi.resetPassword", () => {
         is_disabled: false,
         must_change_password: true,
         created_at: "2026-01-01T00:00:00Z",
+        is_pending: false,
+        invite_email_available: false,
       }),
     );
     vi.stubGlobal("fetch", fetchMock);
@@ -133,6 +314,9 @@ describe("accountsApi.resetPassword", () => {
       isDisabled: false,
       mustChangePassword: true,
       createdAt: "2026-01-01T00:00:00Z",
+      isPending: false,
+      inviteExpiresAt: null,
+      inviteEmailAvailable: false,
     });
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/accounts/2/reset-password",

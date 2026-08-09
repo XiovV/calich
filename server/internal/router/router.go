@@ -31,6 +31,7 @@ func New(logger *slog.Logger, authHandler *handlers.AuthHandler, calendarHandler
 			// it: it establishes a Session rather than requiring one, proving
 			// identity via a single-use token instead of a bearer token.
 			r.Post("/accept-invite", authHandler.AcceptInvite)
+			r.Get("/accept-invite", authHandler.PreviewInvite)
 
 			r.With(httpauth.RequireAuth(authenticator)).Post("/change-password", authHandler.ChangePassword)
 
@@ -140,6 +141,7 @@ func New(logger *slog.Logger, authHandler *handlers.AuthHandler, calendarHandler
 			r.Post("/invite", accountHandler.CreateInvite)
 			r.Post("/{id}/invite/reissue", accountHandler.ReissueInvite)
 			r.Delete("/{id}/invite", accountHandler.CancelInvite)
+			r.Post("/{id}/invite/email", accountHandler.SendInviteEmail)
 			r.Post("/{id}/reset-password", accountHandler.ResetPassword)
 			r.Put("/{id}/admin", accountHandler.SetAdmin)
 			r.Put("/{id}/disabled", accountHandler.SetDisabled)

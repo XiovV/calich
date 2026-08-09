@@ -225,16 +225,9 @@ func (s *AuthService) AcceptInvite(ctx context.Context, token, password string) 
 		return LoginResult{}, ErrInvalidPassword
 	}
 
-	user, err := s.users.GetByInviteTokenHash(ctx, hashToken(token))
-	if errors.Is(err, repository.ErrNotFound) {
-		return LoginResult{}, ErrInviteInvalid
-	}
+	user, err := s.liveInviteUser(ctx, token)
 	if err != nil {
-		return LoginResult{}, fmt.Errorf("get user by invite token: %w", err)
-	}
-
-	if !user.IsPending() || user.InviteExpiresAt == nil || time.Now().After(*user.InviteExpiresAt) {
-		return LoginResult{}, ErrInviteInvalid
+		return LoginResult{}, err
 	}
 
 	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
@@ -252,6 +245,39 @@ func (s *AuthService) AcceptInvite(ctx context.Context, token, password string) 
 	}
 
 	return LoginResult{sessionTokens: tokens, MustChangePassword: false}, nil
+}
+
+// liveInviteUser resolves token to the Pending User it names, the check
+// AcceptInvite and PreviewInvite share: the token must match a User, that
+// User must still be Pending, and the Invite must not have expired.
+func (s *AuthService) liveInviteUser(ctx context.Context, token string) (repository.User, error) {
+	user, err := s.users.GetByInviteTokenHash(ctx, hashToken(token))
+	if errors.Is(err, repository.ErrNotFound) {
+		return repository.User{}, ErrInviteInvalid
+	}
+	if err != nil {
+		return repository.User{}, fmt.Errorf("get user by invite token: %w", err)
+	}
+
+	if !user.IsPending() || user.InviteExpiresAt == nil || time.Now().After(*user.InviteExpiresAt) {
+		return repository.User{}, ErrInviteInvalid
+	}
+
+	return user, nil
+}
+
+// PreviewInvite returns the username a live Invite token names, without
+// consuming it (ADR-0042) — the accept-invite page uses this to show the
+// invitee which pre-chosen username they're setting a password for before
+// they submit one. Rejected the same way as AcceptInvite, and for the same
+// reason: telling an unknown token apart from an expired or already-accepted
+// one would leak whether it ever existed.
+func (s *AuthService) PreviewInvite(ctx context.Context, token string) (string, error) {
+	user, err := s.liveInviteUser(ctx, token)
+	if err != nil {
+		return "", err
+	}
+	return user.Username, nil
 }
 
 // Authenticate validates an access token and returns the user id it was

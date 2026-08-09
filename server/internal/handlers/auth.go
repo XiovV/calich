@@ -46,6 +46,10 @@ var acceptInviteErrors = []errorCase{
 	{service.ErrInvalidPassword, badRequest("password must not be empty")},
 }
 
+var previewInviteErrors = []errorCase{
+	{service.ErrInviteInvalid, unauthorized("invite_invalid", "invite is invalid or has expired")},
+}
+
 var updateEmailErrors = []errorCase{
 	{service.ErrInvalidEmail, badRequest("email is not a valid address")},
 }
@@ -97,6 +101,23 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 type acceptInviteRequest struct {
 	Token    string `json:"token"`
 	Password string `json:"password"`
+}
+
+type previewInviteResponse struct {
+	Username string `json:"username"`
+}
+
+// PreviewInvite is the public, unauthenticated lookup the accept-invite page
+// calls before the invitee has chosen a password (ADR-0042): it resolves a
+// token to the username it names, without consuming it, so the page can show
+// which pre-chosen account the invitee is about to activate.
+func (h *AuthHandler) PreviewInvite(w http.ResponseWriter, r *http.Request) {
+	username, err := h.auth.PreviewInvite(r.Context(), r.URL.Query().Get("token"))
+	if respondError(w, err, previewInviteErrors, "failed to preview invite") {
+		return
+	}
+
+	httpresponse.JSON(w, http.StatusOK, previewInviteResponse{Username: username})
 }
 
 // AcceptInvite is the public, unauthenticated counterpart to Login for a

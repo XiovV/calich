@@ -10,6 +10,30 @@ export interface Account {
   isDisabled: boolean;
   mustChangePassword: boolean;
   createdAt: string;
+  // isPending is whether this account was created via an Invite and hasn't
+  // accepted it yet (ADR-0042) — a distinct state from isDisabled even
+  // though both block login.
+  isPending: boolean;
+  // inviteExpiresAt is when the current outstanding Invite token stops being
+  // acceptable; null once isPending is false.
+  inviteExpiresAt: string | null;
+  // inviteEmailAvailable is whether the "send email" invite action can be
+  // offered for this row: it has an email on file and this deployment has
+  // SMTP configured. Always false once isPending is false.
+  inviteEmailAvailable: boolean;
+}
+
+// An issued or reissued Invite (ADR-0042): the resulting Pending account
+// alongside the plaintext token, shown to the Admin exactly once — nothing
+// retrieves it again once this response is handled.
+export interface InviteResult {
+  account: Account;
+  token: string;
+}
+
+interface InviteResultWire {
+  account: AccountWire;
+  token: string;
 }
 
 // What deleting an account would affect (ADR-0037): every Calendar it owns
@@ -35,6 +59,9 @@ interface AccountWire {
   is_disabled: boolean;
   must_change_password: boolean;
   created_at: string;
+  is_pending: boolean;
+  invite_expires_at?: string;
+  invite_email_available: boolean;
 }
 
 function fromWire(wire: AccountWire): Account {
@@ -45,7 +72,14 @@ function fromWire(wire: AccountWire): Account {
     isDisabled: wire.is_disabled,
     mustChangePassword: wire.must_change_password,
     createdAt: wire.created_at,
+    isPending: wire.is_pending,
+    inviteExpiresAt: wire.invite_expires_at ?? null,
+    inviteEmailAvailable: wire.invite_email_available,
   };
+}
+
+function fromInviteResultWire(wire: InviteResultWire): InviteResult {
+  return { account: fromWire(wire.account), token: wire.token };
 }
 
 export const accountsApi = {
@@ -69,6 +103,56 @@ export const accountsApi = {
     if (!response.ok) throw await errorFromResponse(response);
 
     return fromWire(await response.json());
+  },
+
+  // Invites an account instead of creating one with a temporary password
+  // (ADR-0042): email is optional, and the token this returns is shown to
+  // the Admin exactly once, to distribute however they choose.
+  async createInvite(accessToken: string, username: string, email: string): Promise<InviteResult> {
+    const response = await authedFetch(accessToken, "/api/accounts/invite", {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username, email }),
+    });
+    if (!response.ok) throw await errorFromResponse(response);
+
+    return fromInviteResultWire(await response.json());
+  },
+
+  // Replaces id's outstanding Invite with a fresh token and a reset 7-day
+  // expiry (ADR-0042), invalidating whichever token came before it.
+  async reissueInvite(accessToken: string, id: number): Promise<InviteResult> {
+    const response = await authedFetch(accessToken, `/api/accounts/${id}/invite/reissue`, {
+      method: "POST",
+      credentials: "include",
+    });
+    if (!response.ok) throw await errorFromResponse(response);
+
+    return fromInviteResultWire(await response.json());
+  },
+
+  // Deletes id's Pending account outright (ADR-0042) — a Pending account
+  // owns nothing, so there is no disposition to choose, unlike delete().
+  async cancelInvite(accessToken: string, id: number): Promise<void> {
+    const response = await authedFetch(accessToken, `/api/accounts/${id}/invite`, {
+      method: "DELETE",
+      credentials: "include",
+    });
+    if (!response.ok) throw await errorFromResponse(response);
+  },
+
+  // Emails id's Invite link to the address on file (ADR-0042). link is
+  // built by the caller — this browser's own origin, not the server's
+  // concern — and sent verbatim.
+  async sendInviteEmail(accessToken: string, id: number, link: string): Promise<void> {
+    const response = await authedFetch(accessToken, `/api/accounts/${id}/invite/email`, {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ link }),
+    });
+    if (!response.ok) throw await errorFromResponse(response);
   },
 
   async resetPassword(accessToken: string, id: number, password: string): Promise<Account> {

@@ -89,6 +89,35 @@ export const authApi = {
     return { accessToken: body.access_token, mustChangePassword: body.must_change_password };
   },
 
+  // Sets a password for the Pending account token names and logs the caller
+  // straight in (ADR-0042) — the public, unauthenticated counterpart to
+  // login for an Invite link.
+  async acceptInvite(token: string, password: string): Promise<LoginResult> {
+    const response = await fetch("/api/auth/accept-invite", {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token, password }),
+    });
+    if (!response.ok) throw await errorFromResponse(response);
+
+    const body = (await response.json()) as { access_token: string; must_change_password: boolean };
+    return { accessToken: body.access_token, mustChangePassword: body.must_change_password };
+  },
+
+  // Resolves an Invite token to the username it names, without consuming it
+  // (ADR-0042) — the accept-invite page calls this on load to show the
+  // invitee which pre-chosen account they're setting a password for.
+  async previewInvite(token: string): Promise<string> {
+    const response = await fetch(`/api/auth/accept-invite?token=${encodeURIComponent(token)}`, {
+      credentials: "include",
+    });
+    if (!response.ok) throw await errorFromResponse(response);
+
+    const body = (await response.json()) as { username: string };
+    return body.username;
+  },
+
   // Relies on the httpOnly refresh_token cookie the browser sends automatically —
   // there is nothing to pass in.
   async refresh(): Promise<{ accessToken: string }> {

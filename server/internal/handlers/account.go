@@ -17,11 +17,12 @@ import (
 // serves sits behind httpauth.RequireAdmin, so the caller's own identity is
 // never consulted here beyond that gate.
 type AccountHandler struct {
-	accounts *service.AccountService
+	accounts       *service.AccountService
+	smtpConfigured bool
 }
 
-func NewAccountHandler(accounts *service.AccountService) *AccountHandler {
-	return &AccountHandler{accounts: accounts}
+func NewAccountHandler(accounts *service.AccountService, smtpConfigured bool) *AccountHandler {
+	return &AccountHandler{accounts: accounts, smtpConfigured: smtpConfigured}
 }
 
 type accountResponse struct {
@@ -38,18 +39,23 @@ type accountResponse struct {
 	// InviteExpiresAt is when the current outstanding Invite token stops
 	// being acceptable; nil once IsPending is false.
 	InviteExpiresAt *time.Time `json:"invite_expires_at,omitempty"`
+	// InviteEmailAvailable is whether the "send email" invite action can be
+	// offered for this row: it has an email on file and this deployment has
+	// SMTP configured (ADR-0042). Always false once IsPending is false.
+	InviteEmailAvailable bool `json:"invite_email_available"`
 }
 
-func toAccountResponse(u repository.User) accountResponse {
+func (h *AccountHandler) toAccountResponse(u repository.User) accountResponse {
 	return accountResponse{
-		ID:                 u.ID,
-		Username:           u.Username,
-		IsAdmin:            u.IsAdmin,
-		IsDisabled:         u.IsDisabled,
-		MustChangePassword: u.MustChangePassword,
-		CreatedAt:          u.CreatedAt,
-		IsPending:          u.IsPending(),
-		InviteExpiresAt:    u.InviteExpiresAt,
+		ID:                   u.ID,
+		Username:             u.Username,
+		IsAdmin:              u.IsAdmin,
+		IsDisabled:           u.IsDisabled,
+		MustChangePassword:   u.MustChangePassword,
+		CreatedAt:            u.CreatedAt,
+		IsPending:            u.IsPending(),
+		InviteExpiresAt:      u.InviteExpiresAt,
+		InviteEmailAvailable: u.IsPending() && u.Email != nil && h.smtpConfigured,
 	}
 }
 
@@ -61,8 +67,8 @@ type inviteResponse struct {
 	Token   string          `json:"token"`
 }
 
-func toInviteResponse(result service.InviteResult) inviteResponse {
-	return inviteResponse{Account: toAccountResponse(result.User), Token: result.Token}
+func (h *AccountHandler) toInviteResponse(result service.InviteResult) inviteResponse {
+	return inviteResponse{Account: h.toAccountResponse(result.User), Token: result.Token}
 }
 
 var createAccountErrors = []errorCase{
@@ -109,11 +115,13 @@ var deleteImpactErrors = []errorCase{
 
 var createInviteErrors = []errorCase{
 	{service.ErrInvalidUsername, badRequest("username must not be empty, must not contain whitespace or a colon, and must be at most 64 characters")},
+	{service.ErrInvalidEmail, badRequest("email is not a valid address")},
 	{service.ErrUsernameTaken, conflict("username_taken", "username is already taken")},
 }
 
-// notPendingErrors is shared by ReissueInvite and CancelInvite, the two
-// operations that only make sense against a Pending account.
+// notPendingErrors is shared by ReissueInvite, CancelInvite, and
+// SendInviteEmail — operations that only make sense against a Pending
+// account.
 var notPendingErrors = []errorCase{
 	{service.ErrUserNotPending, conflict("not_pending", service.ErrUserNotPending.Error())},
 	{repository.ErrNotFound, notFound("account not found")},
@@ -122,6 +130,11 @@ var notPendingErrors = []errorCase{
 var reissueInviteErrors = notPendingErrors
 
 var cancelInviteErrors = notPendingErrors
+
+var sendInviteEmailErrors = alsoHandling(notPendingErrors,
+	errorCase{service.ErrNoInviteEmail, conflict("no_invite_email", service.ErrNoInviteEmail.Error())},
+	errorCase{service.ErrEmailNotConfigured, conflict("email_not_configured", service.ErrEmailNotConfigured.Error())},
+)
 
 var deleteAccountErrors = []errorCase{
 	{service.ErrInvalidDisposition, badRequest(service.ErrInvalidDisposition.Error())},
@@ -149,11 +162,15 @@ func (h *AccountHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	httpresponse.JSON(w, http.StatusCreated, toAccountResponse(user))
+	httpresponse.JSON(w, http.StatusCreated, h.toAccountResponse(user))
 }
 
 type createInviteRequest struct {
 	Username string `json:"username"`
+	// Email is optional (ADR-0042 leaves email optional for an Invite
+	// exactly as it already is for direct creation) — when set, it's what
+	// SendInviteEmail later sends to.
+	Email string `json:"email"`
 }
 
 // CreateInvite makes a new Pending account and issues its Invite (ADR-0042)
@@ -166,12 +183,12 @@ func (h *AccountHandler) CreateInvite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result, err := h.accounts.CreateInvite(r.Context(), req.Username)
+	result, err := h.accounts.CreateInvite(r.Context(), req.Username, req.Email)
 	if respondError(w, err, createInviteErrors, "failed to create invite") {
 		return
 	}
 
-	httpresponse.JSON(w, http.StatusCreated, toInviteResponse(result))
+	httpresponse.JSON(w, http.StatusCreated, h.toInviteResponse(result))
 }
 
 // ReissueInvite replaces id's outstanding Invite with a fresh token and
@@ -188,7 +205,7 @@ func (h *AccountHandler) ReissueInvite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	httpresponse.JSON(w, http.StatusOK, toInviteResponse(result))
+	httpresponse.JSON(w, http.StatusOK, h.toInviteResponse(result))
 }
 
 // CancelInvite deletes id's Pending account outright (ADR-0042) — no
@@ -208,6 +225,41 @@ func (h *AccountHandler) CancelInvite(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+type sendInviteEmailRequest struct {
+	// Link is the accept-invite URL to send, built by the caller's own
+	// browser — the server has no notion of this deployment's public
+	// origin, so it sends this string verbatim rather than constructing one
+	// itself (ADR-0042).
+	Link string `json:"link"`
+}
+
+// SendInviteEmail emails id's outstanding Invite link to the address on
+// file, when this deployment has SMTP configured and an email is on file
+// (ADR-0042).
+func (h *AccountHandler) SendInviteEmail(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		httpresponse.Error(w, http.StatusBadRequest, "invalid_request", "id must be a number")
+		return
+	}
+
+	var req sendInviteEmailRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httpresponse.Error(w, http.StatusBadRequest, "invalid_request", "request body must be valid JSON")
+		return
+	}
+	if req.Link == "" {
+		httpresponse.Error(w, http.StatusBadRequest, "invalid_request", "link must not be empty")
+		return
+	}
+
+	if err := h.accounts.SendInviteEmail(r.Context(), id, req.Link); respondError(w, err, sendInviteEmailErrors, "failed to send invite email") {
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (h *AccountHandler) List(w http.ResponseWriter, r *http.Request) {
 	users, err := h.accounts.List(r.Context())
 	if err != nil {
@@ -217,7 +269,7 @@ func (h *AccountHandler) List(w http.ResponseWriter, r *http.Request) {
 
 	responses := make([]accountResponse, len(users))
 	for i, u := range users {
-		responses[i] = toAccountResponse(u)
+		responses[i] = h.toAccountResponse(u)
 	}
 
 	httpresponse.JSON(w, http.StatusOK, responses)
@@ -245,7 +297,7 @@ func (h *AccountHandler) ResetPassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	httpresponse.JSON(w, http.StatusOK, toAccountResponse(user))
+	httpresponse.JSON(w, http.StatusOK, h.toAccountResponse(user))
 }
 
 type setAdminRequest struct {
@@ -270,7 +322,7 @@ func (h *AccountHandler) SetAdmin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	httpresponse.JSON(w, http.StatusOK, toAccountResponse(user))
+	httpresponse.JSON(w, http.StatusOK, h.toAccountResponse(user))
 }
 
 type setDisabledRequest struct {
@@ -295,7 +347,7 @@ func (h *AccountHandler) SetDisabled(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	httpresponse.JSON(w, http.StatusOK, toAccountResponse(user))
+	httpresponse.JSON(w, http.StatusOK, h.toAccountResponse(user))
 }
 
 type setUsernameRequest struct {
@@ -320,7 +372,7 @@ func (h *AccountHandler) SetUsername(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	httpresponse.JSON(w, http.StatusOK, toAccountResponse(user))
+	httpresponse.JSON(w, http.StatusOK, h.toAccountResponse(user))
 }
 
 type usernameImpactResponse struct {

@@ -1,11 +1,15 @@
 import { create } from "zustand";
-import { type Account, type AccountDisposition, accountsApi } from "./accountsApi";
+import { type Account, type AccountDisposition, type InviteResult, accountsApi } from "./accountsApi";
 import { useAuthStore } from "./authStore";
 
 interface AccountsState {
   accounts: Account[];
   fetchAccounts: () => Promise<void>;
   createAccount: (username: string, password: string) => Promise<void>;
+  createInvite: (username: string, email: string) => Promise<InviteResult>;
+  reissueInvite: (id: number) => Promise<InviteResult>;
+  cancelInvite: (id: number) => Promise<void>;
+  sendInviteEmail: (id: number, link: string) => Promise<void>;
   resetPassword: (id: number, password: string) => Promise<void>;
   setAdmin: (id: number, isAdmin: boolean) => Promise<void>;
   setDisabled: (id: number, isDisabled: boolean) => Promise<void>;
@@ -30,6 +34,27 @@ export const useAccountsStore = create<AccountsState>((set, get) => ({
   createAccount: async (username, password) => {
     const account = await accountsApi.create(requireAccessToken(), username, password);
     set({ accounts: [...get().accounts, account] });
+  },
+
+  createInvite: async (username, email) => {
+    const result = await accountsApi.createInvite(requireAccessToken(), username, email);
+    set({ accounts: [...get().accounts, result.account] });
+    return result;
+  },
+
+  reissueInvite: async (id) => {
+    const result = await accountsApi.reissueInvite(requireAccessToken(), id);
+    set({ accounts: get().accounts.map((a) => (a.id === id ? result.account : a)) });
+    return result;
+  },
+
+  cancelInvite: async (id) => {
+    await accountsApi.cancelInvite(requireAccessToken(), id);
+    set({ accounts: get().accounts.filter((a) => a.id !== id) });
+  },
+
+  sendInviteEmail: async (id, link) => {
+    await accountsApi.sendInviteEmail(requireAccessToken(), id, link);
   },
 
   resetPassword: async (id, password) => {

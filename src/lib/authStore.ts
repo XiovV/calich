@@ -16,6 +16,7 @@ interface AuthState {
   accessToken: string | null;
   bootstrap: () => Promise<void>;
   login: (username: string, password: string) => Promise<void>;
+  acceptInvite: (token: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
   changePassword: (currentPassword: string, newPassword: string) => Promise<void>;
   updateEmail: (email: string) => Promise<void>;
@@ -89,6 +90,16 @@ export const useAuthStore = create<AuthState>((set, get) => {
         return;
       }
 
+      const user = await authApi.me(accessToken);
+      set(authenticated(user, accessToken));
+      useShellStore.getState().setActiveView(user.defaultView);
+    },
+
+    // A Pending account accepting its Invite lands in the app already
+    // logged in (ADR-0042) — no separate "invite accepted, now please log
+    // in" step — so this seeds the shell the same way login/bootstrap do.
+    acceptInvite: async (token, password) => {
+      const { accessToken } = await authApi.acceptInvite(token, password);
       const user = await authApi.me(accessToken);
       set(authenticated(user, accessToken));
       useShellStore.getState().setActiveView(user.defaultView);

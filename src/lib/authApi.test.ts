@@ -60,6 +60,64 @@ describe("authApi.login", () => {
   });
 });
 
+describe("authApi.acceptInvite", () => {
+  it("returns the access token on success", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(200, { access_token: "token-123", must_change_password: false }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await authApi.acceptInvite("invite-token-abc", "new-password");
+
+    expect(result).toEqual({ accessToken: "token-123", mustChangePassword: false });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/auth/accept-invite",
+      expect.objectContaining({
+        method: "POST",
+        credentials: "include",
+        body: JSON.stringify({ token: "invite-token-abc", password: "new-password" }),
+      }),
+    );
+  });
+
+  it("throws an ApiError when the invite is invalid or expired", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(401, { error: { code: "invite_invalid", message: "invite is invalid or has expired" } }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(authApi.acceptInvite("bad-token", "new-password")).rejects.toMatchObject({
+      code: "invite_invalid",
+    });
+  });
+});
+
+describe("authApi.previewInvite", () => {
+  it("returns the username on success", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, { username: "alice" }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await authApi.previewInvite("invite-token-abc");
+
+    expect(result).toBe("alice");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/auth/accept-invite?token=invite-token-abc",
+      expect.objectContaining({ credentials: "include" }),
+    );
+  });
+
+  it("throws an ApiError when the invite is invalid or expired", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(401, { error: { code: "invite_invalid", message: "invite is invalid or has expired" } }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(authApi.previewInvite("bad-token")).rejects.toMatchObject({
+      code: "invite_invalid",
+    });
+  });
+});
+
 describe("authApi.refresh", () => {
   it("sends no body and includes credentials", async () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, { access_token: "new-token" }));
