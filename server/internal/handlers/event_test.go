@@ -103,7 +103,7 @@ func newEventTestServerWithServices(t *testing.T) (baseURL, accessToken, calenda
 	users := repository.NewUserRepository(sqlDB)
 	sessions := repository.NewSessionRepository(sqlDB)
 	workspaceRepo := repository.NewWorkspaceRepository(sqlDB)
-	workspaces := service.NewWorkspaceService(sqlDB, workspaceRepo, repository.NewWorkspaceInviteRepository(sqlDB))
+	workspaces := service.NewWorkspaceService(sqlDB, workspaceRepo, repository.NewWorkspaceInviteRepository(sqlDB), repository.NewCalendarRepository(sqlDB), repository.NewCalendarShareRepository(sqlDB))
 	auth := service.NewAuthService(users, sessions, workspaces, repository.NewWorkspaceInviteRepository(sqlDB), []byte("test-secret"), "alice", "hunter2", false)
 	bootstrapUser, _, err := auth.Bootstrap(context.Background())
 	if err != nil {

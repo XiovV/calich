@@ -17,13 +17,15 @@ import (
 // lives on AuthService instead, mirroring the AccountService/AuthService
 // split ADR-0042 already uses for the account-level Invite this replaces.
 type WorkspaceService struct {
-	db         *sql.DB
-	workspaces *repository.WorkspaceRepository
-	invites    *repository.WorkspaceInviteRepository
+	db           *sql.DB
+	workspaces   *repository.WorkspaceRepository
+	invites      *repository.WorkspaceInviteRepository
+	calendarRepo *repository.CalendarRepository
+	shareRepo    *repository.CalendarShareRepository
 }
 
-func NewWorkspaceService(db *sql.DB, workspaces *repository.WorkspaceRepository, invites *repository.WorkspaceInviteRepository) *WorkspaceService {
-	return &WorkspaceService{db: db, workspaces: workspaces, invites: invites}
+func NewWorkspaceService(db *sql.DB, workspaces *repository.WorkspaceRepository, invites *repository.WorkspaceInviteRepository, calendarRepo *repository.CalendarRepository, shareRepo *repository.CalendarShareRepository) *WorkspaceService {
+	return &WorkspaceService{db: db, workspaces: workspaces, invites: invites, calendarRepo: calendarRepo, shareRepo: shareRepo}
 }
 
 // CreateForOwner creates a new Workspace named name and, atomically, adds
@@ -173,6 +175,22 @@ var (
 	// lock out control of the Workspace.
 	ErrAdminCannotRemoveAdmin = errors.New("only the workspace owner can remove an admin")
 
+	// ErrCalendarNotOwnedByRemovedMember is returned by RemoveMember when a
+	// CalendarDisposition names a Calendar the target Member doesn't own
+	// within workspaceID (#160).
+	ErrCalendarNotOwnedByRemovedMember = errors.New("calendar is not owned by the member being removed")
+	// ErrCannotTransferToRemovedMember is returned by RemoveMember when a
+	// CalendarDisposition's TransferTo names the Member being removed — their
+	// Membership, and with it their standing in the Workspace, is about to
+	// end, so their own Calendars can't be reassigned back to them.
+	ErrCannotTransferToRemovedMember = errors.New("cannot transfer a calendar to the member being removed")
+	// ErrMissingCalendarDisposition is returned by RemoveMember when it
+	// wasn't given a disposition for every Calendar the target Member owns
+	// within workspaceID — removal requires an explicit transfer-or-delete
+	// choice for each one (#160), so a Member's departure can't silently
+	// orphan or destroy a Calendar others rely on.
+	ErrMissingCalendarDisposition = errors.New("every calendar the member owns in this workspace needs a disposition")
+
 	// ErrInvalidWorkspaceName is returned by UpdateSettings when name is
 	// empty.
 	ErrInvalidWorkspaceName = errors.New("workspace name must not be empty")
@@ -233,14 +251,13 @@ func (s *WorkspaceService) SetMemberRole(ctx context.Context, actorUserID, works
 	return member, nil
 }
 
-// RemoveMember ends targetUserID's Membership in workspaceID (#156,
-// ADR-0044), callable by the Owner or an Admin. The Owner can never be
-// removed (only a dedicated ownership transfer moves that Role away), and
-// an Admin actor is refused against another Admin target — only the Owner
-// can remove/demote an Admin. Removal here never touches Calendars the
-// target owns in this Workspace; the transfer-or-delete disposition that
-// requires is #160's concern, layered on top of this call.
-func (s *WorkspaceService) RemoveMember(ctx context.Context, actorUserID, workspaceID, targetUserID int64) error {
+// checkRemovalAuthority refuses actorUserID's attempt to remove targetUserID
+// from workspaceID the same way RemoveMember does (#156, ADR-0044): actor
+// must hold Owner or Admin, the Owner can never be removed, and an Admin
+// actor is refused against another Admin target. Shared by RemoveMember and
+// RemoveMemberImpact so a preview can never show impact for a removal that
+// RemoveMember itself would refuse.
+func (s *WorkspaceService) checkRemovalAuthority(ctx context.Context, actorUserID, workspaceID, targetUserID int64) error {
 	actor, err := s.workspaces.GetMember(ctx, workspaceID, actorUserID)
 	if err != nil {
 		return err
@@ -259,11 +276,167 @@ func (s *WorkspaceService) RemoveMember(ctx context.Context, actorUserID, worksp
 	if actor.Role == repository.WorkspaceRoleAdmin && target.Role == repository.WorkspaceRoleAdmin {
 		return ErrAdminCannotRemoveAdmin
 	}
-
-	if err := s.workspaces.RemoveMember(ctx, workspaceID, targetUserID); err != nil {
-		return fmt.Errorf("remove workspace member: %w", err)
-	}
 	return nil
+}
+
+// RemoveMemberImpact reports which Calendars targetUserID owns within
+// workspaceID, how many Users would lose Access to each under
+// DispositionDelete, and who each could be transferred to instead (#160) —
+// the preview a removal-confirmation UI shows before RemoveMember is called,
+// mirroring AccountService.DeleteImpact's shape. Refused the same way
+// RemoveMember itself would refuse the underlying removal.
+func (s *WorkspaceService) RemoveMemberImpact(ctx context.Context, actorUserID, workspaceID, targetUserID int64) (RemoveMemberImpact, error) {
+	if err := s.checkRemovalAuthority(ctx, actorUserID, workspaceID, targetUserID); err != nil {
+		return RemoveMemberImpact{}, err
+	}
+
+	calendars, err := s.calendarRepo.ListByUserAndWorkspace(ctx, targetUserID, workspaceID)
+	if err != nil {
+		return RemoveMemberImpact{}, fmt.Errorf("list owned calendars: %w", err)
+	}
+
+	if len(calendars) == 0 {
+		return RemoveMemberImpact{Calendars: []CalendarImpact{}}, nil
+	}
+
+	workspace, err := s.workspaces.GetByID(ctx, workspaceID)
+	if err != nil {
+		return RemoveMemberImpact{}, fmt.Errorf("get workspace %d: %w", workspaceID, err)
+	}
+
+	candidates, err := s.transferCandidates(ctx, workspaceID, targetUserID)
+	if err != nil {
+		return RemoveMemberImpact{}, err
+	}
+
+	impact := RemoveMemberImpact{Calendars: make([]CalendarImpact, 0, len(calendars))}
+	for _, c := range calendars {
+		shares, err := s.shareRepo.ListByCalendarWithUsername(ctx, c.ID)
+		if err != nil {
+			return RemoveMemberImpact{}, fmt.Errorf("list shares for calendar %s: %w", c.ID, err)
+		}
+
+		impact.Calendars = append(impact.Calendars, CalendarImpact{
+			ID:                 c.ID,
+			Name:               c.Name,
+			WorkspaceID:        c.WorkspaceID,
+			WorkspaceName:      workspace.Name,
+			ShareCount:         len(shares),
+			TransferCandidates: candidates,
+		})
+	}
+
+	return impact, nil
+}
+
+// transferCandidates lists every other enabled Member of workspaceID —
+// RemoveMemberImpact's valid transfer targets, since a Calendar's Owner must
+// belong to its own Workspace (ADR-0044, ADR-0045).
+func (s *WorkspaceService) transferCandidates(ctx context.Context, workspaceID, excludeUserID int64) ([]TransferCandidate, error) {
+	members, err := s.workspaces.ListMembersWithUsername(ctx, workspaceID)
+	if err != nil {
+		return nil, fmt.Errorf("list workspace members: %w", err)
+	}
+
+	candidates := make([]TransferCandidate, 0, len(members))
+	for _, m := range members {
+		if m.UserID == excludeUserID {
+			continue
+		}
+		candidates = append(candidates, TransferCandidate{ID: m.UserID, Username: m.Username})
+	}
+	return candidates, nil
+}
+
+// RemoveMemberImpact is what the method of the same name reports before
+// targetUserID is removed from a Workspace (#160): every Calendar they own
+// within it.
+type RemoveMemberImpact struct {
+	Calendars []CalendarImpact
+}
+
+// RemoveMember ends targetUserID's Membership in workspaceID (#156, #160,
+// ADR-0044), callable by the Owner or an Admin. The Owner can never be
+// removed (only a dedicated ownership transfer moves that Role away), and
+// an Admin actor is refused against another Admin target — only the Owner
+// can remove/demote an Admin.
+//
+// Removal requires an explicit transfer-or-delete disposition for every
+// Calendar targetUserID owns *within workspaceID* — there is no default,
+// since a missing or ambiguous disposition would otherwise take a shared
+// Calendar out from under everyone with a Share the moment its owner leaves.
+// Calendars targetUserID owns in other Workspaces are untouched. Dispositions
+// and the Membership removal itself commit atomically: either all of it
+// happens, or none of it does.
+func (s *WorkspaceService) RemoveMember(ctx context.Context, actorUserID, workspaceID, targetUserID int64, dispositions []CalendarDisposition) error {
+	if err := s.checkRemovalAuthority(ctx, actorUserID, workspaceID, targetUserID); err != nil {
+		return err
+	}
+
+	calendars, err := s.calendarRepo.ListByUserAndWorkspace(ctx, targetUserID, workspaceID)
+	if err != nil {
+		return fmt.Errorf("list owned calendars: %w", err)
+	}
+	byID := make(map[string]repository.Calendar, len(calendars))
+	for _, c := range calendars {
+		byID[c.ID] = c
+	}
+
+	seen := make(map[string]bool, len(dispositions))
+	for _, d := range dispositions {
+		if seen[d.CalendarID] {
+			return ErrDuplicateDisposition
+		}
+		seen[d.CalendarID] = true
+
+		if _, ok := byID[d.CalendarID]; !ok {
+			return ErrCalendarNotOwnedByRemovedMember
+		}
+
+		switch d.Disposition {
+		case DispositionTransfer:
+			if d.TransferTo == nil {
+				return ErrTransferTargetRequired
+			}
+			if *d.TransferTo == targetUserID {
+				return ErrCannotTransferToRemovedMember
+			}
+			isMember, err := s.IsMember(ctx, workspaceID, *d.TransferTo)
+			if err != nil {
+				return err
+			}
+			if !isMember {
+				return ErrTransferTargetNotWorkspaceMember
+			}
+		case DispositionDelete:
+		default:
+			return ErrInvalidDisposition
+		}
+	}
+	if len(seen) != len(calendars) {
+		return ErrMissingCalendarDisposition
+	}
+
+	return repository.WithTx(ctx, s.db, func(tx *sql.Tx) error {
+		txCalendars := s.calendarRepo.WithTx(tx)
+		for _, d := range dispositions {
+			switch d.Disposition {
+			case DispositionTransfer:
+				if err := txCalendars.TransferOwnershipOne(ctx, targetUserID, d.CalendarID, *d.TransferTo); err != nil {
+					return fmt.Errorf("transfer calendar %s: %w", d.CalendarID, err)
+				}
+			case DispositionDelete:
+				if err := txCalendars.Delete(ctx, targetUserID, d.CalendarID); err != nil {
+					return fmt.Errorf("delete calendar %s: %w", d.CalendarID, err)
+				}
+			}
+		}
+
+		if err := s.workspaces.WithTx(tx).RemoveMember(ctx, workspaceID, targetUserID); err != nil {
+			return fmt.Errorf("remove workspace member: %w", err)
+		}
+		return nil
+	})
 }
 
 // UpdateSettings renames workspaceID and sets its default-share-privacy

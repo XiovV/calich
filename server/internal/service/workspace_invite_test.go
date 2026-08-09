@@ -26,7 +26,7 @@ func newTestWorkspaceInviteHarness(t *testing.T) (*WorkspaceService, *AuthServic
 	users := repository.NewUserRepository(sqlDB)
 	sessions := repository.NewSessionRepository(sqlDB)
 	inviteRepo := repository.NewWorkspaceInviteRepository(sqlDB)
-	workspaces := NewWorkspaceService(sqlDB, repository.NewWorkspaceRepository(sqlDB), inviteRepo)
+	workspaces := NewWorkspaceService(sqlDB, repository.NewWorkspaceRepository(sqlDB), inviteRepo, repository.NewCalendarRepository(sqlDB), repository.NewCalendarShareRepository(sqlDB))
 	auth := NewAuthService(users, sessions, workspaces, inviteRepo, []byte("test-secret"), "", "", false)
 
 	return workspaces, auth, users

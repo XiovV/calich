@@ -65,7 +65,7 @@ func main() {
 	colorOverrideRepo := repository.NewCalendarUserColorRepository(sqlDB)
 	workspaceRepo := repository.NewWorkspaceRepository(sqlDB)
 	workspaceInviteRepo := repository.NewWorkspaceInviteRepository(sqlDB)
-	workspaceService := service.NewWorkspaceService(sqlDB, workspaceRepo, workspaceInviteRepo)
+	workspaceService := service.NewWorkspaceService(sqlDB, workspaceRepo, workspaceInviteRepo, calendarRepo, shareRepo)
 	authService := service.NewAuthService(users, sessions, workspaceService, workspaceInviteRepo, jwtSecret, cfg.InitialUsername, cfg.InitialPassword, cfg.EnableSignups)
 	groupShareRepo := repository.NewCalendarGroupShareRepository(sqlDB)
 	groupRepo := repository.NewGroupRepository(sqlDB)

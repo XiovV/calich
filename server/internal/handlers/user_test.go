@@ -35,7 +35,7 @@ func newUserDirectoryTestServer(t *testing.T) userDirectoryTestServer {
 	users := repository.NewUserRepository(sqlDB)
 	sessions := repository.NewSessionRepository(sqlDB)
 	workspaceRepo := repository.NewWorkspaceRepository(sqlDB)
-	workspaceSvc := service.NewWorkspaceService(sqlDB, workspaceRepo, repository.NewWorkspaceInviteRepository(sqlDB))
+	workspaceSvc := service.NewWorkspaceService(sqlDB, workspaceRepo, repository.NewWorkspaceInviteRepository(sqlDB), repository.NewCalendarRepository(sqlDB), repository.NewCalendarShareRepository(sqlDB))
 	auth := service.NewAuthService(users, sessions, workspaceSvc, repository.NewWorkspaceInviteRepository(sqlDB), []byte("test-secret"), "caller", "hunter2", true)
 	ctx := context.Background()
 	if _, _, err := auth.Bootstrap(ctx); err != nil {

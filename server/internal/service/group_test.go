@@ -25,7 +25,7 @@ func newTestGroupService(t *testing.T) (*GroupService, *WorkspaceService, *repos
 
 	users := repository.NewUserRepository(sqlDB)
 	workspaceRepo := repository.NewWorkspaceRepository(sqlDB)
-	workspaceService := NewWorkspaceService(sqlDB, workspaceRepo, repository.NewWorkspaceInviteRepository(sqlDB))
+	workspaceService := NewWorkspaceService(sqlDB, workspaceRepo, repository.NewWorkspaceInviteRepository(sqlDB), repository.NewCalendarRepository(sqlDB), repository.NewCalendarShareRepository(sqlDB))
 	groupService := NewGroupService(repository.NewGroupRepository(sqlDB), workspaceRepo)
 
 	return groupService, workspaceService, users

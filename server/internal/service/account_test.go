@@ -43,7 +43,7 @@ func newAccountTestHarness(t *testing.T) *accountTestHarness {
 	shareRepo := repository.NewCalendarShareRepository(sqlDB)
 	workspaceRepo := repository.NewWorkspaceRepository(sqlDB)
 	workspaceInviteRepo := repository.NewWorkspaceInviteRepository(sqlDB)
-	workspaces := NewWorkspaceService(sqlDB, workspaceRepo, workspaceInviteRepo)
+	workspaces := NewWorkspaceService(sqlDB, workspaceRepo, workspaceInviteRepo, repository.NewCalendarRepository(sqlDB), repository.NewCalendarShareRepository(sqlDB))
 	auth := NewAuthService(users, sessions, workspaces, workspaceInviteRepo, []byte("test-secret"), "", "", true)
 	calendars := NewCalendarService(calendarRepo, shareRepo, users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo, repository.NewCalendarGroupShareRepository(sqlDB), repository.NewGroupRepository(sqlDB))
 	accounts := NewAccountService(sqlDB, users, sessions, calendarRepo, shareRepo, workspaceRepo, workspaces)
@@ -159,7 +159,7 @@ func TestAccountService_SetDisabled_SucceedsOnceWorkspaceIsReducedToJustTheOwner
 	bob, _ := h.register(t, "bob")
 	h.addMember(t, aliceWorkspace.ID, bob.ID, repository.WorkspaceRoleMember)
 
-	if err := h.workspaces.RemoveMember(ctx, alice.ID, aliceWorkspace.ID, bob.ID); err != nil {
+	if err := h.workspaces.RemoveMember(ctx, alice.ID, aliceWorkspace.ID, bob.ID, nil); err != nil {
 		t.Fatalf("remove bob: %v", err)
 	}
 
