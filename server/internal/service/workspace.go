@@ -265,13 +265,22 @@ func (s *WorkspaceService) UpdateSettings(ctx context.Context, actorUserID, work
 
 // requireOwnerOrAdmin refuses actorUserID unless they hold Owner or Admin on
 // workspaceID — issuing and reissuing a Workspace Invite are Admin-and-above
-// operations (ADR-0044). A caller who isn't even a Member gets the same
+// operations (ADR-0044). Delegates to requireWorkspaceOwnerOrAdmin, the same
+// check GroupService uses for its own Owner/Admin-gated operations
+// (ADR-0045).
+func (s *WorkspaceService) requireOwnerOrAdmin(ctx context.Context, actorUserID, workspaceID int64) error {
+	return requireWorkspaceOwnerOrAdmin(ctx, s.workspaces, actorUserID, workspaceID)
+}
+
+// requireWorkspaceOwnerOrAdmin refuses actorUserID unless they hold Owner or
+// Admin on workspaceID. A caller who isn't even a Member gets the same
 // repository.ErrNotFound a wrong-role Owner/Admin check would, mirroring
 // CalendarService.requireOwner's not-found-not-forbidden convention: nothing
 // distinguishes "this workspace doesn't exist" from "you have no authority
-// over it".
-func (s *WorkspaceService) requireOwnerOrAdmin(ctx context.Context, actorUserID, workspaceID int64) error {
-	member, err := s.workspaces.GetMember(ctx, workspaceID, actorUserID)
+// over it". Shared by WorkspaceService and GroupService, the two services
+// that gate operations on Workspace Role.
+func requireWorkspaceOwnerOrAdmin(ctx context.Context, workspaces *repository.WorkspaceRepository, actorUserID, workspaceID int64) error {
+	member, err := workspaces.GetMember(ctx, workspaceID, actorUserID)
 	if err != nil {
 		return err
 	}
