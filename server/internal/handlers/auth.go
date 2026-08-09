@@ -34,11 +34,16 @@ type loginRequest struct {
 type loginResponse struct {
 	AccessToken        string `json:"access_token"`
 	MustChangePassword bool   `json:"must_change_password"`
+	// IsDisabled is whether the account that just authenticated is Disabled
+	// (ADR-0044) — Login still succeeds, since re-activating is the one
+	// action a Disabled User must still be able to reach with no
+	// instance-wide Admin left to do it for them. The frontend gates
+	// everything else off this flag.
+	IsDisabled bool `json:"is_disabled"`
 }
 
 var loginErrors = []errorCase{
 	{service.ErrInvalidCredentials, unauthorized("invalid_credentials", "invalid username or password")},
-	{service.ErrAccountDisabled, unauthorized("account_disabled", "this account has been disabled")},
 }
 
 var registerErrors = []errorCase{
@@ -48,15 +53,6 @@ var registerErrors = []errorCase{
 	{service.ErrEmailRequired, badRequest("email is required")},
 	{service.ErrInvalidEmail, badRequest("email is not a valid address")},
 	{service.ErrInvalidPassword, badRequest("password must not be empty")},
-}
-
-var acceptInviteErrors = []errorCase{
-	{service.ErrInviteInvalid, unauthorized("invite_invalid", "invite is invalid or has expired")},
-	{service.ErrInvalidPassword, badRequest("password must not be empty")},
-}
-
-var previewInviteErrors = []errorCase{
-	{service.ErrInviteInvalid, unauthorized("invite_invalid", "invite is invalid or has expired")},
 }
 
 var previewWorkspaceInviteErrors = []errorCase{
@@ -94,7 +90,6 @@ var updatePreferencesErrors = []errorCase{
 
 var refreshErrors = []errorCase{
 	{service.ErrInvalidSession, unauthorized("unauthorized", "invalid or expired refresh token")},
-	{service.ErrAccountDisabled, unauthorized("account_disabled", "this account has been disabled")},
 }
 
 // ErrInvalidCredentials renders differently here than on login: it means the
@@ -121,6 +116,7 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 	httpresponse.JSON(w, http.StatusOK, loginResponse{
 		AccessToken:        result.AccessToken,
 		MustChangePassword: result.MustChangePassword,
+		IsDisabled:         result.IsDisabled,
 	})
 }
 
@@ -137,7 +133,7 @@ type registerRequest struct {
 // self-registration endpoint (ADR-0044): it always succeeds for the very
 // first account on the instance, and otherwise only when ENABLE_SIGNUPS is
 // true. A successful call creates a brand-new Workspace owned by the
-// registrant and logs them straight in, matching AcceptInvite's shape.
+// registrant and logs them straight in.
 func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 	var req registerRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -147,52 +143,6 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 
 	result, err := h.auth.Register(r.Context(), req.Name, req.Email, req.Password)
 	if respondError(w, err, registerErrors, "failed to register") {
-		return
-	}
-
-	setRefreshCookie(w, result.RefreshToken, result.RefreshTokenExpiresAt)
-
-	httpresponse.JSON(w, http.StatusOK, loginResponse{
-		AccessToken:        result.AccessToken,
-		MustChangePassword: result.MustChangePassword,
-	})
-}
-
-type acceptInviteRequest struct {
-	Token    string `json:"token"`
-	Password string `json:"password"`
-}
-
-type previewInviteResponse struct {
-	Username string `json:"username"`
-}
-
-// PreviewInvite is the public, unauthenticated lookup the accept-invite page
-// calls before the invitee has chosen a password (ADR-0042): it resolves a
-// token to the username it names, without consuming it, so the page can show
-// which pre-chosen account the invitee is about to activate.
-func (h *AuthHandler) PreviewInvite(w http.ResponseWriter, r *http.Request) {
-	username, err := h.auth.PreviewInvite(r.Context(), r.URL.Query().Get("token"))
-	if respondError(w, err, previewInviteErrors, "failed to preview invite") {
-		return
-	}
-
-	httpresponse.JSON(w, http.StatusOK, previewInviteResponse{Username: username})
-}
-
-// AcceptInvite is the public, unauthenticated counterpart to Login for a
-// Pending account (ADR-0042): a valid token and a new password set the
-// password, flip the account to Active, and log the caller straight in —
-// there is no separate "invite accepted, now please log in" step.
-func (h *AuthHandler) AcceptInvite(w http.ResponseWriter, r *http.Request) {
-	var req acceptInviteRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		httpresponse.Error(w, http.StatusBadRequest, "invalid_request", "request body must be valid JSON")
-		return
-	}
-
-	result, err := h.auth.AcceptInvite(r.Context(), req.Token, req.Password)
-	if respondError(w, err, acceptInviteErrors, "failed to accept invite") {
 		return
 	}
 
@@ -303,10 +253,6 @@ type meResponse struct {
 	// SyncedDeviceRemindersEnabled is "let my synced devices show reminder
 	// pop-ups (disable in-app reminder notifications)" (ADR-0027).
 	SyncedDeviceRemindersEnabled bool `json:"synced_device_reminders_enabled"`
-	// IsAdmin is authority over who exists on the instance (ADR-0037) —
-	// without it the web app cannot decide whether to render any
-	// administration UI (#119).
-	IsAdmin bool `json:"is_admin"`
 	// Preferences (ADR-0039): per-User display settings, wired up to the
 	// frontend (#128, #129, #130, #131).
 	WeekStart         int    `json:"week_start"`
@@ -324,7 +270,6 @@ func (h *AuthHandler) toMeResponse(user repository.User) meResponse {
 		Email:                         user.Email,
 		EmailReminderChannelAvailable: h.smtpConfigured && user.Email != nil,
 		SyncedDeviceRemindersEnabled:  user.SyncedDeviceRemindersEnabled,
-		IsAdmin:                       user.IsAdmin,
 		WeekStart:                     user.WeekStart,
 		DefaultView:                   user.DefaultView,
 		TimeFormat:                    user.TimeFormat,

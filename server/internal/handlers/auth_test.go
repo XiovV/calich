@@ -48,22 +48,22 @@ func newAuthTestServerWithSMTP(t *testing.T, smtpConfigured bool) *httptest.Serv
 	r.Post("/api/auth/refresh", h.Refresh)
 	r.Post("/api/auth/logout", h.Logout)
 	r.With(httpauth.RequireAuth(auth)).Post("/api/auth/change-password", h.ChangePassword)
-	r.With(httpauth.RequireAuth(auth), httpauth.RequireActiveUser(auth)).Get("/api/auth/me", h.Me)
-	r.With(httpauth.RequireAuth(auth), httpauth.RequireActiveUser(auth)).Put("/api/auth/email", h.UpdateEmail)
-	r.With(httpauth.RequireAuth(auth), httpauth.RequireActiveUser(auth)).Put("/api/auth/username", h.UpdateUsername)
-	r.With(httpauth.RequireAuth(auth), httpauth.RequireActiveUser(auth)).Put("/api/auth/synced-device-reminders", h.UpdateSyncedDeviceReminders)
-	r.With(httpauth.RequireAuth(auth), httpauth.RequireActiveUser(auth)).Patch("/api/auth/preferences", h.UpdatePreferences)
+	r.With(httpauth.RequireAuth(auth), httpauth.RequireActiveUser(auth), httpauth.RequireEnabledUser(auth)).Get("/api/auth/me", h.Me)
+	r.With(httpauth.RequireAuth(auth), httpauth.RequireActiveUser(auth), httpauth.RequireEnabledUser(auth)).Put("/api/auth/email", h.UpdateEmail)
+	r.With(httpauth.RequireAuth(auth), httpauth.RequireActiveUser(auth), httpauth.RequireEnabledUser(auth)).Put("/api/auth/username", h.UpdateUsername)
+	r.With(httpauth.RequireAuth(auth), httpauth.RequireActiveUser(auth), httpauth.RequireEnabledUser(auth)).Put("/api/auth/synced-device-reminders", h.UpdateSyncedDeviceReminders)
+	r.With(httpauth.RequireAuth(auth), httpauth.RequireActiveUser(auth), httpauth.RequireEnabledUser(auth)).Patch("/api/auth/preferences", h.UpdatePreferences)
 
 	srv := httptest.NewServer(r)
 	t.Cleanup(srv.Close)
 	return srv
 }
 
-// mustSeedUserRequiringPasswordChange inserts an Admin User directly via the
+// mustSeedUserRequiringPasswordChange inserts a User directly via the
 // repository with must_change_password set, standing in for what Bootstrap
 // used to produce unconditionally via its now-retired fixed admin/admin
-// fallback (ADR-0044) — an Admin (ADR-0037) forced to change a temporary
-// password, the shape most of this file's fixture-only setup still needs.
+// fallback (ADR-0044) — a User forced to change a temporary password, the
+// shape most of this file's fixture-only setup still needs.
 func mustSeedUserRequiringPasswordChange(t *testing.T, users *repository.UserRepository, username, password string) repository.User {
 	t.Helper()
 
@@ -75,11 +75,6 @@ func mustSeedUserRequiringPasswordChange(t *testing.T, users *repository.UserRep
 	user, err := users.Create(context.Background(), username, string(hash), true)
 	if err != nil {
 		t.Fatalf("seed user: %v", err)
-	}
-
-	user, err = users.SetAdmin(context.Background(), user.ID, true)
-	if err != nil {
-		t.Fatalf("grant seeded user admin: %v", err)
 	}
 
 	return user
@@ -212,6 +207,69 @@ func TestMe_NoToken_Returns401(t *testing.T) {
 
 	if resp.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("expected 401, got %d", resp.StatusCode)
+	}
+}
+
+// TestLogin_DisabledAccount_SucceedsButMeIsBlocked covers ADR-0044: a
+// Disabled User can still log in (there's no instance-wide Admin left to
+// reactivate them for), but every route except the self-service
+// account-lifecycle ones is closed off — /api/auth/me included.
+func TestLogin_DisabledAccount_SucceedsButMeIsBlocked(t *testing.T) {
+	sqlDB, err := db.OpenInMemory()
+	if err != nil {
+		t.Fatalf("open in-memory db: %v", err)
+	}
+	t.Cleanup(func() { sqlDB.Close() })
+
+	users := repository.NewUserRepository(sqlDB)
+	sessions := repository.NewSessionRepository(sqlDB)
+	auth := service.NewAuthService(users, sessions, service.NewWorkspaceService(sqlDB, repository.NewWorkspaceRepository(sqlDB), repository.NewWorkspaceInviteRepository(sqlDB)), repository.NewWorkspaceInviteRepository(sqlDB), []byte("test-secret"), "", "", false)
+
+	hash, err := bcrypt.GenerateFromPassword([]byte("hunter2"), bcrypt.DefaultCost)
+	if err != nil {
+		t.Fatalf("hash password: %v", err)
+	}
+	user, err := users.Create(context.Background(), "alice", string(hash), false)
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	if _, err := users.SetDisabled(context.Background(), user.ID, true); err != nil {
+		t.Fatalf("disable user: %v", err)
+	}
+
+	h := NewAuthHandler(auth, false)
+	r := chi.NewRouter()
+	r.Post("/api/auth/login", h.Login)
+	r.With(httpauth.RequireAuth(auth), httpauth.RequireActiveUser(auth), httpauth.RequireEnabledUser(auth)).Get("/api/auth/me", h.Me)
+
+	srv := httptest.NewServer(r)
+	t.Cleanup(srv.Close)
+
+	loginResp := login(t, srv, "alice", "hunter2")
+	defer loginResp.Body.Close()
+	if loginResp.StatusCode != http.StatusOK {
+		t.Fatalf("expected login to still succeed for a disabled account, got %d", loginResp.StatusCode)
+	}
+	var logged loginResponse
+	if err := json.NewDecoder(loginResp.Body).Decode(&logged); err != nil {
+		t.Fatalf("decode login response: %v", err)
+	}
+	if !logged.IsDisabled {
+		t.Fatalf("expected the login response to report is_disabled")
+	}
+
+	meReq, err := http.NewRequest(http.MethodGet, srv.URL+"/api/auth/me", nil)
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	meReq.Header.Set("Authorization", "Bearer "+logged.AccessToken)
+	meResp, err := http.DefaultClient.Do(meReq)
+	if err != nil {
+		t.Fatalf("GET /api/auth/me: %v", err)
+	}
+	defer meResp.Body.Close()
+	if meResp.StatusCode != http.StatusForbidden {
+		t.Fatalf("expected 403 for a disabled account, got %d", meResp.StatusCode)
 	}
 }
 
@@ -516,28 +574,6 @@ func TestMe_SyncedDeviceRemindersEnabled_DefaultsFalse(t *testing.T) {
 	}
 	if me.SyncedDeviceRemindersEnabled {
 		t.Fatalf("expected synced device reminders to default off")
-	}
-}
-
-func TestMe_IsAdmin_TrueForBootstrappedAccount(t *testing.T) {
-	srv := newAuthTestServer(t)
-	accessToken := authenticatedAccessToken(t, srv)
-
-	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/api/auth/me", nil)
-	req.Header.Set("Authorization", "Bearer "+accessToken)
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatalf("GET /api/auth/me: %v", err)
-	}
-	defer resp.Body.Close()
-
-	var me meResponse
-	if err := json.NewDecoder(resp.Body).Decode(&me); err != nil {
-		t.Fatalf("decode response: %v", err)
-	}
-	if !me.IsAdmin {
-		t.Fatalf("expected the bootstrapped account to be reported as admin")
 	}
 }
 

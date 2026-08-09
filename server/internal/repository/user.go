@@ -23,14 +23,14 @@ type User struct {
 	// synced device already fires its own alarm from the VALARM. The Email
 	// channel is never gated by this. Defaults off.
 	SyncedDeviceRemindersEnabled bool
-	// IsAdmin is authority over who exists on the instance — creating,
-	// listing, and administering other Users — and never over what they can
-	// see: an Admin still needs a Share to read another User's Calendars
-	// (ADR-0037).
-	IsAdmin bool
-	// IsDisabled blocks Login, Refresh, and CalDAV Basic auth while leaving
-	// everything the User owns untouched (ADR-0037). It is a property of the
-	// account, never of the data.
+	// IsDisabled blocks CalDAV Basic auth while leaving everything the User
+	// owns untouched (ADR-0037, ADR-0044). Self-chosen and self-reversible
+	// only — there is no instance-wide Admin left to disable someone else's
+	// account. Login and Refresh no longer refuse a Disabled User outright
+	// (AuthService.Login, AuthService.Refresh); they still issue a Session so
+	// the User can reach the one action available to them — re-activating —
+	// and every other route is closed off by httpauth.RequireEnabledUser
+	// instead.
 	IsDisabled bool
 	CreatedAt  time.Time
 
@@ -49,28 +49,13 @@ type User struct {
 	// Nil means no shading (ADR-0039).
 	WorkingHoursStart *int
 	WorkingHoursEnd   *int
-
-	// InviteTokenHash and InviteExpiresAt are set together, by CreatePending
-	// or SetInvite, and cleared together by AcceptInvite (ADR-0042). Nil
-	// means this User has no outstanding Invite — always true once Active.
-	InviteTokenHash *string
-	InviteExpiresAt *time.Time
-}
-
-// IsPending reports whether this User was created via an Invite and has
-// never set their own password (ADR-0042). It is a domain state distinct
-// from IsDisabled even though it reuses the same column to block Login,
-// Refresh, and CalDAV Basic auth: Disabled is something an Admin does to a
-// User who was Active, where Pending is a User who has never been Active.
-func (u User) IsPending() bool {
-	return u.IsDisabled && u.PasswordHash == ""
 }
 
 // userColumns is the column list every SELECT against users shares, in the
 // exact order scanUserFields expects — kept as one constant so the two never
-// drift apart across GetByID, GetByIDs, GetByUsername, List,
-// ListEnabledExcluding, and First.
-const userColumns = `id, username, password_hash, must_change_password, email, synced_device_reminders_enabled, is_admin, is_disabled, created_at, week_start, default_view, time_format, working_hours_start, working_hours_end, invite_token_hash, invite_expires_at`
+// drift apart across GetByID, GetByIDs, GetByUsername, ListEnabledExcluding,
+// and First.
+const userColumns = `id, username, password_hash, must_change_password, email, synced_device_reminders_enabled, is_disabled, created_at, week_start, default_view, time_format, working_hours_start, working_hours_end`
 
 type UserRepository struct {
 	db DBTX
@@ -82,8 +67,8 @@ func NewUserRepository(db *sql.DB) *UserRepository {
 
 // WithTx returns a copy of the repository bound to tx, for use inside
 // repository.WithTx to make a multi-table write atomic (ADR-0018) — Delete
-// needs this to pair with CalendarRepository.TransferOwnership under the
-// "transfer" disposition (ADR-0037).
+// needs this to pair with CalendarRepository.TransferOwnershipOne under the
+// "transfer" disposition (ADR-0044).
 func (r *UserRepository) WithTx(tx *sql.Tx) *UserRepository {
 	return &UserRepository{db: tx}
 }
@@ -168,32 +153,6 @@ func (r *UserRepository) GetByUsername(ctx context.Context, username string) (Us
 	return r.scanUser(r.db.QueryRowContext(ctx,
 		`SELECT `+userColumns+` FROM users WHERE username = ?`, username,
 	))
-}
-
-// List returns every account on the instance, ordered by id (i.e. creation
-// order) so the bootstrapped Admin always leads the list.
-func (r *UserRepository) List(ctx context.Context) ([]User, error) {
-	rows, err := r.db.QueryContext(ctx,
-		`SELECT `+userColumns+` FROM users ORDER BY id`,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("query users: %w", err)
-	}
-	defer rows.Close()
-
-	var users []User
-	for rows.Next() {
-		u, err := r.scanUserRow(rows)
-		if err != nil {
-			return nil, err
-		}
-		users = append(users, u)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate users: %w", err)
-	}
-
-	return users, nil
 }
 
 // ListEnabledExcluding returns every enabled User except excludeID, ordered
@@ -337,40 +296,10 @@ func (r *UserRepository) Count(ctx context.Context) (int, error) {
 	return count, nil
 }
 
-// CountAdmins reports how many accounts currently hold Admin — used to
-// guard the last remaining Admin against demotion (ADR-0037).
-func (r *UserRepository) CountAdmins(ctx context.Context) (int, error) {
-	var count int
-	if err := r.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM users WHERE is_admin = 1`).Scan(&count); err != nil {
-		return 0, fmt.Errorf("count admins: %w", err)
-	}
-	return count, nil
-}
-
-// SetAdmin grants or revokes Admin for userID. Callers are responsible for
-// the last-Admin guard (ADR-0037) — this method applies whatever it's told.
-func (r *UserRepository) SetAdmin(ctx context.Context, userID int64, isAdmin bool) (User, error) {
-	if _, err := r.db.ExecContext(ctx, `UPDATE users SET is_admin = ? WHERE id = ?`, isAdmin, userID); err != nil {
-		return User{}, fmt.Errorf("set admin: %w", err)
-	}
-	return r.GetByID(ctx, userID)
-}
-
-// CountEnabledAdmins reports how many non-Disabled accounts currently hold
-// Admin — used to guard the last remaining Admin against being disabled
-// (ADR-0037): a Disabled Admin can no longer administer the instance, so it
-// must not count as one still can.
-func (r *UserRepository) CountEnabledAdmins(ctx context.Context) (int, error) {
-	var count int
-	if err := r.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM users WHERE is_admin = 1 AND is_disabled = 0`).Scan(&count); err != nil {
-		return 0, fmt.Errorf("count enabled admins: %w", err)
-	}
-	return count, nil
-}
-
-// SetDisabled disables or re-enables userID's account (ADR-0037). Callers
-// are responsible for the last-Admin guard and for tearing down live
-// Sessions — this method applies whatever it's told.
+// SetDisabled disables or re-enables userID's account (ADR-0044). Self-chosen
+// and self-reversible only — callers are responsible for the sole-Workspace-
+// Owner guard and for tearing down live Sessions; this method applies
+// whatever it's told.
 func (r *UserRepository) SetDisabled(ctx context.Context, userID int64, isDisabled bool) (User, error) {
 	if _, err := r.db.ExecContext(ctx, `UPDATE users SET is_disabled = ? WHERE id = ?`, isDisabled, userID); err != nil {
 		return User{}, fmt.Errorf("set disabled: %w", err)
@@ -378,97 +307,22 @@ func (r *UserRepository) SetDisabled(ctx context.Context, userID int64, isDisabl
 	return r.GetByID(ctx, userID)
 }
 
-// Delete removes userID's account outright (ADR-0037). Everything that
+// Delete removes userID's account outright (ADR-0044). Everything that
 // references it either cascades — Sessions, App passwords, Shares granted
-// to userID, and, unless the caller has already reassigned them away via
-// CalendarRepository.TransferOwnership, the Calendars userID owned (whose
-// own cascade takes their Events and Shares with them) — or clears via ON
-// DELETE SET NULL (an Event's created_by attribution). Callers are
-// responsible for the last-Admin guard and for the disposition of owned
-// Calendars; this method applies whatever it's told.
+// to userID, Workspace Memberships, and, unless the caller has already
+// reassigned them away via CalendarRepository.TransferOwnershipOne, the
+// Calendars userID owned (whose own cascade takes their Events and Shares
+// with them) — or clears via ON DELETE SET NULL (an Event's created_by
+// attribution). Callers are responsible for the sole-Workspace-Owner guard,
+// for retiring every Workspace userID solely owns first (workspaces.
+// owner_user_id has no ON DELETE behaviour), and for the disposition of
+// owned Calendars; this method applies whatever it's told.
 func (r *UserRepository) Delete(ctx context.Context, userID int64) error {
 	res, err := r.db.ExecContext(ctx, `DELETE FROM users WHERE id = ?`, userID)
 	if err != nil {
 		return fmt.Errorf("delete user: %w", err)
 	}
 	return requireAffected(res)
-}
-
-// ResetPassword sets a new password hash and, unlike UpdatePassword, sets
-// must_change_password rather than clearing it: an Admin-set password is a
-// temporary one the User must replace on next login, reusing the same gate
-// that closes the bootstrap window (ADR-0010, ADR-0037).
-func (r *UserRepository) ResetPassword(ctx context.Context, userID int64, passwordHash string) error {
-	_, err := r.db.ExecContext(ctx,
-		`UPDATE users SET password_hash = ?, must_change_password = 1 WHERE id = ?`,
-		passwordHash, userID,
-	)
-	if err != nil {
-		return fmt.Errorf("reset password: %w", err)
-	}
-	return nil
-}
-
-// CreatePending inserts a new User in the Pending state (ADR-0042): no
-// password, is_disabled set so Login, Refresh, and CalDAV Basic auth all
-// refuse it the same way they refuse a Disabled account, and the given
-// Invite token hash and expiry already attached. must_change_password is
-// left false — that gate is for a password someone else chose, and a
-// Pending User has none yet.
-func (r *UserRepository) CreatePending(ctx context.Context, username, inviteTokenHash string, inviteExpiresAt time.Time) (User, error) {
-	res, err := r.db.ExecContext(ctx,
-		`INSERT INTO users (username, password_hash, is_disabled, invite_token_hash, invite_expires_at) VALUES (?, '', 1, ?, ?)`,
-		username, inviteTokenHash, inviteExpiresAt,
-	)
-	if err != nil {
-		if strings.Contains(err.Error(), "UNIQUE constraint failed") {
-			return User{}, ErrUsernameTaken
-		}
-		return User{}, fmt.Errorf("insert pending user: %w", err)
-	}
-
-	id, err := res.LastInsertId()
-	if err != nil {
-		return User{}, fmt.Errorf("get inserted user id: %w", err)
-	}
-
-	return r.GetByID(ctx, id)
-}
-
-// SetInvite overwrites userID's outstanding Invite with a new token hash and
-// expiry (ADR-0042's reissue) — the previous token stops matching
-// GetByInviteTokenHash the moment this commits.
-func (r *UserRepository) SetInvite(ctx context.Context, userID int64, inviteTokenHash string, inviteExpiresAt time.Time) (User, error) {
-	if _, err := r.db.ExecContext(ctx,
-		`UPDATE users SET invite_token_hash = ?, invite_expires_at = ? WHERE id = ?`,
-		inviteTokenHash, inviteExpiresAt, userID,
-	); err != nil {
-		return User{}, fmt.Errorf("set invite: %w", err)
-	}
-	return r.GetByID(ctx, userID)
-}
-
-// GetByInviteTokenHash looks up the User an Invite token hashes to
-// (ADR-0042) — used by AuthService.AcceptInvite, which only ever has the
-// hash, never a userID.
-func (r *UserRepository) GetByInviteTokenHash(ctx context.Context, inviteTokenHash string) (User, error) {
-	return r.scanUser(r.db.QueryRowContext(ctx,
-		`SELECT `+userColumns+` FROM users WHERE invite_token_hash = ?`, inviteTokenHash,
-	))
-}
-
-// AcceptInvite sets userID's password hash, clears the Invite token and
-// expiry so the token cannot be reused, and clears is_disabled — the single
-// write that flips a Pending User to Active (ADR-0042).
-func (r *UserRepository) AcceptInvite(ctx context.Context, userID int64, passwordHash string) error {
-	_, err := r.db.ExecContext(ctx,
-		`UPDATE users SET password_hash = ?, is_disabled = 0, invite_token_hash = NULL, invite_expires_at = NULL WHERE id = ?`,
-		passwordHash, userID,
-	)
-	if err != nil {
-		return fmt.Errorf("accept invite: %w", err)
-	}
-	return nil
 }
 
 func (r *UserRepository) scanUser(row *sql.Row) (User, error) {
@@ -492,31 +346,22 @@ func (r *UserRepository) scanUserRow(rows *sql.Rows) (User, error) {
 
 // scanUserFields scans one users row via scan, which is either a *sql.Row's
 // or *sql.Rows' Scan — the column list and null-handling are identical
-// either way, so List doesn't have to duplicate GetByID's.
+// either way, so GetByIDs doesn't have to duplicate GetByID's.
 func scanUserFields(scan func(dest ...any) error) (User, error) {
 	var u User
 	var email sql.NullString
 	var workingHoursStart, workingHoursEnd sql.NullInt64
-	var inviteTokenHash sql.NullString
-	var inviteExpiresAt sql.NullTime
 	// modernc.org/sqlite converts the TIMESTAMP column straight into time.Time
 	// based on the declared column type — no manual parsing needed here.
 	err := scan(
-		&u.ID, &u.Username, &u.PasswordHash, &u.MustChangePassword, &email, &u.SyncedDeviceRemindersEnabled, &u.IsAdmin, &u.IsDisabled, &u.CreatedAt,
+		&u.ID, &u.Username, &u.PasswordHash, &u.MustChangePassword, &email, &u.SyncedDeviceRemindersEnabled, &u.IsDisabled, &u.CreatedAt,
 		&u.WeekStart, &u.DefaultView, &u.TimeFormat, &workingHoursStart, &workingHoursEnd,
-		&inviteTokenHash, &inviteExpiresAt,
 	)
 	if err != nil {
 		return User{}, err
 	}
 	if email.Valid {
 		u.Email = &email.String
-	}
-	if inviteTokenHash.Valid {
-		u.InviteTokenHash = &inviteTokenHash.String
-	}
-	if inviteExpiresAt.Valid {
-		u.InviteExpiresAt = &inviteExpiresAt.Time
 	}
 	if workingHoursStart.Valid {
 		v := int(workingHoursStart.Int64)

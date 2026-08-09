@@ -44,7 +44,6 @@ const adminUser = {
   email: null,
   emailReminderChannelAvailable: false,
   syncedDeviceRemindersEnabled: false,
-  isAdmin: false,
   weekStart: 1,
   defaultView: "week" as const,
   timeFormat: "24h" as const,
@@ -106,7 +105,7 @@ describe("bootstrap", () => {
 
 describe("login", () => {
   it("fetches the full user and goes to authenticated when a password change isn't required", async () => {
-    vi.mocked(authApi.login).mockResolvedValue({ accessToken: "token-123", mustChangePassword: false });
+    vi.mocked(authApi.login).mockResolvedValue({ accessToken: "token-123", mustChangePassword: false, isDisabled: false });
     vi.mocked(authApi.me).mockResolvedValue(adminUser);
 
     await useAuthStore.getState().login("admin", "admin");
@@ -117,7 +116,7 @@ describe("login", () => {
   });
 
   it("goes to must-change-password without calling me when required", async () => {
-    vi.mocked(authApi.login).mockResolvedValue({ accessToken: "token-123", mustChangePassword: true });
+    vi.mocked(authApi.login).mockResolvedValue({ accessToken: "token-123", mustChangePassword: true, isDisabled: false });
 
     await useAuthStore.getState().login("admin", "admin");
 
@@ -399,7 +398,7 @@ describe("shell seeding", () => {
   });
 
   it("login seeds the shell's Active view from the resolved user's Default view", async () => {
-    vi.mocked(authApi.login).mockResolvedValue({ accessToken: "token-123", mustChangePassword: false });
+    vi.mocked(authApi.login).mockResolvedValue({ accessToken: "token-123", mustChangePassword: false, isDisabled: false });
     vi.mocked(authApi.me).mockResolvedValue({ ...adminUser, defaultView: "year" });
 
     await useAuthStore.getState().login("admin", "admin");

@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/golang-jwt/jwt/v5"
 	"golang.org/x/crypto/bcrypt"
@@ -26,25 +27,34 @@ const (
 	refreshTokenTTL = 30 * 24 * time.Hour
 )
 
+// maxUsernameLength bounds validateUsername (#125). Chosen as a generous
+// round number — nothing downstream (the users.username column, CalDAV
+// principal paths keyed on id rather than username) imposes a tighter limit.
+const maxUsernameLength = 64
+
+// inviteTokenTTL is how long a Workspace Invite token is valid for
+// (ADR-0044) — shorter than the 30-day refresh token (ADR-0009) because this
+// token doesn't extend a Session, it creates one: anyone holding a live link
+// can become a Member, or a brand-new User, outright.
+const inviteTokenTTL = 7 * 24 * time.Hour
+
 var (
 	ErrInvalidCredentials = errors.New("invalid credentials")
 	ErrInvalidSession     = errors.New("invalid session")
 	ErrInvalidPassword    = errors.New("password must not be empty")
 	ErrInvalidEmail       = errors.New("email is not a valid address")
-	// ErrAccountDisabled is returned by Login and Refresh for a Disabled
-	// User (ADR-0037) — two of the three points Disable must be enforced at,
-	// the third being CalDAV Basic auth (AppPasswordService.Authenticate).
-	ErrAccountDisabled = errors.New("account is disabled")
-	// ErrInviteInvalid is returned by AcceptInvite for a token that doesn't
-	// match any outstanding Invite, has expired, or has already been
-	// consumed (ADR-0042) — deliberately one error for all three, since
+	// ErrInvalidUsername is returned when a username fails validateUsername
+	// — empty (or all whitespace), containing a colon or other whitespace,
+	// or longer than maxUsernameLength.
+	ErrInvalidUsername = errors.New("username must not be empty, must not contain whitespace or a colon, and must be at most 64 characters")
+	// ErrUsernameTaken mirrors repository.ErrUsernameTaken so handlers only
+	// import the service package's sentinels.
+	ErrUsernameTaken = repository.ErrUsernameTaken
+	// ErrWorkspaceInviteInvalid is returned for a Workspace Invite (ADR-0044)
+	// token that doesn't match any outstanding invite, has expired, or has
+	// already been consumed — deliberately one error for all three, since
 	// telling them apart would tell an attacker holding a dead token which
 	// kind of dead it is.
-	ErrInviteInvalid = errors.New("invite is invalid or has expired")
-	// ErrWorkspaceInviteInvalid is the ErrInviteInvalid equivalent for a
-	// Workspace Invite (ADR-0044): a token that doesn't match any outstanding
-	// invite, has expired, or has already been consumed, for the same
-	// one-error-for-all-three reason.
 	ErrWorkspaceInviteInvalid = errors.New("invite is invalid or has expired")
 	// ErrWorkspaceInviteEmailMismatch is returned by
 	// AcceptWorkspaceInviteExisting when the authenticated caller's own
@@ -97,6 +107,24 @@ var validTimeFormats = map[string]bool{
 // maxWorkingHoursMinute is the last valid minute-of-day a Working hours
 // bound may hold — 23:59, expressed as minutes since midnight (ADR-0039).
 const maxWorkingHoursMinute = 1439
+
+// validateUsername trims username and checks it against the one set of rules
+// shared by every path that picks or renames one — Register, AuthService.
+// UpdateUsername, and AcceptWorkspaceInviteNewAccount — so none of them can
+// drift (#125). A colon is rejected because Go's net/http.Request.BasicAuth
+// splits credentials on the first colon: a username containing one could
+// create an account that can never authenticate over CalDAV
+// (AppPasswordService.Authenticate).
+func validateUsername(username string) (string, error) {
+	username = strings.TrimSpace(username)
+	if username == "" || len(username) > maxUsernameLength {
+		return "", ErrInvalidUsername
+	}
+	if strings.ContainsAny(username, ":") || strings.ContainsFunc(username, unicode.IsSpace) {
+		return "", ErrInvalidUsername
+	}
+	return username, nil
+}
 
 type AuthService struct {
 	users            *repository.UserRepository
@@ -159,15 +187,6 @@ func (s *AuthService) Bootstrap(ctx context.Context) (user repository.User, crea
 	newUser, err := s.users.Create(ctx, s.initialUsername, string(hash), false)
 	if err != nil {
 		return repository.User{}, false, fmt.Errorf("create bootstrap user: %w", err)
-	}
-
-	// The bootstrapped account is the first Admin (ADR-0037), so the
-	// instance is never unadministrable — unchanged by ADR-0044, which only
-	// retires the fixed admin/admin fallback credential, not the Admin role
-	// itself (that's #150's broader scope).
-	newUser, err = s.users.SetAdmin(ctx, newUser.ID, true)
-	if err != nil {
-		return repository.User{}, false, fmt.Errorf("grant bootstrap user admin: %w", err)
 	}
 
 	if _, err := s.workspaces.CreateForOwner(ctx, newUser.ID, workspaceNameFor(newUser.Username)); err != nil {
@@ -246,15 +265,6 @@ func (s *AuthService) Register(ctx context.Context, name, email, password string
 			return fmt.Errorf("set email: %w", err)
 		}
 
-		// A Register call against an instance with no accounts yet is a
-		// web-based Bootstrap (ADR-0044) — it inherits Bootstrap's guarantee
-		// of the first Admin (ADR-0037) for the same reason.
-		if count == 0 {
-			if _, err := txUsers.SetAdmin(ctx, newUser.ID, true); err != nil {
-				return fmt.Errorf("grant first account admin: %w", err)
-			}
-		}
-
 		if _, err := s.workspaces.createForOwnerTx(ctx, tx, newUser.ID, workspaceNameFor(name)); err != nil {
 			return fmt.Errorf("create workspace: %w", err)
 		}
@@ -310,6 +320,14 @@ func (s *AuthService) issueSession(ctx context.Context, userID int64) (sessionTo
 type LoginResult struct {
 	sessionTokens
 	MustChangePassword bool
+	// IsDisabled is whether the credentials that just authenticated name a
+	// Disabled account (ADR-0044). Login still issues a Session either way —
+	// there is no instance-wide Admin left to re-activate someone else's
+	// account, so a Disabled User must be able to log back in to reach the
+	// one action available to them. The frontend gates everything else off
+	// this flag exactly as it already does for MustChangePassword, and the
+	// server backs that gate with httpauth.RequireEnabledUser.
+	IsDisabled bool
 }
 
 // GetUser returns the user a valid access token was issued for.
@@ -330,10 +348,6 @@ func (s *AuthService) Login(ctx context.Context, username, password string) (Log
 		return LoginResult{}, ErrInvalidCredentials
 	}
 
-	if user.IsDisabled {
-		return LoginResult{}, ErrAccountDisabled
-	}
-
 	tokens, err := s.issueSession(ctx, user.ID)
 	if err != nil {
 		return LoginResult{}, err
@@ -342,75 +356,8 @@ func (s *AuthService) Login(ctx context.Context, username, password string) (Log
 	return LoginResult{
 		sessionTokens:      tokens,
 		MustChangePassword: user.MustChangePassword,
+		IsDisabled:         user.IsDisabled,
 	}, nil
-}
-
-// AcceptInvite sets a password for the Pending User a live Invite token
-// names and logs them straight in (ADR-0042): the form that sets the
-// password has already proven who's asking, so there's no separate "invite
-// accepted, now please log in" step. A token that doesn't match any User, no
-// longer names a Pending one, or has expired is rejected the same way —
-// ErrInviteInvalid — and a token, once accepted, cannot be reused because
-// UserRepository.AcceptInvite clears it from the row it minted a password
-// hash into.
-func (s *AuthService) AcceptInvite(ctx context.Context, token, password string) (LoginResult, error) {
-	if password == "" {
-		return LoginResult{}, ErrInvalidPassword
-	}
-
-	user, err := s.liveInviteUser(ctx, token)
-	if err != nil {
-		return LoginResult{}, err
-	}
-
-	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
-	if err != nil {
-		return LoginResult{}, fmt.Errorf("hash password: %w", err)
-	}
-
-	if err := s.users.AcceptInvite(ctx, user.ID, string(hash)); err != nil {
-		return LoginResult{}, fmt.Errorf("accept invite: %w", err)
-	}
-
-	tokens, err := s.issueSession(ctx, user.ID)
-	if err != nil {
-		return LoginResult{}, err
-	}
-
-	return LoginResult{sessionTokens: tokens, MustChangePassword: false}, nil
-}
-
-// liveInviteUser resolves token to the Pending User it names, the check
-// AcceptInvite and PreviewInvite share: the token must match a User, that
-// User must still be Pending, and the Invite must not have expired.
-func (s *AuthService) liveInviteUser(ctx context.Context, token string) (repository.User, error) {
-	user, err := s.users.GetByInviteTokenHash(ctx, hashToken(token))
-	if errors.Is(err, repository.ErrNotFound) {
-		return repository.User{}, ErrInviteInvalid
-	}
-	if err != nil {
-		return repository.User{}, fmt.Errorf("get user by invite token: %w", err)
-	}
-
-	if !user.IsPending() || user.InviteExpiresAt == nil || time.Now().After(*user.InviteExpiresAt) {
-		return repository.User{}, ErrInviteInvalid
-	}
-
-	return user, nil
-}
-
-// PreviewInvite returns the username a live Invite token names, without
-// consuming it (ADR-0042) — the accept-invite page uses this to show the
-// invitee which pre-chosen username they're setting a password for before
-// they submit one. Rejected the same way as AcceptInvite, and for the same
-// reason: telling an unknown token apart from an expired or already-accepted
-// one would leak whether it ever existed.
-func (s *AuthService) PreviewInvite(ctx context.Context, token string) (string, error) {
-	user, err := s.liveInviteUser(ctx, token)
-	if err != nil {
-		return "", err
-	}
-	return user.Username, nil
 }
 
 // liveWorkspaceInvite resolves token to the WorkspaceInvite it names, the
@@ -690,14 +637,15 @@ func (s *AuthService) MustChangePassword(ctx context.Context, userID int64) (boo
 	return user.MustChangePassword, nil
 }
 
-// IsAdmin reports whether the given user holds Admin (ADR-0037), gating
-// every account-management endpoint via httpauth.RequireAdmin.
-func (s *AuthService) IsAdmin(ctx context.Context, userID int64) (bool, error) {
+// IsDisabled reports whether the given user is Disabled (ADR-0044), gating
+// every route but the self-service account-lifecycle ones via
+// httpauth.RequireEnabledUser.
+func (s *AuthService) IsDisabled(ctx context.Context, userID int64) (bool, error) {
 	user, err := s.users.GetByID(ctx, userID)
 	if err != nil {
 		return false, fmt.Errorf("get user: %w", err)
 	}
-	return user.IsAdmin, nil
+	return user.IsDisabled, nil
 }
 
 // ChangePasswordResult is the freshly issued Session's tokens (#123) — the
@@ -880,14 +828,12 @@ func (s *AuthService) Refresh(ctx context.Context, refreshToken string) (string,
 		return "", ErrInvalidSession
 	}
 
-	user, err := s.users.GetByID(ctx, session.UserID)
-	if err != nil {
-		return "", fmt.Errorf("get user: %w", err)
-	}
-	if user.IsDisabled {
-		return "", ErrAccountDisabled
-	}
-
+	// Unlike Login, Refresh doesn't need to look the user up at all — a
+	// Disabled account still gets a fresh access token here (ADR-0044), the
+	// same way it still gets a Session from Login, so a page reload doesn't
+	// strand a Disabled User short of the one action available to them.
+	// httpauth.RequireEnabledUser is what actually closes off every other
+	// route.
 	accessToken, err := s.newAccessToken(session.UserID)
 	if err != nil {
 		return "", fmt.Errorf("issue access token: %w", err)

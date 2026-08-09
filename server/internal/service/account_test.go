@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"strings"
 	"testing"
 	"time"
 
@@ -12,28 +11,24 @@ import (
 	"github.com/XiovV/calendar/server/internal/repository"
 )
 
-// clearSoleWorkspaceOwnership deletes userID's own Workspace and their
-// Membership in it via raw SQL, standing in for the Workspace-transfer step
-// ADR-0044's sole-Owner guard says must happen "before a User can be
-// deleted" (workspaces.owner_user_id carries no ON DELETE behaviour,
-// mirrored in internal/repository/user_test.go). AccountService.Create now
-// always mints a personal Workspace for a new account (#155, ADR-0045), but
-// AccountService.Delete's disposition handling predates Workspaces and
-// doesn't yet transfer or retire one — so a test exercising Delete/
-// CancelInvite against an account that owns nothing but its own solo
-// Workspace clears it first, the same way a real caller would need to
-// before Workspace lifecycle management exists.
-func clearSoleWorkspaceOwnership(t *testing.T, db *sql.DB, userID int64) {
-	t.Helper()
-	if _, err := db.Exec("DELETE FROM workspace_members WHERE user_id = ?", userID); err != nil {
-		t.Fatalf("clear workspace membership for user %d: %v", userID, err)
-	}
-	if _, err := db.Exec("DELETE FROM workspaces WHERE owner_user_id = ?", userID); err != nil {
-		t.Fatalf("clear workspace ownership for user %d: %v", userID, err)
-	}
+// accountTestHarness bundles everything a self-service AccountService test
+// needs: AuthService to register real Users (each minting their own
+// Workspace and default Calendars, exactly like production), CalendarService
+// to create/share extra Calendars, and WorkspaceService to inspect/adjust
+// Membership directly where a test needs to set up a scenario production
+// code wouldn't call AccountService to reach (e.g. adding a second Member to
+// a Workspace, which is WorkspaceService.CreateInvite/AuthService.Accept*'s
+// job, not AccountService's).
+type accountTestHarness struct {
+	db         *sql.DB
+	accounts   *AccountService
+	auth       *AuthService
+	calendars  *CalendarService
+	workspaces *WorkspaceService
+	users      *repository.UserRepository
 }
 
-func newTestAccountService(t *testing.T) *AccountService {
+func newAccountTestHarness(t *testing.T) *accountTestHarness {
 	t.Helper()
 
 	sqlDB, err := db.OpenInMemory()
@@ -47,243 +42,67 @@ func newTestAccountService(t *testing.T) *AccountService {
 	calendarRepo := repository.NewCalendarRepository(sqlDB)
 	shareRepo := repository.NewCalendarShareRepository(sqlDB)
 	workspaceRepo := repository.NewWorkspaceRepository(sqlDB)
+	workspaceInviteRepo := repository.NewWorkspaceInviteRepository(sqlDB)
+	workspaces := NewWorkspaceService(sqlDB, workspaceRepo, workspaceInviteRepo)
+	auth := NewAuthService(users, sessions, workspaces, workspaceInviteRepo, []byte("test-secret"), "", "", true)
 	calendars := NewCalendarService(calendarRepo, shareRepo, users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo)
-	appPasswords := NewAppPasswordService(repository.NewAppPasswordRepository(sqlDB), users)
-	workspaces := NewWorkspaceService(sqlDB, workspaceRepo, repository.NewWorkspaceInviteRepository(sqlDB))
+	accounts := NewAccountService(sqlDB, users, sessions, calendarRepo, shareRepo, workspaceRepo, workspaces)
 
-	return NewAccountService(sqlDB, users, sessions, calendarRepo, shareRepo, calendars, appPasswords, nil, workspaces)
+	return &accountTestHarness{db: sqlDB, accounts: accounts, auth: auth, calendars: calendars, workspaces: workspaces, users: users}
 }
 
-// fakeMailer records every Send call instead of delivering anything, for
-// tests exercising SendInviteEmail.
-type fakeMailer struct {
-	to, subject, body string
-	sendErr           error
-}
-
-func (m *fakeMailer) Send(to, subject, body string) error {
-	m.to, m.subject, m.body = to, subject, body
-	return m.sendErr
-}
-
-func newTestAccountServiceWithMailer(t *testing.T, mailer Mailer) *AccountService {
+// register self-registers username (ENABLE_SIGNUPS is always true in the
+// harness), returning the resulting User and their sole, freshly created
+// Workspace.
+func (h *accountTestHarness) register(t *testing.T, username string) (repository.User, repository.Workspace) {
 	t.Helper()
-
-	sqlDB, err := db.OpenInMemory()
-	if err != nil {
-		t.Fatalf("open in-memory db: %v", err)
-	}
-	t.Cleanup(func() { sqlDB.Close() })
-
-	users := repository.NewUserRepository(sqlDB)
-	sessions := repository.NewSessionRepository(sqlDB)
-	calendarRepo := repository.NewCalendarRepository(sqlDB)
-	shareRepo := repository.NewCalendarShareRepository(sqlDB)
-	workspaceRepo := repository.NewWorkspaceRepository(sqlDB)
-	calendars := NewCalendarService(calendarRepo, shareRepo, users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo)
-	appPasswords := NewAppPasswordService(repository.NewAppPasswordRepository(sqlDB), users)
-	workspaces := NewWorkspaceService(sqlDB, workspaceRepo, repository.NewWorkspaceInviteRepository(sqlDB))
-
-	return NewAccountService(sqlDB, users, sessions, calendarRepo, shareRepo, calendars, appPasswords, mailer, workspaces)
-}
-
-func TestAccountService_Create_SeedsDefaultCalendarsAndForcesPasswordChange(t *testing.T) {
-	accounts := newTestAccountService(t)
 	ctx := context.Background()
 
-	user, err := accounts.Create(ctx, "alice", "temp-secret")
+	if _, err := h.auth.Register(ctx, username, username+"@example.com", "hunter2"); err != nil {
+		t.Fatalf("register %s: %v", username, err)
+	}
+
+	user, err := h.users.GetByUsername(ctx, username)
 	if err != nil {
-		t.Fatalf("create account: %v", err)
+		t.Fatalf("get %s: %v", username, err)
 	}
-	if user.Username != "alice" {
-		t.Fatalf("expected username alice, got %q", user.Username)
+	workspaces, err := h.workspaces.ListForUser(ctx, user.ID)
+	if err != nil || len(workspaces) != 1 {
+		t.Fatalf("list workspaces for %s: %v (%d workspaces)", username, err, len(workspaces))
 	}
-	if !user.MustChangePassword {
-		t.Fatalf("expected a newly created account to require a password change")
-	}
-	if user.IsAdmin {
-		t.Fatalf("expected a newly created account to not be an admin by default")
-	}
+	return user, workspaces[0]
+}
 
-	calendars, err := accounts.calendars.List(ctx, user.ID)
+// createCalendar creates a Calendar for userID inside workspaceID — Register
+// (unlike the retired AccountService.Create) doesn't seed default Calendars,
+// so tests that need at least one owned Calendar create it explicitly.
+func (h *accountTestHarness) createCalendar(t *testing.T, userID, workspaceID int64, id, name string) repository.Calendar {
+	t.Helper()
+	calendar, err := h.calendars.Create(context.Background(), userID, workspaceID, id, CalendarWrite{Name: name, Color: "#112233FF"})
 	if err != nil {
-		t.Fatalf("list calendars: %v", err)
+		t.Fatalf("create calendar %s: %v", id, err)
 	}
-	if len(calendars) == 0 {
-		t.Fatalf("expected the new account to start with default calendars")
+	return calendar
+}
+
+// addMember inserts a WorkspaceMember row directly — standing in for
+// accepting a Workspace Invite (WorkspaceService/AuthService's job, not
+// AccountService's), so a test can put a second User in workspaceID without
+// exercising the whole invite flow.
+func (h *accountTestHarness) addMember(t *testing.T, workspaceID, userID int64, role string) {
+	t.Helper()
+	if err := h.workspaces.workspaces.AddMember(context.Background(), workspaceID, userID, role); err != nil {
+		t.Fatalf("add member: %v", err)
 	}
 }
 
-func TestAccountService_Create_EmptyUsername_ReturnsErrInvalidUsername(t *testing.T) {
-	accounts := newTestAccountService(t)
-
-	_, err := accounts.Create(context.Background(), "  ", "temp-secret")
-	if !errors.Is(err, ErrInvalidUsername) {
-		t.Fatalf("expected ErrInvalidUsername, got %v", err)
-	}
-}
-
-func TestAccountService_Create_EmptyPassword_ReturnsErrInvalidPassword(t *testing.T) {
-	accounts := newTestAccountService(t)
-
-	_, err := accounts.Create(context.Background(), "alice", "")
-	if !errors.Is(err, ErrInvalidPassword) {
-		t.Fatalf("expected ErrInvalidPassword, got %v", err)
-	}
-}
-
-func TestAccountService_Create_DuplicateUsername_ReturnsErrUsernameTaken(t *testing.T) {
-	accounts := newTestAccountService(t)
+func TestAccountService_SetDisabled_DisablesAndReactivates(t *testing.T) {
+	h := newAccountTestHarness(t)
 	ctx := context.Background()
 
-	if _, err := accounts.Create(ctx, "alice", "temp-secret"); err != nil {
-		t.Fatalf("create first account: %v", err)
-	}
+	alice, _ := h.register(t, "alice")
 
-	if _, err := accounts.Create(ctx, "alice", "another-secret"); !errors.Is(err, ErrUsernameTaken) {
-		t.Fatalf("expected ErrUsernameTaken, got %v", err)
-	}
-}
-
-func TestAccountService_List_ReturnsEveryAccount(t *testing.T) {
-	accounts := newTestAccountService(t)
-	ctx := context.Background()
-
-	if _, err := accounts.Create(ctx, "alice", "temp-secret"); err != nil {
-		t.Fatalf("create alice: %v", err)
-	}
-	if _, err := accounts.Create(ctx, "bob", "temp-secret"); err != nil {
-		t.Fatalf("create bob: %v", err)
-	}
-
-	users, err := accounts.List(ctx)
-	if err != nil {
-		t.Fatalf("list: %v", err)
-	}
-	if len(users) != 2 {
-		t.Fatalf("expected 2 accounts, got %d", len(users))
-	}
-}
-
-func TestAccountService_ResetPassword_ForcesPasswordChangeAndInvalidatesSessions(t *testing.T) {
-	sqlDB, err := db.OpenInMemory()
-	if err != nil {
-		t.Fatalf("open in-memory db: %v", err)
-	}
-	t.Cleanup(func() { sqlDB.Close() })
-
-	users := repository.NewUserRepository(sqlDB)
-	sessions := repository.NewSessionRepository(sqlDB)
-	calendarRepo := repository.NewCalendarRepository(sqlDB)
-	shareRepo := repository.NewCalendarShareRepository(sqlDB)
-	workspaceRepo := repository.NewWorkspaceRepository(sqlDB)
-	calendars := NewCalendarService(calendarRepo, shareRepo, users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo)
-	appPasswords := NewAppPasswordService(repository.NewAppPasswordRepository(sqlDB), users)
-	workspaces := NewWorkspaceService(sqlDB, workspaceRepo, repository.NewWorkspaceInviteRepository(sqlDB))
-	accounts := NewAccountService(sqlDB, users, sessions, calendarRepo, shareRepo, calendars, appPasswords, nil, workspaces)
-	ctx := context.Background()
-
-	user, err := accounts.Create(ctx, "alice", "temp-secret")
-	if err != nil {
-		t.Fatalf("create account: %v", err)
-	}
-	// Simulate alice having already changed her password and logged in with
-	// a live session, so ResetPassword has something to invalidate.
-	if err := users.UpdatePassword(ctx, user.ID, "some-hash"); err != nil {
-		t.Fatalf("update password: %v", err)
-	}
-	if _, err := sessions.Create(ctx, user.ID, "refresh-token-hash", time.Now().Add(24*time.Hour)); err != nil {
-		t.Fatalf("create session: %v", err)
-	}
-
-	updated, err := accounts.ResetPassword(ctx, user.ID, "new-temp-secret")
-	if err != nil {
-		t.Fatalf("reset password: %v", err)
-	}
-	if !updated.MustChangePassword {
-		t.Fatalf("expected must_change_password to be set after an admin reset")
-	}
-
-	if _, err := sessions.GetByRefreshTokenHash(ctx, "refresh-token-hash"); !errors.Is(err, repository.ErrNotFound) {
-		t.Fatalf("expected the existing session to be invalidated, got %v", err)
-	}
-}
-
-func TestAccountService_ResetPassword_EmptyPassword_ReturnsErrInvalidPassword(t *testing.T) {
-	accounts := newTestAccountService(t)
-	ctx := context.Background()
-
-	user, err := accounts.Create(ctx, "alice", "temp-secret")
-	if err != nil {
-		t.Fatalf("create account: %v", err)
-	}
-
-	if _, err := accounts.ResetPassword(ctx, user.ID, ""); !errors.Is(err, ErrInvalidPassword) {
-		t.Fatalf("expected ErrInvalidPassword, got %v", err)
-	}
-}
-
-func TestAccountService_SetAdmin_GrantsAndRevokes(t *testing.T) {
-	accounts := newTestAccountService(t)
-	ctx := context.Background()
-
-	// Two admins so revoking one never hits the last-admin guard.
-	alice, err := accounts.Create(ctx, "alice", "temp-secret")
-	if err != nil {
-		t.Fatalf("create alice: %v", err)
-	}
-	if _, err := accounts.SetAdmin(ctx, alice.ID, true); err != nil {
-		t.Fatalf("grant alice admin: %v", err)
-	}
-
-	bob, err := accounts.Create(ctx, "bob", "temp-secret")
-	if err != nil {
-		t.Fatalf("create bob: %v", err)
-	}
-	granted, err := accounts.SetAdmin(ctx, bob.ID, true)
-	if err != nil {
-		t.Fatalf("grant bob admin: %v", err)
-	}
-	if !granted.IsAdmin {
-		t.Fatalf("expected bob to be an admin")
-	}
-
-	revoked, err := accounts.SetAdmin(ctx, bob.ID, false)
-	if err != nil {
-		t.Fatalf("revoke bob admin: %v", err)
-	}
-	if revoked.IsAdmin {
-		t.Fatalf("expected bob to no longer be an admin")
-	}
-}
-
-func TestAccountService_SetAdmin_RefusesToDemoteTheLastRemainingAdmin(t *testing.T) {
-	accounts := newTestAccountService(t)
-	ctx := context.Background()
-
-	alice, err := accounts.Create(ctx, "alice", "temp-secret")
-	if err != nil {
-		t.Fatalf("create alice: %v", err)
-	}
-	if _, err := accounts.SetAdmin(ctx, alice.ID, true); err != nil {
-		t.Fatalf("grant alice admin: %v", err)
-	}
-
-	if _, err := accounts.SetAdmin(ctx, alice.ID, false); !errors.Is(err, ErrLastAdmin) {
-		t.Fatalf("expected ErrLastAdmin, got %v", err)
-	}
-}
-
-func TestAccountService_SetDisabled_DisablesAndReenables(t *testing.T) {
-	accounts := newTestAccountService(t)
-	ctx := context.Background()
-
-	alice, err := accounts.Create(ctx, "alice", "temp-secret")
-	if err != nil {
-		t.Fatalf("create alice: %v", err)
-	}
-
-	disabled, err := accounts.SetDisabled(ctx, alice.ID, true)
+	disabled, err := h.accounts.SetDisabled(ctx, alice.ID, true)
 	if err != nil {
 		t.Fatalf("disable alice: %v", err)
 	}
@@ -291,42 +110,26 @@ func TestAccountService_SetDisabled_DisablesAndReenables(t *testing.T) {
 		t.Fatalf("expected alice to be disabled")
 	}
 
-	enabled, err := accounts.SetDisabled(ctx, alice.ID, false)
+	reactivated, err := h.accounts.SetDisabled(ctx, alice.ID, false)
 	if err != nil {
-		t.Fatalf("re-enable alice: %v", err)
+		t.Fatalf("reactivate alice: %v", err)
 	}
-	if enabled.IsDisabled {
+	if reactivated.IsDisabled {
 		t.Fatalf("expected alice to no longer be disabled")
 	}
 }
 
 func TestAccountService_SetDisabled_DeletesLiveSessions(t *testing.T) {
-	sqlDB, err := db.OpenInMemory()
-	if err != nil {
-		t.Fatalf("open in-memory db: %v", err)
-	}
-	t.Cleanup(func() { sqlDB.Close() })
-
-	users := repository.NewUserRepository(sqlDB)
-	sessions := repository.NewSessionRepository(sqlDB)
-	calendarRepo := repository.NewCalendarRepository(sqlDB)
-	shareRepo := repository.NewCalendarShareRepository(sqlDB)
-	workspaceRepo := repository.NewWorkspaceRepository(sqlDB)
-	calendars := NewCalendarService(calendarRepo, shareRepo, users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo)
-	appPasswords := NewAppPasswordService(repository.NewAppPasswordRepository(sqlDB), users)
-	workspaces := NewWorkspaceService(sqlDB, workspaceRepo, repository.NewWorkspaceInviteRepository(sqlDB))
-	accounts := NewAccountService(sqlDB, users, sessions, calendarRepo, shareRepo, calendars, appPasswords, nil, workspaces)
+	h := newAccountTestHarness(t)
 	ctx := context.Background()
 
-	alice, err := accounts.Create(ctx, "alice", "temp-secret")
-	if err != nil {
-		t.Fatalf("create account: %v", err)
-	}
+	alice, _ := h.register(t, "alice")
+	sessions := repository.NewSessionRepository(h.db)
 	if _, err := sessions.Create(ctx, alice.ID, "refresh-token-hash", time.Now().Add(24*time.Hour)); err != nil {
 		t.Fatalf("create session: %v", err)
 	}
 
-	if _, err := accounts.SetDisabled(ctx, alice.ID, true); err != nil {
+	if _, err := h.accounts.SetDisabled(ctx, alice.ID, true); err != nil {
 		t.Fatalf("disable alice: %v", err)
 	}
 
@@ -335,313 +138,280 @@ func TestAccountService_SetDisabled_DeletesLiveSessions(t *testing.T) {
 	}
 }
 
-func TestAccountService_SetDisabled_RefusesToDisableTheLastRemainingAdmin(t *testing.T) {
-	accounts := newTestAccountService(t)
+func TestAccountService_SetDisabled_RefusesTheSoleOwnerOfANonEmptyWorkspace(t *testing.T) {
+	h := newAccountTestHarness(t)
 	ctx := context.Background()
 
-	alice, err := accounts.Create(ctx, "alice", "temp-secret")
-	if err != nil {
-		t.Fatalf("create alice: %v", err)
-	}
-	if _, err := accounts.SetAdmin(ctx, alice.ID, true); err != nil {
-		t.Fatalf("grant alice admin: %v", err)
-	}
+	alice, aliceWorkspace := h.register(t, "alice")
+	bob, _ := h.register(t, "bob")
+	h.addMember(t, aliceWorkspace.ID, bob.ID, repository.WorkspaceRoleMember)
 
-	if _, err := accounts.SetDisabled(ctx, alice.ID, true); !errors.Is(err, ErrLastAdmin) {
-		t.Fatalf("expected ErrLastAdmin, got %v", err)
+	if _, err := h.accounts.SetDisabled(ctx, alice.ID, true); !errors.Is(err, ErrSoleWorkspaceOwner) {
+		t.Fatalf("expected ErrSoleWorkspaceOwner, got %v", err)
 	}
 }
 
-func TestAccountService_SetDisabled_AllowsDisablingAnAdminWhenAnotherAdminRemains(t *testing.T) {
-	accounts := newTestAccountService(t)
+func TestAccountService_SetDisabled_SucceedsOnceWorkspaceIsReducedToJustTheOwner(t *testing.T) {
+	h := newAccountTestHarness(t)
 	ctx := context.Background()
 
-	alice, err := accounts.Create(ctx, "alice", "temp-secret")
-	if err != nil {
-		t.Fatalf("create alice: %v", err)
-	}
-	if _, err := accounts.SetAdmin(ctx, alice.ID, true); err != nil {
-		t.Fatalf("grant alice admin: %v", err)
+	alice, aliceWorkspace := h.register(t, "alice")
+	bob, _ := h.register(t, "bob")
+	h.addMember(t, aliceWorkspace.ID, bob.ID, repository.WorkspaceRoleMember)
+
+	if err := h.workspaces.RemoveMember(ctx, alice.ID, aliceWorkspace.ID, bob.ID); err != nil {
+		t.Fatalf("remove bob: %v", err)
 	}
 
-	bob, err := accounts.Create(ctx, "bob", "temp-secret")
-	if err != nil {
-		t.Fatalf("create bob: %v", err)
-	}
-	if _, err := accounts.SetAdmin(ctx, bob.ID, true); err != nil {
-		t.Fatalf("grant bob admin: %v", err)
-	}
-
-	disabled, err := accounts.SetDisabled(ctx, alice.ID, true)
-	if err != nil {
-		t.Fatalf("disable alice: %v", err)
-	}
-	if !disabled.IsDisabled {
-		t.Fatalf("expected alice to be disabled")
+	if _, err := h.accounts.SetDisabled(ctx, alice.ID, true); err != nil {
+		t.Fatalf("expected disable to succeed once alice is the workspace's only member, got %v", err)
 	}
 }
 
-func TestAccountService_SetDisabled_DisablingANonAdminNeverTripsTheLastAdminGuard(t *testing.T) {
-	accounts := newTestAccountService(t)
+func TestAccountService_SetDisabled_SucceedsOnceOwnershipIsTransferred(t *testing.T) {
+	h := newAccountTestHarness(t)
 	ctx := context.Background()
 
-	alice, err := accounts.Create(ctx, "alice", "temp-secret")
-	if err != nil {
-		t.Fatalf("create alice: %v", err)
+	alice, aliceWorkspace := h.register(t, "alice")
+	bob, _ := h.register(t, "bob")
+	h.addMember(t, aliceWorkspace.ID, bob.ID, repository.WorkspaceRoleMember)
+
+	if _, err := h.db.Exec("UPDATE workspaces SET owner_user_id = ? WHERE id = ?", bob.ID, aliceWorkspace.ID); err != nil {
+		t.Fatalf("transfer workspace ownership to bob: %v", err)
+	}
+	if _, err := h.db.Exec("UPDATE workspace_members SET role = 'owner' WHERE workspace_id = ? AND user_id = ?", aliceWorkspace.ID, bob.ID); err != nil {
+		t.Fatalf("promote bob to owner: %v", err)
+	}
+	if _, err := h.db.Exec("UPDATE workspace_members SET role = 'member' WHERE workspace_id = ? AND user_id = ?", aliceWorkspace.ID, alice.ID); err != nil {
+		t.Fatalf("demote alice to member: %v", err)
 	}
 
-	disabled, err := accounts.SetDisabled(ctx, alice.ID, true)
-	if err != nil {
-		t.Fatalf("expected no error disabling a non-admin, got %v", err)
-	}
-	if !disabled.IsDisabled {
-		t.Fatalf("expected alice to be disabled")
+	if _, err := h.accounts.SetDisabled(ctx, alice.ID, true); err != nil {
+		t.Fatalf("expected disable to succeed once alice is no longer the owner, got %v", err)
 	}
 }
 
-func TestAccountService_SetDisabled_DemotedAdminCanBeReenabledOnceAnotherAdminExists(t *testing.T) {
-	accounts := newTestAccountService(t)
+func TestAccountService_DeleteImpact_ReportsPerCalendarWorkspaceAndTransferCandidates(t *testing.T) {
+	h := newAccountTestHarness(t)
 	ctx := context.Background()
 
-	// Re-enabling a disabled admin must never be blocked by the last-admin
-	// guard — that guard only protects against losing the last one, and
-	// enabling never removes an admin.
-	alice, err := accounts.Create(ctx, "alice", "temp-secret")
+	alice, aliceWorkspace := h.register(t, "alice")
+	bob, _ := h.register(t, "bob")
+	carol, _ := h.register(t, "carol")
+	h.addMember(t, aliceWorkspace.ID, bob.ID, repository.WorkspaceRoleMember)
+
+	shared, err := h.calendars.Create(ctx, alice.ID, aliceWorkspace.ID, "cal-shared", CalendarWrite{Name: "Shared", Color: "#112233FF"})
 	if err != nil {
-		t.Fatalf("create alice: %v", err)
+		t.Fatalf("create shared calendar: %v", err)
 	}
-	if _, err := accounts.SetAdmin(ctx, alice.ID, true); err != nil {
-		t.Fatalf("grant alice admin: %v", err)
+	if _, err := h.calendars.Share(ctx, alice.ID, shared.ID, "bob", repository.RoleEditor); err != nil {
+		t.Fatalf("share with bob: %v", err)
 	}
 
-	bob, err := accounts.Create(ctx, "bob", "temp-secret")
+	impact, err := h.accounts.DeleteImpact(ctx, alice.ID)
 	if err != nil {
-		t.Fatalf("create bob: %v", err)
-	}
-	if _, err := accounts.SetAdmin(ctx, bob.ID, true); err != nil {
-		t.Fatalf("grant bob admin: %v", err)
-	}
-	if _, err := accounts.SetDisabled(ctx, alice.ID, true); err != nil {
-		t.Fatalf("disable alice: %v", err)
+		t.Fatalf("delete impact: %v", err)
 	}
 
-	enabled, err := accounts.SetDisabled(ctx, alice.ID, false)
-	if err != nil {
-		t.Fatalf("re-enable alice: %v", err)
+	var sharedImpact *CalendarImpact
+	for i, c := range impact.Calendars {
+		if c.ID == shared.ID {
+			sharedImpact = &impact.Calendars[i]
+		}
 	}
-	if enabled.IsDisabled {
-		t.Fatalf("expected alice to no longer be disabled")
+	if sharedImpact == nil {
+		t.Fatalf("expected the shared calendar to appear in the impact report: %+v", impact.Calendars)
+	}
+	if sharedImpact.ShareCount != 1 {
+		t.Fatalf("expected 1 share, got %d", sharedImpact.ShareCount)
+	}
+	if sharedImpact.WorkspaceID != aliceWorkspace.ID || sharedImpact.WorkspaceName != aliceWorkspace.Name {
+		t.Fatalf("expected the calendar's own workspace, got %+v", sharedImpact)
+	}
+
+	candidateUsernames := map[string]bool{}
+	for _, c := range sharedImpact.TransferCandidates {
+		candidateUsernames[c.Username] = true
+	}
+	if !candidateUsernames["bob"] {
+		t.Fatalf("expected bob (a workspace member) to be a transfer candidate, got %+v", sharedImpact.TransferCandidates)
+	}
+	if candidateUsernames["alice"] {
+		t.Fatalf("expected alice not to be her own transfer candidate")
+	}
+	if candidateUsernames["carol"] {
+		t.Fatalf("expected carol, who isn't a member of alice's workspace, not to be a transfer candidate")
+	}
+	_ = carol
+}
+
+func TestAccountService_Delete_RequiresADispositionForEveryOwnedCalendar(t *testing.T) {
+	h := newAccountTestHarness(t)
+	ctx := context.Background()
+
+	alice, aliceWorkspace := h.register(t, "alice")
+	h.createCalendar(t, alice.ID, aliceWorkspace.ID, "cal-1", "Personal")
+
+	if err := h.accounts.Delete(ctx, alice.ID, nil); !errors.Is(err, ErrMissingDisposition) {
+		t.Fatalf("expected ErrMissingDisposition when no disposition is given for an owned calendar, got %v", err)
 	}
 }
 
-func TestAccountService_SetAdmin_DemotingANonAdminIsANoopNotAnError(t *testing.T) {
-	accounts := newTestAccountService(t)
+func TestAccountService_Delete_RejectsDuplicateCalendarInDispositions(t *testing.T) {
+	h := newAccountTestHarness(t)
 	ctx := context.Background()
 
-	// alice is the sole account and not an admin — revoking admin from her
-	// (a no-op) must not trip the last-admin guard, which only protects an
-	// actual admin from being demoted.
-	alice, err := accounts.Create(ctx, "alice", "temp-secret")
-	if err != nil {
-		t.Fatalf("create alice: %v", err)
-	}
+	alice, aliceWorkspace := h.register(t, "alice")
+	calendar := h.createCalendar(t, alice.ID, aliceWorkspace.ID, "cal-1", "Personal")
 
-	revoked, err := accounts.SetAdmin(ctx, alice.ID, false)
-	if err != nil {
-		t.Fatalf("expected no error revoking admin from a non-admin, got %v", err)
+	dispositions := []CalendarDisposition{
+		{CalendarID: calendar.ID, Disposition: DispositionDelete},
+		{CalendarID: calendar.ID, Disposition: DispositionDelete},
 	}
-	if revoked.IsAdmin {
-		t.Fatalf("expected alice to remain a non-admin")
+	if err := h.accounts.Delete(ctx, alice.ID, dispositions); !errors.Is(err, ErrDuplicateDisposition) {
+		t.Fatalf("expected ErrDuplicateDisposition, got %v", err)
 	}
 }
 
-func TestAccountService_Delete_RejectsMissingOrInvalidDisposition(t *testing.T) {
-	accounts := newTestAccountService(t)
+func TestAccountService_Delete_RejectsCalendarNotOwnedByCaller(t *testing.T) {
+	h := newAccountTestHarness(t)
 	ctx := context.Background()
 
-	alice, err := accounts.Create(ctx, "alice", "temp-secret")
-	if err != nil {
-		t.Fatalf("create alice: %v", err)
-	}
+	alice, _ := h.register(t, "alice")
+	bob, bobWorkspace := h.register(t, "bob")
+	bobCalendar := h.createCalendar(t, bob.ID, bobWorkspace.ID, "cal-1", "Bob's")
 
-	if err := accounts.Delete(ctx, alice.ID, "", nil); !errors.Is(err, ErrInvalidDisposition) {
-		t.Fatalf("expected ErrInvalidDisposition for an empty disposition, got %v", err)
+	dispositions := []CalendarDisposition{{CalendarID: bobCalendar.ID, Disposition: DispositionDelete}}
+	if err := h.accounts.Delete(ctx, alice.ID, dispositions); !errors.Is(err, ErrCalendarNotOwned) {
+		t.Fatalf("expected ErrCalendarNotOwned, got %v", err)
 	}
-	if err := accounts.Delete(ctx, alice.ID, "cascade", nil); !errors.Is(err, ErrInvalidDisposition) {
-		t.Fatalf("expected ErrInvalidDisposition for an unrecognized disposition, got %v", err)
+}
+
+func TestAccountService_Delete_InvalidDisposition(t *testing.T) {
+	h := newAccountTestHarness(t)
+	ctx := context.Background()
+
+	alice, aliceWorkspace := h.register(t, "alice")
+	calendar := h.createCalendar(t, alice.ID, aliceWorkspace.ID, "cal-1", "Personal")
+
+	dispositions := []CalendarDisposition{{CalendarID: calendar.ID, Disposition: "cascade"}}
+	if err := h.accounts.Delete(ctx, alice.ID, dispositions); !errors.Is(err, ErrInvalidDisposition) {
+		t.Fatalf("expected ErrInvalidDisposition, got %v", err)
 	}
 }
 
 func TestAccountService_Delete_TransferRequiresTransferTo(t *testing.T) {
-	accounts := newTestAccountService(t)
+	h := newAccountTestHarness(t)
 	ctx := context.Background()
 
-	alice, err := accounts.Create(ctx, "alice", "temp-secret")
-	if err != nil {
-		t.Fatalf("create alice: %v", err)
-	}
+	alice, aliceWorkspace := h.register(t, "alice")
+	calendar := h.createCalendar(t, alice.ID, aliceWorkspace.ID, "cal-1", "Personal")
 
-	if err := accounts.Delete(ctx, alice.ID, DispositionTransfer, nil); !errors.Is(err, ErrTransferTargetRequired) {
+	dispositions := []CalendarDisposition{{CalendarID: calendar.ID, Disposition: DispositionTransfer}}
+	if err := h.accounts.Delete(ctx, alice.ID, dispositions); !errors.Is(err, ErrTransferTargetRequired) {
 		t.Fatalf("expected ErrTransferTargetRequired, got %v", err)
 	}
 }
 
-func TestAccountService_Delete_RejectsUnknownTransferTarget(t *testing.T) {
-	accounts := newTestAccountService(t)
-	ctx := context.Background()
-
-	alice, err := accounts.Create(ctx, "alice", "temp-secret")
-	if err != nil {
-		t.Fatalf("create alice: %v", err)
-	}
-
-	ghost := int64(9999)
-	if err := accounts.Delete(ctx, alice.ID, DispositionTransfer, &ghost); !errors.Is(err, ErrTransferTargetNotFound) {
-		t.Fatalf("expected ErrTransferTargetNotFound, got %v", err)
-	}
-}
-
 func TestAccountService_Delete_RejectsTransferToSelf(t *testing.T) {
-	accounts := newTestAccountService(t)
+	h := newAccountTestHarness(t)
 	ctx := context.Background()
 
-	alice, err := accounts.Create(ctx, "alice", "temp-secret")
-	if err != nil {
-		t.Fatalf("create alice: %v", err)
-	}
+	alice, aliceWorkspace := h.register(t, "alice")
+	calendar := h.createCalendar(t, alice.ID, aliceWorkspace.ID, "cal-1", "Personal")
 
 	self := alice.ID
-	if err := accounts.Delete(ctx, alice.ID, DispositionTransfer, &self); !errors.Is(err, ErrCannotTransferToSelf) {
+	dispositions := []CalendarDisposition{{CalendarID: calendar.ID, Disposition: DispositionTransfer, TransferTo: &self}}
+	if err := h.accounts.Delete(ctx, alice.ID, dispositions); !errors.Is(err, ErrCannotTransferToSelf) {
 		t.Fatalf("expected ErrCannotTransferToSelf, got %v", err)
 	}
 }
 
-func TestAccountService_Delete_RefusesToDeleteTheLastRemainingAdmin(t *testing.T) {
-	accounts := newTestAccountService(t)
+func TestAccountService_Delete_RejectsTransferTargetOutsideTheCalendarsWorkspace(t *testing.T) {
+	h := newAccountTestHarness(t)
 	ctx := context.Background()
 
-	alice, err := accounts.Create(ctx, "alice", "temp-secret")
-	if err != nil {
-		t.Fatalf("create alice: %v", err)
-	}
-	if _, err := accounts.SetAdmin(ctx, alice.ID, true); err != nil {
-		t.Fatalf("grant alice admin: %v", err)
-	}
+	alice, aliceWorkspace := h.register(t, "alice")
+	carol, _ := h.register(t, "carol") // not a member of alice's workspace
+	calendar := h.createCalendar(t, alice.ID, aliceWorkspace.ID, "cal-1", "Personal")
 
-	if err := accounts.Delete(ctx, alice.ID, DispositionDelete, nil); !errors.Is(err, ErrLastAdmin) {
-		t.Fatalf("expected ErrLastAdmin, got %v", err)
+	dispositions := []CalendarDisposition{{CalendarID: calendar.ID, Disposition: DispositionTransfer, TransferTo: &carol.ID}}
+	if err := h.accounts.Delete(ctx, alice.ID, dispositions); !errors.Is(err, ErrTransferTargetNotWorkspaceMember) {
+		t.Fatalf("expected ErrTransferTargetNotWorkspaceMember, got %v", err)
 	}
 }
 
-func TestAccountService_Delete_AllowsDeletingAnAdminWhenAnotherAdminRemains(t *testing.T) {
-	accounts := newTestAccountService(t)
+func TestAccountService_Delete_RefusesTheSoleOwnerOfANonEmptyWorkspace(t *testing.T) {
+	h := newAccountTestHarness(t)
 	ctx := context.Background()
 
-	alice, err := accounts.Create(ctx, "alice", "temp-secret")
-	if err != nil {
-		t.Fatalf("create alice: %v", err)
-	}
-	if _, err := accounts.SetAdmin(ctx, alice.ID, true); err != nil {
-		t.Fatalf("grant alice admin: %v", err)
-	}
-	bob, err := accounts.Create(ctx, "bob", "temp-secret")
-	if err != nil {
-		t.Fatalf("create bob: %v", err)
-	}
-	if _, err := accounts.SetAdmin(ctx, bob.ID, true); err != nil {
-		t.Fatalf("grant bob admin: %v", err)
-	}
+	alice, aliceWorkspace := h.register(t, "alice")
+	bob, _ := h.register(t, "bob")
+	h.addMember(t, aliceWorkspace.ID, bob.ID, repository.WorkspaceRoleMember)
 
-	clearSoleWorkspaceOwnership(t, accounts.db, alice.ID)
-
-	if err := accounts.Delete(ctx, alice.ID, DispositionDelete, nil); err != nil {
-		t.Fatalf("delete alice: %v", err)
-	}
-	if _, err := accounts.users.GetByID(ctx, alice.ID); !errors.Is(err, repository.ErrNotFound) {
-		t.Fatalf("expected alice to be gone, got %v", err)
+	if err := h.accounts.Delete(ctx, alice.ID, nil); !errors.Is(err, ErrSoleWorkspaceOwner) {
+		t.Fatalf("expected ErrSoleWorkspaceOwner, got %v", err)
 	}
 }
 
-// TestAccountService_Delete_DispositionDelete_RemovesOwnedCalendarsAndEvents
-// covers ADR-0037's "the delete disposition removes the User's Calendars
-// and their Events".
-func TestAccountService_Delete_DispositionDelete_RemovesOwnedCalendarsAndEvents(t *testing.T) {
-	accounts := newTestAccountService(t)
+// TestAccountService_Delete_DispositionDelete_RemovesOwnedCalendarsWorkspaceAndAccount
+// covers self-Delete with the delete disposition end to end: every owned
+// Calendar and its Events are gone, the User's own solo Workspace is
+// retired, and the account itself is gone.
+func TestAccountService_Delete_DispositionDelete_RemovesOwnedCalendarsWorkspaceAndAccount(t *testing.T) {
+	h := newAccountTestHarness(t)
 	ctx := context.Background()
 
-	alice, err := accounts.Create(ctx, "alice", "temp-secret")
-	if err != nil {
-		t.Fatalf("create alice: %v", err)
-	}
-	calendars, err := accounts.calendars.List(ctx, alice.ID)
-	if err != nil {
-		t.Fatalf("list alice's default calendars: %v", err)
-	}
-	if len(calendars) == 0 {
-		t.Fatalf("expected alice to start with default calendars")
+	alice, aliceWorkspace := h.register(t, "alice")
+	calendarA := h.createCalendar(t, alice.ID, aliceWorkspace.ID, "cal-1", "Personal")
+	calendarB := h.createCalendar(t, alice.ID, aliceWorkspace.ID, "cal-2", "Work")
+
+	dispositions := []CalendarDisposition{
+		{CalendarID: calendarA.ID, Disposition: DispositionDelete},
+		{CalendarID: calendarB.ID, Disposition: DispositionDelete},
 	}
 
-	clearSoleWorkspaceOwnership(t, accounts.db, alice.ID)
-
-	if err := accounts.Delete(ctx, alice.ID, DispositionDelete, nil); err != nil {
+	if err := h.accounts.Delete(ctx, alice.ID, dispositions); err != nil {
 		t.Fatalf("delete alice: %v", err)
 	}
 
-	for _, c := range calendars {
-		if _, err := accounts.calendarRepo.GetByIDAny(ctx, c.ID); !errors.Is(err, repository.ErrNotFound) {
-			t.Fatalf("expected calendar %s to be deleted along with its owner, got %v", c.ID, err)
+	calendarRepo := repository.NewCalendarRepository(h.db)
+	for _, id := range []string{calendarA.ID, calendarB.ID} {
+		if _, err := calendarRepo.GetByIDAny(ctx, id); !errors.Is(err, repository.ErrNotFound) {
+			t.Fatalf("expected calendar %s to be deleted, got %v", id, err)
 		}
+	}
+
+	workspaceRepo := repository.NewWorkspaceRepository(h.db)
+	if _, err := workspaceRepo.GetByID(ctx, aliceWorkspace.ID); !errors.Is(err, repository.ErrNotFound) {
+		t.Fatalf("expected alice's solo workspace to be retired, got %v", err)
+	}
+
+	if _, err := h.users.GetByID(ctx, alice.ID); !errors.Is(err, repository.ErrNotFound) {
+		t.Fatalf("expected alice's account to be gone, got %v", err)
 	}
 }
 
 // TestAccountService_Delete_DispositionTransfer_KeepsEventsAndShares covers
-// ADR-0037's "transferred Calendars keep their Events, including Events
-// created by other people, and keep their existing Shares".
+// self-Delete with the transfer disposition: a transferred Calendar keeps
+// its Events (including ones written by other people) and existing Shares.
 func TestAccountService_Delete_DispositionTransfer_KeepsEventsAndShares(t *testing.T) {
-	sqlDB, err := db.OpenInMemory()
-	if err != nil {
-		t.Fatalf("open in-memory db: %v", err)
-	}
-	t.Cleanup(func() { sqlDB.Close() })
+	h := newAccountTestHarness(t)
 	ctx := context.Background()
 
-	users := repository.NewUserRepository(sqlDB)
-	sessions := repository.NewSessionRepository(sqlDB)
-	calendarRepo := repository.NewCalendarRepository(sqlDB)
-	shareRepo := repository.NewCalendarShareRepository(sqlDB)
-	workspaceRepo := repository.NewWorkspaceRepository(sqlDB)
-	calendarService := NewCalendarService(calendarRepo, shareRepo, users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo)
-	appPasswords := NewAppPasswordService(repository.NewAppPasswordRepository(sqlDB), users)
-	workspaces := NewWorkspaceService(sqlDB, workspaceRepo, repository.NewWorkspaceInviteRepository(sqlDB))
-	accounts := NewAccountService(sqlDB, users, sessions, calendarRepo, shareRepo, calendarService, appPasswords, nil, workspaces)
+	alice, aliceWorkspace := h.register(t, "alice")
+	bob, _ := h.register(t, "bob")
+	h.addMember(t, aliceWorkspace.ID, bob.ID, repository.WorkspaceRoleMember)
 
-	alice, err := accounts.Create(ctx, "alice", "temp-secret")
-	if err != nil {
-		t.Fatalf("create alice: %v", err)
-	}
-	bob, err := accounts.Create(ctx, "bob", "temp-secret")
-	if err != nil {
-		t.Fatalf("create bob: %v", err)
-	}
-	carol, err := accounts.Create(ctx, "carol", "temp-secret")
-	if err != nil {
-		t.Fatalf("create carol: %v", err)
-	}
-
-	aliceWorkspaces, err := workspaces.ListForUser(ctx, alice.ID)
-	if err != nil || len(aliceWorkspaces) == 0 {
-		t.Fatalf("list alice's workspaces: %v", err)
-	}
-
-	calendar, err := calendarService.Create(ctx, alice.ID, aliceWorkspaces[0].ID, "cal-1", CalendarWrite{Name: "Family", Color: "#112233FF"})
+	calendar, err := h.calendars.Create(ctx, alice.ID, aliceWorkspace.ID, "cal-1", CalendarWrite{Name: "Family", Color: "#112233FF"})
 	if err != nil {
 		t.Fatalf("create calendar: %v", err)
 	}
-	if _, err := calendarService.Share(ctx, alice.ID, calendar.ID, "bob", repository.RoleEditor); err != nil {
+	if _, err := h.calendars.Share(ctx, alice.ID, calendar.ID, "bob", repository.RoleEditor); err != nil {
 		t.Fatalf("share calendar with bob: %v", err)
 	}
 
-	events := repository.NewEventRepository(sqlDB)
+	events := repository.NewEventRepository(h.db)
 	bobID := bob.ID
 	event, err := events.Create(ctx, "evt-1", &bobID, repository.EventFields{
 		CalendarID: calendar.ID,
@@ -653,30 +423,35 @@ func TestAccountService_Delete_DispositionTransfer_KeepsEventsAndShares(t *testi
 		t.Fatalf("create event authored by bob: %v", err)
 	}
 
-	// Unlike clearSoleWorkspaceOwnership's other call sites, this test's
-	// Calendar lives in alice's Workspace (workspace_id ON DELETE CASCADE,
-	// #155) and must survive the transfer — so reassign the Workspace's
-	// ownership to carol instead of deleting it outright, standing in for
-	// the Workspace-transfer step ADR-0044's sole-Owner guard requires
-	// before a User can be deleted (AccountService.Delete doesn't yet
-	// automate this — see clearSoleWorkspaceOwnership's doc comment).
-	if _, err := sqlDB.Exec("UPDATE workspaces SET owner_user_id = ? WHERE owner_user_id = ?", carol.ID, alice.ID); err != nil {
-		t.Fatalf("reassign alice's workspace ownership to carol: %v", err)
+	// Transfer Workspace Ownership to bob so alice is no longer its Owner —
+	// the sole-owner guard only cares about Ownership, and bob stays a
+	// Member throughout, so the calendar transfer below still lands on a
+	// valid target and the workspace (with its calendars/shares/events)
+	// stays alive. Mirrors ADR-0044's story: a sole Owner must transfer
+	// Ownership (or empty the workspace) before they can delete themselves.
+	if _, err := h.db.Exec("UPDATE workspaces SET owner_user_id = ? WHERE id = ?", bob.ID, aliceWorkspace.ID); err != nil {
+		t.Fatalf("transfer workspace ownership to bob: %v", err)
 	}
-	if _, err := sqlDB.Exec("DELETE FROM workspace_members WHERE user_id = ?", alice.ID); err != nil {
-		t.Fatalf("clear alice's workspace membership: %v", err)
+	if _, err := h.db.Exec("UPDATE workspace_members SET role = 'owner' WHERE workspace_id = ? AND user_id = ?", aliceWorkspace.ID, bob.ID); err != nil {
+		t.Fatalf("promote bob to owner: %v", err)
 	}
-
-	if err := accounts.Delete(ctx, alice.ID, DispositionTransfer, &carol.ID); err != nil {
-		t.Fatalf("delete alice with transfer to carol: %v", err)
+	if _, err := h.db.Exec("UPDATE workspace_members SET role = 'member' WHERE workspace_id = ? AND user_id = ?", aliceWorkspace.ID, alice.ID); err != nil {
+		t.Fatalf("demote alice to member: %v", err)
 	}
 
+	if err := h.accounts.Delete(ctx, alice.ID, []CalendarDisposition{
+		{CalendarID: calendar.ID, Disposition: DispositionTransfer, TransferTo: &bob.ID},
+	}); err != nil {
+		t.Fatalf("delete alice with transfer to bob: %v", err)
+	}
+
+	calendarRepo := repository.NewCalendarRepository(h.db)
 	transferred, err := calendarRepo.GetByIDAny(ctx, calendar.ID)
 	if err != nil {
 		t.Fatalf("expected the calendar to survive the transfer: %v", err)
 	}
-	if transferred.UserID != carol.ID {
-		t.Fatalf("expected the calendar to be owned by carol, got owner %d", transferred.UserID)
+	if transferred.UserID != bob.ID {
+		t.Fatalf("expected the calendar to be owned by bob, got owner %d", transferred.UserID)
 	}
 
 	survivingEvent, err := events.GetByID(ctx, event.ID)
@@ -687,119 +462,13 @@ func TestAccountService_Delete_DispositionTransfer_KeepsEventsAndShares(t *testi
 		t.Fatalf("expected the event to be unchanged, got %+v", survivingEvent)
 	}
 
+	shareRepo := repository.NewCalendarShareRepository(h.db)
 	if _, err := shareRepo.Get(ctx, calendar.ID, bob.ID); err != nil {
 		t.Fatalf("expected bob's share to survive the transfer: %v", err)
 	}
 
-	if _, err := users.GetByID(ctx, alice.ID); !errors.Is(err, repository.ErrNotFound) {
+	if _, err := h.users.GetByID(ctx, alice.ID); !errors.Is(err, repository.ErrNotFound) {
 		t.Fatalf("expected alice's account to be gone, got %v", err)
-	}
-}
-
-// TestAccountService_Delete_RemovesSharesGrantedToTheDeletedUser covers
-// ADR-0037's "Shares granted to the deleted User are removed" — regardless
-// of disposition, since it concerns Shares the deleted User held on
-// someone else's Calendar, not their own.
-func TestAccountService_Delete_RemovesSharesGrantedToTheDeletedUser(t *testing.T) {
-	accounts := newTestAccountService(t)
-	ctx := context.Background()
-
-	owner, err := accounts.Create(ctx, "owner", "temp-secret")
-	if err != nil {
-		t.Fatalf("create owner: %v", err)
-	}
-	holder, err := accounts.Create(ctx, "holder", "temp-secret")
-	if err != nil {
-		t.Fatalf("create holder: %v", err)
-	}
-
-	ownerWorkspaces, err := accounts.workspaces.ListForUser(ctx, owner.ID)
-	if err != nil || len(ownerWorkspaces) == 0 {
-		t.Fatalf("list owner's workspaces: %v", err)
-	}
-
-	calendar, err := accounts.calendars.Create(ctx, owner.ID, ownerWorkspaces[0].ID, "cal-1", CalendarWrite{Name: "Family", Color: "#112233FF"})
-	if err != nil {
-		t.Fatalf("create calendar: %v", err)
-	}
-	if _, err := accounts.calendars.Share(ctx, owner.ID, calendar.ID, "holder", repository.RoleViewer); err != nil {
-		t.Fatalf("share calendar with holder: %v", err)
-	}
-
-	clearSoleWorkspaceOwnership(t, accounts.db, holder.ID)
-
-	if err := accounts.Delete(ctx, holder.ID, DispositionDelete, nil); err != nil {
-		t.Fatalf("delete holder: %v", err)
-	}
-
-	if _, err := accounts.shareRepo.Get(ctx, calendar.ID, holder.ID); !errors.Is(err, repository.ErrNotFound) {
-		t.Fatalf("expected holder's share to be removed, got %v", err)
-	}
-	if _, err := accounts.calendarRepo.GetByIDAny(ctx, calendar.ID); err != nil {
-		t.Fatalf("expected owner's calendar to survive holder's deletion: %v", err)
-	}
-}
-
-// TestAccountService_DeleteImpact_ReportsShareCountsAndAffectedUsers covers
-// ADR-0037's "the API reports, before deletion, which of the User's
-// Calendars have Shares and how many Users would lose Access".
-func TestAccountService_DeleteImpact_ReportsShareCountsAndAffectedUsers(t *testing.T) {
-	accounts := newTestAccountService(t)
-	ctx := context.Background()
-
-	owner, err := accounts.Create(ctx, "owner", "temp-secret")
-	if err != nil {
-		t.Fatalf("create owner: %v", err)
-	}
-	if _, err := accounts.Create(ctx, "bob", "temp-secret"); err != nil {
-		t.Fatalf("create bob: %v", err)
-	}
-	if _, err := accounts.Create(ctx, "carol", "temp-secret"); err != nil {
-		t.Fatalf("create carol: %v", err)
-	}
-
-	ownerWorkspaces, err := accounts.workspaces.ListForUser(ctx, owner.ID)
-	if err != nil || len(ownerWorkspaces) == 0 {
-		t.Fatalf("list owner's workspaces: %v", err)
-	}
-
-	shared, err := accounts.calendars.Create(ctx, owner.ID, ownerWorkspaces[0].ID, "cal-shared", CalendarWrite{Name: "Shared", Color: "#112233FF"})
-	if err != nil {
-		t.Fatalf("create shared calendar: %v", err)
-	}
-	if _, err := accounts.calendars.Share(ctx, owner.ID, shared.ID, "bob", repository.RoleEditor); err != nil {
-		t.Fatalf("share with bob: %v", err)
-	}
-	if _, err := accounts.calendars.Share(ctx, owner.ID, shared.ID, "carol", repository.RoleViewer); err != nil {
-		t.Fatalf("share with carol: %v", err)
-	}
-	if _, err := accounts.calendars.Create(ctx, owner.ID, ownerWorkspaces[0].ID, "cal-private", CalendarWrite{Name: "Private", Color: "#445566FF"}); err != nil {
-		t.Fatalf("create private calendar: %v", err)
-	}
-
-	impact, err := accounts.DeleteImpact(ctx, owner.ID)
-	if err != nil {
-		t.Fatalf("delete impact: %v", err)
-	}
-
-	if impact.AffectedUserCount != 2 {
-		t.Fatalf("expected 2 affected users, got %d", impact.AffectedUserCount)
-	}
-	if len(impact.Calendars) != 5 { // owner's 3 defaults + cal-shared + cal-private
-		t.Fatalf("expected 5 calendars in the impact report, got %d: %+v", len(impact.Calendars), impact.Calendars)
-	}
-
-	var sharedImpact *CalendarImpact
-	for i, c := range impact.Calendars {
-		if c.ID == shared.ID {
-			sharedImpact = &impact.Calendars[i]
-		}
-	}
-	if sharedImpact == nil {
-		t.Fatalf("expected the shared calendar to appear in the impact report")
-	}
-	if sharedImpact.ShareCount != 2 {
-		t.Fatalf("expected the shared calendar to report 2 shares, got %d", sharedImpact.ShareCount)
 	}
 }
 
@@ -816,8 +485,6 @@ func TestValidateUsername(t *testing.T) {
 		{name: "internal whitespace is rejected", username: "alice bob", wantErr: true},
 		{name: "a tab is rejected", username: "alice\tbob", wantErr: true},
 		{name: "a colon is rejected", username: "ali:ce", wantErr: true},
-		{name: "exactly 64 characters is allowed", username: strings.Repeat("a", 64), want: strings.Repeat("a", 64)},
-		{name: "65 characters is rejected", username: strings.Repeat("a", 65), wantErr: true},
 	}
 
 	for _, tt := range tests {
@@ -836,425 +503,5 @@ func TestValidateUsername(t *testing.T) {
 				t.Fatalf("validateUsername(%q) = %q, want %q", tt.username, got, tt.want)
 			}
 		})
-	}
-}
-
-func TestAccountService_SetUsername_RenamesAccount(t *testing.T) {
-	accounts := newTestAccountService(t)
-	ctx := context.Background()
-
-	alice, err := accounts.Create(ctx, "alice", "temp-secret")
-	if err != nil {
-		t.Fatalf("create alice: %v", err)
-	}
-
-	renamed, err := accounts.SetUsername(ctx, alice.ID, "alicia")
-	if err != nil {
-		t.Fatalf("set username: %v", err)
-	}
-	if renamed.Username != "alicia" {
-		t.Fatalf("expected username alicia, got %q", renamed.Username)
-	}
-}
-
-func TestAccountService_SetUsername_InvalidUsername_ReturnsErrInvalidUsername(t *testing.T) {
-	accounts := newTestAccountService(t)
-	ctx := context.Background()
-
-	alice, err := accounts.Create(ctx, "alice", "temp-secret")
-	if err != nil {
-		t.Fatalf("create alice: %v", err)
-	}
-
-	if _, err := accounts.SetUsername(ctx, alice.ID, "ali:ce"); !errors.Is(err, ErrInvalidUsername) {
-		t.Fatalf("expected ErrInvalidUsername, got %v", err)
-	}
-}
-
-func TestAccountService_SetUsername_DuplicateUsername_ReturnsErrUsernameTaken(t *testing.T) {
-	accounts := newTestAccountService(t)
-	ctx := context.Background()
-
-	alice, err := accounts.Create(ctx, "alice", "temp-secret")
-	if err != nil {
-		t.Fatalf("create alice: %v", err)
-	}
-	if _, err := accounts.Create(ctx, "bob", "temp-secret"); err != nil {
-		t.Fatalf("create bob: %v", err)
-	}
-
-	if _, err := accounts.SetUsername(ctx, alice.ID, "bob"); !errors.Is(err, ErrUsernameTaken) {
-		t.Fatalf("expected ErrUsernameTaken, got %v", err)
-	}
-}
-
-func TestAccountService_SetUsername_UnknownID_ReturnsErrNotFound(t *testing.T) {
-	accounts := newTestAccountService(t)
-	ctx := context.Background()
-
-	if _, err := accounts.SetUsername(ctx, 999, "alicia"); !errors.Is(err, repository.ErrNotFound) {
-		t.Fatalf("expected ErrNotFound, got %v", err)
-	}
-}
-
-func TestAccountService_SetUsername_ExistingAppPasswordAuthenticatesUnderTheNewUsername(t *testing.T) {
-	accounts := newTestAccountService(t)
-	ctx := context.Background()
-
-	alice, err := accounts.Create(ctx, "alice", "temp-secret")
-	if err != nil {
-		t.Fatalf("create alice: %v", err)
-	}
-
-	created, err := accounts.appPasswords.Create(ctx, alice.ID, "phone")
-	if err != nil {
-		t.Fatalf("create app password: %v", err)
-	}
-
-	if _, err := accounts.SetUsername(ctx, alice.ID, "alicia"); err != nil {
-		t.Fatalf("set username: %v", err)
-	}
-
-	if _, err := accounts.appPasswords.Authenticate(ctx, "alice", created.Secret); err == nil {
-		t.Fatalf("expected the old username to no longer authenticate")
-	}
-	userID, err := accounts.appPasswords.Authenticate(ctx, "alicia", created.Secret)
-	if err != nil {
-		t.Fatalf("authenticate under new username: %v", err)
-	}
-	if userID != alice.ID {
-		t.Fatalf("expected authenticated user id %d, got %d", alice.ID, userID)
-	}
-}
-
-func TestAccountService_UsernameImpact_ReportsAppPasswordCount(t *testing.T) {
-	accounts := newTestAccountService(t)
-	ctx := context.Background()
-
-	alice, err := accounts.Create(ctx, "alice", "temp-secret")
-	if err != nil {
-		t.Fatalf("create alice: %v", err)
-	}
-
-	count, err := accounts.UsernameImpact(ctx, alice.ID)
-	if err != nil {
-		t.Fatalf("username impact: %v", err)
-	}
-	if count != 0 {
-		t.Fatalf("expected 0 app passwords for a fresh account, got %d", count)
-	}
-
-	if _, err := accounts.appPasswords.Create(ctx, alice.ID, "phone"); err != nil {
-		t.Fatalf("create app password: %v", err)
-	}
-	if _, err := accounts.appPasswords.Create(ctx, alice.ID, "laptop"); err != nil {
-		t.Fatalf("create second app password: %v", err)
-	}
-
-	count, err = accounts.UsernameImpact(ctx, alice.ID)
-	if err != nil {
-		t.Fatalf("username impact: %v", err)
-	}
-	if count != 2 {
-		t.Fatalf("expected 2 app passwords, got %d", count)
-	}
-}
-
-func TestAccountService_UsernameImpact_UnknownID_ReturnsErrNotFound(t *testing.T) {
-	accounts := newTestAccountService(t)
-	ctx := context.Background()
-
-	if _, err := accounts.UsernameImpact(ctx, 999); !errors.Is(err, repository.ErrNotFound) {
-		t.Fatalf("expected ErrNotFound, got %v", err)
-	}
-}
-
-func TestAccountService_CreateInvite_CreatesPendingUserWithTokenAndDefaults(t *testing.T) {
-	accounts := newTestAccountService(t)
-	ctx := context.Background()
-
-	result, err := accounts.CreateInvite(ctx, "alice", "")
-	if err != nil {
-		t.Fatalf("create invite: %v", err)
-	}
-	if result.Token == "" {
-		t.Fatalf("expected a non-empty invite token")
-	}
-	if result.User.Username != "alice" {
-		t.Fatalf("expected username alice, got %q", result.User.Username)
-	}
-	if !result.User.IsPending() {
-		t.Fatalf("expected a freshly invited account to be pending")
-	}
-	if result.User.PasswordHash != "" {
-		t.Fatalf("expected a freshly invited account to have no password")
-	}
-	if result.User.MustChangePassword {
-		t.Fatalf("expected must_change_password to not apply to a pending account")
-	}
-
-	calendars, err := accounts.calendars.List(ctx, result.User.ID)
-	if err != nil {
-		t.Fatalf("list calendars: %v", err)
-	}
-	if len(calendars) == 0 {
-		t.Fatalf("expected the invited account to start with default calendars")
-	}
-}
-
-func TestAccountService_CreateInvite_EmptyUsername_ReturnsErrInvalidUsername(t *testing.T) {
-	accounts := newTestAccountService(t)
-
-	if _, err := accounts.CreateInvite(context.Background(), "  ", ""); !errors.Is(err, ErrInvalidUsername) {
-		t.Fatalf("expected ErrInvalidUsername, got %v", err)
-	}
-}
-
-func TestAccountService_CreateInvite_DuplicateUsername_ReturnsErrUsernameTaken(t *testing.T) {
-	accounts := newTestAccountService(t)
-	ctx := context.Background()
-
-	if _, err := accounts.Create(ctx, "alice", "temp-secret"); err != nil {
-		t.Fatalf("create alice: %v", err)
-	}
-
-	if _, err := accounts.CreateInvite(ctx, "alice", ""); !errors.Is(err, ErrUsernameTaken) {
-		t.Fatalf("expected ErrUsernameTaken, got %v", err)
-	}
-}
-
-func TestAccountService_CreateInvite_WithEmail_StoresIt(t *testing.T) {
-	accounts := newTestAccountService(t)
-	ctx := context.Background()
-
-	result, err := accounts.CreateInvite(ctx, "alice", "alice@example.com")
-	if err != nil {
-		t.Fatalf("create invite: %v", err)
-	}
-	if result.User.Email == nil || *result.User.Email != "alice@example.com" {
-		t.Fatalf("expected the invite email to be stored, got %+v", result.User.Email)
-	}
-}
-
-func TestAccountService_CreateInvite_InvalidEmail_ReturnsErrInvalidEmail(t *testing.T) {
-	accounts := newTestAccountService(t)
-
-	if _, err := accounts.CreateInvite(context.Background(), "alice", "not-an-email"); !errors.Is(err, ErrInvalidEmail) {
-		t.Fatalf("expected ErrInvalidEmail, got %v", err)
-	}
-}
-
-func TestAccountService_SendInviteEmail_SendsToEmailOnFile(t *testing.T) {
-	mailer := &fakeMailer{}
-	accounts := newTestAccountServiceWithMailer(t, mailer)
-	ctx := context.Background()
-
-	invite, err := accounts.CreateInvite(ctx, "alice", "alice@example.com")
-	if err != nil {
-		t.Fatalf("create invite: %v", err)
-	}
-
-	if err := accounts.SendInviteEmail(ctx, invite.User.ID, "https://example.com/accept-invite?token=abc"); err != nil {
-		t.Fatalf("send invite email: %v", err)
-	}
-	if mailer.to != "alice@example.com" {
-		t.Fatalf("expected the email to go to alice@example.com, got %q", mailer.to)
-	}
-	if !strings.Contains(mailer.body, "https://example.com/accept-invite?token=abc") {
-		t.Fatalf("expected the body to contain the invite link, got %q", mailer.body)
-	}
-}
-
-func TestAccountService_SendInviteEmail_NoEmailOnFile_ReturnsErrNoInviteEmail(t *testing.T) {
-	mailer := &fakeMailer{}
-	accounts := newTestAccountServiceWithMailer(t, mailer)
-	ctx := context.Background()
-
-	invite, err := accounts.CreateInvite(ctx, "alice", "")
-	if err != nil {
-		t.Fatalf("create invite: %v", err)
-	}
-
-	if err := accounts.SendInviteEmail(ctx, invite.User.ID, "https://example.com/accept-invite?token=abc"); !errors.Is(err, ErrNoInviteEmail) {
-		t.Fatalf("expected ErrNoInviteEmail, got %v", err)
-	}
-}
-
-func TestAccountService_SendInviteEmail_NoMailerConfigured_ReturnsErrEmailNotConfigured(t *testing.T) {
-	accounts := newTestAccountService(t)
-	ctx := context.Background()
-
-	invite, err := accounts.CreateInvite(ctx, "alice", "alice@example.com")
-	if err != nil {
-		t.Fatalf("create invite: %v", err)
-	}
-
-	if err := accounts.SendInviteEmail(ctx, invite.User.ID, "https://example.com/accept-invite?token=abc"); !errors.Is(err, ErrEmailNotConfigured) {
-		t.Fatalf("expected ErrEmailNotConfigured, got %v", err)
-	}
-}
-
-func TestAccountService_SendInviteEmail_NotPending_ReturnsErrUserNotPending(t *testing.T) {
-	mailer := &fakeMailer{}
-	accounts := newTestAccountServiceWithMailer(t, mailer)
-	ctx := context.Background()
-
-	alice, err := accounts.Create(ctx, "alice", "temp-secret")
-	if err != nil {
-		t.Fatalf("create alice: %v", err)
-	}
-
-	if err := accounts.SendInviteEmail(ctx, alice.ID, "https://example.com/accept-invite?token=abc"); !errors.Is(err, ErrUserNotPending) {
-		t.Fatalf("expected ErrUserNotPending, got %v", err)
-	}
-}
-
-func TestAccountService_ReissueInvite_ReplacesTokenAndExtendsExpiry(t *testing.T) {
-	accounts := newTestAccountService(t)
-	ctx := context.Background()
-
-	first, err := accounts.CreateInvite(ctx, "alice", "")
-	if err != nil {
-		t.Fatalf("create invite: %v", err)
-	}
-
-	second, err := accounts.ReissueInvite(ctx, first.User.ID)
-	if err != nil {
-		t.Fatalf("reissue invite: %v", err)
-	}
-	if second.Token == "" || second.Token == first.Token {
-		t.Fatalf("expected a fresh, different token")
-	}
-	if !second.User.IsPending() {
-		t.Fatalf("expected the account to remain pending after reissue")
-	}
-
-	// The old token must no longer resolve to anything.
-	if _, err := accounts.users.GetByInviteTokenHash(ctx, hashToken(first.Token)); !errors.Is(err, repository.ErrNotFound) {
-		t.Fatalf("expected the previous token to be invalidated, got %v", err)
-	}
-	if _, err := accounts.users.GetByInviteTokenHash(ctx, hashToken(second.Token)); err != nil {
-		t.Fatalf("expected the new token to resolve, got %v", err)
-	}
-}
-
-func TestAccountService_ReissueInvite_NotPending_ReturnsErrUserNotPending(t *testing.T) {
-	accounts := newTestAccountService(t)
-	ctx := context.Background()
-
-	alice, err := accounts.Create(ctx, "alice", "temp-secret")
-	if err != nil {
-		t.Fatalf("create alice: %v", err)
-	}
-
-	if _, err := accounts.ReissueInvite(ctx, alice.ID); !errors.Is(err, ErrUserNotPending) {
-		t.Fatalf("expected ErrUserNotPending, got %v", err)
-	}
-}
-
-func TestAccountService_ReissueInvite_UnknownID_ReturnsErrNotFound(t *testing.T) {
-	accounts := newTestAccountService(t)
-
-	if _, err := accounts.ReissueInvite(context.Background(), 999); !errors.Is(err, repository.ErrNotFound) {
-		t.Fatalf("expected ErrNotFound, got %v", err)
-	}
-}
-
-func TestAccountService_CancelInvite_DeletesPendingUser(t *testing.T) {
-	accounts := newTestAccountService(t)
-	ctx := context.Background()
-
-	invite, err := accounts.CreateInvite(ctx, "alice", "")
-	if err != nil {
-		t.Fatalf("create invite: %v", err)
-	}
-
-	clearSoleWorkspaceOwnership(t, accounts.db, invite.User.ID)
-
-	if err := accounts.CancelInvite(ctx, invite.User.ID); err != nil {
-		t.Fatalf("cancel invite: %v", err)
-	}
-
-	if _, err := accounts.users.GetByID(ctx, invite.User.ID); !errors.Is(err, repository.ErrNotFound) {
-		t.Fatalf("expected the pending user to be deleted, got %v", err)
-	}
-}
-
-func TestAccountService_CancelInvite_NotPending_ReturnsErrUserNotPending(t *testing.T) {
-	accounts := newTestAccountService(t)
-	ctx := context.Background()
-
-	alice, err := accounts.Create(ctx, "alice", "temp-secret")
-	if err != nil {
-		t.Fatalf("create alice: %v", err)
-	}
-
-	if err := accounts.CancelInvite(ctx, alice.ID); !errors.Is(err, ErrUserNotPending) {
-		t.Fatalf("expected ErrUserNotPending, got %v", err)
-	}
-
-	if _, err := accounts.users.GetByID(ctx, alice.ID); err != nil {
-		t.Fatalf("expected the active account to survive a refused cancel, got %v", err)
-	}
-}
-
-func TestAccountService_SetDisabled_RefusesPendingAccount(t *testing.T) {
-	accounts := newTestAccountService(t)
-	ctx := context.Background()
-
-	invite, err := accounts.CreateInvite(ctx, "alice", "")
-	if err != nil {
-		t.Fatalf("create invite: %v", err)
-	}
-
-	if _, err := accounts.SetDisabled(ctx, invite.User.ID, true); !errors.Is(err, ErrUserIsPending) {
-		t.Fatalf("expected ErrUserIsPending, got %v", err)
-	}
-	if _, err := accounts.SetDisabled(ctx, invite.User.ID, false); !errors.Is(err, ErrUserIsPending) {
-		t.Fatalf("expected ErrUserIsPending, got %v", err)
-	}
-}
-
-func TestAccountService_SetAdmin_RefusesPendingAccount(t *testing.T) {
-	accounts := newTestAccountService(t)
-	ctx := context.Background()
-
-	invite, err := accounts.CreateInvite(ctx, "alice", "")
-	if err != nil {
-		t.Fatalf("create invite: %v", err)
-	}
-
-	if _, err := accounts.SetAdmin(ctx, invite.User.ID, true); !errors.Is(err, ErrUserIsPending) {
-		t.Fatalf("expected ErrUserIsPending, got %v", err)
-	}
-}
-
-func TestAccountService_ResetPassword_RefusesPendingAccount(t *testing.T) {
-	accounts := newTestAccountService(t)
-	ctx := context.Background()
-
-	invite, err := accounts.CreateInvite(ctx, "alice", "")
-	if err != nil {
-		t.Fatalf("create invite: %v", err)
-	}
-
-	if _, err := accounts.ResetPassword(ctx, invite.User.ID, "new-temp-secret"); !errors.Is(err, ErrUserIsPending) {
-		t.Fatalf("expected ErrUserIsPending, got %v", err)
-	}
-}
-
-func TestAccountService_Create_StillProducesImmediatelyActiveUser(t *testing.T) {
-	accounts := newTestAccountService(t)
-	ctx := context.Background()
-
-	user, err := accounts.Create(ctx, "alice", "temp-secret")
-	if err != nil {
-		t.Fatalf("create account: %v", err)
-	}
-	if user.IsPending() {
-		t.Fatalf("expected the temp-password flow to produce an immediately-active account, not a pending one")
-	}
-	if user.IsDisabled {
-		t.Fatalf("expected the temp-password flow to produce an enabled account")
 	}
 }

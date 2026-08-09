@@ -15,7 +15,7 @@ import (
 	"github.com/XiovV/calendar/server/internal/static"
 )
 
-func New(logger *slog.Logger, authHandler *handlers.AuthHandler, calendarHandler *handlers.CalendarHandler, eventHandler *handlers.EventHandler, attachmentHandler *handlers.AttachmentHandler, notificationHandler *handlers.NotificationHandler, appPasswordHandler *handlers.AppPasswordHandler, accountHandler *handlers.AccountHandler, userHandler *handlers.UserHandler, workspaceHandler *handlers.WorkspaceHandler, calDAVHandler http.Handler, authenticator httpauth.Authenticator, activeUserChecker httpauth.ActiveUserChecker, calDAVAuthenticator httpauth.CalDAVAuthenticator, adminChecker httpauth.AdminChecker, workspaceMembershipChecker httpauth.WorkspaceMembershipChecker) (http.Handler, error) {
+func New(logger *slog.Logger, authHandler *handlers.AuthHandler, calendarHandler *handlers.CalendarHandler, eventHandler *handlers.EventHandler, attachmentHandler *handlers.AttachmentHandler, notificationHandler *handlers.NotificationHandler, appPasswordHandler *handlers.AppPasswordHandler, accountHandler *handlers.AccountHandler, userHandler *handlers.UserHandler, workspaceHandler *handlers.WorkspaceHandler, calDAVHandler http.Handler, authenticator httpauth.Authenticator, activeUserChecker httpauth.ActiveUserChecker, calDAVAuthenticator httpauth.CalDAVAuthenticator, enabledChecker httpauth.DisabledChecker, workspaceMembershipChecker httpauth.WorkspaceMembershipChecker) (http.Handler, error) {
 	r := chi.NewRouter()
 	r.Use(requestLogger(logger))
 	r.Use(middleware.Recoverer)
@@ -32,14 +32,9 @@ func New(logger *slog.Logger, authHandler *handlers.AuthHandler, calendarHandler
 			// bootstrapping the very first account or self-registering a new
 			// one while ENABLE_SIGNUPS is true.
 			r.Post("/register", authHandler.Register)
-			// Accept-invite (ADR-0042) is public like the three routes above
-			// it: it establishes a Session rather than requiring one, proving
-			// identity via a single-use token instead of a bearer token.
-			r.Post("/accept-invite", authHandler.AcceptInvite)
-			r.Get("/accept-invite", authHandler.PreviewInvite)
 
 			// Workspace Invite accept (ADR-0044, #154): the preview and the
-			// new-account path are public like accept-invite above; the
+			// new-account path are public like the routes above; the
 			// existing-account path instead requires the caller already be
 			// logged in as the User whose email the invite names.
 			r.Get("/accept-workspace-invite", authHandler.PreviewWorkspaceInvite)
@@ -51,6 +46,7 @@ func New(logger *slog.Logger, authHandler *handlers.AuthHandler, calendarHandler
 			r.Group(func(r chi.Router) {
 				r.Use(httpauth.RequireAuth(authenticator))
 				r.Use(httpauth.RequireActiveUser(activeUserChecker))
+				r.Use(httpauth.RequireEnabledUser(enabledChecker))
 				r.Get("/me", authHandler.Me)
 				r.Put("/email", authHandler.UpdateEmail)
 				r.Put("/username", authHandler.UpdateUsername)
@@ -62,6 +58,7 @@ func New(logger *slog.Logger, authHandler *handlers.AuthHandler, calendarHandler
 		r.Route("/calendars", func(r chi.Router) {
 			r.Use(httpauth.RequireAuth(authenticator))
 			r.Use(httpauth.RequireActiveUser(activeUserChecker))
+			r.Use(httpauth.RequireEnabledUser(enabledChecker))
 
 			// List/Create/Import/Subscribe create or read Calendars scoped to
 			// the caller's active Workspace (#155, ADR-0045) — RequireWorkspace
@@ -95,6 +92,7 @@ func New(logger *slog.Logger, authHandler *handlers.AuthHandler, calendarHandler
 		r.Route("/events", func(r chi.Router) {
 			r.Use(httpauth.RequireAuth(authenticator))
 			r.Use(httpauth.RequireActiveUser(activeUserChecker))
+			r.Use(httpauth.RequireEnabledUser(enabledChecker))
 
 			r.Get("/", eventHandler.List)
 			r.Post("/", eventHandler.Create)
@@ -124,6 +122,7 @@ func New(logger *slog.Logger, authHandler *handlers.AuthHandler, calendarHandler
 		r.Route("/notifications", func(r chi.Router) {
 			r.Use(httpauth.RequireAuth(authenticator))
 			r.Use(httpauth.RequireActiveUser(activeUserChecker))
+			r.Use(httpauth.RequireEnabledUser(enabledChecker))
 
 			r.Get("/", notificationHandler.List)
 			r.Post("/seen", notificationHandler.MarkSeen)
@@ -132,6 +131,7 @@ func New(logger *slog.Logger, authHandler *handlers.AuthHandler, calendarHandler
 		r.Route("/app-passwords", func(r chi.Router) {
 			r.Use(httpauth.RequireAuth(authenticator))
 			r.Use(httpauth.RequireActiveUser(activeUserChecker))
+			r.Use(httpauth.RequireEnabledUser(enabledChecker))
 
 			r.Get("/", appPasswordHandler.List)
 			r.Post("/", appPasswordHandler.Create)
@@ -139,12 +139,11 @@ func New(logger *slog.Logger, authHandler *handlers.AuthHandler, calendarHandler
 		})
 
 		// User directory (#113): any authenticated caller may see who else
-		// has an account, to pick a Share recipient — deliberately not the
-		// Admin-only /accounts listing below, which carries status a
-		// non-Admin has no business seeing.
+		// has an account, to pick a Share recipient.
 		r.Route("/users", func(r chi.Router) {
 			r.Use(httpauth.RequireAuth(authenticator))
 			r.Use(httpauth.RequireActiveUser(activeUserChecker))
+			r.Use(httpauth.RequireEnabledUser(enabledChecker))
 
 			r.Get("/", userHandler.Directory)
 		})
@@ -154,6 +153,7 @@ func New(logger *slog.Logger, authHandler *handlers.AuthHandler, calendarHandler
 		r.Route("/workspaces", func(r chi.Router) {
 			r.Use(httpauth.RequireAuth(authenticator))
 			r.Use(httpauth.RequireActiveUser(activeUserChecker))
+			r.Use(httpauth.RequireEnabledUser(enabledChecker))
 
 			r.Get("/", workspaceHandler.List)
 			// Invite issuance (ADR-0044, #154): WorkspaceService itself
@@ -163,26 +163,17 @@ func New(logger *slog.Logger, authHandler *handlers.AuthHandler, calendarHandler
 			r.Post("/invites/{id}/reissue", workspaceHandler.ReissueInvite)
 		})
 
-		// Account administration (ADR-0037): who exists, never what they can
-		// see — RequireAdmin is the only authorization this group needs.
-		r.Route("/accounts", func(r chi.Router) {
+		// Self-service account lifecycle (ADR-0044): a User acting on their
+		// own account, never anyone else's — there is no instance-wide Admin
+		// left. SetDisabled sits behind RequireAuth alone, not
+		// RequireEnabledUser, since re-activating is the one action a
+		// Disabled User must still be able to reach.
+		r.Route("/account", func(r chi.Router) {
 			r.Use(httpauth.RequireAuth(authenticator))
-			r.Use(httpauth.RequireActiveUser(activeUserChecker))
-			r.Use(httpauth.RequireAdmin(adminChecker))
 
-			r.Get("/", accountHandler.List)
-			r.Post("/", accountHandler.Create)
-			r.Post("/invite", accountHandler.CreateInvite)
-			r.Post("/{id}/invite/reissue", accountHandler.ReissueInvite)
-			r.Delete("/{id}/invite", accountHandler.CancelInvite)
-			r.Post("/{id}/invite/email", accountHandler.SendInviteEmail)
-			r.Post("/{id}/reset-password", accountHandler.ResetPassword)
-			r.Put("/{id}/admin", accountHandler.SetAdmin)
-			r.Put("/{id}/disabled", accountHandler.SetDisabled)
-			r.Put("/{id}/username", accountHandler.SetUsername)
-			r.Get("/{id}/username-impact", accountHandler.UsernameImpact)
-			r.Get("/{id}/delete-impact", accountHandler.DeleteImpact)
-			r.Delete("/{id}", accountHandler.Delete)
+			r.Put("/disabled", accountHandler.SetDisabled)
+			r.With(httpauth.RequireEnabledUser(enabledChecker)).Get("/delete-impact", accountHandler.DeleteImpact)
+			r.With(httpauth.RequireEnabledUser(enabledChecker)).Delete("/", accountHandler.Delete)
 		})
 	})
 

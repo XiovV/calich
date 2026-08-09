@@ -76,18 +76,14 @@ func main() {
 	notificationRepo := repository.NewNotificationRepository(sqlDB)
 	notificationService := service.NewNotificationService(notificationRepo)
 	appPasswordService := service.NewAppPasswordService(repository.NewAppPasswordRepository(sqlDB), users)
-	// smtpMailer is shared by Reminder email delivery (ADR-0021) and Invite
-	// email delivery (ADR-0042) — nil, and both features fall back
-	// accordingly, when this deployment has no SMTP transport configured.
+	// smtpMailer serves Reminder email delivery (ADR-0021) — nil, and
+	// Reminders fall back to the log sink, when this deployment has no SMTP
+	// transport configured.
 	var smtpMailer *mailer.SMTPMailer
 	if cfg.SMTPConfigured() {
 		smtpMailer = mailer.NewSMTPMailer(cfg.SMTPHost, cfg.SMTPPort, cfg.SMTPUser, cfg.SMTPPass, cfg.SMTPFrom)
 	}
-	var accountMailer service.Mailer
-	if smtpMailer != nil {
-		accountMailer = smtpMailer
-	}
-	accountService := service.NewAccountService(sqlDB, users, sessions, calendarRepo, shareRepo, calendarService, appPasswordService, accountMailer, workspaceService)
+	accountService := service.NewAccountService(sqlDB, users, sessions, calendarRepo, shareRepo, workspaceRepo, workspaceService)
 
 	ctx := context.Background()
 	bootstrapUser, bootstrapCreatedUser, err := authService.Bootstrap(ctx)
@@ -120,7 +116,7 @@ func main() {
 	attachmentHandler := handlers.NewAttachmentHandler(attachmentService, cfg.MaxAttachmentSize)
 	notificationHandler := handlers.NewNotificationHandler(notificationService)
 	appPasswordHandler := handlers.NewAppPasswordHandler(appPasswordService)
-	accountHandler := handlers.NewAccountHandler(accountService, cfg.SMTPConfigured())
+	accountHandler := handlers.NewAccountHandler(accountService)
 	userService := service.NewUserService(users)
 	userHandler := handlers.NewUserHandler(userService)
 	workspaceHandler := handlers.NewWorkspaceHandler(workspaceService)

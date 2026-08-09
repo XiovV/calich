@@ -100,8 +100,8 @@ func NewCalendarRepository(db *sql.DB) *CalendarRepository {
 
 // WithTx returns a copy of the repository bound to tx, for use inside
 // repository.WithTx to make a multi-table write atomic (ADR-0018) —
-// TransferOwnership needs this to pair with UserRepository.Delete under the
-// "transfer" disposition (ADR-0037).
+// TransferOwnershipOne needs this to pair with UserRepository.Delete under
+// the "transfer" disposition (ADR-0044).
 func (r *CalendarRepository) WithTx(tx *sql.Tx) *CalendarRepository {
 	return &CalendarRepository{db: tx}
 }
@@ -322,16 +322,18 @@ func (r *CalendarRepository) Delete(ctx context.Context, userID int64, id string
 	return requireAffected(res)
 }
 
-// TransferOwnership reassigns every Calendar fromUserID owns to toUserID in
-// one statement — the "transfer" disposition for a deleted account's
-// Calendars (ADR-0037). Existing Events and Shares on each Calendar are left
-// exactly as they are; only ownership moves. A no-op, not an error, when
-// fromUserID owns nothing.
-func (r *CalendarRepository) TransferOwnership(ctx context.Context, fromUserID, toUserID int64) error {
-	if _, err := r.db.ExecContext(ctx, `UPDATE calendars SET user_id = ? WHERE user_id = ?`, toUserID, fromUserID); err != nil {
+// TransferOwnershipOne reassigns a single Calendar id, owned by fromUserID,
+// to toUserID — the per-Calendar "transfer" disposition self-Delete requires
+// (ADR-0044): unlike the retired Admin-driven Delete, which took one
+// disposition for a whole account, a self-deleting User chooses transfer or
+// delete independently for each Calendar they own. Existing Events and
+// Shares on the Calendar are left exactly as they are; only ownership moves.
+func (r *CalendarRepository) TransferOwnershipOne(ctx context.Context, fromUserID int64, id string, toUserID int64) error {
+	res, err := r.db.ExecContext(ctx, `UPDATE calendars SET user_id = ? WHERE user_id = ? AND id = ?`, toUserID, fromUserID, id)
+	if err != nil {
 		return fmt.Errorf("transfer calendar ownership: %w", err)
 	}
-	return nil
+	return requireAffected(res)
 }
 
 // RefreshSuccess is what a completed, successful Refresh persists on a

@@ -19,13 +19,13 @@ afterEach(() => {
 describe("authApi.login", () => {
   it("returns the access token and must_change_password flag on success", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
-      jsonResponse(200, { access_token: "token-123", must_change_password: true }),
+      jsonResponse(200, { access_token: "token-123", must_change_password: true, is_disabled: false }),
     );
     vi.stubGlobal("fetch", fetchMock);
 
     const result = await authApi.login("admin", "admin");
 
-    expect(result).toEqual({ accessToken: "token-123", mustChangePassword: true });
+    expect(result).toEqual({ accessToken: "token-123", mustChangePassword: true, isDisabled: false });
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/auth/login",
       expect.objectContaining({
@@ -58,63 +58,16 @@ describe("authApi.login", () => {
     expect(error).toBeInstanceOf(ApiError);
     expect((error as ApiError).status).toBe(500);
   });
-});
 
-describe("authApi.acceptInvite", () => {
-  it("returns the access token on success", async () => {
+  it("reports is_disabled for a Disabled account instead of refusing (ADR-0044)", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
-      jsonResponse(200, { access_token: "token-123", must_change_password: false }),
+      jsonResponse(200, { access_token: "token-123", must_change_password: false, is_disabled: true }),
     );
     vi.stubGlobal("fetch", fetchMock);
 
-    const result = await authApi.acceptInvite("invite-token-abc", "new-password");
+    const result = await authApi.login("alice", "hunter2");
 
-    expect(result).toEqual({ accessToken: "token-123", mustChangePassword: false });
-    expect(fetchMock).toHaveBeenCalledWith(
-      "/api/auth/accept-invite",
-      expect.objectContaining({
-        method: "POST",
-        credentials: "include",
-        body: JSON.stringify({ token: "invite-token-abc", password: "new-password" }),
-      }),
-    );
-  });
-
-  it("throws an ApiError when the invite is invalid or expired", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(
-      jsonResponse(401, { error: { code: "invite_invalid", message: "invite is invalid or has expired" } }),
-    );
-    vi.stubGlobal("fetch", fetchMock);
-
-    await expect(authApi.acceptInvite("bad-token", "new-password")).rejects.toMatchObject({
-      code: "invite_invalid",
-    });
-  });
-});
-
-describe("authApi.previewInvite", () => {
-  it("returns the username on success", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, { username: "alice" }));
-    vi.stubGlobal("fetch", fetchMock);
-
-    const result = await authApi.previewInvite("invite-token-abc");
-
-    expect(result).toBe("alice");
-    expect(fetchMock).toHaveBeenCalledWith(
-      "/api/auth/accept-invite?token=invite-token-abc",
-      expect.objectContaining({ credentials: "include" }),
-    );
-  });
-
-  it("throws an ApiError when the invite is invalid or expired", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(
-      jsonResponse(401, { error: { code: "invite_invalid", message: "invite is invalid or has expired" } }),
-    );
-    vi.stubGlobal("fetch", fetchMock);
-
-    await expect(authApi.previewInvite("bad-token")).rejects.toMatchObject({
-      code: "invite_invalid",
-    });
+    expect(result).toEqual({ accessToken: "token-123", mustChangePassword: false, isDisabled: true });
   });
 });
 
@@ -152,7 +105,6 @@ describe("authApi.me", () => {
         email: "admin@example.com",
         email_reminder_channel_available: true,
         synced_device_reminders_enabled: false,
-        is_admin: true,
         week_start: 1,
         default_view: "week",
       }),
@@ -168,7 +120,6 @@ describe("authApi.me", () => {
       email: "admin@example.com",
       emailReminderChannelAvailable: true,
       syncedDeviceRemindersEnabled: false,
-      isAdmin: true,
       weekStart: 1,
       defaultView: "week",
     });
@@ -243,7 +194,6 @@ describe("authApi.updateEmail", () => {
         must_change_password: false,
         email: "admin@example.com",
         email_reminder_channel_available: true,
-        is_admin: false,
       }),
     );
     vi.stubGlobal("fetch", fetchMock);
@@ -256,7 +206,6 @@ describe("authApi.updateEmail", () => {
       mustChangePassword: false,
       email: "admin@example.com",
       emailReminderChannelAvailable: true,
-      isAdmin: false,
     });
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/auth/email",
@@ -290,7 +239,6 @@ describe("authApi.updateUsername", () => {
         must_change_password: false,
         email: null,
         email_reminder_channel_available: false,
-        is_admin: false,
       }),
     );
     vi.stubGlobal("fetch", fetchMock);
@@ -303,7 +251,6 @@ describe("authApi.updateUsername", () => {
       mustChangePassword: false,
       email: null,
       emailReminderChannelAvailable: false,
-      isAdmin: false,
     });
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/auth/username",
@@ -338,7 +285,6 @@ describe("authApi.updateSyncedDeviceReminders", () => {
         email: null,
         email_reminder_channel_available: false,
         synced_device_reminders_enabled: true,
-        is_admin: false,
         week_start: 1,
       }),
     );
@@ -353,7 +299,6 @@ describe("authApi.updateSyncedDeviceReminders", () => {
       email: null,
       emailReminderChannelAvailable: false,
       syncedDeviceRemindersEnabled: true,
-      isAdmin: false,
       weekStart: 1,
     });
     expect(fetchMock).toHaveBeenCalledWith(
@@ -389,7 +334,6 @@ describe("authApi.updatePreferences", () => {
         email: null,
         email_reminder_channel_available: false,
         synced_device_reminders_enabled: false,
-        is_admin: false,
         week_start: 0,
         default_view: "week",
       }),
@@ -405,7 +349,6 @@ describe("authApi.updatePreferences", () => {
       email: null,
       emailReminderChannelAvailable: false,
       syncedDeviceRemindersEnabled: false,
-      isAdmin: false,
       weekStart: 0,
       defaultView: "week",
     });
@@ -429,7 +372,6 @@ describe("authApi.updatePreferences", () => {
         email: null,
         email_reminder_channel_available: false,
         synced_device_reminders_enabled: false,
-        is_admin: false,
         week_start: 1,
         default_view: "month",
       }),
@@ -459,7 +401,6 @@ describe("authApi.updatePreferences", () => {
         email: null,
         email_reminder_channel_available: false,
         synced_device_reminders_enabled: false,
-        is_admin: false,
         week_start: 1,
         default_view: "week",
         time_format: "12h",
@@ -490,7 +431,6 @@ describe("authApi.updatePreferences", () => {
         email: null,
         email_reminder_channel_available: false,
         synced_device_reminders_enabled: false,
-        is_admin: false,
         week_start: 1,
         default_view: "week",
         time_format: "24h",
@@ -524,7 +464,6 @@ describe("authApi.updatePreferences", () => {
         email: null,
         email_reminder_channel_available: false,
         synced_device_reminders_enabled: false,
-        is_admin: false,
         week_start: 1,
         default_view: "week",
         time_format: "24h",

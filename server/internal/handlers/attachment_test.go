@@ -47,7 +47,7 @@ func newAttachmentTestServer(t *testing.T, maxAttachmentSize int64, maxAttachmen
 	sessions := repository.NewSessionRepository(sqlDB)
 	workspaceRepo := repository.NewWorkspaceRepository(sqlDB)
 	workspaces := service.NewWorkspaceService(sqlDB, workspaceRepo, repository.NewWorkspaceInviteRepository(sqlDB))
-	auth := service.NewAuthService(users, sessions, workspaces, repository.NewWorkspaceInviteRepository(sqlDB), []byte("test-secret"), "owner", "hunter2", false)
+	auth := service.NewAuthService(users, sessions, workspaces, repository.NewWorkspaceInviteRepository(sqlDB), []byte("test-secret"), "owner", "hunter2", true)
 	bootstrapUser, _, err := auth.Bootstrap(ctx)
 	if err != nil {
 		t.Fatalf("bootstrap: %v", err)
@@ -65,17 +65,15 @@ func newAttachmentTestServer(t *testing.T, maxAttachmentSize int64, maxAttachmen
 	calendarRepo := repository.NewCalendarRepository(sqlDB)
 	shareRepo := repository.NewCalendarShareRepository(sqlDB)
 	calendars := service.NewCalendarService(calendarRepo, shareRepo, users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo)
-	appPasswords := service.NewAppPasswordService(repository.NewAppPasswordRepository(sqlDB), users)
-	accounts := service.NewAccountService(sqlDB, users, sessions, calendarRepo, shareRepo, calendars, appPasswords, nil, workspaces)
 
-	if _, err := accounts.Create(ctx, "editor", "temp-password"); err != nil {
-		t.Fatalf("create editor: %v", err)
+	if _, err := auth.Register(ctx, "editor", "editor@example.com", "temp-password"); err != nil {
+		t.Fatalf("register editor: %v", err)
 	}
-	if _, err := accounts.Create(ctx, "viewer", "temp-password"); err != nil {
-		t.Fatalf("create viewer: %v", err)
+	if _, err := auth.Register(ctx, "viewer", "viewer@example.com", "temp-password"); err != nil {
+		t.Fatalf("register viewer: %v", err)
 	}
-	if _, err := accounts.Create(ctx, "stranger", "temp-password"); err != nil {
-		t.Fatalf("create stranger: %v", err)
+	if _, err := auth.Register(ctx, "stranger", "stranger@example.com", "temp-password"); err != nil {
+		t.Fatalf("register stranger: %v", err)
 	}
 
 	ownerLogin, err := auth.Login(ctx, "owner", "hunter2")

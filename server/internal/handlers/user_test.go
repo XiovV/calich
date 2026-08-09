@@ -36,7 +36,7 @@ func newUserDirectoryTestServer(t *testing.T) userDirectoryTestServer {
 	sessions := repository.NewSessionRepository(sqlDB)
 	workspaceRepo := repository.NewWorkspaceRepository(sqlDB)
 	workspaceSvc := service.NewWorkspaceService(sqlDB, workspaceRepo, repository.NewWorkspaceInviteRepository(sqlDB))
-	auth := service.NewAuthService(users, sessions, workspaceSvc, repository.NewWorkspaceInviteRepository(sqlDB), []byte("test-secret"), "caller", "hunter2", false)
+	auth := service.NewAuthService(users, sessions, workspaceSvc, repository.NewWorkspaceInviteRepository(sqlDB), []byte("test-secret"), "caller", "hunter2", true)
 	ctx := context.Background()
 	if _, _, err := auth.Bootstrap(ctx); err != nil {
 		t.Fatalf("bootstrap: %v", err)
@@ -44,16 +44,17 @@ func newUserDirectoryTestServer(t *testing.T) userDirectoryTestServer {
 
 	calendarRepo := repository.NewCalendarRepository(sqlDB)
 	shareRepo := repository.NewCalendarShareRepository(sqlDB)
-	calendars := service.NewCalendarService(calendarRepo, shareRepo, users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo)
-	appPasswords := service.NewAppPasswordService(repository.NewAppPasswordRepository(sqlDB), users)
-	accounts := service.NewAccountService(sqlDB, users, sessions, calendarRepo, shareRepo, calendars, appPasswords, nil, workspaceSvc)
+	accounts := service.NewAccountService(sqlDB, users, sessions, calendarRepo, shareRepo, workspaceRepo, workspaceSvc)
 
-	if _, err := accounts.Create(ctx, "bob", "temp-password"); err != nil {
-		t.Fatalf("create bob: %v", err)
+	if _, err := auth.Register(ctx, "bob", "bob@example.com", "temp-password"); err != nil {
+		t.Fatalf("register bob: %v", err)
 	}
-	ghost, err := accounts.Create(ctx, "ghost", "temp-password")
+	if _, err := auth.Register(ctx, "ghost", "ghost@example.com", "temp-password"); err != nil {
+		t.Fatalf("register ghost: %v", err)
+	}
+	ghost, err := users.GetByUsername(ctx, "ghost")
 	if err != nil {
-		t.Fatalf("create ghost: %v", err)
+		t.Fatalf("get ghost: %v", err)
 	}
 	if _, err := accounts.SetDisabled(ctx, ghost.ID, true); err != nil {
 		t.Fatalf("disable ghost: %v", err)

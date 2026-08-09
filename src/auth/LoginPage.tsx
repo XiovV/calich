@@ -18,7 +18,7 @@ export function LoginPage() {
     return null;
   }
 
-  if (status === "authenticated" || status === "must-change-password") {
+  if (status === "authenticated" || status === "must-change-password" || status === "account-disabled") {
     return <Navigate to="/" replace />;
   }
 

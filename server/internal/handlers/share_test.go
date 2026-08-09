@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/go-chi/chi/v5"
+	"golang.org/x/crypto/bcrypt"
 
 	"github.com/XiovV/calendar/server/internal/attachmentstore"
 	"github.com/XiovV/calendar/server/internal/db"
@@ -48,25 +49,17 @@ func newShareTestServer(t *testing.T) shareTestServer {
 	if err != nil {
 		t.Fatalf("bootstrap: %v", err)
 	}
-	if _, err := users.Create(ctx, "other", "hash", false); err != nil {
+	otherHash, err := bcrypt.GenerateFromPassword([]byte("temp-password"), bcrypt.DefaultCost)
+	if err != nil {
+		t.Fatalf("hash other user's password: %v", err)
+	}
+	other, err := users.Create(ctx, "other", string(otherHash), false)
+	if err != nil {
 		t.Fatalf("create other user: %v", err)
 	}
-	// AccountService hashes properly via bcrypt; a raw repository.Create
-	// like the one above stores "hash" verbatim, which Login's
-	// bcrypt.CompareHashAndPassword would reject — so "other" logs in
-	// through an Admin-issued temporary password instead.
 	calendarRepo := repository.NewCalendarRepository(sqlDB)
 	shareRepo := repository.NewCalendarShareRepository(sqlDB)
 	calendars := service.NewCalendarService(calendarRepo, shareRepo, users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo)
-	appPasswords := service.NewAppPasswordService(repository.NewAppPasswordRepository(sqlDB), users)
-	accounts := service.NewAccountService(sqlDB, users, sessions, calendarRepo, shareRepo, calendars, appPasswords, nil, workspaceSvc)
-	other, err := accounts.ResetPassword(ctx, 2, "temp-password")
-	if err != nil {
-		t.Fatalf("reset other user's password: %v", err)
-	}
-	if other.Username != "other" {
-		t.Fatalf("expected id 2 to be %q, got %q", "other", other.Username)
-	}
 
 	ownerLogin, err := auth.Login(ctx, "owner", "hunter2")
 	if err != nil {

@@ -1,9 +1,15 @@
 import { create } from "zustand";
 import { setSessionRefresher } from "./apiClient";
+import { accountApi, type CalendarDispositionChoice } from "./accountApi";
 import { ApiError, authApi, type TimeFormat, type User } from "./authApi";
 import { useShellStore, type ActiveView } from "./shellStore";
 
-export type AuthStatus = "loading" | "unauthenticated" | "must-change-password" | "authenticated";
+export type AuthStatus =
+  | "loading"
+  | "unauthenticated"
+  | "must-change-password"
+  | "account-disabled"
+  | "authenticated";
 
 interface AuthState {
   status: AuthStatus;
@@ -17,7 +23,6 @@ interface AuthState {
   bootstrap: () => Promise<void>;
   login: (username: string, password: string) => Promise<void>;
   register: (name: string, email: string, password: string) => Promise<void>;
-  acceptInvite: (token: string, password: string) => Promise<void>;
   acceptWorkspaceInvite: (token: string, name: string, password: string) => Promise<void>;
   joinWorkspaceInvite: (token: string) => Promise<{ id: number; name: string }>;
   logout: () => Promise<void>;
@@ -29,6 +34,13 @@ interface AuthState {
   updateDefaultView: (defaultView: ActiveView) => Promise<void>;
   updateTimeFormat: (timeFormat: TimeFormat) => Promise<void>;
   updateWorkingHours: (workingHours: { start: number; end: number } | null) => Promise<void>;
+  // Self-service account lifecycle (ADR-0044): disabling logs the caller out
+  // locally (their Session was invalidated server-side); reactivating is the
+  // one action reachable from "account-disabled" and returns them to a full
+  // session; deleting logs the caller out for good.
+  disableAccount: () => Promise<void>;
+  reactivateAccount: () => Promise<void>;
+  deleteAccount: (calendars: CalendarDispositionChoice[]) => Promise<void>;
 }
 
 type AuthFields = Pick<AuthState, "status" | "user" | "pendingUsername" | "accessToken">;
@@ -39,6 +51,13 @@ function unauthenticated(): AuthFields {
 
 function mustChangePassword(accessToken: string, pendingUsername: string | null): AuthFields {
   return { status: "must-change-password", user: null, pendingUsername, accessToken };
+}
+
+// accountDisabled carries a live access token (Login/Refresh still issue one
+// for a Disabled account, ADR-0044) with no `user` — GET /api/auth/me is
+// blocked while Disabled, mirroring mustChangePassword's shape.
+function accountDisabled(accessToken: string): AuthFields {
+  return { status: "account-disabled", user: null, pendingUsername: null, accessToken };
 }
 
 function authenticated(user: User, accessToken: string): AuthFields {
@@ -81,15 +100,27 @@ export const useAuthStore = create<AuthState>((set, get) => {
           set(mustChangePassword(accessToken, null));
           return;
         }
+        if (err instanceof ApiError && err.code === "account_disabled") {
+          set(accountDisabled(accessToken));
+          return;
+        }
         set(unauthenticated());
       }
     },
 
     login: async (username, password) => {
-      const { accessToken, mustChangePassword: passwordChangeRequired } = await authApi.login(username, password);
+      const {
+        accessToken,
+        mustChangePassword: passwordChangeRequired,
+        isDisabled,
+      } = await authApi.login(username, password);
 
       if (passwordChangeRequired) {
         set(mustChangePassword(accessToken, username));
+        return;
+      }
+      if (isDisabled) {
+        set(accountDisabled(accessToken));
         return;
       }
 
@@ -108,19 +139,8 @@ export const useAuthStore = create<AuthState>((set, get) => {
       useShellStore.getState().setActiveView(user.defaultView);
     },
 
-    // A Pending account accepting its Invite lands in the app already
-    // logged in (ADR-0042) — no separate "invite accepted, now please log
-    // in" step — so this seeds the shell the same way login/bootstrap do.
-    acceptInvite: async (token, password) => {
-      const { accessToken } = await authApi.acceptInvite(token, password);
-      const user = await authApi.me(accessToken);
-      set(authenticated(user, accessToken));
-      useShellStore.getState().setActiveView(user.defaultView);
-    },
-
     // A new-account Workspace Invite accept lands in the app already logged
-    // in (ADR-0044), same as acceptInvite for the account-level Invite this
-    // replaces.
+    // in (ADR-0044).
     acceptWorkspaceInvite: async (token, name, password) => {
       const { accessToken } = await authApi.acceptWorkspaceInvite(token, name, password);
       const user = await authApi.me(accessToken);
@@ -221,6 +241,37 @@ export const useAuthStore = create<AuthState>((set, get) => {
 
       const user = await authApi.updatePreferences(accessToken, { workingHours });
       set(authenticated(user, accessToken));
+    },
+
+    // Disabling deletes every live Session server-side (AccountService.
+    // SetDisabled), so the local session ends the same way logout's does —
+    // the caller can log back in later to reactivate (ADR-0044).
+    disableAccount: async () => {
+      const { accessToken } = get();
+      if (!accessToken) throw new Error("Not authenticated.");
+
+      await accountApi.setDisabled(accessToken, true);
+      set(unauthenticated());
+    },
+
+    // Reactivating is the one action reachable from "account-disabled" — a
+    // successful call re-fetches `user` and returns to a full session.
+    reactivateAccount: async () => {
+      const { accessToken } = get();
+      if (!accessToken) throw new Error("Not authenticated.");
+
+      await accountApi.setDisabled(accessToken, false);
+      const user = await authApi.me(accessToken);
+      set(authenticated(user, accessToken));
+      useShellStore.getState().setActiveView(user.defaultView);
+    },
+
+    deleteAccount: async (calendars) => {
+      const { accessToken } = get();
+      if (!accessToken) throw new Error("Not authenticated.");
+
+      await accountApi.delete(accessToken, calendars);
+      set(unauthenticated());
     },
   };
 });

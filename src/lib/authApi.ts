@@ -20,9 +20,6 @@ export interface User {
   // "Let my synced devices show reminder pop-ups (disable in-app reminder
   // notifications)" (ADR-0027). Defaults false.
   syncedDeviceRemindersEnabled: boolean;
-  // Authority over who exists on the instance (ADR-0037) — gates whether the
-  // app renders any administration UI at all (#119).
-  isAdmin: boolean;
   // Week start (ADR-0039): a date-fns weekStartsOn index, 0 (Sunday) to 6
   // (Saturday). Never fed into a Recurrence rule's WKST.
   weekStart: number;
@@ -41,6 +38,11 @@ export interface User {
 export interface LoginResult {
   accessToken: string;
   mustChangePassword: boolean;
+  // isDisabled is whether the account that just authenticated is Disabled
+  // (ADR-0044) — Login still succeeds, since re-activating is the one action
+  // a Disabled User must still be able to reach with no instance-wide Admin
+  // left to do it for them.
+  isDisabled: boolean;
 }
 
 interface MeWire {
@@ -50,7 +52,6 @@ interface MeWire {
   email: string | null;
   email_reminder_channel_available: boolean;
   synced_device_reminders_enabled: boolean;
-  is_admin: boolean;
   week_start: number;
   default_view: ActiveView;
   time_format: TimeFormat;
@@ -66,7 +67,6 @@ function fromMeWire(wire: MeWire): User {
     email: wire.email,
     emailReminderChannelAvailable: wire.email_reminder_channel_available,
     syncedDeviceRemindersEnabled: wire.synced_device_reminders_enabled,
-    isAdmin: wire.is_admin,
     weekStart: wire.week_start,
     defaultView: wire.default_view,
     timeFormat: wire.time_format,
@@ -85,8 +85,16 @@ export const authApi = {
     });
     if (!response.ok) throw await errorFromResponse(response);
 
-    const body = (await response.json()) as { access_token: string; must_change_password: boolean };
-    return { accessToken: body.access_token, mustChangePassword: body.must_change_password };
+    const body = (await response.json()) as {
+      access_token: string;
+      must_change_password: boolean;
+      is_disabled: boolean;
+    };
+    return {
+      accessToken: body.access_token,
+      mustChangePassword: body.must_change_password,
+      isDisabled: body.is_disabled,
+    };
   },
 
   // Self-registers a new account (ADR-0044) and logs the caller straight in
@@ -104,36 +112,7 @@ export const authApi = {
     if (!response.ok) throw await errorFromResponse(response);
 
     const body = (await response.json()) as { access_token: string; must_change_password: boolean };
-    return { accessToken: body.access_token, mustChangePassword: body.must_change_password };
-  },
-
-  // Sets a password for the Pending account token names and logs the caller
-  // straight in (ADR-0042) — the public, unauthenticated counterpart to
-  // login for an Invite link.
-  async acceptInvite(token: string, password: string): Promise<LoginResult> {
-    const response = await fetch("/api/auth/accept-invite", {
-      method: "POST",
-      credentials: "include",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ token, password }),
-    });
-    if (!response.ok) throw await errorFromResponse(response);
-
-    const body = (await response.json()) as { access_token: string; must_change_password: boolean };
-    return { accessToken: body.access_token, mustChangePassword: body.must_change_password };
-  },
-
-  // Resolves an Invite token to the username it names, without consuming it
-  // (ADR-0042) — the accept-invite page calls this on load to show the
-  // invitee which pre-chosen account they're setting a password for.
-  async previewInvite(token: string): Promise<string> {
-    const response = await fetch(`/api/auth/accept-invite?token=${encodeURIComponent(token)}`, {
-      credentials: "include",
-    });
-    if (!response.ok) throw await errorFromResponse(response);
-
-    const body = (await response.json()) as { username: string };
-    return body.username;
+    return { accessToken: body.access_token, mustChangePassword: body.must_change_password, isDisabled: false };
   },
 
   // Resolves a Workspace Invite token to the Workspace and email it names,
@@ -167,7 +146,7 @@ export const authApi = {
     if (!response.ok) throw await errorFromResponse(response);
 
     const body = (await response.json()) as { access_token: string; must_change_password: boolean };
-    return { accessToken: body.access_token, mustChangePassword: body.must_change_password };
+    return { accessToken: body.access_token, mustChangePassword: body.must_change_password, isDisabled: false };
   },
 
   // Accepts a Workspace Invite on behalf of the already-authenticated caller

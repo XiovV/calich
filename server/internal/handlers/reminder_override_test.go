@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/go-chi/chi/v5"
+	"golang.org/x/crypto/bcrypt"
 
 	"github.com/XiovV/calendar/server/internal/attachmentstore"
 	"github.com/XiovV/calendar/server/internal/db"
@@ -46,18 +47,17 @@ func newReminderOverrideTestServer(t *testing.T) reminderOverrideTestServer {
 	if err != nil {
 		t.Fatalf("bootstrap: %v", err)
 	}
-	if _, err := users.Create(ctx, "other", "hash", false); err != nil {
+	otherHash, err := bcrypt.GenerateFromPassword([]byte("temp-password"), bcrypt.DefaultCost)
+	if err != nil {
+		t.Fatalf("hash other user's password: %v", err)
+	}
+	if _, err := users.Create(ctx, "other", string(otherHash), false); err != nil {
 		t.Fatalf("create other user: %v", err)
 	}
 
 	calendarRepo := repository.NewCalendarRepository(sqlDB)
 	shareRepo := repository.NewCalendarShareRepository(sqlDB)
 	calendars := service.NewCalendarService(calendarRepo, shareRepo, users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo)
-	appPasswords := service.NewAppPasswordService(repository.NewAppPasswordRepository(sqlDB), users)
-	accounts := service.NewAccountService(sqlDB, users, sessions, calendarRepo, shareRepo, calendars, appPasswords, nil, workspaceSvc)
-	if _, err := accounts.ResetPassword(ctx, 2, "temp-password"); err != nil {
-		t.Fatalf("reset other user's password: %v", err)
-	}
 
 	ownerLogin, err := auth.Login(ctx, "owner", "hunter2")
 	if err != nil {

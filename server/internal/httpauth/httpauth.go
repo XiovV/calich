@@ -87,16 +87,19 @@ func RequireActiveUser(checker ActiveUserChecker) func(http.Handler) http.Handle
 	}
 }
 
-// AdminChecker reports whether a user holds Admin (ADR-0037).
-type AdminChecker interface {
-	IsAdmin(ctx context.Context, userID int64) (bool, error)
+// DisabledChecker reports whether a user is Disabled (ADR-0044).
+type DisabledChecker interface {
+	IsDisabled(ctx context.Context, userID int64) (bool, error)
 }
 
-// RequireAdmin blocks requests from a non-Admin user with a 403 forbidden
-// response — every account-management endpoint sits behind it, since an
-// Admin's authority is over who exists and nothing else grants it. It must
-// run after RequireAuth, which populates the user id in context.
-func RequireAdmin(checker AdminChecker) func(http.Handler) http.Handler {
+// RequireEnabledUser blocks requests from a Disabled user with a 403
+// account_disabled response — every route sits behind it except the
+// self-service account-lifecycle ones (/api/account/...), which must stay
+// reachable so a Disabled User can still reach the one action available to
+// them: re-activating. There is no instance-wide Admin left to do it for
+// them (ADR-0044). It must run after RequireAuth, which populates the user
+// id in context.
+func RequireEnabledUser(checker DisabledChecker) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			userID, ok := UserIDFromContext(r.Context())
@@ -105,13 +108,13 @@ func RequireAdmin(checker AdminChecker) func(http.Handler) http.Handler {
 				return
 			}
 
-			isAdmin, err := checker.IsAdmin(r.Context(), userID)
+			isDisabled, err := checker.IsDisabled(r.Context(), userID)
 			if err != nil {
 				httpresponse.Error(w, http.StatusInternalServerError, "internal_error", "failed to check user status")
 				return
 			}
-			if !isAdmin {
-				httpresponse.Error(w, http.StatusForbidden, "forbidden", "admin access required")
+			if isDisabled {
+				httpresponse.Error(w, http.StatusForbidden, "account_disabled", "this account is disabled")
 				return
 			}
 

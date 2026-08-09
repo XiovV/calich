@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import { Navigate } from "react-router";
 import { useAuthStore } from "../lib/authStore";
 import { ChangePasswordScreen } from "./ChangePasswordScreen";
+import { ReactivateAccountScreen } from "./ReactivateAccountScreen";
 
 interface ProtectedRouteProps {
   children: ReactNode;
@@ -20,6 +21,10 @@ export function ProtectedRoute({ children }: ProtectedRouteProps) {
 
   if (status === "must-change-password") {
     return <ChangePasswordScreen />;
+  }
+
+  if (status === "account-disabled") {
+    return <ReactivateAccountScreen />;
   }
 
   return children;

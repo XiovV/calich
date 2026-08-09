@@ -122,6 +122,34 @@ func (s *WorkspaceService) ListForUser(ctx context.Context, userID int64) ([]rep
 	return workspaces, nil
 }
 
+// OwnsNonEmptyWorkspace reports whether userID is the sole Owner of any
+// Workspace that still has other Members in it — the guard blocking
+// self-Disable and self-Delete (ADR-0044, AccountService): a Workspace is
+// never left without anyone able to manage it. A Workspace where userID is
+// Owner but the only Member (a solo Workspace) never blocks — there's nobody
+// else depending on them there.
+func (s *WorkspaceService) OwnsNonEmptyWorkspace(ctx context.Context, userID int64) (bool, error) {
+	workspaces, err := s.workspaces.ListForUser(ctx, userID)
+	if err != nil {
+		return false, fmt.Errorf("list workspaces: %w", err)
+	}
+
+	for _, w := range workspaces {
+		if w.OwnerUserID != userID {
+			continue
+		}
+		count, err := s.workspaces.CountMembers(ctx, w.ID)
+		if err != nil {
+			return false, fmt.Errorf("count members of workspace %d: %w", w.ID, err)
+		}
+		if count > 1 {
+			return true, nil
+		}
+	}
+
+	return false, nil
+}
+
 var (
 	// ErrInvalidWorkspaceRole is returned by SetMemberRole when role isn't
 	// "admin" or "member" — the Owner grant/revoke-Admin operation never

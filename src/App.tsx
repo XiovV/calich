@@ -1,7 +1,6 @@
 import { useEffect } from "react";
 import { BrowserRouter, Navigate, Route, Routes } from "react-router";
 import { AppShell } from "./components/layout/AppShell";
-import { AcceptInvitePage } from "./auth/AcceptInvitePage";
 import { AcceptWorkspaceInvitePage } from "./auth/AcceptWorkspaceInvitePage";
 import { LoginPage } from "./auth/LoginPage";
 import { RegisterPage } from "./auth/RegisterPage";
@@ -13,8 +12,7 @@ import { useAuthStore } from "./lib/authStore";
 
 function App() {
   const bootstrap = useAuthStore((state) => state.bootstrap);
-  const isAdmin = useAuthStore((state) => state.user?.isAdmin ?? false);
-  const settingsSections = getSettingsSections(isAdmin);
+  const settingsSections = getSettingsSections();
 
   useEffect(() => {
     bootstrap();
@@ -25,7 +23,6 @@ function App() {
       <Routes>
         <Route path="/login" element={<LoginPage />} />
         <Route path="/register" element={<RegisterPage />} />
-        <Route path="/accept-invite" element={<AcceptInvitePage />} />
         <Route path="/accept-workspace-invite" element={<AcceptWorkspaceInvitePage />} />
         <Route
           path="/"

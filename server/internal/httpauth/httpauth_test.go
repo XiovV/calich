@@ -201,17 +201,17 @@ func TestRequireActiveUser_ActiveUser_CallsNext(t *testing.T) {
 	}
 }
 
-type fakeAdminChecker struct {
-	isAdmin bool
-	err     error
+type fakeDisabledChecker struct {
+	isDisabled bool
+	err        error
 }
 
-func (f fakeAdminChecker) IsAdmin(ctx context.Context, userID int64) (bool, error) {
-	return f.isAdmin, f.err
+func (f fakeDisabledChecker) IsDisabled(ctx context.Context, userID int64) (bool, error) {
+	return f.isDisabled, f.err
 }
 
-func TestRequireAdmin_NoUserIDInContext_Returns401(t *testing.T) {
-	handler := RequireAdmin(fakeAdminChecker{isAdmin: true})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+func TestRequireEnabledUser_NoUserIDInContext_Returns401(t *testing.T) {
+	handler := RequireEnabledUser(fakeDisabledChecker{isDisabled: false})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Fatalf("next handler should not be called")
 	}))
 
@@ -224,8 +224,8 @@ func TestRequireAdmin_NoUserIDInContext_Returns401(t *testing.T) {
 	}
 }
 
-func TestRequireAdmin_NonAdmin_Returns403(t *testing.T) {
-	handler := RequireAdmin(fakeAdminChecker{isAdmin: false})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+func TestRequireEnabledUser_Disabled_Returns403(t *testing.T) {
+	handler := RequireEnabledUser(fakeDisabledChecker{isDisabled: true})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Fatalf("next handler should not be called")
 	}))
 
@@ -239,9 +239,9 @@ func TestRequireAdmin_NonAdmin_Returns403(t *testing.T) {
 	}
 }
 
-func TestRequireAdmin_Admin_CallsNext(t *testing.T) {
+func TestRequireEnabledUser_Enabled_CallsNext(t *testing.T) {
 	called := false
-	handler := RequireAdmin(fakeAdminChecker{isAdmin: true})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := RequireEnabledUser(fakeDisabledChecker{isDisabled: false})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		called = true
 		w.WriteHeader(http.StatusOK)
 	}))

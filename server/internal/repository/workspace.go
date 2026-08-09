@@ -158,6 +158,32 @@ func (r *WorkspaceRepository) GetMember(ctx context.Context, workspaceID, userID
 	return m, nil
 }
 
+// CountMembers reports how many Members workspaceID currently has, itself
+// included — the sole-Owner guard's building block (ADR-0044,
+// WorkspaceService.OwnsNonEmptyWorkspace): a Workspace whose Owner is its
+// only Member (count 1) never blocks that Owner's self-Disable or
+// self-Delete, since nobody else depends on them.
+func (r *WorkspaceRepository) CountMembers(ctx context.Context, workspaceID int64) (int, error) {
+	var count int
+	if err := r.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM workspace_members WHERE workspace_id = ?`, workspaceID).Scan(&count); err != nil {
+		return 0, fmt.Errorf("count workspace members: %w", err)
+	}
+	return count, nil
+}
+
+// Delete removes workspaceID outright, cascading its workspace_members and
+// calendars rows (ADR-0044) — used by AccountService.Delete to retire every
+// solo Workspace (Owner with no other Members) a self-deleting User owns,
+// since workspaces.owner_user_id carries no ON DELETE behaviour and must not
+// be left pointing at a deleted User.
+func (r *WorkspaceRepository) Delete(ctx context.Context, id int64) error {
+	res, err := r.db.ExecContext(ctx, `DELETE FROM workspaces WHERE id = ?`, id)
+	if err != nil {
+		return fmt.Errorf("delete workspace: %w", err)
+	}
+	return requireAffected(res)
+}
+
 // ListMembers returns every WorkspaceMember of workspaceID, ordered by when
 // their Membership was created — the member-management list's data source
 // (#156).

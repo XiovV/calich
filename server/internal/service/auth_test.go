@@ -39,9 +39,7 @@ func newTestAuthServiceWithSignups(t *testing.T, initialUsername, initialPasswor
 // repository, bypassing both Bootstrap and Register — neither of which ever
 // produces a User with must_change_password set anymore (ADR-0044 retires
 // the fixed bootstrap default that used to). Used only by tests exercising
-// AuthService's must-change-password mechanics themselves, which is
-// otherwise exercised via AccountService.Create (ADR-0037)'s Admin-issued
-// temporary password.
+// AuthService's must-change-password mechanics themselves.
 func mustSeedUserRequiringPasswordChange(t *testing.T, svc *AuthService, ctx context.Context, username, password string) repository.User {
 	t.Helper()
 
@@ -179,12 +177,12 @@ func TestBootstrap_NoopWhenUsersExist(t *testing.T) {
 	}
 }
 
-// TestRegister_ConcurrentFirstRegistrations_OnlyOneBecomesAdmin guards
-// against a TOCTOU race: two Register calls hitting a fresh instance at the
-// same time must not both observe zero existing Users and both end up
-// treated as the first account (bypassing ENABLE_SIGNUPS and both granted
-// Admin) — see the transaction Register wraps its count check in.
-func TestRegister_ConcurrentFirstRegistrations_OnlyOneBecomesAdmin(t *testing.T) {
+// TestRegister_ConcurrentFirstRegistrations_OnlyOneSucceeds guards against a
+// TOCTOU race: two Register calls hitting a fresh instance at the same time
+// must not both observe zero existing Users and both end up treated as the
+// first account (bypassing ENABLE_SIGNUPS) — see the transaction Register
+// wraps its count check in.
+func TestRegister_ConcurrentFirstRegistrations_OnlyOneSucceeds(t *testing.T) {
 	svc := newTestAuthServiceWithSignups(t, "", "", false)
 	ctx := context.Background()
 
@@ -212,12 +210,12 @@ func TestRegister_ConcurrentFirstRegistrations_OnlyOneBecomesAdmin(t *testing.T)
 		t.Fatalf("expected exactly one of the two concurrent registrations to succeed as the first account, got %d", successes)
 	}
 
-	adminCount, err := svc.users.CountAdmins(ctx)
+	count, err := svc.users.Count(ctx)
 	if err != nil {
-		t.Fatalf("count admins: %v", err)
+		t.Fatalf("count users: %v", err)
 	}
-	if adminCount != 1 {
-		t.Fatalf("expected exactly one Admin, got %d", adminCount)
+	if count != 1 {
+		t.Fatalf("expected exactly one account to have been created, got %d", count)
 	}
 }
 
@@ -240,9 +238,6 @@ func TestRegister_FirstAccountSucceedsEvenWithSignupsDisabled(t *testing.T) {
 	user, err := svc.users.GetByUsername(ctx, "alice")
 	if err != nil {
 		t.Fatalf("get user: %v", err)
-	}
-	if !user.IsAdmin {
-		t.Fatalf("expected the first-ever account to be the first Admin (ADR-0037)")
 	}
 
 	workspaces, err := svc.workspaces.ListForUser(ctx, user.ID)
@@ -292,9 +287,6 @@ func TestRegister_SignupsEnabled_AlwaysCreatesAFreshWorkspace(t *testing.T) {
 	bob, err := svc.users.GetByUsername(ctx, "bob")
 	if err != nil {
 		t.Fatalf("get bob: %v", err)
-	}
-	if bob.IsAdmin {
-		t.Fatalf("expected only the first-ever account to be Admin, bob should not be")
 	}
 
 	aliceWorkspaces, err := svc.workspaces.ListForUser(ctx, alice.ID)
@@ -420,7 +412,13 @@ func TestLogin_UnknownUsername(t *testing.T) {
 	}
 }
 
-func TestLogin_RejectsDisabledAccount(t *testing.T) {
+// TestLogin_DisabledAccount_StillIssuesASessionButFlagsIt covers ADR-0044:
+// with no instance-wide Admin left to re-activate someone else's account, a
+// Disabled User must still be able to log back in to reach the one action
+// available to them — reactivating. Login reports IsDisabled instead of
+// refusing outright; httpauth.RequireEnabledUser is what closes off every
+// other route.
+func TestLogin_DisabledAccount_StillIssuesASessionButFlagsIt(t *testing.T) {
 	svc := newTestAuthService(t, "admin", "admin")
 	ctx := context.Background()
 	if _, _, err := svc.Bootstrap(ctx); err != nil {
@@ -435,8 +433,15 @@ func TestLogin_RejectsDisabledAccount(t *testing.T) {
 		t.Fatalf("disable user: %v", err)
 	}
 
-	if _, err := svc.Login(ctx, "admin", "admin"); !errors.Is(err, ErrAccountDisabled) {
-		t.Fatalf("expected ErrAccountDisabled, got %v", err)
+	result, err := svc.Login(ctx, "admin", "admin")
+	if err != nil {
+		t.Fatalf("expected login to succeed for a disabled account, got %v", err)
+	}
+	if !result.IsDisabled {
+		t.Fatalf("expected the login result to report IsDisabled")
+	}
+	if result.AccessToken == "" || result.RefreshToken == "" {
+		t.Fatalf("expected a full session to still be issued")
 	}
 }
 
@@ -1191,7 +1196,11 @@ func TestRefresh_RejectsExpiredSession(t *testing.T) {
 	}
 }
 
-func TestRefresh_RejectsDisabledAccount(t *testing.T) {
+// TestRefresh_StillWorksForADisabledAccount covers ADR-0044: a page reload
+// while Disabled must not strand the User short of the one action available
+// to them — reactivating. httpauth.RequireEnabledUser, not Refresh, is what
+// closes off every other route.
+func TestRefresh_StillWorksForADisabledAccount(t *testing.T) {
 	svc := newTestAuthService(t, "admin", "admin")
 	ctx := context.Background()
 	if _, _, err := svc.Bootstrap(ctx); err != nil {
@@ -1211,8 +1220,8 @@ func TestRefresh_RejectsDisabledAccount(t *testing.T) {
 		t.Fatalf("disable user: %v", err)
 	}
 
-	if _, err := svc.Refresh(ctx, login.RefreshToken); !errors.Is(err, ErrAccountDisabled) {
-		t.Fatalf("expected ErrAccountDisabled, got %v", err)
+	if _, err := svc.Refresh(ctx, login.RefreshToken); err != nil {
+		t.Fatalf("expected refresh to still succeed for a disabled account, got %v", err)
 	}
 }
 
@@ -1242,186 +1251,5 @@ func TestLogout_NoopForUnknownToken(t *testing.T) {
 
 	if err := svc.Logout(context.Background(), "not-a-real-refresh-token"); err != nil {
 		t.Fatalf("expected logout to be a no-op for an unknown token, got %v", err)
-	}
-}
-
-// createPendingUser mirrors AccountService.CreateInvite's write, without
-// pulling in AccountService (and its CalendarService dependency) just to get
-// a Pending row for AuthService's own tests.
-func createPendingUser(t *testing.T, svc *AuthService, username, rawToken string, expiresAt time.Time) repository.User {
-	t.Helper()
-
-	user, err := svc.users.CreatePending(context.Background(), username, hashToken(rawToken), expiresAt)
-	if err != nil {
-		t.Fatalf("create pending user: %v", err)
-	}
-	return user
-}
-
-func TestLogin_RejectsPendingAccount(t *testing.T) {
-	svc := newTestAuthService(t, "admin", "admin")
-	ctx := context.Background()
-
-	createPendingUser(t, svc, "alice", "raw-token", time.Now().Add(time.Hour))
-
-	// A Pending account has no password at all, so any attempt fails the
-	// same way a wrong password would — there is no separate "pending"
-	// signal at Login, unlike Disabled.
-	if _, err := svc.Login(ctx, "alice", "anything"); !errors.Is(err, ErrInvalidCredentials) {
-		t.Fatalf("expected ErrInvalidCredentials, got %v", err)
-	}
-}
-
-func TestRefresh_RejectsPendingAccount(t *testing.T) {
-	svc := newTestAuthService(t, "admin", "admin")
-	ctx := context.Background()
-
-	user := createPendingUser(t, svc, "alice", "raw-token", time.Now().Add(time.Hour))
-
-	// A Pending account can never have issued itself a session through
-	// Login, but Refresh's own guard must still hold if one exists some
-	// other way (e.g. a session surviving a state change).
-	refreshToken, refreshTokenHash, err := newOpaqueToken()
-	if err != nil {
-		t.Fatalf("generate refresh token: %v", err)
-	}
-	if _, err := svc.sessions.Create(ctx, user.ID, refreshTokenHash, time.Now().Add(24*time.Hour)); err != nil {
-		t.Fatalf("create session: %v", err)
-	}
-
-	if _, err := svc.Refresh(ctx, refreshToken); !errors.Is(err, ErrAccountDisabled) {
-		t.Fatalf("expected ErrAccountDisabled, got %v", err)
-	}
-}
-
-func TestAcceptInvite_ActivatesAccountAndIssuesSession(t *testing.T) {
-	svc := newTestAuthService(t, "admin", "admin")
-	ctx := context.Background()
-
-	createPendingUser(t, svc, "alice", "raw-token", time.Now().Add(time.Hour))
-
-	result, err := svc.AcceptInvite(ctx, "raw-token", "new-password")
-	if err != nil {
-		t.Fatalf("accept invite: %v", err)
-	}
-	if result.AccessToken == "" || result.RefreshToken == "" {
-		t.Fatalf("expected a full session to be issued")
-	}
-	if result.MustChangePassword {
-		t.Fatalf("expected must_change_password to be false for an invitee-chosen password")
-	}
-
-	user, err := svc.users.GetByUsername(ctx, "alice")
-	if err != nil {
-		t.Fatalf("get user: %v", err)
-	}
-	if user.IsPending() {
-		t.Fatalf("expected the account to no longer be pending")
-	}
-	if user.IsDisabled {
-		t.Fatalf("expected the account to be active, not disabled")
-	}
-	if user.InviteTokenHash != nil || user.InviteExpiresAt != nil {
-		t.Fatalf("expected the invite to be cleared from the row")
-	}
-
-	// The chosen password now works for an ordinary login.
-	if _, err := svc.Login(ctx, "alice", "new-password"); err != nil {
-		t.Fatalf("login with the accepted password: %v", err)
-	}
-}
-
-func TestAcceptInvite_EmptyPassword_ReturnsErrInvalidPassword(t *testing.T) {
-	svc := newTestAuthService(t, "admin", "admin")
-
-	createPendingUser(t, svc, "alice", "raw-token", time.Now().Add(time.Hour))
-
-	if _, err := svc.AcceptInvite(context.Background(), "raw-token", ""); !errors.Is(err, ErrInvalidPassword) {
-		t.Fatalf("expected ErrInvalidPassword, got %v", err)
-	}
-}
-
-func TestAcceptInvite_UnknownToken_ReturnsErrInviteInvalid(t *testing.T) {
-	svc := newTestAuthService(t, "admin", "admin")
-
-	if _, err := svc.AcceptInvite(context.Background(), "not-a-real-token", "new-password"); !errors.Is(err, ErrInviteInvalid) {
-		t.Fatalf("expected ErrInviteInvalid, got %v", err)
-	}
-}
-
-func TestAcceptInvite_ExpiredToken_ReturnsErrInviteInvalid(t *testing.T) {
-	svc := newTestAuthService(t, "admin", "admin")
-
-	createPendingUser(t, svc, "alice", "raw-token", time.Now().Add(-time.Minute))
-
-	if _, err := svc.AcceptInvite(context.Background(), "raw-token", "new-password"); !errors.Is(err, ErrInviteInvalid) {
-		t.Fatalf("expected ErrInviteInvalid, got %v", err)
-	}
-}
-
-func TestAcceptInvite_TokenCannotBeReused(t *testing.T) {
-	svc := newTestAuthService(t, "admin", "admin")
-	ctx := context.Background()
-
-	createPendingUser(t, svc, "alice", "raw-token", time.Now().Add(time.Hour))
-
-	if _, err := svc.AcceptInvite(ctx, "raw-token", "first-password"); err != nil {
-		t.Fatalf("accept invite: %v", err)
-	}
-
-	if _, err := svc.AcceptInvite(ctx, "raw-token", "second-password"); !errors.Is(err, ErrInviteInvalid) {
-		t.Fatalf("expected a reused token to be rejected with ErrInviteInvalid, got %v", err)
-	}
-}
-
-func TestPreviewInvite_ReturnsUsernameWithoutConsumingToken(t *testing.T) {
-	svc := newTestAuthService(t, "admin", "admin")
-	ctx := context.Background()
-
-	createPendingUser(t, svc, "alice", "raw-token", time.Now().Add(time.Hour))
-
-	username, err := svc.PreviewInvite(ctx, "raw-token")
-	if err != nil {
-		t.Fatalf("preview invite: %v", err)
-	}
-	if username != "alice" {
-		t.Fatalf("expected username %q, got %q", "alice", username)
-	}
-
-	// Previewing must not consume the token — accepting it afterwards still works.
-	if _, err := svc.AcceptInvite(ctx, "raw-token", "new-password"); err != nil {
-		t.Fatalf("accept invite after preview: %v", err)
-	}
-}
-
-func TestPreviewInvite_UnknownToken_ReturnsErrInviteInvalid(t *testing.T) {
-	svc := newTestAuthService(t, "admin", "admin")
-
-	if _, err := svc.PreviewInvite(context.Background(), "not-a-real-token"); !errors.Is(err, ErrInviteInvalid) {
-		t.Fatalf("expected ErrInviteInvalid, got %v", err)
-	}
-}
-
-func TestPreviewInvite_ExpiredToken_ReturnsErrInviteInvalid(t *testing.T) {
-	svc := newTestAuthService(t, "admin", "admin")
-
-	createPendingUser(t, svc, "alice", "raw-token", time.Now().Add(-time.Minute))
-
-	if _, err := svc.PreviewInvite(context.Background(), "raw-token"); !errors.Is(err, ErrInviteInvalid) {
-		t.Fatalf("expected ErrInviteInvalid, got %v", err)
-	}
-}
-
-func TestPreviewInvite_AlreadyAcceptedToken_ReturnsErrInviteInvalid(t *testing.T) {
-	svc := newTestAuthService(t, "admin", "admin")
-	ctx := context.Background()
-
-	createPendingUser(t, svc, "alice", "raw-token", time.Now().Add(time.Hour))
-	if _, err := svc.AcceptInvite(ctx, "raw-token", "new-password"); err != nil {
-		t.Fatalf("accept invite: %v", err)
-	}
-
-	if _, err := svc.PreviewInvite(ctx, "raw-token"); !errors.Is(err, ErrInviteInvalid) {
-		t.Fatalf("expected ErrInviteInvalid, got %v", err)
 	}
 }

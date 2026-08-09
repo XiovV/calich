@@ -5,418 +5,94 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"net/mail"
-	"strings"
-	"time"
-	"unicode"
-
-	"golang.org/x/crypto/bcrypt"
 
 	"github.com/XiovV/calendar/server/internal/repository"
 )
 
-// Delete dispositions for a deleted User's owned Calendars (ADR-0037) —
-// there is no default, since guessing wrong either silently destroys a
-// shared Calendar or hands its data to someone with no business holding it.
+// Delete dispositions for a self-deleted User's owned Calendars (ADR-0037,
+// ADR-0044) — there is no default, since guessing wrong either silently
+// destroys a shared Calendar or hands its data to someone with no business
+// holding it.
 const (
 	DispositionTransfer = "transfer"
 	DispositionDelete   = "delete"
 )
 
-// maxUsernameLength bounds validateUsername (#125). Chosen as a generous
-// round number — nothing downstream (the users.username column, CalDAV
-// principal paths keyed on id rather than username) imposes a tighter limit.
-const maxUsernameLength = 64
-
 var (
-	// ErrInvalidUsername is returned when a username fails validateUsername
-	// — empty (or all whitespace), containing a colon or other whitespace,
-	// or longer than maxUsernameLength.
-	ErrInvalidUsername = errors.New("username must not be empty, must not contain whitespace or a colon, and must be at most 64 characters")
-	// ErrUsernameTaken mirrors repository.ErrUsernameTaken so handlers only
-	// import the service package's sentinels, matching every other service.
-	ErrUsernameTaken = repository.ErrUsernameTaken
-	// ErrLastAdmin is returned when an operation would leave the instance
-	// with no Admin at all (ADR-0037).
-	ErrLastAdmin = errors.New("cannot remove the last remaining admin")
-	// ErrInvalidDisposition is returned when Delete is called with neither
-	// DispositionTransfer nor DispositionDelete — Delete has no default
-	// (ADR-0037).
-	ErrInvalidDisposition = errors.New(`owned_calendars must be "transfer" or "delete"`)
-	// ErrTransferTargetRequired is returned when Delete is called with
-	// DispositionTransfer but no transferTo.
-	ErrTransferTargetRequired = errors.New("transfer_to is required when owned_calendars is \"transfer\"")
-	// ErrTransferTargetNotFound is returned when transferTo doesn't name an
-	// existing User.
-	ErrTransferTargetNotFound = errors.New("transfer target not found")
-	// ErrCannotTransferToSelf is returned when transferTo names the User
+	// ErrInvalidDisposition is returned when a CalendarDisposition names
+	// neither DispositionTransfer nor DispositionDelete — there is no
+	// default (ADR-0037).
+	ErrInvalidDisposition = errors.New(`disposition must be "transfer" or "delete"`)
+	// ErrTransferTargetRequired is returned when a CalendarDisposition is
+	// DispositionTransfer with no TransferTo.
+	ErrTransferTargetRequired = errors.New("transfer_to is required when disposition is \"transfer\"")
+	// ErrCannotTransferToSelf is returned when TransferTo names the User
 	// being deleted — their Calendars can't be reassigned to themselves,
 	// since they're about to stop existing.
-	ErrCannotTransferToSelf = errors.New("cannot transfer calendars to the user being deleted")
-	// ErrUserNotPending is returned by ReissueInvite and CancelInvite when
-	// userID names a User who isn't Pending — either never invited, or
-	// already Active (ADR-0042).
-	ErrUserNotPending = errors.New("account does not have an outstanding invite")
-	// ErrUserIsPending is returned by operations ADR-0037 wrote for an
-	// already-Active account — SetAdmin, SetDisabled, ResetPassword — when
-	// called against a Pending one instead. Pending is a state of its own
-	// (ADR-0042): it has no password to reset, can't hold Admin, and
-	// "disabled" already describes why it can't log in, so re-running those
-	// operations on it would either do nothing meaningful or, for
-	// ResetPassword, quietly turn it into an Active-but-still-flagged-disabled
-	// account. Use the Invite endpoints instead.
-	ErrUserIsPending = errors.New("account has an outstanding invite; use the invite endpoints instead")
-	// ErrNoInviteEmail is returned by SendInviteEmail when the Pending User
-	// has no email on file to send to (ADR-0042 leaves email optional).
-	ErrNoInviteEmail = errors.New("no email on file for this invite")
-	// ErrEmailNotConfigured is returned by SendInviteEmail when this
-	// deployment has no SMTP transport configured (ADR-0042, ADR-0021).
-	ErrEmailNotConfigured = errors.New("email delivery is not configured")
+	ErrCannotTransferToSelf = errors.New("cannot transfer a calendar to the account being deleted")
+	// ErrTransferTargetNotWorkspaceMember is returned when TransferTo
+	// doesn't belong to the Calendar's own Workspace — a Calendar's Owner
+	// must belong to its Workspace (ADR-0044, ADR-0045), so a transfer
+	// target from anywhere else, or that doesn't exist at all, is refused
+	// the same way.
+	ErrTransferTargetNotWorkspaceMember = errors.New("transfer target must be a member of the calendar's workspace")
+	// ErrCalendarNotOwned is returned when a CalendarDisposition names a
+	// Calendar the deleting User doesn't own.
+	ErrCalendarNotOwned = errors.New("calendar is not owned by you")
+	// ErrDuplicateDisposition is returned when the same Calendar appears
+	// more than once across the dispositions Delete was given.
+	ErrDuplicateDisposition = errors.New("a calendar cannot appear more than once")
+	// ErrMissingDisposition is returned when Delete wasn't given a
+	// disposition for every Calendar the User owns — self-Delete requires an
+	// explicit transfer-or-delete choice for each one (ADR-0044), so an
+	// account can't be deleted with a Calendar silently uncovered.
+	ErrMissingDisposition = errors.New("every owned calendar needs a disposition")
+	// ErrSoleWorkspaceOwner is returned by SetDisabled (when disabling) and
+	// Delete when the User is the sole Owner of a Workspace that still has
+	// other Members in it (ADR-0044) — a Workspace must never be left
+	// without anyone able to manage it. Resolved by transferring Ownership
+	// or removing the other Members first.
+	ErrSoleWorkspaceOwner = errors.New("cannot proceed while you are the sole owner of a workspace with other members")
 )
 
-// inviteTokenTTL is how long an Invite token is valid for (ADR-0042) —
-// shorter than the 30-day refresh token (ADR-0009) because this token
-// doesn't extend a Session, it creates one: anyone holding a live link can
-// become the User outright.
-const inviteTokenTTL = 7 * 24 * time.Hour
-
-// Mailer sends a plain-text email — the Invite email delivery seam
-// (ADR-0042), matching reminder.Mailer's shape. Satisfied by
-// *mailer.SMTPMailer; nil when this deployment has no SMTP transport
-// configured, in which case SendInviteEmail always fails with
-// ErrEmailNotConfigured.
-type Mailer interface {
-	Send(to, subject, body string) error
-}
-
-// AccountService is account administration (ADR-0037): creating accounts,
-// listing them, resetting a password, granting or revoking Admin, renaming,
-// disabling, and deleting. It is deliberately separate from data access — an
-// Admin's authority here never extends to another User's Calendars or
-// Events, which stay behind the Access resolver (ADR-0034) like everyone
-// else's.
+// AccountService is self-service account lifecycle (ADR-0044): a User
+// disabling or deleting their own account, and nobody else's — the instance-
+// wide Admin this replaces (ADR-0037) is retired entirely, along with its
+// account-list UI and every guard that existed only to keep it staffed.
 type AccountService struct {
-	db           *sql.DB
-	users        *repository.UserRepository
-	sessions     *repository.SessionRepository
-	calendarRepo *repository.CalendarRepository
-	shareRepo    *repository.CalendarShareRepository
-	calendars    *CalendarService
-	appPasswords *AppPasswordService
-	mailer       Mailer
-	workspaces   *WorkspaceService
+	db            *sql.DB
+	users         *repository.UserRepository
+	sessions      *repository.SessionRepository
+	calendarRepo  *repository.CalendarRepository
+	shareRepo     *repository.CalendarShareRepository
+	workspaceRepo *repository.WorkspaceRepository
+	workspaces    *WorkspaceService
 }
 
-func NewAccountService(db *sql.DB, users *repository.UserRepository, sessions *repository.SessionRepository, calendarRepo *repository.CalendarRepository, shareRepo *repository.CalendarShareRepository, calendars *CalendarService, appPasswords *AppPasswordService, mailer Mailer, workspaces *WorkspaceService) *AccountService {
-	return &AccountService{db: db, users: users, sessions: sessions, calendarRepo: calendarRepo, shareRepo: shareRepo, calendars: calendars, appPasswords: appPasswords, mailer: mailer, workspaces: workspaces}
+func NewAccountService(db *sql.DB, users *repository.UserRepository, sessions *repository.SessionRepository, calendarRepo *repository.CalendarRepository, shareRepo *repository.CalendarShareRepository, workspaceRepo *repository.WorkspaceRepository, workspaces *WorkspaceService) *AccountService {
+	return &AccountService{db: db, users: users, sessions: sessions, calendarRepo: calendarRepo, shareRepo: shareRepo, workspaceRepo: workspaceRepo, workspaces: workspaces}
 }
 
-// validateUsername trims username and checks it against the one set of rules
-// shared by Create and both rename paths — self (AuthService.UpdateUsername)
-// and Admin (AccountService.SetUsername) — so account creation and account
-// rename cannot drift (#125). A colon is rejected because Go's
-// net/http.Request.BasicAuth splits credentials on the first colon: a
-// username containing one could create an account that can never
-// authenticate over CalDAV (AppPasswordService.Authenticate).
-func validateUsername(username string) (string, error) {
-	username = strings.TrimSpace(username)
-	if username == "" || len(username) > maxUsernameLength {
-		return "", ErrInvalidUsername
-	}
-	if strings.ContainsAny(username, ":") || strings.ContainsFunc(username, unicode.IsSpace) {
-		return "", ErrInvalidUsername
-	}
-	return username, nil
-}
-
-// seedWorkspaceAndDefaults gives a newly created account its own personal
-// Workspace (ADR-0044) — exactly like Bootstrap/Register create for a
-// self-registered one — and seeds it with the default Calendars, since
-// EnsureDefaults needs a Workspace to create them in. Shared by Create and
-// CreateInvite, the two AccountService paths that mint a brand-new User.
-func (s *AccountService) seedWorkspaceAndDefaults(ctx context.Context, user repository.User) error {
-	workspace, err := s.workspaces.CreateForOwner(ctx, user.ID, workspaceNameFor(user.Username))
-	if err != nil {
-		return fmt.Errorf("create workspace: %w", err)
-	}
-
-	if err := s.calendars.EnsureDefaults(ctx, user.ID, workspace.ID); err != nil {
-		return fmt.Errorf("seed default calendars: %w", err)
-	}
-
-	return nil
-}
-
-// Create makes a new account with username and a temporary password
-// (ADR-0037): the account is forced through the same must_change_password
-// gate that closes the bootstrap window (ADR-0010), and starts with the
-// same default Calendars a bootstrapped account gets rather than an empty
-// sidebar.
-func (s *AccountService) Create(ctx context.Context, username, tempPassword string) (repository.User, error) {
-	username, err := validateUsername(username)
-	if err != nil {
-		return repository.User{}, err
-	}
-	if tempPassword == "" {
-		return repository.User{}, ErrInvalidPassword
-	}
-
-	hash, err := bcrypt.GenerateFromPassword([]byte(tempPassword), bcrypt.DefaultCost)
-	if err != nil {
-		return repository.User{}, fmt.Errorf("hash temporary password: %w", err)
-	}
-
-	user, err := s.users.Create(ctx, username, string(hash), true)
-	if err != nil {
-		if errors.Is(err, repository.ErrUsernameTaken) {
-			return repository.User{}, ErrUsernameTaken
-		}
-		return repository.User{}, fmt.Errorf("create user: %w", err)
-	}
-
-	if err := s.seedWorkspaceAndDefaults(ctx, user); err != nil {
-		return repository.User{}, err
-	}
-
-	return user, nil
-}
-
-// InviteResult is a Pending User alongside the plaintext Invite token
-// (ADR-0042) — the token exists only at issuance, exactly like
-// CreateResult.Secret for an App password; nothing else ever returns it
-// again, since only its hash is stored.
-type InviteResult struct {
-	User  repository.User
-	Token string
-}
-
-// CreateInvite makes a new Pending account (ADR-0042): username is validated
-// exactly as Create validates one, since the Admin still picks it either
-// way, and the same default Calendars are seeded so a Pending row looks like
-// any other account the moment it accepts. Unlike Create, no password is set
-// — the invitee sets their own via AuthService.AcceptInvite — so the account
-// starts blocked from Login, Refresh, and CalDAV Basic auth the same way a
-// Disabled one is, until accepted.
-//
-// email is optional (ADR-0042 leaves email optional for an Invite exactly as
-// it already is for direct creation) and, when supplied, is validated and
-// stored the same way AuthService.UpdateEmail does — it's what
-// SendInviteEmail later sends to.
-func (s *AccountService) CreateInvite(ctx context.Context, username, email string) (InviteResult, error) {
-	username, err := validateUsername(username)
-	if err != nil {
-		return InviteResult{}, err
-	}
-
-	email = strings.TrimSpace(email)
-	if email != "" {
-		if _, err := mail.ParseAddress(email); err != nil {
-			return InviteResult{}, ErrInvalidEmail
-		}
-	}
-
-	token, hash, err := newOpaqueToken()
-	if err != nil {
-		return InviteResult{}, fmt.Errorf("generate invite token: %w", err)
-	}
-
-	user, err := s.users.CreatePending(ctx, username, hash, time.Now().Add(inviteTokenTTL))
-	if err != nil {
-		if errors.Is(err, repository.ErrUsernameTaken) {
-			return InviteResult{}, ErrUsernameTaken
-		}
-		return InviteResult{}, fmt.Errorf("create pending user: %w", err)
-	}
-
-	if err := s.seedWorkspaceAndDefaults(ctx, user); err != nil {
-		return InviteResult{}, err
-	}
-
-	if email != "" {
-		user, err = s.users.UpdateEmail(ctx, user.ID, email)
-		if err != nil {
-			return InviteResult{}, fmt.Errorf("set invite email: %w", err)
-		}
-	}
-
-	return InviteResult{User: user, Token: token}, nil
-}
-
-// ReissueInvite overwrites userID's outstanding Invite with a fresh token and
-// a reset 7-day expiry (ADR-0042), invalidating whichever token came before
-// it. Unlike CreateInvite, it does not re-validate the username or re-run
-// EnsureDefaults — the account and its default Calendars already exist; only
-// the credential to activate it is being replaced. Available before or after
-// the previous token's expiry, so an expired Invite is never a dead end.
-func (s *AccountService) ReissueInvite(ctx context.Context, userID int64) (InviteResult, error) {
-	user, err := s.users.GetByID(ctx, userID)
-	if err != nil {
-		return InviteResult{}, fmt.Errorf("get user: %w", err)
-	}
-	if !user.IsPending() {
-		return InviteResult{}, ErrUserNotPending
-	}
-
-	token, hash, err := newOpaqueToken()
-	if err != nil {
-		return InviteResult{}, fmt.Errorf("generate invite token: %w", err)
-	}
-
-	user, err = s.users.SetInvite(ctx, userID, hash, time.Now().Add(inviteTokenTTL))
-	if err != nil {
-		return InviteResult{}, fmt.Errorf("set invite: %w", err)
-	}
-
-	return InviteResult{User: user, Token: token}, nil
-}
-
-// CancelInvite deletes a Pending User's row outright (ADR-0042). Unlike
-// Delete, it takes no disposition for owned Calendars: a Pending User has
-// never logged in, so their default Calendars carry no Events and no Shares,
-// and cascade-delete with the row like any other child row would.
-func (s *AccountService) CancelInvite(ctx context.Context, userID int64) error {
-	user, err := s.users.GetByID(ctx, userID)
-	if err != nil {
-		return fmt.Errorf("get user: %w", err)
-	}
-	if !user.IsPending() {
-		return ErrUserNotPending
-	}
-
-	if err := s.users.Delete(ctx, userID); err != nil {
-		return fmt.Errorf("delete pending user: %w", err)
-	}
-	return nil
-}
-
-// SendInviteEmail emails userID's Pending invite link to the address on file
-// (ADR-0042). link is built by the caller (the Admin's own browser knows
-// this deployment's origin; the server does not track one) and is sent
-// verbatim — the token it embeds was already minted by CreateInvite or
-// ReissueInvite, whichever the caller called just before this.
-func (s *AccountService) SendInviteEmail(ctx context.Context, userID int64, link string) error {
-	user, err := s.users.GetByID(ctx, userID)
-	if err != nil {
-		return fmt.Errorf("get user: %w", err)
-	}
-	if !user.IsPending() {
-		return ErrUserNotPending
-	}
-	if user.Email == nil {
-		return ErrNoInviteEmail
-	}
-	if s.mailer == nil {
-		return ErrEmailNotConfigured
-	}
-
-	subject := "You've been invited"
-	body := fmt.Sprintf("An account has been set up for you. Set your password to get started:\n\n%s\n\nThis link expires in 7 days.", link)
-	if err := s.mailer.Send(*user.Email, subject, body); err != nil {
-		return fmt.Errorf("send invite email: %w", err)
-	}
-	return nil
-}
-
-// List returns every account on the instance.
-func (s *AccountService) List(ctx context.Context) ([]repository.User, error) {
-	users, err := s.users.List(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("list users: %w", err)
-	}
-	return users, nil
-}
-
-// ResetPassword sets userID's password to a new temporary one, without
-// requiring their current password, and forces the must_change_password
-// gate again so the value the Admin typed does not survive their next
-// login. Every existing Session is invalidated, mirroring what a
-// self-service password change already does.
-func (s *AccountService) ResetPassword(ctx context.Context, userID int64, tempPassword string) (repository.User, error) {
-	user, err := s.users.GetByID(ctx, userID)
-	if err != nil {
-		return repository.User{}, fmt.Errorf("get user: %w", err)
-	}
-	if user.IsPending() {
-		return repository.User{}, ErrUserIsPending
-	}
-
-	if tempPassword == "" {
-		return repository.User{}, ErrInvalidPassword
-	}
-
-	hash, err := bcrypt.GenerateFromPassword([]byte(tempPassword), bcrypt.DefaultCost)
-	if err != nil {
-		return repository.User{}, fmt.Errorf("hash temporary password: %w", err)
-	}
-
-	if err := s.users.ResetPassword(ctx, userID, string(hash)); err != nil {
-		return repository.User{}, fmt.Errorf("reset password: %w", err)
-	}
-
-	if err := s.sessions.DeleteAllForUser(ctx, userID); err != nil {
-		return repository.User{}, fmt.Errorf("invalidate sessions: %w", err)
-	}
-
-	return s.users.GetByID(ctx, userID)
-}
-
-// SetAdmin grants or revokes Admin for userID. Revoking the last remaining
-// Admin is refused (ADR-0037) — otherwise the instance becomes
-// unadministrable, with nobody left who can create accounts or promote
-// anyone back.
-func (s *AccountService) SetAdmin(ctx context.Context, userID int64, isAdmin bool) (repository.User, error) {
-	existing, err := s.users.GetByID(ctx, userID)
-	if err != nil {
-		return repository.User{}, fmt.Errorf("get user: %w", err)
-	}
-	if existing.IsPending() {
-		return repository.User{}, ErrUserIsPending
-	}
-
-	if !isAdmin && existing.IsAdmin {
-		count, err := s.users.CountAdmins(ctx)
-		if err != nil {
-			return repository.User{}, fmt.Errorf("count admins: %w", err)
-		}
-		if count <= 1 {
-			return repository.User{}, ErrLastAdmin
-		}
-	}
-
-	user, err := s.users.SetAdmin(ctx, userID, isAdmin)
-	if err != nil {
-		return repository.User{}, fmt.Errorf("set admin: %w", err)
-	}
-	return user, nil
-}
-
-// SetDisabled disables or re-enables userID's account (ADR-0037). Disabling
-// the last remaining Admin is refused, exactly like revoking their Admin —
-// otherwise the instance becomes unadministrable. Disabling deletes every
-// live Session so the change takes effect immediately rather than waiting
-// out an existing session; everything the User owns — Calendars, Events,
-// Shares — is left untouched, since Disable is a property of the account,
-// never of the data.
+// SetDisabled disables or re-activates the caller's own account (ADR-0044).
+// Disabling is refused while the caller is the sole Owner of a Workspace
+// that still has other Members in it (ErrSoleWorkspaceOwner) — re-activating
+// never trips that guard, since it never removes anyone's ability to manage
+// a Workspace. Disabling also deletes every live Session so the change takes
+// effect immediately; everything the User owns — Calendars, Events, Shares —
+// is left untouched, since Disable is a property of the account, never of
+// the data.
 func (s *AccountService) SetDisabled(ctx context.Context, userID int64, isDisabled bool) (repository.User, error) {
-	user, err := s.users.GetByID(ctx, userID)
-	if err != nil {
-		return repository.User{}, fmt.Errorf("get user: %w", err)
-	}
-	if user.IsPending() {
-		return repository.User{}, ErrUserIsPending
-	}
-
-	if isDisabled && user.IsAdmin {
-		count, err := s.users.CountEnabledAdmins(ctx)
+	if isDisabled {
+		blocked, err := s.workspaces.OwnsNonEmptyWorkspace(ctx, userID)
 		if err != nil {
-			return repository.User{}, fmt.Errorf("count enabled admins: %w", err)
+			return repository.User{}, err
 		}
-		if count <= 1 {
-			return repository.User{}, ErrLastAdmin
+		if blocked {
+			return repository.User{}, ErrSoleWorkspaceOwner
 		}
 	}
 
-	user, err = s.users.SetDisabled(ctx, userID, isDisabled)
+	user, err := s.users.SetDisabled(ctx, userID, isDisabled)
 	if err != nil {
 		return repository.User{}, fmt.Errorf("set disabled: %w", err)
 	}
@@ -430,147 +106,204 @@ func (s *AccountService) SetDisabled(ctx context.Context, userID int64, isDisabl
 	return user, nil
 }
 
-// SetUsername renames userID's account (#125), validated the same way
-// Create validates one. The App passwords userID holds stay valid — CalDAV
-// auth is keyed by username (AppPasswordService.Authenticate), so every
-// device already configured with the old one gets 401 until it's
-// reconfigured with the new one. That is what UsernameImpact exists to warn
-// an Admin about before calling this; SetUsername itself does not guard
-// against it.
-func (s *AccountService) SetUsername(ctx context.Context, userID int64, username string) (repository.User, error) {
-	username, err := validateUsername(username)
-	if err != nil {
-		return repository.User{}, err
-	}
-
-	user, err := s.users.UpdateUsername(ctx, userID, username)
-	if err != nil {
-		if errors.Is(err, repository.ErrUsernameTaken) {
-			return repository.User{}, ErrUsernameTaken
-		}
-		return repository.User{}, fmt.Errorf("update username: %w", err)
-	}
-	return user, nil
+// TransferCandidate is one other Member of a Calendar's Workspace — a valid
+// transfer target for that Calendar, since a Calendar's Owner must belong to
+// its own Workspace (ADR-0044, ADR-0045).
+type TransferCandidate struct {
+	ID       int64
+	Username string
 }
 
-// UsernameImpact reports how many App passwords userID holds — the
-// Admin-facing preview a rename UI shows before calling SetUsername, so the
-// Admin knows how many of that person's synced devices are about to start
-// failing to sync until reconfigured. Callers should only surface this as a
-// confirmation when the count is at least one; a fresh account with none
-// warrants no such interruption.
-func (s *AccountService) UsernameImpact(ctx context.Context, userID int64) (int, error) {
-	if _, err := s.users.GetByID(ctx, userID); err != nil {
-		return 0, fmt.Errorf("get user: %w", err)
-	}
-
-	count, err := s.appPasswords.CountForUser(ctx, userID)
-	if err != nil {
-		return 0, fmt.Errorf("count app passwords: %w", err)
-	}
-	return count, nil
-}
-
-// CalendarImpact is one owned Calendar's exposure to a Delete — how many
-// Users hold a Share on it, and would therefore lose Access the moment its
-// Owner's account (and, under DispositionDelete, the Calendar itself) is
-// gone.
+// CalendarImpact is one Calendar the deleting User owns: which Workspace it
+// belongs to, how many Users hold a Share on it and would therefore lose
+// Access under DispositionDelete, and who it could be transferred to
+// instead.
 type CalendarImpact struct {
-	ID         string
-	Name       string
-	ShareCount int
+	ID                 string
+	Name               string
+	WorkspaceID        int64
+	WorkspaceName      string
+	ShareCount         int
+	TransferCandidates []TransferCandidate
 }
 
-// DeleteImpact is what DeleteImpact reports before an Admin commits to
-// deleting userID's account (ADR-0037): every Calendar they own, and how
-// many distinct Users, across all of them, hold a Share and would lose
-// Access.
+// DeleteImpact is what DeleteImpact reports before the caller commits to
+// deleting their own account (ADR-0044): every Calendar they own, across
+// every Workspace they belong to.
 type DeleteImpact struct {
-	Calendars         []CalendarImpact
-	AffectedUserCount int
+	Calendars []CalendarImpact
 }
 
-// DeleteImpact reports what deleting userID's account would affect, without
-// writing anything — the Admin-facing preview ADR-0037 asks for so "which
-// Calendars have Shares and how many Users would lose Access" is known
-// before the irreversible DispositionDelete is chosen.
+// DeleteImpact reports what deleting the caller's own account would affect,
+// without writing anything — the preview a self-Delete UI shows so a
+// transfer-or-delete choice for each owned Calendar can be made with the
+// cost, and the available transfer targets, already in view.
 func (s *AccountService) DeleteImpact(ctx context.Context, userID int64) (DeleteImpact, error) {
 	calendars, err := s.calendarRepo.ListByUser(ctx, userID)
 	if err != nil {
 		return DeleteImpact{}, fmt.Errorf("list owned calendars: %w", err)
 	}
 
+	workspaceNames := map[int64]string{}
+	candidatesByWorkspace := map[int64][]TransferCandidate{}
+
 	impact := DeleteImpact{Calendars: make([]CalendarImpact, 0, len(calendars))}
-	affected := map[int64]struct{}{}
 	for _, c := range calendars {
+		if _, ok := workspaceNames[c.WorkspaceID]; !ok {
+			workspace, err := s.workspaces.GetByID(ctx, c.WorkspaceID)
+			if err != nil {
+				return DeleteImpact{}, fmt.Errorf("get workspace %d: %w", c.WorkspaceID, err)
+			}
+			workspaceNames[c.WorkspaceID] = workspace.Name
+
+			members, err := s.workspaces.ListMembers(ctx, userID, c.WorkspaceID)
+			if err != nil {
+				return DeleteImpact{}, fmt.Errorf("list members of workspace %d: %w", c.WorkspaceID, err)
+			}
+			candidates := make([]TransferCandidate, 0, len(members))
+			for _, m := range members {
+				if m.UserID == userID {
+					continue
+				}
+				member, err := s.users.GetByID(ctx, m.UserID)
+				if err != nil {
+					return DeleteImpact{}, fmt.Errorf("get member %d: %w", m.UserID, err)
+				}
+				candidates = append(candidates, TransferCandidate{ID: member.ID, Username: member.Username})
+			}
+			candidatesByWorkspace[c.WorkspaceID] = candidates
+		}
+
 		shares, err := s.shareRepo.ListByCalendarWithUsername(ctx, c.ID)
 		if err != nil {
 			return DeleteImpact{}, fmt.Errorf("list shares for calendar %s: %w", c.ID, err)
 		}
-		impact.Calendars = append(impact.Calendars, CalendarImpact{ID: c.ID, Name: c.Name, ShareCount: len(shares)})
-		for _, share := range shares {
-			affected[share.UserID] = struct{}{}
-		}
+
+		impact.Calendars = append(impact.Calendars, CalendarImpact{
+			ID:                 c.ID,
+			Name:               c.Name,
+			WorkspaceID:        c.WorkspaceID,
+			WorkspaceName:      workspaceNames[c.WorkspaceID],
+			ShareCount:         len(shares),
+			TransferCandidates: candidatesByWorkspace[c.WorkspaceID],
+		})
 	}
-	impact.AffectedUserCount = len(affected)
 
 	return impact, nil
 }
 
-// Delete removes userID's account outright, requiring an explicit
-// disposition for the Calendars they own (ADR-0037) — there is no default,
-// since today's cascade would otherwise take a shared Calendar, including
-// Events other people wrote, out from under everyone with a Share, silently,
-// at the exact moment nobody is paying attention:
-//
-//   - DispositionTransfer reassigns every Calendar userID owned to
-//     transferTo, keeping their Events (including ones other people wrote)
-//     and existing Shares exactly as they were.
-//   - DispositionDelete removes userID's Calendars, and with them their
-//     Events, via the existing cascade.
-//
-// Either way, Shares granted *to* userID are removed (cascade on
-// calendar_shares.user_id), and deleting the last remaining Admin is
-// refused, exactly like disabling one.
-func (s *AccountService) Delete(ctx context.Context, userID int64, disposition string, transferTo *int64) error {
-	if disposition != DispositionTransfer && disposition != DispositionDelete {
-		return ErrInvalidDisposition
-	}
+// CalendarDisposition is one owned Calendar's transfer-or-delete choice for
+// Delete (ADR-0044) — self-Delete requires one per Calendar the caller owns,
+// unlike the retired Admin-driven Delete, which took a single disposition
+// for the whole account.
+type CalendarDisposition struct {
+	CalendarID  string
+	Disposition string // DispositionTransfer or DispositionDelete
+	// TransferTo is required, and must name a current Member of the
+	// Calendar's own Workspace, when Disposition is DispositionTransfer.
+	TransferTo *int64
+}
 
-	if disposition == DispositionTransfer {
-		if transferTo == nil {
-			return ErrTransferTargetRequired
-		}
-		if *transferTo == userID {
-			return ErrCannotTransferToSelf
-		}
-		if _, err := s.users.GetByID(ctx, *transferTo); err != nil {
-			if errors.Is(err, repository.ErrNotFound) {
-				return ErrTransferTargetNotFound
-			}
-			return fmt.Errorf("get transfer target: %w", err)
-		}
-	}
-
-	user, err := s.users.GetByID(ctx, userID)
+// Delete removes the caller's own account outright (ADR-0044), requiring an
+// explicit disposition for every Calendar they own, across every Workspace
+// they belong to — there is no default, since a missing or ambiguous
+// disposition would otherwise take a shared Calendar, including Events other
+// people wrote, out from under everyone with a Share, silently, at the exact
+// moment nobody is paying attention:
+//
+//   - DispositionTransfer reassigns the Calendar to TransferTo, keeping its
+//     Events (including ones other people wrote) and existing Shares exactly
+//     as they were. TransferTo must belong to the Calendar's own Workspace.
+//   - DispositionDelete removes the Calendar, and with it its Events, via
+//     the existing cascade.
+//
+// Refused with ErrSoleWorkspaceOwner while the caller is the sole Owner of a
+// Workspace that still has other Members in it. Once every disposition is
+// applied, every Workspace the caller solely owns (necessarily a solo one —
+// the guard above already proved no other Member depends on it) is retired
+// too, since workspaces.owner_user_id carries no ON DELETE behaviour.
+// Shares granted *to* the caller are removed as a side effect of deleting
+// their account (cascade on calendar_shares.user_id).
+func (s *AccountService) Delete(ctx context.Context, userID int64, dispositions []CalendarDisposition) error {
+	blocked, err := s.workspaces.OwnsNonEmptyWorkspace(ctx, userID)
 	if err != nil {
-		return fmt.Errorf("get user: %w", err)
+		return err
+	}
+	if blocked {
+		return ErrSoleWorkspaceOwner
 	}
 
-	if user.IsAdmin {
-		count, err := s.users.CountEnabledAdmins(ctx)
-		if err != nil {
-			return fmt.Errorf("count enabled admins: %w", err)
+	calendars, err := s.calendarRepo.ListByUser(ctx, userID)
+	if err != nil {
+		return fmt.Errorf("list owned calendars: %w", err)
+	}
+	byID := make(map[string]repository.Calendar, len(calendars))
+	for _, c := range calendars {
+		byID[c.ID] = c
+	}
+
+	seen := make(map[string]bool, len(dispositions))
+	for _, d := range dispositions {
+		if seen[d.CalendarID] {
+			return ErrDuplicateDisposition
 		}
-		if count <= 1 {
-			return ErrLastAdmin
+		seen[d.CalendarID] = true
+
+		calendar, ok := byID[d.CalendarID]
+		if !ok {
+			return ErrCalendarNotOwned
 		}
+
+		switch d.Disposition {
+		case DispositionTransfer:
+			if d.TransferTo == nil {
+				return ErrTransferTargetRequired
+			}
+			if *d.TransferTo == userID {
+				return ErrCannotTransferToSelf
+			}
+			isMember, err := s.workspaces.IsMember(ctx, calendar.WorkspaceID, *d.TransferTo)
+			if err != nil {
+				return err
+			}
+			if !isMember {
+				return ErrTransferTargetNotWorkspaceMember
+			}
+		case DispositionDelete:
+		default:
+			return ErrInvalidDisposition
+		}
+	}
+	if len(seen) != len(calendars) {
+		return ErrMissingDisposition
 	}
 
 	return repository.WithTx(ctx, s.db, func(tx *sql.Tx) error {
-		if disposition == DispositionTransfer {
-			if err := s.calendarRepo.WithTx(tx).TransferOwnership(ctx, userID, *transferTo); err != nil {
-				return fmt.Errorf("transfer calendars: %w", err)
+		txCalendars := s.calendarRepo.WithTx(tx)
+		for _, d := range dispositions {
+			switch d.Disposition {
+			case DispositionTransfer:
+				if err := txCalendars.TransferOwnershipOne(ctx, userID, d.CalendarID, *d.TransferTo); err != nil {
+					return fmt.Errorf("transfer calendar %s: %w", d.CalendarID, err)
+				}
+			case DispositionDelete:
+				if err := txCalendars.Delete(ctx, userID, d.CalendarID); err != nil {
+					return fmt.Errorf("delete calendar %s: %w", d.CalendarID, err)
+				}
+			}
+		}
+
+		txWorkspaces := s.workspaceRepo.WithTx(tx)
+		ownedWorkspaces, err := txWorkspaces.ListForUser(ctx, userID)
+		if err != nil {
+			return fmt.Errorf("list owned workspaces: %w", err)
+		}
+		for _, w := range ownedWorkspaces {
+			if w.OwnerUserID != userID {
+				continue
+			}
+			if err := txWorkspaces.Delete(ctx, w.ID); err != nil {
+				return fmt.Errorf("delete workspace %d: %w", w.ID, err)
 			}
 		}
 
