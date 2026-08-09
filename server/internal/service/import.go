@@ -537,6 +537,7 @@ func seriesWriteFromImported(imported icalendar.ImportedSeries) SeriesWrite {
 			AllDay:       o.AllDay,
 			Tzid:         o.Tzid,
 			Reminders:    o.Reminders,
+			Color:        o.Color,
 		}
 	}
 
@@ -552,5 +553,6 @@ func seriesWriteFromImported(imported icalendar.ImportedSeries) SeriesWrite {
 		Reminders:   imported.Master.Reminders,
 		Exdates:     imported.Exdates,
 		Overrides:   overrides,
+		Color:       imported.Master.Color,
 	}
 }

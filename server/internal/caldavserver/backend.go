@@ -513,6 +513,7 @@ func seriesWriteFromParsed(parsed *icalendar.ParsedSeries) service.SeriesWrite {
 			AllDay:       o.AllDay,
 			Tzid:         o.Tzid,
 			Reminders:    o.Reminders,
+			Color:        o.Color,
 		}
 	}
 
@@ -528,6 +529,7 @@ func seriesWriteFromParsed(parsed *icalendar.ParsedSeries) service.SeriesWrite {
 		Reminders:   parsed.Master.Reminders,
 		Exdates:     parsed.Exdates,
 		Overrides:   overrides,
+		Color:       parsed.Master.Color,
 	}
 }
 
@@ -545,7 +547,8 @@ func mapPutSeriesError(err error) error {
 	case errors.Is(err, service.ErrInvalidTitle),
 		errors.Is(err, service.ErrInvalidTimeRange),
 		errors.Is(err, service.ErrInvalidRecurrenceRule),
-		errors.Is(err, service.ErrInvalidReminderChannel):
+		errors.Is(err, service.ErrInvalidReminderChannel),
+		errors.Is(err, service.ErrInvalidEventColor):
 		return webdav.NewHTTPError(http.StatusBadRequest, err)
 	default:
 		return fmt.Errorf("put calendar object: %w", err)

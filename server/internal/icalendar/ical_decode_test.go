@@ -245,6 +245,86 @@ func TestParseCalendarObject_NoMasterVEvent_Errors(t *testing.T) {
 	}
 }
 
+func TestParseCalendarObject_Color_RoundTrips(t *testing.T) {
+	color := "#FF0000FF"
+	master := repository.Event{
+		ID:        "evt-1",
+		Title:     "Meeting",
+		Color:     &color,
+		Start:     time.Date(2026, 7, 1, 15, 0, 0, 0, time.UTC),
+		End:       time.Date(2026, 7, 1, 16, 0, 0, 0, time.UTC),
+		CreatedAt: time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC),
+	}
+
+	parsed := mustParse(t, master, nil)
+
+	if parsed.Master.Color == nil || *parsed.Master.Color != "#FF0000FF" {
+		t.Fatalf("expected color #FF0000FF to round-trip losslessly (red is an exact CSS3 keyword), got %v", parsed.Master.Color)
+	}
+}
+
+func TestParseCalendarObject_NoColorProperty_ColorAbsent(t *testing.T) {
+	master := repository.Event{
+		ID:        "evt-1",
+		Title:     "Meeting",
+		Start:     time.Date(2026, 7, 1, 15, 0, 0, 0, time.UTC),
+		End:       time.Date(2026, 7, 1, 16, 0, 0, 0, time.UTC),
+		CreatedAt: time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC),
+	}
+
+	parsed := mustParse(t, master, nil)
+
+	if parsed.Master.Color != nil {
+		t.Fatalf("expected no COLOR property to decode to a nil (inherited) color, got %v", *parsed.Master.Color)
+	}
+}
+
+func TestParseCalendarObject_ColorKeyword_DecodesExactDefinedRGB(t *testing.T) {
+	master := repository.Event{
+		ID:        "evt-1",
+		Title:     "Meeting",
+		Start:     time.Date(2026, 7, 1, 15, 0, 0, 0, time.UTC),
+		End:       time.Date(2026, 7, 1, 16, 0, 0, 0, time.UTC),
+		CreatedAt: time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC),
+	}
+	cal, err := SeriesToICal(master, nil, SerializationTarget{})
+	if err != nil {
+		t.Fatalf("seriesToICal: %v", err)
+	}
+	cal.Children[0].Props.SetText(ical.PropColor, "cornflowerblue")
+
+	parsed, err := ParseCalendarObject(cal)
+	if err != nil {
+		t.Fatalf("parseCalendarObject: %v", err)
+	}
+	if parsed.Master.Color == nil || *parsed.Master.Color != "#6495EDFF" {
+		t.Fatalf("expected cornflowerblue to decode to #6495EDFF, got %v", parsed.Master.Color)
+	}
+}
+
+func TestParseCalendarObject_UnrecognizedColorKeyword_IsDropped(t *testing.T) {
+	master := repository.Event{
+		ID:        "evt-1",
+		Title:     "Meeting",
+		Start:     time.Date(2026, 7, 1, 15, 0, 0, 0, time.UTC),
+		End:       time.Date(2026, 7, 1, 16, 0, 0, 0, time.UTC),
+		CreatedAt: time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC),
+	}
+	cal, err := SeriesToICal(master, nil, SerializationTarget{})
+	if err != nil {
+		t.Fatalf("seriesToICal: %v", err)
+	}
+	cal.Children[0].Props.SetText(ical.PropColor, "not-a-css3-keyword")
+
+	parsed, err := ParseCalendarObject(cal)
+	if err != nil {
+		t.Fatalf("parseCalendarObject: %v", err)
+	}
+	if parsed.Master.Color != nil {
+		t.Fatalf("expected an unrecognized COLOR keyword to be dropped, got %v", *parsed.Master.Color)
+	}
+}
+
 func TestParseCalendarObject_UnmodeledValarmAction_IsDropped(t *testing.T) {
 	master := repository.Event{
 		ID:        "evt-1",

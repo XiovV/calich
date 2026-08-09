@@ -189,6 +189,68 @@ func TestSeriesToICal_DescriptionAndLocation(t *testing.T) {
 	}
 }
 
+func TestSeriesToICal_ColorSnapsToNearestCSS3Keyword(t *testing.T) {
+	color := "#FF0000FF"
+	master := repository.Event{
+		ID:        "evt-1",
+		Title:     "Meeting",
+		Color:     &color,
+		Start:     time.Date(2026, 7, 1, 15, 0, 0, 0, time.UTC),
+		End:       time.Date(2026, 7, 1, 16, 0, 0, 0, time.UTC),
+		CreatedAt: time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC),
+	}
+
+	body := mustEncode(t, master, nil)
+
+	if !strings.Contains(body, "COLOR:red") {
+		t.Fatalf("expected COLOR:red, got:\n%s", body)
+	}
+}
+
+func TestSeriesToICal_NoColor_OmitsColorProperty(t *testing.T) {
+	master := repository.Event{
+		ID:        "evt-1",
+		Title:     "Meeting",
+		Start:     time.Date(2026, 7, 1, 15, 0, 0, 0, time.UTC),
+		End:       time.Date(2026, 7, 1, 16, 0, 0, 0, time.UTC),
+		CreatedAt: time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC),
+	}
+
+	body := mustEncode(t, master, nil)
+
+	if strings.Contains(body, "COLOR") {
+		t.Fatalf("expected no COLOR property for an inherited (nil) color, got:\n%s", body)
+	}
+}
+
+func TestSeriesToICal_ColorOnOverrideOnly(t *testing.T) {
+	overrideColor := "#0000FFFF"
+	recurrenceID := time.Date(2026, 7, 8, 15, 0, 0, 0, time.UTC)
+	master := repository.Event{
+		ID:        "evt-1",
+		Title:     "Meeting",
+		Rrule:     "FREQ=WEEKLY",
+		Start:     time.Date(2026, 7, 1, 15, 0, 0, 0, time.UTC),
+		End:       time.Date(2026, 7, 1, 16, 0, 0, 0, time.UTC),
+		CreatedAt: time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC),
+	}
+	override := repository.Event{
+		ID:           "evt-1-override",
+		Title:        "Meeting",
+		Color:        &overrideColor,
+		RecurrenceID: &recurrenceID,
+		Start:        recurrenceID,
+		End:          recurrenceID.Add(time.Hour),
+		CreatedAt:    time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC),
+	}
+
+	body := mustEncode(t, master, []repository.Event{override})
+
+	if strings.Count(body, "COLOR:blue") != 1 {
+		t.Fatalf("expected exactly one COLOR:blue on the override, got:\n%s", body)
+	}
+}
+
 func TestSeriesToICal_Reminders_SerializeAsValarm(t *testing.T) {
 	master := repository.Event{
 		ID:        "evt-1",

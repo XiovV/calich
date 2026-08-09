@@ -138,3 +138,122 @@ func TestEventService_Update_ViewerCannotSetColor(t *testing.T) {
 		t.Fatalf("viewer set color err = %v, want ErrCalendarReadOnly", err)
 	}
 }
+
+// The following cover PutSeries and ImportSeries (icalendar's #149 CalDAV
+// round-trip writes through these) normalizing and persisting Color the
+// same way Create/Update do (ADR-0043) — nil stays absent, a valid hex
+// normalizes, and an invalid one is rejected before anything is written.
+
+func TestEventService_PutSeries_PersistsMasterAndOverrideColor(t *testing.T) {
+	svc, userID, calendarID := newTestEventService(t)
+	ctx := context.Background()
+	start := time.Date(2026, 6, 1, 9, 0, 0, 0, time.UTC)
+	end := start.Add(30 * time.Minute)
+	recurrenceID := time.Date(2026, 6, 8, 9, 0, 0, 0, time.UTC)
+
+	master, overrides, err := svc.PutSeries(ctx, userID, calendarID, "client-uid-1", SeriesWrite{
+		Title: "Standup", Start: start, End: end, Rrule: "FREQ=WEEKLY",
+		Color: strPtr("#ff6b35"),
+		Overrides: []OverrideWrite{
+			{RecurrenceID: recurrenceID, Title: "Standup", Start: recurrenceID, End: recurrenceID.Add(30 * time.Minute), Color: strPtr("#123456")},
+		},
+	})
+	if err != nil {
+		t.Fatalf("put series: %v", err)
+	}
+	if master.Color == nil || *master.Color != "#FF6B35FF" {
+		t.Fatalf("expected normalized master color, got %v", master.Color)
+	}
+	if len(overrides) != 1 || overrides[0].Color == nil || *overrides[0].Color != "#123456FF" {
+		t.Fatalf("expected normalized override color, got %+v", overrides)
+	}
+}
+
+func TestEventService_PutSeries_NoColorIsAbsent(t *testing.T) {
+	svc, userID, calendarID := newTestEventService(t)
+	ctx := context.Background()
+	start := time.Date(2026, 6, 1, 9, 0, 0, 0, time.UTC)
+	end := start.Add(30 * time.Minute)
+
+	master, _, err := svc.PutSeries(ctx, userID, calendarID, "client-uid-1", SeriesWrite{
+		Title: "Standup", Start: start, End: end,
+	})
+	if err != nil {
+		t.Fatalf("put series: %v", err)
+	}
+	if master.Color != nil {
+		t.Fatalf("expected no color, got %v", *master.Color)
+	}
+}
+
+func TestEventService_PutSeries_RejectsInvalidColor(t *testing.T) {
+	svc, userID, calendarID := newTestEventService(t)
+	ctx := context.Background()
+	start := time.Date(2026, 6, 1, 9, 0, 0, 0, time.UTC)
+	end := start.Add(30 * time.Minute)
+
+	_, _, err := svc.PutSeries(ctx, userID, calendarID, "client-uid-1", SeriesWrite{
+		Title: "Standup", Start: start, End: end, Color: strPtr("not-a-color"),
+	})
+	if !errors.Is(err, ErrInvalidEventColor) {
+		t.Fatalf("err = %v, want ErrInvalidEventColor", err)
+	}
+}
+
+func TestEventService_ImportSeries_PersistsMasterAndOverrideColor(t *testing.T) {
+	svc, userID, calendarID := newTestEventService(t)
+	ctx := context.Background()
+	start := time.Date(2026, 6, 1, 9, 0, 0, 0, time.UTC)
+	end := start.Add(30 * time.Minute)
+	recurrenceID := time.Date(2026, 6, 8, 9, 0, 0, 0, time.UTC)
+
+	n, err := svc.ImportSeries(ctx, userID, calendarID, []SeriesWrite{{
+		Title: "Standup", Start: start, End: end, Rrule: "FREQ=WEEKLY",
+		Color: strPtr("#ff6b35"),
+		Overrides: []OverrideWrite{
+			{RecurrenceID: recurrenceID, Title: "Standup", Start: recurrenceID, End: recurrenceID.Add(30 * time.Minute), Color: strPtr("#123456")},
+		},
+	}})
+	if err != nil {
+		t.Fatalf("import series: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("expected 1 series imported, got %d", n)
+	}
+
+	from := start.Add(-24 * time.Hour)
+	to := recurrenceID.Add(24 * time.Hour)
+	events, err := svc.List(ctx, userID, &from, &to)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	var sawMasterColor, sawOverrideColor bool
+	for _, e := range events {
+		if e.ParentID == nil && e.Color != nil && *e.Color == "#FF6B35FF" {
+			sawMasterColor = true
+		}
+		if e.ParentID != nil && e.Color != nil && *e.Color == "#123456FF" {
+			sawOverrideColor = true
+		}
+	}
+	if !sawMasterColor {
+		t.Fatalf("expected the imported master to carry its normalized color, got %+v", events)
+	}
+	if !sawOverrideColor {
+		t.Fatalf("expected the imported override to carry its normalized color, got %+v", events)
+	}
+}
+
+func TestEventService_ImportSeries_RejectsInvalidColor(t *testing.T) {
+	svc, userID, calendarID := newTestEventService(t)
+	ctx := context.Background()
+	start := time.Date(2026, 6, 1, 9, 0, 0, 0, time.UTC)
+	end := start.Add(30 * time.Minute)
+
+	_, err := svc.ImportSeries(ctx, userID, calendarID, []SeriesWrite{{
+		Title: "Standup", Start: start, End: end, Color: strPtr("not-a-color"),
+	}})
+	if !errors.Is(err, ErrInvalidEventColor) {
+		t.Fatalf("err = %v, want ErrInvalidEventColor", err)
+	}
+}

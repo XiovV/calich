@@ -836,6 +836,7 @@ func (s *EventService) writeSeries(ctx context.Context, userID int64, calendarID
 				Tzid:        w.Tzid,
 				Description: w.Description,
 				Location:    w.Location,
+				Color:       w.Color,
 				ExternalUID: nonEmptyPtr(w.ExternalUID),
 			}
 			if _, err := repos.events.Create(ctx, masterID, &userID, master, seq); err != nil {
@@ -865,6 +866,7 @@ func (s *EventService) writeSeries(ctx context.Context, userID int64, calendarID
 					Tzid:         o.Tzid,
 					Description:  o.Description,
 					Location:     o.Location,
+					Color:        o.Color,
 					ParentID:     &masterID,
 					RecurrenceID: &o.RecurrenceID,
 					ExternalUID:  nonEmptyPtr(o.ExternalUID),
@@ -1597,6 +1599,9 @@ type SeriesWrite struct {
 	Reminders                    []repository.Reminder
 	Exdates                      []time.Time
 	Overrides                    []OverrideWrite
+	// Color mirrors EventWrite.Color — the Master's own color override, nil
+	// meaning "inherit the Calendar's color" (ADR-0043).
+	Color *string
 	// ExternalUID is set only when ImportSeries is writing a Subscribed
 	// Calendar's Events (#83, ADR-0033) — empty for ordinary import and
 	// CalDAV PUT, which leave the row's external_uid column NULL.
@@ -1632,6 +1637,9 @@ type OverrideWrite struct {
 	// ExternalUID mirrors SeriesWrite.ExternalUID — an Override shares its
 	// Master's foreign UID (#83, ADR-0033).
 	ExternalUID string
+	// Color mirrors SeriesWrite.Color, scoped to this Override alone
+	// (ADR-0043).
+	Color *string
 }
 
 // validateEventFields applies the Create/Update validation shared by every
@@ -1667,12 +1675,22 @@ func validateSeriesWrites(writes []SeriesWrite) error {
 		if !isValidRecurrenceRule(w.Rrule) {
 			return ErrInvalidRecurrenceRule
 		}
+		color, err := normalizeEventColor(w.Color)
+		if err != nil {
+			return err
+		}
+		writes[i].Color = color
 		for j, o := range w.Overrides {
 			trimmed, err := validateEventFields(o.Title, o.Start, o.End, o.Reminders)
 			if err != nil {
 				return err
 			}
 			writes[i].Overrides[j].Title = trimmed
+			overrideColor, err := normalizeEventColor(o.Color)
+			if err != nil {
+				return err
+			}
+			writes[i].Overrides[j].Color = overrideColor
 		}
 	}
 	return nil
@@ -1695,12 +1713,22 @@ func (s *EventService) PutSeries(ctx context.Context, userID int64, calendarID, 
 	if !isValidRecurrenceRule(write.Rrule) {
 		return repository.Event{}, nil, ErrInvalidRecurrenceRule
 	}
+	color, err := normalizeEventColor(write.Color)
+	if err != nil {
+		return repository.Event{}, nil, err
+	}
+	write.Color = color
 	for i, o := range write.Overrides {
 		trimmed, err := validateEventFields(o.Title, o.Start, o.End, o.Reminders)
 		if err != nil {
 			return repository.Event{}, nil, err
 		}
 		write.Overrides[i].Title = trimmed
+		overrideColor, err := normalizeEventColor(o.Color)
+		if err != nil {
+			return repository.Event{}, nil, err
+		}
+		write.Overrides[i].Color = overrideColor
 	}
 
 	if err := s.requireWritableCalendar(ctx, userID, calendarID); err != nil {
@@ -1748,6 +1776,7 @@ func (s *EventService) PutSeries(ctx context.Context, userID int64, calendarID, 
 			Tzid:        write.Tzid,
 			Description: write.Description,
 			Location:    write.Location,
+			Color:       write.Color,
 		}
 		if masterExists {
 			if _, err := repos.events.Update(ctx, masterID, master, seq); err != nil {
@@ -1788,6 +1817,7 @@ func (s *EventService) PutSeries(ctx context.Context, userID int64, calendarID, 
 				Tzid:        o.Tzid,
 				Description: o.Description,
 				Location:    o.Location,
+				Color:       o.Color,
 			}
 
 			if existing, ok := existingByRecurrenceID[key]; ok {

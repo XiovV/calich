@@ -24,6 +24,10 @@ type ParsedEvent struct {
 	AllDay                       bool
 	Tzid                         *string
 	Reminders                    []repository.Reminder
+	// Color is the exact hex this VEVENT's COLOR keyword decodes to, nil if
+	// it carries none (ADR-0043) — lossless in this direction, since a CSS3
+	// keyword has an exact defined RGB.
+	Color *string
 }
 
 // ParsedSeries is a whole decomposed calendar object: the Master VEVENT
@@ -171,7 +175,25 @@ func parseVEvent(v ical.Event, isOverride bool) (ParsedEvent, string, error) {
 		AllDay:      allDay,
 		Tzid:        tzid,
 		Reminders:   reminders,
+		Color:       parseEventColor(v),
 	}, rrule, nil
+}
+
+// parseEventColor decodes v's COLOR property (RFC 7986) into the exact hex
+// its CSS3 keyword defines, nil if v carries no COLOR or its value isn't a
+// keyword this app recognizes — unmodeled data normalized away, not
+// preserved (ADR-0026), same as any other unsupported property.
+func parseEventColor(v ical.Event) *string {
+	prop := v.Props.Get(ical.PropColor)
+	if prop == nil {
+		return nil
+	}
+	r, g, b, ok := css3KeywordRGB(prop.Value)
+	if !ok {
+		return nil
+	}
+	hex := fmt.Sprintf("#%02X%02X%02XFF", r, g, b)
+	return &hex
 }
 
 // parseEventTime decodes a DTSTART/DTEND/RECURRENCE-ID/EXDATE property into

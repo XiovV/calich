@@ -257,7 +257,9 @@ func seriesTzids(master repository.Event, overrides []repository.Event) []string
 // recurrenceID is nil for a Master. recurrenceIDAnchor is the Master whose
 // rrule generated recurrenceID — its AllDay/Tzid define how RECURRENCE-ID is
 // formatted, since it must match the original Occurrence the rule produced,
-// independent of anything the Override itself changed.
+// independent of anything the Override itself changed. e.Color, if set, is
+// snapped to the nearest CSS3 keyword and written as COLOR (RFC 7986,
+// ADR-0043); an inherited (nil) color emits no COLOR property at all.
 func buildVEvent(e repository.Event, uid string, recurrenceID *time.Time, recurrenceIDAnchor *repository.Event) (*ical.Event, error) {
 	v := ical.NewEvent()
 	v.Props.SetText(ical.PropUID, uid)
@@ -268,6 +270,13 @@ func buildVEvent(e repository.Event, uid string, recurrenceID *time.Time, recurr
 	}
 	if e.Location != "" {
 		v.Props.SetText(ical.PropLocation, e.Location)
+	}
+	if e.Color != nil {
+		r, g, b, err := parseHexRGB(*e.Color)
+		if err != nil {
+			return nil, fmt.Errorf("parse event color: %w", err)
+		}
+		v.Props.SetText(ical.PropColor, nearestCSS3Keyword(r, g, b))
 	}
 
 	startProp, err := newDateTimeProp(ical.PropDateTimeStart, e.Start, e.AllDay, e.Tzid)
