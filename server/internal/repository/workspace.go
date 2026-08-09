@@ -13,12 +13,21 @@ import (
 // (ADR-0044): a named container with an Owner and an opaque
 // subscription_status.
 type Workspace struct {
-	ID                 int64
-	Name               string
-	OwnerUserID        int64
-	SubscriptionStatus string
-	CreatedAt          time.Time
+	ID                  int64
+	Name                string
+	OwnerUserID         int64
+	SubscriptionStatus  string
+	DefaultSharePrivacy string
+	CreatedAt           time.Time
 }
+
+// DefaultSharePrivacy values a Workspace's default_share_privacy setting may
+// hold (#156) — stored now, consumed by a later Calendar/Group ticket
+// (ADR-0045) as the default privacy a newly shared Calendar gets.
+const (
+	DefaultSharePrivacyPrivate   = "private"
+	DefaultSharePrivacyWorkspace = "workspace"
+)
 
 // WorkspaceRole is the Role a WorkspaceMember row grants over a Workspace's
 // membership and settings (ADR-0044) — never over Calendar Access.
@@ -37,7 +46,7 @@ type WorkspaceMember struct {
 	CreatedAt   time.Time
 }
 
-const workspaceColumns = `id, name, owner_user_id, subscription_status, created_at`
+const workspaceColumns = `id, name, owner_user_id, subscription_status, default_share_privacy, created_at`
 
 type WorkspaceRepository struct {
 	db DBTX
@@ -86,7 +95,7 @@ func (r *WorkspaceRepository) GetByID(ctx context.Context, id int64) (Workspace,
 // (ADR-0044).
 func (r *WorkspaceRepository) ListForUser(ctx context.Context, userID int64) ([]Workspace, error) {
 	rows, err := r.db.QueryContext(ctx,
-		`SELECT w.id, w.name, w.owner_user_id, w.subscription_status, w.created_at
+		`SELECT w.id, w.name, w.owner_user_id, w.subscription_status, w.default_share_privacy, w.created_at
 		 FROM workspaces w
 		 JOIN workspace_members m ON m.workspace_id = w.id
 		 WHERE m.user_id = ?
@@ -149,6 +158,79 @@ func (r *WorkspaceRepository) GetMember(ctx context.Context, workspaceID, userID
 	return m, nil
 }
 
+// ListMembers returns every WorkspaceMember of workspaceID, ordered by when
+// their Membership was created — the member-management list's data source
+// (#156).
+func (r *WorkspaceRepository) ListMembers(ctx context.Context, workspaceID int64) ([]WorkspaceMember, error) {
+	rows, err := r.db.QueryContext(ctx,
+		`SELECT workspace_id, user_id, role, created_at FROM workspace_members WHERE workspace_id = ? ORDER BY created_at, user_id`,
+		workspaceID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list workspace members: %w", err)
+	}
+	defer rows.Close()
+
+	members := []WorkspaceMember{}
+	for rows.Next() {
+		var m WorkspaceMember
+		if err := rows.Scan(&m.WorkspaceID, &m.UserID, &m.Role, &m.CreatedAt); err != nil {
+			return nil, fmt.Errorf("scan workspace member: %w", err)
+		}
+		members = append(members, m)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate workspace members: %w", err)
+	}
+	return members, nil
+}
+
+// SetMemberRole updates userID's Role within workspaceID (#156) — the Owner
+// grant/revoke-Admin operation.
+func (r *WorkspaceRepository) SetMemberRole(ctx context.Context, workspaceID, userID int64, role string) (WorkspaceMember, error) {
+	res, err := r.db.ExecContext(ctx,
+		`UPDATE workspace_members SET role = ? WHERE workspace_id = ? AND user_id = ?`,
+		role, workspaceID, userID,
+	)
+	if err != nil {
+		return WorkspaceMember{}, fmt.Errorf("update workspace member role: %w", err)
+	}
+	if err := requireAffected(res); err != nil {
+		return WorkspaceMember{}, err
+	}
+	return r.GetMember(ctx, workspaceID, userID)
+}
+
+// RemoveMember deletes userID's WorkspaceMember row from workspaceID (#156)
+// — ends only that Membership; the User account and any other Workspace
+// Memberships are untouched (ADR-0044).
+func (r *WorkspaceRepository) RemoveMember(ctx context.Context, workspaceID, userID int64) error {
+	res, err := r.db.ExecContext(ctx,
+		`DELETE FROM workspace_members WHERE workspace_id = ? AND user_id = ?`,
+		workspaceID, userID,
+	)
+	if err != nil {
+		return fmt.Errorf("delete workspace member: %w", err)
+	}
+	return requireAffected(res)
+}
+
+// UpdateSettings renames workspaceID and sets its default_share_privacy
+// (#156) — callable only by its Owner or Admin.
+func (r *WorkspaceRepository) UpdateSettings(ctx context.Context, workspaceID int64, name, defaultSharePrivacy string) (Workspace, error) {
+	res, err := r.db.ExecContext(ctx,
+		`UPDATE workspaces SET name = ?, default_share_privacy = ? WHERE id = ?`,
+		name, defaultSharePrivacy, workspaceID,
+	)
+	if err != nil {
+		return Workspace{}, fmt.Errorf("update workspace settings: %w", err)
+	}
+	if err := requireAffected(res); err != nil {
+		return Workspace{}, err
+	}
+	return r.GetByID(ctx, workspaceID)
+}
+
 func (r *WorkspaceRepository) scanWorkspace(row *sql.Row) (Workspace, error) {
 	w, err := scanWorkspaceRow(row)
 	if err != nil {
@@ -162,7 +244,7 @@ func (r *WorkspaceRepository) scanWorkspace(row *sql.Row) (Workspace, error) {
 
 func scanWorkspaceRow(row rowScanner) (Workspace, error) {
 	var w Workspace
-	if err := row.Scan(&w.ID, &w.Name, &w.OwnerUserID, &w.SubscriptionStatus, &w.CreatedAt); err != nil {
+	if err := row.Scan(&w.ID, &w.Name, &w.OwnerUserID, &w.SubscriptionStatus, &w.DefaultSharePrivacy, &w.CreatedAt); err != nil {
 		return Workspace{}, err
 	}
 	return w, nil

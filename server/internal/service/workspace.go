@@ -122,6 +122,147 @@ func (s *WorkspaceService) ListForUser(ctx context.Context, userID int64) ([]rep
 	return workspaces, nil
 }
 
+var (
+	// ErrInvalidWorkspaceRole is returned by SetMemberRole when role isn't
+	// "admin" or "member" — the Owner grant/revoke-Admin operation never
+	// assigns "owner" itself (ownership transfer is a separate operation,
+	// out of scope here).
+	ErrInvalidWorkspaceRole = errors.New(`role must be "admin" or "member"`)
+
+	// ErrCannotChangeOwnerRole is returned by SetMemberRole when the target
+	// currently holds Owner — Ownership only moves via a dedicated transfer
+	// operation, never by role assignment.
+	ErrCannotChangeOwnerRole = errors.New("cannot change the workspace owner's role")
+
+	// ErrCannotRemoveOwner is returned by RemoveMember when the target holds
+	// Owner — a Workspace always has exactly one Owner, who leaves only via
+	// ownership transfer, never plain removal.
+	ErrCannotRemoveOwner = errors.New("cannot remove the workspace owner")
+
+	// ErrAdminCannotRemoveAdmin is returned by RemoveMember when an Admin
+	// actor targets another Admin — "only the Owner can remove/demote an
+	// Admin" (ADR-0044), so membership management can't be used to seize or
+	// lock out control of the Workspace.
+	ErrAdminCannotRemoveAdmin = errors.New("only the workspace owner can remove an admin")
+
+	// ErrInvalidWorkspaceName is returned by UpdateSettings when name is
+	// empty.
+	ErrInvalidWorkspaceName = errors.New("workspace name must not be empty")
+
+	// ErrInvalidSharePrivacy is returned by UpdateSettings when
+	// defaultSharePrivacy isn't a recognized repository.DefaultSharePrivacy*
+	// value.
+	ErrInvalidSharePrivacy = errors.New(`default_share_privacy must be "private" or "workspace"`)
+)
+
+// ListMembers returns every WorkspaceMember of workspaceID (#156), callable
+// by any Member — the member-management list's data source. actorUserID who
+// isn't a Member gets the same repository.ErrNotFound a non-existent
+// workspaceID would.
+func (s *WorkspaceService) ListMembers(ctx context.Context, actorUserID, workspaceID int64) ([]repository.WorkspaceMember, error) {
+	if _, err := s.workspaces.GetMember(ctx, workspaceID, actorUserID); err != nil {
+		return nil, err
+	}
+
+	members, err := s.workspaces.ListMembers(ctx, workspaceID)
+	if err != nil {
+		return nil, fmt.Errorf("list workspace members: %w", err)
+	}
+	return members, nil
+}
+
+// SetMemberRole grants or revokes the Admin Role on targetUserID within
+// workspaceID (#156, ADR-0044) — Owner-only; an Admin actor gets the same
+// repository.ErrNotFound a non-Member would, mirroring
+// requireOwnerOrAdmin's not-found-not-forbidden convention. The target
+// can't already be the Owner — Ownership moves only via a dedicated
+// transfer, never through this call.
+func (s *WorkspaceService) SetMemberRole(ctx context.Context, actorUserID, workspaceID, targetUserID int64, role string) (repository.WorkspaceMember, error) {
+	if role != repository.WorkspaceRoleAdmin && role != repository.WorkspaceRoleMember {
+		return repository.WorkspaceMember{}, ErrInvalidWorkspaceRole
+	}
+
+	actor, err := s.workspaces.GetMember(ctx, workspaceID, actorUserID)
+	if err != nil {
+		return repository.WorkspaceMember{}, err
+	}
+	if actor.Role != repository.WorkspaceRoleOwner {
+		return repository.WorkspaceMember{}, repository.ErrNotFound
+	}
+
+	target, err := s.workspaces.GetMember(ctx, workspaceID, targetUserID)
+	if err != nil {
+		return repository.WorkspaceMember{}, err
+	}
+	if target.Role == repository.WorkspaceRoleOwner {
+		return repository.WorkspaceMember{}, ErrCannotChangeOwnerRole
+	}
+
+	member, err := s.workspaces.SetMemberRole(ctx, workspaceID, targetUserID, role)
+	if err != nil {
+		return repository.WorkspaceMember{}, fmt.Errorf("set workspace member role: %w", err)
+	}
+	return member, nil
+}
+
+// RemoveMember ends targetUserID's Membership in workspaceID (#156,
+// ADR-0044), callable by the Owner or an Admin. The Owner can never be
+// removed (only a dedicated ownership transfer moves that Role away), and
+// an Admin actor is refused against another Admin target — only the Owner
+// can remove/demote an Admin. Removal here never touches Calendars the
+// target owns in this Workspace; the transfer-or-delete disposition that
+// requires is #160's concern, layered on top of this call.
+func (s *WorkspaceService) RemoveMember(ctx context.Context, actorUserID, workspaceID, targetUserID int64) error {
+	actor, err := s.workspaces.GetMember(ctx, workspaceID, actorUserID)
+	if err != nil {
+		return err
+	}
+	if actor.Role != repository.WorkspaceRoleOwner && actor.Role != repository.WorkspaceRoleAdmin {
+		return repository.ErrNotFound
+	}
+
+	target, err := s.workspaces.GetMember(ctx, workspaceID, targetUserID)
+	if err != nil {
+		return err
+	}
+	if target.Role == repository.WorkspaceRoleOwner {
+		return ErrCannotRemoveOwner
+	}
+	if actor.Role == repository.WorkspaceRoleAdmin && target.Role == repository.WorkspaceRoleAdmin {
+		return ErrAdminCannotRemoveAdmin
+	}
+
+	if err := s.workspaces.RemoveMember(ctx, workspaceID, targetUserID); err != nil {
+		return fmt.Errorf("remove workspace member: %w", err)
+	}
+	return nil
+}
+
+// UpdateSettings renames workspaceID and sets its default-share-privacy
+// setting (#156, ADR-0044) — callable by its Owner or Admin. The stored
+// value isn't consumed by anything yet; a later Calendar/Group ticket
+// (ADR-0045) reads it as the default privacy a newly shared Calendar gets.
+func (s *WorkspaceService) UpdateSettings(ctx context.Context, actorUserID, workspaceID int64, name, defaultSharePrivacy string) (repository.Workspace, error) {
+	if err := s.requireOwnerOrAdmin(ctx, actorUserID, workspaceID); err != nil {
+		return repository.Workspace{}, err
+	}
+
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return repository.Workspace{}, ErrInvalidWorkspaceName
+	}
+
+	if defaultSharePrivacy != repository.DefaultSharePrivacyPrivate && defaultSharePrivacy != repository.DefaultSharePrivacyWorkspace {
+		return repository.Workspace{}, ErrInvalidSharePrivacy
+	}
+
+	workspace, err := s.workspaces.UpdateSettings(ctx, workspaceID, name, defaultSharePrivacy)
+	if err != nil {
+		return repository.Workspace{}, fmt.Errorf("update workspace settings: %w", err)
+	}
+	return workspace, nil
+}
+
 // requireOwnerOrAdmin refuses actorUserID unless they hold Owner or Admin on
 // workspaceID — issuing and reissuing a Workspace Invite are Admin-and-above
 // operations (ADR-0044). A caller who isn't even a Member gets the same
