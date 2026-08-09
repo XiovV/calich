@@ -4,7 +4,7 @@ import { AttachmentIndicator } from "./AttachmentIndicator";
 import { occurrenceKey, type Occurrence } from "../lib/occurrence";
 import type { DraftBlock } from "../lib/gridTime";
 import { canWriteCalendarEvents, getCalendarById } from "../lib/calendar";
-import { getCalendarBlockStyle } from "../lib/calendarColors";
+import { getOccurrenceBlockStyle } from "../lib/calendarColors";
 import { useCalendarsStore } from "../lib/calendarsStore";
 import { useShellStore } from "../lib/shellStore";
 import { computeCellDraft, computeChipCapacity } from "../lib/monthGrid";
@@ -103,7 +103,7 @@ export function MonthDayCell({
             calendars,
             occurrence.event.calendarId,
           );
-          const blockStyle = getCalendarBlockStyle(calendar);
+          const blockStyle = getOccurrenceBlockStyle(occurrence.event, calendar);
           // An Occurrence on a Calendar the caller can't write doesn't drag
           // (#111, ADR-0034) — the gesture below is never started for one,
           // so its real mouse clicks fall through to the keyboard-only

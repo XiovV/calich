@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { addDays, format, isSameDay, startOfDay } from "date-fns";
 import { useCalendarsStore } from "../lib/calendarsStore";
 import { getCalendarById, type Calendar } from "../lib/calendar";
-import { getCalendarBlockStyle } from "../lib/calendarColors";
+import { getOccurrenceBlockStyle } from "../lib/calendarColors";
 import { layoutOverlappingEvents } from "../lib/layoutOverlappingEvents";
 import { columnLayoutToBox } from "../lib/eventBlockGeometry";
 import { useVisibleOccurrences } from "../hooks/useVisibleOccurrences";
@@ -109,7 +109,7 @@ function computeEventDragPreview(
     calendars,
     activeDrag.occurrence.event.calendarId,
   );
-  const blockStyle = getCalendarBlockStyle(calendar);
+  const blockStyle = getOccurrenceBlockStyle(activeDrag.occurrence.event, calendar);
 
   return {
     day,
@@ -231,7 +231,10 @@ export function TimeGrid({
   const allDayDragCalendar = allDayDrag.active
     ? getCalendarById(calendars, allDayDrag.active.event.calendarId)
     : undefined;
-  const allDayDragBlockStyle = getCalendarBlockStyle(allDayDragCalendar);
+  const allDayDragBlockStyle = getOccurrenceBlockStyle(
+    allDayDrag.active?.event,
+    allDayDragCalendar,
+  );
 
   return (
     <div className="flex h-full flex-col">

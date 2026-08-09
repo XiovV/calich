@@ -129,3 +129,18 @@ export function getCalendarBlockStyle(
     border: CALENDAR_BLOCK_BORDER,
   };
 }
+
+// getOccurrenceBlockStyle is getCalendarBlockStyle's counterpart for a
+// rendered Occurrence rather than a bare Calendar row — it runs the Event's
+// color through resolveOccurrenceColor first, so an Event's own color (once
+// set) wins outright over its Calendar's (ADR-0043). `event` is optional so
+// a drag preview with nothing active can still fall back to the Calendar's
+// own color without a call-site ternary.
+export function getOccurrenceBlockStyle(
+  event: { color?: string } | undefined,
+  calendar: { color: string } | undefined,
+): CalendarBlockStyle {
+  return getCalendarBlockStyle(
+    event ? { color: resolveOccurrenceColor(event, calendar) } : calendar,
+  );
+}

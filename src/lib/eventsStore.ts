@@ -128,6 +128,7 @@ export const useEventsStore = create<EventsState>((set, get) => ({
         reminders: updated.reminders,
         description: updated.description,
         location: updated.location,
+        color: updated.color,
       });
     } catch (error) {
       set({ events: previousEvents });

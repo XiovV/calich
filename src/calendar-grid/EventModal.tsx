@@ -36,6 +36,8 @@ import {
   getCalendarById,
   getCheckedCalendars,
 } from "../lib/calendar";
+import { resolveCalendarFill } from "../lib/calendarColors";
+import { ColorSwatchPicker } from "../components/layout/ColorSwatchPicker";
 import { useShellStore } from "../lib/shellStore";
 import { useEventsStore } from "../lib/eventsStore";
 import { useCalendarsStore } from "../lib/calendarsStore";
@@ -84,6 +86,10 @@ interface InitialFormState {
   reminders: Reminder[];
   description: string;
   location: string;
+  /** This Event's own color override (ADR-0043) — undefined means inherited,
+   * never the Calendar's resolved hex, so a later Reset has an absent value
+   * to fall back to instead of copying whatever was already showing. */
+  color: string | undefined;
 }
 
 function timeStringToDate(day: Date, time: string): Date {
@@ -116,6 +122,7 @@ function deriveInitialFormState(
       reminders: event.reminders ?? [],
       description: event.description ?? "",
       location: event.location ?? "",
+      color: event.color,
     };
   }
 
@@ -131,6 +138,7 @@ function deriveInitialFormState(
     reminders: [],
     description: "",
     location: "",
+    color: undefined,
   };
 }
 
@@ -247,6 +255,7 @@ export function EventModal(props: EventModalProps) {
   );
   const [description, setDescription] = useState(initial.description);
   const [location, setLocation] = useState(initial.location);
+  const [color, setColor] = useState<string | undefined>(initial.color);
   const [isCustomDialogOpen, setIsCustomDialogOpen] = useState(false);
   const [isDeleteConfirmOpen, setIsDeleteConfirmOpen] = useState(false);
   const [pendingEditChanges, setPendingEditChanges] = useState<
@@ -483,6 +492,7 @@ export function EventModal(props: EventModalProps) {
       reminders: reminderChanges,
       description: description.trim(),
       location: location.trim(),
+      color,
     };
 
     if (mode !== "edit") {
@@ -561,6 +571,7 @@ export function EventModal(props: EventModalProps) {
         reminders: initial.reminders,
         description: initial.description,
         location: initial.location,
+        color: initial.color,
       })
     ) {
       onClose();
@@ -807,6 +818,24 @@ export function EventModal(props: EventModalProps) {
                     label: calendarPickerLabel(calendar),
                   }))}
                 />
+              )}
+            </div>
+
+            <div className="mt-4">
+              <p className="mb-1.5 text-label-sm text-ink-muted">Color</p>
+              <ColorSwatchPicker
+                value={color ?? resolveCalendarFill(getCalendarById(calendars, calendarId))}
+                onValueChange={setColor}
+                disabled={isReadOnlyEvent}
+              />
+              {color !== undefined && !isReadOnlyEvent && (
+                <button
+                  type="button"
+                  onClick={() => setColor(undefined)}
+                  className="mt-1.5 text-label-sm text-accent hover:underline"
+                >
+                  Reset to Calendar color
+                </button>
               )}
             </div>
 

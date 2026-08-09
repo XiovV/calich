@@ -3,7 +3,7 @@ import { addDays, format, isSameDay, startOfDay } from "date-fns";
 import { useShellStore } from "../lib/shellStore";
 import { useCalendarsStore } from "../lib/calendarsStore";
 import { getCalendarById } from "../lib/calendar";
-import { getCalendarBlockStyle } from "../lib/calendarColors";
+import { getOccurrenceBlockStyle } from "../lib/calendarColors";
 import { buildMonthGrid, getOccurrencesForDay } from "../lib/monthGrid";
 import { computeMoveToDate } from "../lib/gridTime";
 import { useVisibleOccurrences } from "../hooks/useVisibleOccurrences";
@@ -103,7 +103,7 @@ export function MonthGrid({ onDraftCreated, onOccurrenceClick }: MonthGridProps)
   const dragCalendar = eventDrag.active
     ? getCalendarById(calendars, eventDrag.active.event.calendarId)
     : undefined;
-  const dragBlockStyle = getCalendarBlockStyle(dragCalendar);
+  const dragBlockStyle = getOccurrenceBlockStyle(eventDrag.active?.event, dragCalendar);
   const draggingKey = eventDrag.active ? occurrenceKey(eventDrag.active) : null;
 
   return (

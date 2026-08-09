@@ -2,7 +2,7 @@ import type { OccurrenceLayout } from "../lib/layoutOverlappingEvents";
 import type { Occurrence } from "../lib/occurrence";
 import { durationToHeight, timeToY } from "../lib/gridTime";
 import { canWriteCalendarEvents, getCalendarById } from "../lib/calendar";
-import { getCalendarBlockStyle } from "../lib/calendarColors";
+import { getOccurrenceBlockStyle } from "../lib/calendarColors";
 import { useCalendarsStore } from "../lib/calendarsStore";
 import { columnLayoutToBox } from "../lib/eventBlockGeometry";
 import { EventVisual } from "./EventVisual";
@@ -34,7 +34,7 @@ export function EventBlock({
   const isPast = occurrence.end < now;
   const calendars = useCalendarsStore((state) => state.calendars);
   const calendar = getCalendarById(calendars, event.calendarId);
-  const blockStyle = getCalendarBlockStyle(calendar);
+  const blockStyle = getOccurrenceBlockStyle(event, calendar);
   // A Calendar's Occurrences are read-only unless the caller may write its
   // Events (#111, ADR-0034) — Viewer Access or a Subscription both resolve
   // here. No drag-to-move, no resize handles: the gesture is never started

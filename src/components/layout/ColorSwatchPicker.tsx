@@ -4,6 +4,7 @@ import { SWATCHES, normalizeCalendarColor, toOpaqueHex } from "../../lib/calenda
 interface ColorSwatchPickerProps {
   value: string;
   onValueChange: (color: string) => void;
+  disabled?: boolean;
 }
 
 // Accessible labels only — a Swatch has no name in the domain model
@@ -26,7 +27,7 @@ const SWATCH_LABELS = [
 // from SWATCHES so it can't drift from the actual Swatch list.
 const CUSTOM_TILE_GRADIENT = `linear-gradient(135deg, ${SWATCHES.map(toOpaqueHex).join(", ")})`;
 
-export function ColorSwatchPicker({ value, onValueChange }: ColorSwatchPickerProps) {
+export function ColorSwatchPicker({ value, onValueChange, disabled }: ColorSwatchPickerProps) {
   const nativeInputRef = useRef<HTMLInputElement>(null);
   // Selection is hex equality, not name equality — a client-set color that
   // matches no Swatch must still show as selected on the custom tile
@@ -48,8 +49,9 @@ export function ColorSwatchPicker({ value, onValueChange }: ColorSwatchPickerPro
           aria-checked={swatch === value}
           aria-label={SWATCH_LABELS[index]}
           onClick={() => onValueChange(swatch)}
+          disabled={disabled}
           style={{ backgroundColor: toOpaqueHex(swatch) }}
-          className={`size-7 rounded-shell-pill ${
+          className={`size-7 rounded-shell-pill disabled:opacity-50 ${
             swatch === value
               ? "ring-2 ring-accent ring-offset-2 ring-offset-surface"
               : ""
@@ -62,8 +64,9 @@ export function ColorSwatchPicker({ value, onValueChange }: ColorSwatchPickerPro
         aria-checked={!matchesSwatch}
         aria-label="Custom color"
         onClick={() => nativeInputRef.current?.click()}
+        disabled={disabled}
         style={matchesSwatch ? { backgroundImage: CUSTOM_TILE_GRADIENT } : { backgroundColor: toOpaqueHex(value) }}
-        className={`relative size-7 overflow-hidden rounded-shell-pill ${
+        className={`relative size-7 overflow-hidden rounded-shell-pill disabled:opacity-50 ${
           !matchesSwatch ? "ring-2 ring-accent ring-offset-2 ring-offset-surface" : ""
         }`}
       >
@@ -74,6 +77,7 @@ export function ColorSwatchPicker({ value, onValueChange }: ColorSwatchPickerPro
           onChange={handleNativeColorChange}
           aria-label="Custom color picker"
           tabIndex={-1}
+          disabled={disabled}
           className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
         />
       </button>
