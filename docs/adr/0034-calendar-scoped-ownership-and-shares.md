@@ -1,6 +1,6 @@
 # The Calendar is the unit of ownership and sharing
 
-Status: accepted — supersedes ADR-0010's single-account rule
+Status: accepted — supersedes ADR-0010's single-account rule; amended by ADR-0045 (Calendar becomes Workspace-scoped; Groups add a dynamic Share target) and ADR-0046 (the "no event attendees" non-goal below is narrowly reopened)
 
 ADR-0010 modelled a `User` as its own record so that multi-user support would need "only the 'single account, no invites' business rule lifted, not a data-model migration." That held up better than expected: `calendars`, `events`, `sessions`, `notifications` and `app_passwords` all already carry `user_id`, and every method on `CalendarService` and `EventService` already takes one. There was no single-user data to migrate and no enforcement to remove — the constraint was absent code, not present code.
 
@@ -70,4 +70,4 @@ There is deliberately **no term for "a Calendar someone shared with me."** "Shar
 - **Authorization moves out of SQL and into the service layer.** This is a relocation, not an invention: `requireWritableCalendar` (`service/event.go`) already resolves a Calendar and refuses the write if it is Subscribed — a per-Calendar permission check with nothing to do with `user_id`. Access resolution is that same seam with a second dimension. ADR-0032's reasoning applies unchanged: both the REST handlers and the CalDAV backend funnel through `EventService`, so one guard covers both, and the next entry point added is guarded by default.
 - **`EventService.CalendarCTag` is the one method that never took a `userID`.** Harmless while Calendar ids were unguessable UUIDs belonging to the only user; it must take Access now.
 - **Every existing row is already correct.** Existing Calendars keep their `user_id` as Owner, existing Events lose a redundant column, and no backfill is needed.
-- **Scope: this is Calendar sharing, not event attendees.** No invitations, no RSVP, no free/busy lookup, no iTIP/iMIP scheduling (RFC 6638). Those are a different feature that will also want the word "share," and naming them as non-goals now keeps this ADR from being read as covering them.
+- **Scope: this is Calendar sharing, not event attendees.** No invitations, no RSVP, no free/busy lookup, no iTIP/iMIP scheduling (RFC 6638). Those are a different feature that will also want the word "share," and naming them as non-goals now keeps this ADR from being read as covering them. (Narrowly reopened by ADR-0046: per-Event Attendees with an RSVP now exist, independent of Calendar Access; free/busy and full iTIP/iMIP remain out of scope.)

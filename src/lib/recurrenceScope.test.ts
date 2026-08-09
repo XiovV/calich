@@ -7,6 +7,7 @@ import {
   hasFieldChanges,
   makeException,
   makeOverride,
+  resolveColor,
   resolveReminders,
   shouldDiscardChildren,
   splitFollowing,
@@ -35,6 +36,19 @@ describe("makeOverride", () => {
     expect(makeOverride(zonedMaster, occurrenceStart, changes).tzid).toBe(
       "Europe/Berlin",
     );
+  });
+
+  it("inherits the master's color when the edit doesn't touch it (ADR-0043)", () => {
+    const coloredMaster: Event = { ...master, color: "#12809CFF" };
+    const occurrenceStart = new Date(2026, 0, 3, 9, 0);
+    const changes = {
+      calendarId: "cal-1",
+      title: "Standup",
+      start: occurrenceStart,
+      end: new Date(2026, 0, 3, 9, 30),
+    };
+
+    expect(makeOverride(coloredMaster, occurrenceStart, changes).color).toBe("#12809CFF");
   });
 
   it("keys the override to the parent and the replaced Occurrence's start", () => {
@@ -316,6 +330,22 @@ describe("shouldDiscardChildren", () => {
   });
 });
 
+describe("resolveColor", () => {
+  const coloredMaster: Event = { ...master, color: "#12809CFF" };
+
+  it("falls back to the reference's own color when the edit didn't touch it", () => {
+    expect(resolveColor({}, coloredMaster)).toBe("#12809CFF");
+  });
+
+  it("sets the color when the edit provides one", () => {
+    expect(resolveColor({ color: "#FF6B35FF" }, coloredMaster)).toBe("#FF6B35FF");
+  });
+
+  it("clears to absent on an explicit reset (null), rather than copying the reference's color (ADR-0043)", () => {
+    expect(resolveColor({ color: null }, coloredMaster)).toBeUndefined();
+  });
+});
+
 describe("hasFieldChanges", () => {
   const original = {
     calendarId: "cal-1",
@@ -381,5 +411,18 @@ describe("hasFieldChanges", () => {
     expect(hasFieldChanges({ ...original, description: "", location: "" }, withoutOptional)).toBe(
       false,
     );
+  });
+
+  it("is true when a color is set", () => {
+    expect(hasFieldChanges({ ...original, color: "#FF6B35FF" }, original)).toBe(true);
+  });
+
+  it("is true when a color is explicitly reset to inherit", () => {
+    const withColor = { ...original, color: "#FF6B35FF" };
+    expect(hasFieldChanges({ ...withColor, color: null }, withColor)).toBe(true);
+  });
+
+  it("treats an absent color key as unchanged from another absent color key", () => {
+    expect(hasFieldChanges({ ...original }, original)).toBe(false);
   });
 });

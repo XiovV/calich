@@ -48,6 +48,10 @@ var (
 	// real Occurrence of the series: it isn't dtstart nor a start the rrule
 	// generates, or it's excluded by an Exdate (#76).
 	ErrOccurrenceNotFound = errors.New("occurrence not found")
+	// ErrInvalidEventColor is returned when an Event's color fails
+	// NormalizeColor — the same arbitrary-hex value space as Calendar color
+	// (ADR-0029, ADR-0043).
+	ErrInvalidEventColor = errors.New("invalid event color")
 	// ErrCalendarReadOnly is returned by every mutating method (Create,
 	// Update, Delete, AddException, ReparentFrom, ImportSeries, PutSeries)
 	// when the caller's Access to the Calendar a write targets doesn't
@@ -73,6 +77,21 @@ func validateReminders(reminders []repository.Reminder) error {
 		}
 	}
 	return nil
+}
+
+// normalizeEventColor validates color against NormalizeColor and returns its
+// canonical form — the same arbitrary-hex value space as Calendar color
+// (ADR-0029, ADR-0043). A nil color (inherit the Calendar's color) passes
+// through unchanged; there is nothing to validate.
+func normalizeEventColor(color *string) (*string, error) {
+	if color == nil {
+		return nil, nil
+	}
+	normalized, ok := NormalizeColor(*color)
+	if !ok {
+		return nil, ErrInvalidEventColor
+	}
+	return &normalized, nil
 }
 
 type EventService struct {
@@ -276,6 +295,12 @@ type EventWrite struct {
 	Reminders    []repository.Reminder
 	Description  string
 	Location     string
+	// Color is this Event's own color override — same Editor Access rule as
+	// title or time (ADR-0034), nullable to mean "inherit the Calendar's
+	// color" (ADR-0043). A caller resetting to the Calendar's color passes
+	// nil, never the Calendar's current hex — see ResolveColor's contract in
+	// docs/adr/0043-per-event-color-override.md.
+	Color *string
 }
 
 // fields projects the write onto the columns the repository stores, dropping
@@ -293,6 +318,7 @@ func (w EventWrite) fields() repository.EventFields {
 		Tzid:         w.Tzid,
 		Description:  w.Description,
 		Location:     w.Location,
+		Color:        w.Color,
 	}
 }
 
@@ -307,6 +333,11 @@ func (s *EventService) Create(ctx context.Context, userID int64, id string, writ
 	if err := validateReminders(write.Reminders); err != nil {
 		return repository.Event{}, err
 	}
+	normalizedColor, err := normalizeEventColor(write.Color)
+	if err != nil {
+		return repository.Event{}, err
+	}
+	write.Color = normalizedColor
 
 	if write.ParentID != nil {
 		if overrideCarriesOwnRrule(write.ParentID, write.Rrule) || write.RecurrenceID == nil {
@@ -331,7 +362,7 @@ func (s *EventService) Create(ctx context.Context, userID int64, id string, writ
 	}
 
 	var event repository.Event
-	err := s.withTx(ctx, func(repos txRepos) error {
+	err = s.withTx(ctx, func(repos txRepos) error {
 		seq, err := repos.sync.NextChangeSeq(ctx)
 		if err != nil {
 			return err
@@ -647,6 +678,11 @@ func (s *EventService) Update(ctx context.Context, userID int64, id string, writ
 	if err := validateReminders(write.Reminders); err != nil {
 		return repository.Event{}, err
 	}
+	normalizedColor, err := normalizeEventColor(write.Color)
+	if err != nil {
+		return repository.Event{}, err
+	}
+	write.Color = normalizedColor
 	if err := s.requireWritableCalendar(ctx, userID, write.CalendarID); err != nil {
 		return repository.Event{}, err
 	}

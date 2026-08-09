@@ -144,19 +144,11 @@ _Avoid_: business hours, office hours, availability, day bounds
 ## Authentication
 
 **User**:
-The account record a Session belongs to, validated by the backend. An instance holds many — the first is bootstrapped (ADR-0010), the rest are created by an Admin (ADR-0037). Active, Pending, or Disabled.
+The account record a Session belongs to, validated by the backend. An instance's first User is always bootstrapped (ADR-0010); every subsequent one either self-registers (gated by `ENABLE_SIGNUPS`, ADR-0044) or is created by accepting a Workspace Invite. A User is Active or Disabled, and belongs to zero or more Workspaces. There is no instance-wide role on a User — authority over other Users exists only inside a Workspace, as a Role on that Workspace's membership.
 _Avoid_: account, profile
 
-**Admin**:
-A User who may create, Invite, Disable, delete, and reset the password of other Users, and grant or revoke Admin. Authority over *who exists*, and nothing else — an Admin has no access to another User's Calendars or Events and needs a Share like anyone else. The last remaining Admin can be neither Disabled nor deleted. See ADR-0037, ADR-0042.
-_Avoid_: owner (that's a Calendar's), superuser, root, administrator (in prose)
-
-**Pending**:
-The account state of a User created via an Invite who has not yet set a password. A Pending User cannot log in, same as Disabled, but the two are not the same state: Disabled is something an Admin does to a User who was active, where Pending is a User who has never been active yet. Ends the moment the User accepts — there is no path back to Pending once a User has had a password. See ADR-0042.
-_Avoid_: invited (that's the Invite, not the state), unactivated, unconfirmed
-
 **Disabled**:
-The reversible account state in which an *active* User cannot log in, refresh a Session, or authenticate over CalDAV, and receives no Reminders. Everything they own stays live and unchanged for everyone else — Disabling an account never degrades another User's Calendars. Distinct from deletion, which removes the account and demands an explicit disposition for the Calendars it owned. Distinct from Pending, which a User has never left Active to enter. See ADR-0037.
+The reversible account state in which a User cannot log in, refresh a Session, or authenticate over CalDAV, and receives no Reminders. Self-chosen and self-reversible only — with no instance-wide Admin (ADR-0044), nobody can disable another User's account for them. Blocked while the User is the sole Owner of any Workspace that still has other Members in it. Everything they own stays live and unchanged for everyone else. Distinct from deletion, which removes the account and demands an explicit disposition for the Calendars it owned. See ADR-0037, ADR-0044.
 _Avoid_: suspended, deactivated, locked, banned
 
 **Session**:
@@ -175,29 +167,51 @@ _Avoid_: renewal token
 A per-User, revocable credential a native calendar client uses to authenticate over CalDAV (HTTP Basic), distinct from the login password and shown to the User only once when generated. Stored hashed, one row per generated credential, so a single device can be revoked without touching the account password. The successor to the abandoned feed token. See ADR-0024.
 _Avoid_: app-specific password (in prose), device password, API key
 
+## Workspaces
+
+**Workspace**:
+The account-management and billing boundary: a named container a User owns or belongs to, holding a group of Calendars (ADR-0045) and the Members who can be given Access to them. A self-hosted instance may host several independent Workspaces side by side; a User may belong to several Workspaces at once, switching between them in the UI, which changes the entire visible Calendar and member list. See ADR-0044.
+_Avoid_: instance (an instance may host many Workspaces), account (that's the User), organization, team
+
+**Workspace Role**:
+What a `WorkspaceMember` row grants over *that Workspace's membership and settings* — **Owner**, **Admin**, or **Member**. Grants no Calendar Access by itself: Owner and Admin resolve Access exactly like a Member does, through ownership or a Share. Owner alone may manage billing, delete the Workspace, and grant or revoke Admin. Admin may invite and remove Members (not Owner, not another Admin), manage Groups, create workspace-facing shared Calendars, and configure workspace settings. See ADR-0044.
+_Avoid_: permission, admin (ambiguous with the retired instance-wide Admin, ADR-0037), role (say Workspace Role to distinguish from a Calendar Share's Role, ADR-0034)
+
 **Invite**:
-A single-use, expiring credential an Admin issues for a Pending User, letting them set their own password instead of an Admin choosing one on their behalf. Account-level, not Calendar-level — a deliberately different concept from Share, which is why the two may share the English word "invite" in conversation without being the same thing in this glossary. An Admin may reissue an Invite for the same Pending User at any time, which invalidates whichever one came before it. See ADR-0042.
+A single-use, expiring credential a Workspace's Owner or Admin issues for an email address, granting that email a Membership in the Workspace once accepted. Workspace-scoped, not account-level or Calendar-level — a deliberately different concept from Share, which is why the two may share the English word "invite" in conversation without being the same thing in this glossary. If no User exists with that email, accepting creates one (name, email, password) and joins them to the Workspace in one step; if one already exists, accepting simply adds the Membership. See ADR-0044.
 _Avoid_: invite token (in prose — the credential and the act are one term here), invitation, activation link
 
 ## Sharing
 
 **Owner**:
-The single User a Calendar belongs to — the only one who may rename, recolour, delete, or share it, or bind it to a Subscription. Implicit rather than granted: an Owner has no Share. Every Calendar has exactly one, and it does not change except by an explicit transfer when the Owner's account is deleted. See ADR-0034.
-_Avoid_: creator, admin (that's the instance role), author
+The single User a Calendar belongs to — the only one who may rename, recolour, delete, or share it, or bind it to a Subscription. Implicit rather than granted: an Owner has no Share. Every Calendar has exactly one, and it does not change except by an explicit transfer when the Owner's account is removed from the Calendar's Workspace or deleted. Unchanged by Workspace Role — a Workspace Admin who creates a Calendar owns it personally, the same as anyone else. See ADR-0034, ADR-0044, ADR-0045.
+_Avoid_: creator, admin (that's a Workspace Role), author
 
 **Share**:
-The grant binding one Calendar to one User with one Role. What an Owner creates and revokes, and what a User may renounce to leave a Calendar. The Owner never has one.
-_Avoid_: invite (that word is reserved for the Authentication section's Invite — getting an account, not Access to a Calendar), permission, membership, ACL entry
+The grant binding one Calendar to one User or Group with one Role. What an Owner creates and revokes, and what a User may renounce to leave a Calendar. The Owner never has one. Its target must be a User or Group belonging to the Calendar's own Workspace. See ADR-0034, ADR-0045.
+_Avoid_: invite (that word is reserved for the Workspaces section's Invite — getting a Membership, not Access to a Calendar), permission, membership, ACL entry
+
+**Group**:
+A named set of a Workspace's Members (e.g. "Tech team"), created and membership-managed by that Workspace's Owner or Admin, usable as a Share target in place of a single User. Access granted to a Group is resolved dynamically against current membership — joining or leaving the Group changes Access immediately, with no Calendar re-shared. See ADR-0045.
+_Avoid_: team (reserved loosely for describing groups in prose; Group is the modelled term), role (a Group is a set of people, not a permission level)
 
 **Role**:
 What a Share permits: **Viewer** (read the Calendar's Events and download their Attachments) or **Editor** (create, edit, and delete them, set their Reminders, and add or remove their Attachments). Neither permits managing the Calendar itself — rename, delete, re-share, revoke, and binding a Subscription are Owner-only. See ADR-0034, ADR-0040.
-_Avoid_: permission, level, access level (Access is the resolved value, not this)
+_Avoid_: permission, level, access level (Access is the resolved value, not this), Workspace Role (a different axis — see Workspaces)
 
 **Access**:
-The resolved answer to "what may this User do with this Calendar" — Owner, Editor, Viewer, or None. Computed on demand, never stored: ownership first, then a Share's Role, then None, and finally clamped to read-only if the Calendar carries a Subscription. The single question every permission check asks, replacing the single-user era's "does this row's user match". See ADR-0034.
+The resolved answer to "what may this User do with this Calendar" — Owner, Editor, Viewer, or None. Computed on demand, never stored: ownership first, then the highest Role from any direct Share or a Share on a Group the User currently belongs to, then None, and finally clamped to read-only if the Calendar carries a Subscription. The single question every permission check asks, replacing the single-user era's "does this row's user match". See ADR-0034, ADR-0045.
 _Avoid_: permission, privilege (that's the CalDAV property), rights
 
 There is deliberately **no term for a Calendar someone shared with you.** "Shared Calendar" points both ways — the Owner shares it out, the recipient sees it shared in — and would sit confusingly beside Subscribed Calendar, which is also a Calendar you see and may not write. Say "a Calendar you have Editor Access to" instead. UI copy may still read "Shared with me"; that is a label, not a term.
+
+**Attendee**:
+A User invited to one specific Event, independent of any Calendar Access — the invite itself is the visibility grant, scoped to that Event alone. May be invited individually or via a Group (expanded to its current members at invite time into individual Attendee rows, since a response has to survive later Group membership changes rather than tracking membership dynamically the way a Group Share does). Its target must belong to the Event's own Workspace. See ADR-0046.
+_Avoid_: invitee, guest, participant
+
+**Response**:
+An Attendee's answer to their invite — **Needs-Action** (the default, unanswered), **Accepted**, **Declined**, or **Tentative** — iCalendar's `PARTSTAT` values, modelled in full for lossless CalDAV round-tripping even though the web UI leads with only Accept/Decline. See ADR-0046.
+_Avoid_: RSVP (the act, not the stored value), status (ambiguous with account state)
 
 ## Attachments
 

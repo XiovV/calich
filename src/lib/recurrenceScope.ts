@@ -27,6 +27,14 @@ export interface EventFieldChanges {
   reminders?: Reminder[];
   description?: string;
   location?: string;
+  // This Event's own color override (ADR-0043). Three states, distinct from
+  // description/location because "untouched" and "explicit reset to
+  // Calendar color" must both stay expressible: key absent means untouched
+  // (falls back to the reference Event's own color, like a drag-only edit
+  // that can't touch it yet); `null` is an explicit "reset to Calendar
+  // color", which must clear to absent rather than copy the reference's
+  // current color; a string sets it.
+  color?: string | null;
 }
 
 /** `changes`' allDay, falling back to `master`'s own when the edit didn't
@@ -67,6 +75,20 @@ export function resolveLocation(
   return changes.location ?? reference.location;
 }
 
+/** `changes`' color, falling back to `reference`'s own when the edit didn't
+ * touch it — but unlike resolveDescription/resolveLocation, an explicit
+ * `null` (a "Reset to Calendar color" action) must win and clear to absent
+ * rather than fall back, so this can't use `??` the way they do: `null` is
+ * nullish too, and would silently copy `reference`'s current color instead
+ * of clearing it (ADR-0043). Presence of the `color` key, not nullishness of
+ * its value, is what "touched" means here. */
+export function resolveColor(
+  changes: Pick<EventFieldChanges, "color">,
+  reference: Pick<Event, "color">,
+): string | undefined {
+  return "color" in changes ? (changes.color ?? undefined) : reference.color;
+}
+
 /**
  * "This event": the fields for a new Override that replaces one Occurrence of
  * `master`'s series, keyed to the Occurrence it replaces (its RECURRENCE-ID).
@@ -95,6 +117,10 @@ export function makeOverride(
     reminders: resolveReminders(changes, master),
     description: resolveDescription(changes, master),
     location: resolveLocation(changes, master),
+    // A fresh Override starts as a copy of the Master's color, same as
+    // description/location/reminders — color is just another field the
+    // compiler carries (ADR-0043).
+    color: resolveColor(changes, master),
   };
 }
 
@@ -187,6 +213,7 @@ export function splitFollowing(
       reminders: resolveReminders(changes, master),
       description: resolveDescription(changes, master),
       location: resolveLocation(changes, master),
+      color: resolveColor(changes, master),
     },
     reparentFromStart: splitStart,
   };
@@ -245,6 +272,7 @@ export function hasFieldChanges(
     Boolean(changes.allDay) !== Boolean(original.allDay) ||
     (changes.description ?? "") !== (original.description ?? "") ||
     (changes.location ?? "") !== (original.location ?? "") ||
+    resolveColor(changes, { color: undefined }) !== resolveColor(original, { color: undefined }) ||
     !remindersEqual(changes.reminders ?? [], original.reminders ?? []) ||
     (changes.rrule ?? "") !== (original.rrule ?? "")
   );

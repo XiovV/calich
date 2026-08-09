@@ -6,6 +6,7 @@ import {
   makeException,
   makeOverride,
   resolveAllDay,
+  resolveColor,
   resolveDescription,
   resolveLocation,
   resolveReminders,
@@ -28,7 +29,15 @@ export type MasterFieldChanges = EventFieldChanges & { rrule?: string };
  * API replaces Reminders wholesale, so an omitted field would wipe them. */
 type MasterCoreFields = Pick<
   Event,
-  "calendarId" | "title" | "start" | "end" | "tzid" | "reminders" | "description" | "location"
+  | "calendarId"
+  | "title"
+  | "start"
+  | "end"
+  | "tzid"
+  | "reminders"
+  | "description"
+  | "location"
+  | "color"
 >;
 
 /**
@@ -168,6 +177,7 @@ export function planEditOccurrence(
           reminders: resolveReminders(changes, master),
           description: resolveDescription(changes, master),
           location: resolveLocation(changes, master),
+          color: resolveColor(changes, master),
         },
         discardChildren: shouldDiscardChildren(master.rrule, rrule),
       },
@@ -197,6 +207,7 @@ export function planEditOccurrence(
           reminders: master.reminders,
           description: master.description,
           location: master.location,
+          color: master.color,
         },
         truncatedRrule: truncatedMaster.rrule,
         keptExdates,
@@ -232,6 +243,7 @@ export function planEditOccurrence(
           reminders: resolveReminders(changes, occurrence.event),
           description: resolveDescription(changes, occurrence.event),
           location: resolveLocation(changes, occurrence.event),
+          color: resolveColor(changes, occurrence.event),
         },
       },
     ];
@@ -255,6 +267,7 @@ export function planEditOccurrence(
         reminders: override.reminders,
         description: override.description,
         location: override.location,
+        color: override.color,
       },
     },
   ];
@@ -313,6 +326,7 @@ export function planDeleteOccurrence({
           reminders: master.reminders,
           description: master.description,
           location: master.location,
+          color: master.color,
         },
         truncatedRrule,
         keptExdates,

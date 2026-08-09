@@ -100,6 +100,19 @@ export function resolveCalendarFill(calendar: { color: string } | undefined): st
   return calendar?.color ?? UNRESOLVED_CALENDAR_COLOR;
 }
 
+// resolveOccurrenceColor is ADR-0043's ResolveColor: an Event's own color
+// wins outright over its Calendar's when set, checked first; the Calendar's
+// color (`calendar.color`, already resolved per-viewer by ADR-0038's
+// DisplayColor before it reaches here) is consulted only when the Event
+// carries none of its own. Event color itself is never per-viewer — every
+// caller with Access sees the same value.
+export function resolveOccurrenceColor(
+  event: { color?: string },
+  calendar: { color: string } | undefined,
+): string {
+  return event.color ?? resolveCalendarFill(calendar);
+}
+
 // getCalendarBlockStyle is the single seam every event-rendering surface
 // (timed blocks, the all-day lane, month day cells, drag previews, the
 // sidebar Calendar list) goes through for a Calendar's rendered appearance:

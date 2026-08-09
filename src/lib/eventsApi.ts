@@ -22,6 +22,8 @@ interface EventWire {
   reminders?: Reminder[];
   description?: string;
   location?: string;
+  // Absent means "inherit the Calendar's color" (ADR-0043).
+  color?: string;
   // createdByUsername is absent when the creator's account has been
   // deleted or the Event predates this column (#118).
   createdByUsername?: string;
@@ -91,6 +93,7 @@ function fromWire(wire: EventWire): Event {
     reminders: wire.reminders,
     description: wire.description || undefined,
     location: wire.location || undefined,
+    color: wire.color ?? undefined,
     createdByUsername: wire.createdByUsername || undefined,
     attachments: wire.attachments?.map(attachmentFromWire),
   };
@@ -123,6 +126,7 @@ export const eventsApi = {
       reminders?: Reminder[];
       description?: string;
       location?: string;
+      color?: string;
     },
   ): Promise<Event> {
     const response = await authedFetch(accessToken, "/api/events/", {
@@ -143,6 +147,7 @@ export const eventsApi = {
         reminders: event.reminders,
         description: event.description,
         location: event.location,
+        color: event.color,
       }),
     });
     if (!response.ok) throw await errorFromResponse(response);
@@ -164,6 +169,7 @@ export const eventsApi = {
       reminders?: Reminder[];
       description?: string;
       location?: string;
+      color?: string;
     },
   ): Promise<Event> {
     const response = await authedFetch(accessToken, `/api/events/${id}`, {
@@ -181,6 +187,7 @@ export const eventsApi = {
         reminders: changes.reminders,
         description: changes.description,
         location: changes.location,
+        color: changes.color,
       }),
     });
     if (!response.ok) throw await errorFromResponse(response);

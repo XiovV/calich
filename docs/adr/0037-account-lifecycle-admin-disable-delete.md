@@ -1,6 +1,6 @@
 # Admin manages accounts, not data; accounts are disabled or deleted with an explicit disposition
 
-Status: accepted — supersedes ADR-0010's "no invites" rule
+Status: accepted — supersedes ADR-0010's "no invites" rule; superseded by ADR-0044 (instance-wide Admin is retired; Disable/Delete become self-service and are re-scoped to the Workspace level, though the underlying transfer-or-delete disposition for owned Calendars survives unchanged)
 
 Multiple accounts need someone empowered to create them. `users` gains `is_admin`; the bootstrapped account (ADR-0010) becomes the first Admin.
 

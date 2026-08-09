@@ -150,6 +150,9 @@ type eventResponse struct {
 	// Description and Location are free-text fields on an Event (#61).
 	Description string `json:"description,omitempty"`
 	Location    string `json:"location,omitempty"`
+	// Color is this Event's own color override — absent means "inherit the
+	// Calendar's color" (ADR-0043).
+	Color *string `json:"color,omitempty"`
 	// CreatedBy and CreatedByUsername are the Event's creator, for display
 	// only — never consulted for authorization, which resolves through
 	// CalendarID instead (ADR-0034, #118). Both absent when the creator's
@@ -177,6 +180,7 @@ func toEventResponse(e repository.Event) eventResponse {
 		Reminders:         toReminderWire(e.Reminders),
 		Description:       e.Description,
 		Location:          e.Location,
+		Color:             e.Color,
 		CreatedBy:         e.CreatedBy,
 		CreatedByUsername: e.CreatedByUsername,
 		Attachments:       toAttachmentResponses(e.Attachments),
@@ -190,6 +194,7 @@ var eventWriteErrors = []errorCase{
 	{service.ErrInvalidTimeRange, badRequest("end must be after start")},
 	{service.ErrInvalidRecurrenceRule, badRequest("recurrence rule is invalid")},
 	{service.ErrInvalidReminderChannel, badRequest("reminder channel must be \"notification\" or \"email\"")},
+	{service.ErrInvalidEventColor, badRequest("color must be a valid hex color (#RGB, #RRGGBB, or #RRGGBBAA)")},
 	{service.ErrCalendarNotFound, badRequest("calendar not found")},
 	{service.ErrCalendarReadOnly, forbidden("calendar is read-only")},
 }
@@ -286,6 +291,9 @@ type createEventRequest struct {
 	Reminders    []reminderWire `json:"reminders,omitempty"`
 	Description  string         `json:"description,omitempty"`
 	Location     string         `json:"location,omitempty"`
+	// Color is this Event's own color override — absent/null means "inherit
+	// the Calendar's color" (ADR-0043).
+	Color *string `json:"color,omitempty"`
 }
 
 // parseEventTimes converts a decoded body's start/end strings into instants,
@@ -342,6 +350,7 @@ func (h *EventHandler) Create(w http.ResponseWriter, r *http.Request) {
 		Reminders:    fromReminderWire(req.Reminders),
 		Description:  req.Description,
 		Location:     req.Location,
+		Color:        req.Color,
 	})
 	if respondError(w, err, createEventErrors, "failed to create event") {
 		return
@@ -380,6 +389,9 @@ type updateEventRequest struct {
 	Reminders   []reminderWire `json:"reminders,omitempty"`
 	Description string         `json:"description,omitempty"`
 	Location    string         `json:"location,omitempty"`
+	// Color is this Event's own color override — absent/null means "inherit
+	// the Calendar's color" (ADR-0043).
+	Color *string `json:"color,omitempty"`
 }
 
 func (h *EventHandler) Update(w http.ResponseWriter, r *http.Request) {
@@ -414,6 +426,7 @@ func (h *EventHandler) Update(w http.ResponseWriter, r *http.Request) {
 		Reminders:   fromReminderWire(req.Reminders),
 		Description: req.Description,
 		Location:    req.Location,
+		Color:       req.Color,
 	})
 	if respondError(w, err, updateEventErrors, "failed to update event") {
 		return

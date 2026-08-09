@@ -1,6 +1,6 @@
 # Admin-issued Invites let a Pending User set their own password
 
-Status: accepted — supersedes ADR-0037's "no self-registration and no invite tokens" line
+Status: accepted — supersedes ADR-0037's "no self-registration and no invite tokens" line; superseded by ADR-0044 (Invites become Workspace-scoped rather than instance-wide and Admin-issued; Pending as an account state is retired, since an invited email either has no account yet — and creates one, choosing its own password immediately — or already has one and simply gains a new Workspace membership)
 
 ADR-0037 rejected invite tokens alongside self-registration, in one breath: "a self-hosted household instance has an Admin present, and an open endpoint is a liability with no corresponding benefit." That conflated two different things. Self-registration is an *unauthenticated* endpoint — anyone who can reach the server can create an account, which is the liability ADR-0037 was right to reject and this ADR does not revisit. An Invite is not that: only an Admin can create one, for a username the Admin already chose, exactly as `AccountService.Create` requires today. What it removes is the step where the Admin makes up a temporary password and relays it out of band. That step was never load-bearing for the no-open-endpoint guarantee — it was just the only mechanism ADR-0037 had described.
 

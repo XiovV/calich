@@ -41,6 +41,7 @@ type decodedEvent struct {
 	Reminders         []reminderWire
 	Description       string
 	Location          string
+	Color             *string
 	CreatedBy         *int64
 	CreatedByUsername string
 }
@@ -73,6 +74,7 @@ func (d *decodedEvent) UnmarshalJSON(data []byte) error {
 		Reminders:         wire.Reminders,
 		Description:       wire.Description,
 		Location:          wire.Location,
+		Color:             wire.Color,
 		CreatedBy:         wire.CreatedBy,
 		CreatedByUsername: wire.CreatedByUsername,
 	}

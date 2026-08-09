@@ -119,6 +119,29 @@ describe("planEditOccurrence", () => {
     ]);
   });
 
+  it('scope "this": a fresh override inherits the master\'s color when untouched (ADR-0043)', () => {
+    const coloredMaster = { ...recurringMaster, color: "#12809CFF" };
+    const occurrenceStart = new Date("2026-01-03T09:00:00Z");
+    const ops = planEditOccurrence(
+      {
+        master: coloredMaster,
+        occurrence: occurrenceOf(coloredMaster, occurrenceStart),
+        isOverride: false,
+        originalStart: occurrenceStart,
+        scope: "this",
+        changes: {
+          calendarId: "cal-1",
+          title: "Standup (moved)",
+          start: new Date("2026-01-03T10:00:00Z"),
+          end: new Date("2026-01-03T10:30:00Z"),
+        },
+      },
+      nextId,
+    );
+
+    expect(ops[0]).toMatchObject({ fields: { color: "#12809CFF" } });
+  });
+
   it('scope "all": keeps the rule and does not discard children when the rule is unchanged', () => {
     const ops = planEditOccurrence({
       master: recurringMaster,
@@ -306,6 +329,45 @@ describe("planEditOccurrence", () => {
     });
 
     expect(ops[0]).toMatchObject({ fields: { reminders: authoredReminders } });
+  });
+
+  it('scope "all": carries an authored color onto the master (ADR-0043)', () => {
+    const ops = planEditOccurrence({
+      master: recurringMaster,
+      occurrence: occurrenceOf(recurringMaster, recurringMaster.start),
+      isOverride: false,
+      originalStart: recurringMaster.start,
+      scope: "all",
+      changes: {
+        calendarId: "cal-1",
+        title: "Renamed",
+        start: recurringMaster.start,
+        end: recurringMaster.end,
+        color: "#FF6B35FF",
+      },
+    });
+
+    expect(ops[0]).toMatchObject({ fields: { color: "#FF6B35FF" } });
+  });
+
+  it('scope "all": an explicit color reset clears the master to absent (ADR-0043)', () => {
+    const coloredMaster = { ...recurringMaster, color: "#12809CFF" };
+    const ops = planEditOccurrence({
+      master: coloredMaster,
+      occurrence: occurrenceOf(coloredMaster, coloredMaster.start),
+      isOverride: false,
+      originalStart: coloredMaster.start,
+      scope: "all",
+      changes: {
+        calendarId: "cal-1",
+        title: "Renamed",
+        start: coloredMaster.start,
+        end: coloredMaster.end,
+        color: null,
+      },
+    });
+
+    expect(ops[0]).toMatchObject({ fields: { color: undefined } });
   });
 
   it('scope "following": plans a truncated old master, a new master, and the reparent boundary', () => {
@@ -753,6 +815,52 @@ describe("dispatchSeriesOps", () => {
       "override-1",
       expect.objectContaining({ title: "Renamed again", rrule: undefined }),
     );
+  });
+
+  it("dispatches a putEvent op's color to eventsApi.update verbatim (ADR-0043)", async () => {
+    vi.mocked(eventsApi.update).mockResolvedValue({} as never);
+
+    await dispatchSeriesOps("token-123", [
+      {
+        kind: "putEvent",
+        id: "master-1",
+        fields: {
+          calendarId: "cal-1",
+          title: "Renamed",
+          start: recurringMaster.start,
+          end: recurringMaster.end,
+          color: "#FF6B35FF",
+        },
+        discardChildren: false,
+      },
+    ]);
+
+    expect(eventsApi.update).toHaveBeenCalledWith(
+      "token-123",
+      "master-1",
+      expect.objectContaining({ color: "#FF6B35FF" }),
+    );
+  });
+
+  it("dispatches a putEvent op's cleared color (undefined) to eventsApi.update, not the prior value", async () => {
+    vi.mocked(eventsApi.update).mockResolvedValue({} as never);
+
+    await dispatchSeriesOps("token-123", [
+      {
+        kind: "putEvent",
+        id: "master-1",
+        fields: {
+          calendarId: "cal-1",
+          title: "Renamed",
+          start: recurringMaster.start,
+          end: recurringMaster.end,
+        },
+        discardChildren: false,
+      },
+    ]);
+
+    const call = vi.mocked(eventsApi.update).mock.calls[0][2];
+    expect(call.color).toBeUndefined();
   });
 
   it("dispatches a reanchorSeries op as truncate -> create -> reparent, in order", async () => {

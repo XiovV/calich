@@ -4,6 +4,7 @@ import {
   getContrastTextColor,
   getNextUnusedColor,
   normalizeCalendarColor,
+  resolveOccurrenceColor,
 } from "./calendarColors";
 
 describe("getNextUnusedColor", () => {
@@ -77,5 +78,23 @@ describe("getContrastTextColor", () => {
 
   it("picks black text on a bright swatch-adjacent yellow", () => {
     expect(getContrastTextColor("#FFEE00")).toBe("#000000");
+  });
+});
+
+// ADR-0043's ResolveColor: an Event's own color wins outright over its
+// Calendar's when set; the Calendar's color is consulted only when absent.
+describe("resolveOccurrenceColor", () => {
+  it("wins outright with the Event's own color when set", () => {
+    expect(resolveOccurrenceColor({ color: "#FF6B35FF" }, { color: "#12809CFF" })).toBe(
+      "#FF6B35FF",
+    );
+  });
+
+  it("falls through to the Calendar's (already per-viewer resolved) color when absent", () => {
+    expect(resolveOccurrenceColor({}, { color: "#12809CFF" })).toBe("#12809CFF");
+  });
+
+  it("falls through to the unresolved-Calendar fallback when both are absent", () => {
+    expect(resolveOccurrenceColor({}, undefined)).toBe("#6B7280FF");
   });
 });

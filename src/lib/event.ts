@@ -55,6 +55,12 @@ export interface Event {
   // Free-text description and location, both optional.
   description?: string;
   location?: string;
+  // This Event's own color override, in the same arbitrary-hex value space
+  // as Calendar color. Absent means "inherit the Calendar's color" — wins
+  // outright over it when set. Set by an Editor, seen identically by
+  // everyone with Access (not per-viewer, unlike Calendar color's own
+  // override). See ADR-0043.
+  color?: string;
   // createdByUsername is who created this Event, for display in the Event
   // dialog on a Calendar where more than one person could have created it
   // (#118) — never consulted to decide what a User may do with an Event,
