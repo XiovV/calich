@@ -114,7 +114,7 @@ func (r *UserRepository) Create(ctx context.Context, username, passwordHash stri
 
 func (r *UserRepository) GetByID(ctx context.Context, id int64) (User, error) {
 	return r.scanUser(r.db.QueryRowContext(ctx,
-		`SELECT ` + userColumns + ` FROM users WHERE id = ?`, id,
+		`SELECT `+userColumns+` FROM users WHERE id = ?`, id,
 	))
 }
 
@@ -154,9 +154,19 @@ func (r *UserRepository) GetByIDs(ctx context.Context, ids []int64) (map[int64]U
 	return result, nil
 }
 
+// GetByEmail returns the first User with the given email — used to decide,
+// when accepting a Workspace Invite (ADR-0044), whether the invited address
+// already belongs to an account. email is never unique-constrained, so this
+// takes the first match; the accept flow only needs "does at least one exist".
+func (r *UserRepository) GetByEmail(ctx context.Context, email string) (User, error) {
+	return r.scanUser(r.db.QueryRowContext(ctx,
+		`SELECT `+userColumns+` FROM users WHERE email = ? LIMIT 1`, email,
+	))
+}
+
 func (r *UserRepository) GetByUsername(ctx context.Context, username string) (User, error) {
 	return r.scanUser(r.db.QueryRowContext(ctx,
-		`SELECT ` + userColumns + ` FROM users WHERE username = ?`, username,
+		`SELECT `+userColumns+` FROM users WHERE username = ?`, username,
 	))
 }
 
@@ -164,7 +174,7 @@ func (r *UserRepository) GetByUsername(ctx context.Context, username string) (Us
 // order) so the bootstrapped Admin always leads the list.
 func (r *UserRepository) List(ctx context.Context) ([]User, error) {
 	rows, err := r.db.QueryContext(ctx,
-		`SELECT ` + userColumns + ` FROM users ORDER BY id`,
+		`SELECT `+userColumns+` FROM users ORDER BY id`,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("query users: %w", err)
@@ -315,7 +325,7 @@ func (r *UserRepository) UpdatePassword(ctx context.Context, userID int64, passw
 // single-user instance (ADR-0010).
 func (r *UserRepository) First(ctx context.Context) (User, error) {
 	return r.scanUser(r.db.QueryRowContext(ctx,
-		`SELECT ` + userColumns + ` FROM users ORDER BY id LIMIT 1`,
+		`SELECT `+userColumns+` FROM users ORDER BY id LIMIT 1`,
 	))
 }
 

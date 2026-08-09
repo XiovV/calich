@@ -3,22 +3,27 @@ package service
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
+	"net/mail"
+	"strings"
+	"time"
 
 	"github.com/XiovV/calendar/server/internal/repository"
 )
 
-// WorkspaceService creates Workspaces and resolves which ones a User belongs
-// to (ADR-0044). Membership/Role management beyond the owning Membership
-// Create always establishes is out of scope here — that's #150's broader
-// WorkspaceService surface.
+// WorkspaceService creates Workspaces, resolves which ones a User belongs to,
+// and issues/reissues Workspace Invites (ADR-0044, #154). Accepting an invite
+// lives on AuthService instead, mirroring the AccountService/AuthService
+// split ADR-0042 already uses for the account-level Invite this replaces.
 type WorkspaceService struct {
 	db         *sql.DB
 	workspaces *repository.WorkspaceRepository
+	invites    *repository.WorkspaceInviteRepository
 }
 
-func NewWorkspaceService(db *sql.DB, workspaces *repository.WorkspaceRepository) *WorkspaceService {
-	return &WorkspaceService{db: db, workspaces: workspaces}
+func NewWorkspaceService(db *sql.DB, workspaces *repository.WorkspaceRepository, invites *repository.WorkspaceInviteRepository) *WorkspaceService {
+	return &WorkspaceService{db: db, workspaces: workspaces, invites: invites}
 }
 
 // CreateForOwner creates a new Workspace named name and, atomically, adds
@@ -72,6 +77,28 @@ func (s *WorkspaceService) WithTx(ctx context.Context, fn func(tx *sql.Tx) error
 	return repository.WithTx(ctx, s.db, fn)
 }
 
+// GetByID returns the Workspace identified by id. A non-existent id surfaces
+// as the unwrapped repository.ErrNotFound, matching ListForUser's other
+// callers that check for it directly (e.g. PreviewWorkspaceInvite).
+func (s *WorkspaceService) GetByID(ctx context.Context, id int64) (repository.Workspace, error) {
+	workspace, err := s.workspaces.GetByID(ctx, id)
+	if err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			return repository.Workspace{}, err
+		}
+		return repository.Workspace{}, fmt.Errorf("get workspace: %w", err)
+	}
+	return workspace, nil
+}
+
+// AddMemberInTx adds userID to workspaceID with role, bound to a transaction
+// the caller already holds open — the seam AuthService's Workspace-invite
+// accept paths use to fold creating (or resolving) the User, adding their
+// Membership, and consuming the invite into one all-or-nothing unit.
+func (s *WorkspaceService) AddMemberInTx(ctx context.Context, tx *sql.Tx, workspaceID, userID int64, role string) error {
+	return s.workspaces.WithTx(tx).AddMember(ctx, workspaceID, userID, role)
+}
+
 // ListForUser returns every Workspace userID belongs to (ADR-0044) — the
 // workspace switcher's data source.
 func (s *WorkspaceService) ListForUser(ctx context.Context, userID int64) ([]repository.Workspace, error) {
@@ -80,4 +107,87 @@ func (s *WorkspaceService) ListForUser(ctx context.Context, userID int64) ([]rep
 		return nil, fmt.Errorf("list workspaces: %w", err)
 	}
 	return workspaces, nil
+}
+
+// requireOwnerOrAdmin refuses actorUserID unless they hold Owner or Admin on
+// workspaceID — issuing and reissuing a Workspace Invite are Admin-and-above
+// operations (ADR-0044). A caller who isn't even a Member gets the same
+// repository.ErrNotFound a wrong-role Owner/Admin check would, mirroring
+// CalendarService.requireOwner's not-found-not-forbidden convention: nothing
+// distinguishes "this workspace doesn't exist" from "you have no authority
+// over it".
+func (s *WorkspaceService) requireOwnerOrAdmin(ctx context.Context, actorUserID, workspaceID int64) error {
+	member, err := s.workspaces.GetMember(ctx, workspaceID, actorUserID)
+	if err != nil {
+		return err
+	}
+	if member.Role != repository.WorkspaceRoleOwner && member.Role != repository.WorkspaceRoleAdmin {
+		return repository.ErrNotFound
+	}
+	return nil
+}
+
+// WorkspaceInviteResult is a WorkspaceInvite alongside the plaintext token
+// (ADR-0044) — mirrors AccountService.InviteResult: the token exists only at
+// issuance, since only its hash is ever stored.
+type WorkspaceInviteResult struct {
+	Invite repository.WorkspaceInvite
+	Token  string
+}
+
+// CreateInvite issues a single-use, 7-day Workspace Invite for email,
+// callable only by workspaceID's Owner or Admin (ADR-0044). Fails with
+// repository.ErrWorkspaceInviteExists if workspaceID already has an
+// outstanding invite for that email — the caller should call ReissueInvite
+// on it instead of creating a competing one, mirroring how
+// AccountService.CreateInvite and ReissueInvite are separate operations for
+// the account-level Invite this replaces.
+func (s *WorkspaceService) CreateInvite(ctx context.Context, actorUserID, workspaceID int64, email string) (WorkspaceInviteResult, error) {
+	if err := s.requireOwnerOrAdmin(ctx, actorUserID, workspaceID); err != nil {
+		return WorkspaceInviteResult{}, err
+	}
+
+	email = strings.TrimSpace(email)
+	if _, err := mail.ParseAddress(email); err != nil {
+		return WorkspaceInviteResult{}, ErrInvalidEmail
+	}
+
+	token, hash, err := newOpaqueToken()
+	if err != nil {
+		return WorkspaceInviteResult{}, fmt.Errorf("generate invite token: %w", err)
+	}
+
+	invite, err := s.invites.Create(ctx, workspaceID, email, hash, time.Now().Add(inviteTokenTTL))
+	if err != nil {
+		return WorkspaceInviteResult{}, err
+	}
+
+	return WorkspaceInviteResult{Invite: invite, Token: token}, nil
+}
+
+// ReissueInvite overwrites inviteID's outstanding Workspace Invite with a
+// fresh token and a reset 7-day expiry (ADR-0044), invalidating whichever
+// token came before it — callable only by the invite's Workspace's Owner or
+// Admin.
+func (s *WorkspaceService) ReissueInvite(ctx context.Context, actorUserID, inviteID int64) (WorkspaceInviteResult, error) {
+	invite, err := s.invites.GetByID(ctx, inviteID)
+	if err != nil {
+		return WorkspaceInviteResult{}, err
+	}
+
+	if err := s.requireOwnerOrAdmin(ctx, actorUserID, invite.WorkspaceID); err != nil {
+		return WorkspaceInviteResult{}, err
+	}
+
+	token, hash, err := newOpaqueToken()
+	if err != nil {
+		return WorkspaceInviteResult{}, fmt.Errorf("generate invite token: %w", err)
+	}
+
+	invite, err = s.invites.SetTokenHash(ctx, inviteID, hash, time.Now().Add(inviteTokenTTL))
+	if err != nil {
+		return WorkspaceInviteResult{}, fmt.Errorf("reissue workspace invite: %w", err)
+	}
+
+	return WorkspaceInviteResult{Invite: invite, Token: token}, nil
 }

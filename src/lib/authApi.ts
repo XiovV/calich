@@ -136,6 +136,56 @@ export const authApi = {
     return body.username;
   },
 
+  // Resolves a Workspace Invite token to the Workspace and email it names,
+  // without consuming it (ADR-0044), and reports whether that email already
+  // has an account — the accept-workspace-invite page uses this to decide
+  // whether to collect a name and password (new account) or ask the invitee
+  // to log in (existing account).
+  async previewWorkspaceInvite(
+    token: string,
+  ): Promise<{ workspaceName: string; email: string; userExists: boolean }> {
+    const response = await fetch(`/api/auth/accept-workspace-invite?token=${encodeURIComponent(token)}`, {
+      credentials: "include",
+    });
+    if (!response.ok) throw await errorFromResponse(response);
+
+    const body = (await response.json()) as { workspace_name: string; email: string; user_exists: boolean };
+    return { workspaceName: body.workspace_name, email: body.email, userExists: body.user_exists };
+  },
+
+  // Accepts a Workspace Invite for an email with no existing account
+  // (ADR-0044): creates the account, adds it as a Member of the inviting
+  // Workspace, and logs the caller straight in — the public,
+  // unauthenticated new-account accept path.
+  async acceptWorkspaceInvite(token: string, name: string, password: string): Promise<LoginResult> {
+    const response = await fetch("/api/auth/accept-workspace-invite", {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token, name, password }),
+    });
+    if (!response.ok) throw await errorFromResponse(response);
+
+    const body = (await response.json()) as { access_token: string; must_change_password: boolean };
+    return { accessToken: body.access_token, mustChangePassword: body.must_change_password };
+  },
+
+  // Accepts a Workspace Invite on behalf of the already-authenticated caller
+  // (ADR-0044): just adds a Membership for the inviting Workspace — no new
+  // account, no password step. The server refuses this unless the caller's
+  // own account email matches the invite's exactly.
+  async joinWorkspaceInvite(accessToken: string, token: string): Promise<{ id: number; name: string }> {
+    const response = await authedFetch(accessToken, "/api/auth/accept-workspace-invite/join", {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token }),
+    });
+    if (!response.ok) throw await errorFromResponse(response);
+
+    return (await response.json()) as { id: number; name: string };
+  },
+
   // Relies on the httpOnly refresh_token cookie the browser sends automatically —
   // there is nothing to pass in.
   async refresh(): Promise<{ accessToken: string }> {

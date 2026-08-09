@@ -30,9 +30,9 @@ func newTestAuthServiceWithSignups(t *testing.T, initialUsername, initialPasswor
 
 	users := repository.NewUserRepository(sqlDB)
 	sessions := repository.NewSessionRepository(sqlDB)
-	workspaces := NewWorkspaceService(sqlDB, repository.NewWorkspaceRepository(sqlDB))
+	workspaces := NewWorkspaceService(sqlDB, repository.NewWorkspaceRepository(sqlDB), repository.NewWorkspaceInviteRepository(sqlDB))
 
-	return NewAuthService(users, sessions, workspaces, []byte("test-secret"), initialUsername, initialPassword, enableSignups)
+	return NewAuthService(users, sessions, workspaces, repository.NewWorkspaceInviteRepository(sqlDB), []byte("test-secret"), initialUsername, initialPassword, enableSignups)
 }
 
 // mustSeedUserRequiringPasswordChange inserts a User directly via the
@@ -444,7 +444,7 @@ func TestAuthenticate_RejectsWrongSigningSecret(t *testing.T) {
 	svc := newTestAuthService(t, "admin", "admin")
 	ctx := context.Background()
 
-	other := NewAuthService(svc.users, svc.sessions, svc.workspaces, []byte("a-different-secret"), "admin", "admin", false)
+	other := NewAuthService(svc.users, svc.sessions, svc.workspaces, svc.workspaceInvites, []byte("a-different-secret"), "admin", "admin", false)
 	if _, _, err := other.Bootstrap(ctx); err != nil {
 		t.Fatalf("bootstrap: %v", err)
 	}

@@ -38,7 +38,7 @@ func newShareTestServer(t *testing.T) shareTestServer {
 
 	users := repository.NewUserRepository(sqlDB)
 	sessions := repository.NewSessionRepository(sqlDB)
-	auth := service.NewAuthService(users, sessions, service.NewWorkspaceService(sqlDB, repository.NewWorkspaceRepository(sqlDB)), []byte("test-secret"), "owner", "hunter2", false)
+	auth := service.NewAuthService(users, sessions, service.NewWorkspaceService(sqlDB, repository.NewWorkspaceRepository(sqlDB), repository.NewWorkspaceInviteRepository(sqlDB)), repository.NewWorkspaceInviteRepository(sqlDB), []byte("test-secret"), "owner", "hunter2", false)
 	ctx := context.Background()
 	if _, _, err := auth.Bootstrap(ctx); err != nil {
 		t.Fatalf("bootstrap: %v", err)

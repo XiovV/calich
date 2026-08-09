@@ -41,6 +41,20 @@ var (
 	// telling them apart would tell an attacker holding a dead token which
 	// kind of dead it is.
 	ErrInviteInvalid = errors.New("invite is invalid or has expired")
+	// ErrWorkspaceInviteInvalid is the ErrInviteInvalid equivalent for a
+	// Workspace Invite (ADR-0044): a token that doesn't match any outstanding
+	// invite, has expired, or has already been consumed, for the same
+	// one-error-for-all-three reason.
+	ErrWorkspaceInviteInvalid = errors.New("invite is invalid or has expired")
+	// ErrWorkspaceInviteEmailMismatch is returned by
+	// AcceptWorkspaceInviteExisting when the authenticated caller's own
+	// account email doesn't match the invite's exactly (ADR-0044) — an
+	// invite for one address must not silently add whoever happens to be
+	// logged in when they click it.
+	ErrWorkspaceInviteEmailMismatch = errors.New("this invite was issued for a different email address")
+	// ErrAlreadyWorkspaceMember mirrors repository.ErrAlreadyMember so
+	// handlers only import the service package's sentinels.
+	ErrAlreadyWorkspaceMember = repository.ErrAlreadyMember
 	// ErrInvalidWeekStart is returned by UpdatePreferences for a Week start
 	// outside the date-fns weekStartsOn range (ADR-0039).
 	ErrInvalidWeekStart = errors.New("week_start must be between 0 and 6")
@@ -85,24 +99,26 @@ var validTimeFormats = map[string]bool{
 const maxWorkingHoursMinute = 1439
 
 type AuthService struct {
-	users           *repository.UserRepository
-	sessions        *repository.SessionRepository
-	workspaces      *WorkspaceService
-	jwtSecret       []byte
-	initialUsername string
-	initialPassword string
-	enableSignups   bool
+	users            *repository.UserRepository
+	sessions         *repository.SessionRepository
+	workspaces       *WorkspaceService
+	workspaceInvites *repository.WorkspaceInviteRepository
+	jwtSecret        []byte
+	initialUsername  string
+	initialPassword  string
+	enableSignups    bool
 }
 
-func NewAuthService(users *repository.UserRepository, sessions *repository.SessionRepository, workspaces *WorkspaceService, jwtSecret []byte, initialUsername, initialPassword string, enableSignups bool) *AuthService {
+func NewAuthService(users *repository.UserRepository, sessions *repository.SessionRepository, workspaces *WorkspaceService, workspaceInvites *repository.WorkspaceInviteRepository, jwtSecret []byte, initialUsername, initialPassword string, enableSignups bool) *AuthService {
 	return &AuthService{
-		users:           users,
-		sessions:        sessions,
-		workspaces:      workspaces,
-		jwtSecret:       jwtSecret,
-		initialUsername: initialUsername,
-		initialPassword: initialPassword,
-		enableSignups:   enableSignups,
+		users:            users,
+		sessions:         sessions,
+		workspaces:       workspaces,
+		workspaceInvites: workspaceInvites,
+		jwtSecret:        jwtSecret,
+		initialUsername:  initialUsername,
+		initialPassword:  initialPassword,
+		enableSignups:    enableSignups,
 	}
 }
 
@@ -395,6 +411,210 @@ func (s *AuthService) PreviewInvite(ctx context.Context, token string) (string, 
 		return "", err
 	}
 	return user.Username, nil
+}
+
+// liveWorkspaceInvite resolves token to the WorkspaceInvite it names, the
+// check every Workspace-invite operation shares: the token must match an
+// outstanding invite and it must not have expired (ADR-0044).
+func (s *AuthService) liveWorkspaceInvite(ctx context.Context, token string) (repository.WorkspaceInvite, error) {
+	invite, err := s.workspaceInvites.GetByTokenHash(ctx, hashToken(token))
+	if errors.Is(err, repository.ErrNotFound) {
+		return repository.WorkspaceInvite{}, ErrWorkspaceInviteInvalid
+	}
+	if err != nil {
+		return repository.WorkspaceInvite{}, fmt.Errorf("get workspace invite by token: %w", err)
+	}
+
+	if time.Now().After(invite.InviteExpiresAt) {
+		return repository.WorkspaceInvite{}, ErrWorkspaceInviteInvalid
+	}
+
+	return invite, nil
+}
+
+// WorkspaceInvitePreview is what the accept-workspace-invite page shows
+// before the invitee does anything (ADR-0044): which Workspace they're
+// joining, the email the invite names, and whether that email already
+// belongs to an account — deciding whether the page should collect a name
+// and password (new account) or just ask the invitee to log in (existing
+// account).
+type WorkspaceInvitePreview struct {
+	WorkspaceName string
+	Email         string
+	UserExists    bool
+}
+
+// PreviewWorkspaceInvite resolves a live Workspace Invite token without
+// consuming it (ADR-0044), mirroring PreviewInvite for the account-level
+// Invite this replaces.
+func (s *AuthService) PreviewWorkspaceInvite(ctx context.Context, token string) (WorkspaceInvitePreview, error) {
+	invite, err := s.liveWorkspaceInvite(ctx, token)
+	if err != nil {
+		return WorkspaceInvitePreview{}, err
+	}
+
+	workspace, err := s.workspaces.GetByID(ctx, invite.WorkspaceID)
+	if err != nil {
+		return WorkspaceInvitePreview{}, fmt.Errorf("get workspace: %w", err)
+	}
+
+	_, err = s.users.GetByEmail(ctx, invite.Email)
+	if err != nil && !errors.Is(err, repository.ErrNotFound) {
+		return WorkspaceInvitePreview{}, fmt.Errorf("check existing user: %w", err)
+	}
+
+	return WorkspaceInvitePreview{
+		WorkspaceName: workspace.Name,
+		Email:         invite.Email,
+		UserExists:    err == nil,
+	}, nil
+}
+
+// liveWorkspaceInviteTx re-resolves invite.ID inside a transaction and
+// confirms it's still the same live invite token names — the re-check both
+// accept paths need after opening their transaction, since liveWorkspaceInvite
+// only proved the invite was live at the time it was first read, not at the
+// moment the transaction actually commits.
+func liveWorkspaceInviteTx(ctx context.Context, txInvites *repository.WorkspaceInviteRepository, invite repository.WorkspaceInvite, token string) (repository.WorkspaceInvite, error) {
+	liveInvite, err := txInvites.GetByID(ctx, invite.ID)
+	if errors.Is(err, repository.ErrNotFound) {
+		return repository.WorkspaceInvite{}, ErrWorkspaceInviteInvalid
+	}
+	if err != nil {
+		return repository.WorkspaceInvite{}, fmt.Errorf("get workspace invite: %w", err)
+	}
+	if liveInvite.InviteTokenHash != hashToken(token) || time.Now().After(liveInvite.InviteExpiresAt) {
+		return repository.WorkspaceInvite{}, ErrWorkspaceInviteInvalid
+	}
+	return liveInvite, nil
+}
+
+// AcceptWorkspaceInviteNewAccount accepts a live Workspace Invite whose email
+// belongs to nobody yet (ADR-0044): it creates a User (name, the invite's
+// email, password), adds them as a Member of the inviting Workspace, and
+// consumes the invite — all in one transaction — then logs them straight in,
+// matching AcceptInvite's shape for the account-level Invite this replaces.
+// Fails with ErrWorkspaceInviteInvalid if, by the time the transaction runs,
+// a User has already claimed the invite's email — the same kind of race
+// Register's first-account count check closes.
+func (s *AuthService) AcceptWorkspaceInviteNewAccount(ctx context.Context, token, name, password string) (LoginResult, error) {
+	name, err := validateUsername(name)
+	if err != nil {
+		return LoginResult{}, err
+	}
+	if password == "" {
+		return LoginResult{}, ErrInvalidPassword
+	}
+
+	invite, err := s.liveWorkspaceInvite(ctx, token)
+	if err != nil {
+		return LoginResult{}, err
+	}
+
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	if err != nil {
+		return LoginResult{}, fmt.Errorf("hash password: %w", err)
+	}
+
+	var newUser repository.User
+	err = s.workspaces.WithTx(ctx, func(tx *sql.Tx) error {
+		txUsers := s.users.WithTx(tx)
+		txInvites := s.workspaceInvites.WithTx(tx)
+
+		liveInvite, err := liveWorkspaceInviteTx(ctx, txInvites, invite, token)
+		if err != nil {
+			return err
+		}
+
+		if _, err := txUsers.GetByEmail(ctx, liveInvite.Email); err == nil {
+			return ErrWorkspaceInviteInvalid
+		} else if !errors.Is(err, repository.ErrNotFound) {
+			return fmt.Errorf("check existing user: %w", err)
+		}
+
+		newUser, err = txUsers.Create(ctx, name, string(hash), false)
+		if err != nil {
+			if errors.Is(err, repository.ErrUsernameTaken) {
+				return ErrUsernameTaken
+			}
+			return fmt.Errorf("create user: %w", err)
+		}
+
+		if _, err := txUsers.UpdateEmail(ctx, newUser.ID, liveInvite.Email); err != nil {
+			return fmt.Errorf("set email: %w", err)
+		}
+
+		if err := s.workspaces.AddMemberInTx(ctx, tx, liveInvite.WorkspaceID, newUser.ID, repository.WorkspaceRoleMember); err != nil {
+			return fmt.Errorf("add workspace member: %w", err)
+		}
+
+		if err := txInvites.Delete(ctx, liveInvite.ID); err != nil {
+			return fmt.Errorf("consume workspace invite: %w", err)
+		}
+
+		return nil
+	})
+	if err != nil {
+		return LoginResult{}, err
+	}
+
+	tokens, err := s.issueSession(ctx, newUser.ID)
+	if err != nil {
+		return LoginResult{}, err
+	}
+
+	return LoginResult{sessionTokens: tokens, MustChangePassword: false}, nil
+}
+
+// AcceptWorkspaceInviteExisting accepts a live Workspace Invite on behalf of
+// the already-authenticated userID (ADR-0044): it adds a WorkspaceMember row
+// for the inviting Workspace and consumes the invite — no new User row, no
+// password step, and every other Workspace userID already belongs to is left
+// untouched. Refused with ErrWorkspaceInviteEmailMismatch unless userID's own
+// account email matches the invite's exactly, so accepting an invite meant
+// for someone else's address isn't possible just by being logged in as
+// anybody, and with ErrAlreadyWorkspaceMember if userID already belongs to
+// the Workspace.
+func (s *AuthService) AcceptWorkspaceInviteExisting(ctx context.Context, userID int64, token string) (repository.Workspace, error) {
+	invite, err := s.liveWorkspaceInvite(ctx, token)
+	if err != nil {
+		return repository.Workspace{}, err
+	}
+
+	user, err := s.users.GetByID(ctx, userID)
+	if err != nil {
+		return repository.Workspace{}, fmt.Errorf("get user: %w", err)
+	}
+	if user.Email == nil || *user.Email != invite.Email {
+		return repository.Workspace{}, ErrWorkspaceInviteEmailMismatch
+	}
+
+	err = s.workspaces.WithTx(ctx, func(tx *sql.Tx) error {
+		txInvites := s.workspaceInvites.WithTx(tx)
+
+		liveInvite, err := liveWorkspaceInviteTx(ctx, txInvites, invite, token)
+		if err != nil {
+			return err
+		}
+
+		if err := s.workspaces.AddMemberInTx(ctx, tx, liveInvite.WorkspaceID, userID, repository.WorkspaceRoleMember); err != nil {
+			if errors.Is(err, repository.ErrAlreadyMember) {
+				return ErrAlreadyWorkspaceMember
+			}
+			return fmt.Errorf("add workspace member: %w", err)
+		}
+
+		if err := txInvites.Delete(ctx, liveInvite.ID); err != nil {
+			return fmt.Errorf("consume workspace invite: %w", err)
+		}
+
+		return nil
+	})
+	if err != nil {
+		return repository.Workspace{}, err
+	}
+
+	return s.workspaces.GetByID(ctx, invite.WorkspaceID)
 }
 
 // Authenticate validates an access token and returns the user id it was

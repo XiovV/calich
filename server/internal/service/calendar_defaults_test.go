@@ -117,8 +117,8 @@ func TestBootstrapCreatedFlag_GatesSeedingSoDeletedCalendarsStayDeleted(t *testi
 	t.Cleanup(func() { sqlDB.Close() })
 
 	users := repository.NewUserRepository(sqlDB)
-	workspaces := NewWorkspaceService(sqlDB, repository.NewWorkspaceRepository(sqlDB))
-	authSvc := NewAuthService(users, repository.NewSessionRepository(sqlDB), workspaces, []byte("test-secret"), "admin", "admin", false)
+	workspaces := NewWorkspaceService(sqlDB, repository.NewWorkspaceRepository(sqlDB), repository.NewWorkspaceInviteRepository(sqlDB))
+	authSvc := NewAuthService(users, repository.NewSessionRepository(sqlDB), workspaces, repository.NewWorkspaceInviteRepository(sqlDB), []byte("test-secret"), "admin", "admin", false)
 	calendarSvc := NewCalendarService(repository.NewCalendarRepository(sqlDB), repository.NewCalendarShareRepository(sqlDB), users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB))
 	ctx := context.Background()
 

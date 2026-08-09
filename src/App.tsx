@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import { BrowserRouter, Navigate, Route, Routes } from "react-router";
 import { AppShell } from "./components/layout/AppShell";
 import { AcceptInvitePage } from "./auth/AcceptInvitePage";
+import { AcceptWorkspaceInvitePage } from "./auth/AcceptWorkspaceInvitePage";
 import { LoginPage } from "./auth/LoginPage";
 import { RegisterPage } from "./auth/RegisterPage";
 import { ProtectedRoute } from "./auth/ProtectedRoute";
@@ -25,6 +26,7 @@ function App() {
         <Route path="/login" element={<LoginPage />} />
         <Route path="/register" element={<RegisterPage />} />
         <Route path="/accept-invite" element={<AcceptInvitePage />} />
+        <Route path="/accept-workspace-invite" element={<AcceptWorkspaceInvitePage />} />
         <Route
           path="/"
           element={

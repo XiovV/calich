@@ -30,8 +30,8 @@ func newTestRouter(t *testing.T) http.Handler {
 	users := repository.NewUserRepository(sqlDB)
 	sessions := repository.NewSessionRepository(sqlDB)
 	workspaceRepo := repository.NewWorkspaceRepository(sqlDB)
-	workspaceService := service.NewWorkspaceService(sqlDB, workspaceRepo)
-	authService := service.NewAuthService(users, sessions, workspaceService, []byte("test-secret"), "admin", "admin", false)
+	workspaceService := service.NewWorkspaceService(sqlDB, workspaceRepo, repository.NewWorkspaceInviteRepository(sqlDB))
+	authService := service.NewAuthService(users, sessions, workspaceService, repository.NewWorkspaceInviteRepository(sqlDB), []byte("test-secret"), "admin", "admin", false)
 	if _, _, err := authService.Bootstrap(context.Background()); err != nil {
 		t.Fatalf("bootstrap: %v", err)
 	}

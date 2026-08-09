@@ -38,6 +38,14 @@ func New(logger *slog.Logger, authHandler *handlers.AuthHandler, calendarHandler
 			r.Post("/accept-invite", authHandler.AcceptInvite)
 			r.Get("/accept-invite", authHandler.PreviewInvite)
 
+			// Workspace Invite accept (ADR-0044, #154): the preview and the
+			// new-account path are public like accept-invite above; the
+			// existing-account path instead requires the caller already be
+			// logged in as the User whose email the invite names.
+			r.Get("/accept-workspace-invite", authHandler.PreviewWorkspaceInvite)
+			r.Post("/accept-workspace-invite", authHandler.AcceptWorkspaceInvite)
+			r.With(httpauth.RequireAuth(authenticator)).Post("/accept-workspace-invite/join", authHandler.JoinWorkspaceInvite)
+
 			r.With(httpauth.RequireAuth(authenticator)).Post("/change-password", authHandler.ChangePassword)
 
 			r.Group(func(r chi.Router) {
@@ -141,6 +149,11 @@ func New(logger *slog.Logger, authHandler *handlers.AuthHandler, calendarHandler
 			r.Use(httpauth.RequireActiveUser(activeUserChecker))
 
 			r.Get("/", workspaceHandler.List)
+			// Invite issuance (ADR-0044, #154): WorkspaceService itself
+			// refuses a caller who isn't the target Workspace's Owner or
+			// Admin, so no extra middleware gate is needed here.
+			r.Post("/{id}/invites", workspaceHandler.CreateInvite)
+			r.Post("/invites/{id}/reissue", workspaceHandler.ReissueInvite)
 		})
 
 		// Account administration (ADR-0037): who exists, never what they can

@@ -18,7 +18,7 @@ func newTestWorkspaceService(t *testing.T) (*WorkspaceService, *repository.UserR
 	t.Cleanup(func() { sqlDB.Close() })
 
 	users := repository.NewUserRepository(sqlDB)
-	return NewWorkspaceService(sqlDB, repository.NewWorkspaceRepository(sqlDB)), users
+	return NewWorkspaceService(sqlDB, repository.NewWorkspaceRepository(sqlDB), repository.NewWorkspaceInviteRepository(sqlDB)), users
 }
 
 func TestWorkspaceService_CreateForOwner_AddsOwnerMembership(t *testing.T) {

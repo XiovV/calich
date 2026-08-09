@@ -18,6 +18,8 @@ interface AuthState {
   login: (username: string, password: string) => Promise<void>;
   register: (name: string, email: string, password: string) => Promise<void>;
   acceptInvite: (token: string, password: string) => Promise<void>;
+  acceptWorkspaceInvite: (token: string, name: string, password: string) => Promise<void>;
+  joinWorkspaceInvite: (token: string) => Promise<{ id: number; name: string }>;
   logout: () => Promise<void>;
   changePassword: (currentPassword: string, newPassword: string) => Promise<void>;
   updateEmail: (email: string) => Promise<void>;
@@ -114,6 +116,26 @@ export const useAuthStore = create<AuthState>((set, get) => {
       const user = await authApi.me(accessToken);
       set(authenticated(user, accessToken));
       useShellStore.getState().setActiveView(user.defaultView);
+    },
+
+    // A new-account Workspace Invite accept lands in the app already logged
+    // in (ADR-0044), same as acceptInvite for the account-level Invite this
+    // replaces.
+    acceptWorkspaceInvite: async (token, name, password) => {
+      const { accessToken } = await authApi.acceptWorkspaceInvite(token, name, password);
+      const user = await authApi.me(accessToken);
+      set(authenticated(user, accessToken));
+      useShellStore.getState().setActiveView(user.defaultView);
+    },
+
+    // Joining a second Workspace via an existing-account invite leaves the
+    // caller's session untouched (ADR-0044) — no new tokens, no re-fetch of
+    // `user`, just the Membership row on the server.
+    joinWorkspaceInvite: async (token) => {
+      const { accessToken } = get();
+      if (!accessToken) throw new Error("Not authenticated.");
+
+      return authApi.joinWorkspaceInvite(accessToken, token);
     },
 
     logout: async () => {

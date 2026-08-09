@@ -3,7 +3,9 @@ package repository
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -110,6 +112,10 @@ func (r *WorkspaceRepository) ListForUser(ctx context.Context, userID int64) ([]
 	return workspaces, nil
 }
 
+// ErrAlreadyMember is returned by AddMember when userID already belongs to
+// workspaceID — the workspace_members primary key is (workspace_id, user_id).
+var ErrAlreadyMember = errors.New("user is already a member of this workspace")
+
 // AddMember inserts a WorkspaceMember row binding userID to workspaceID with
 // role (ADR-0044).
 func (r *WorkspaceRepository) AddMember(ctx context.Context, workspaceID, userID int64, role string) error {
@@ -117,9 +123,30 @@ func (r *WorkspaceRepository) AddMember(ctx context.Context, workspaceID, userID
 		`INSERT INTO workspace_members (workspace_id, user_id, role) VALUES (?, ?, ?)`,
 		workspaceID, userID, role,
 	); err != nil {
+		if strings.Contains(err.Error(), "UNIQUE constraint failed") {
+			return ErrAlreadyMember
+		}
 		return fmt.Errorf("insert workspace member: %w", err)
 	}
 	return nil
+}
+
+// GetMember returns userID's WorkspaceMember row in workspaceID, or
+// ErrNotFound if they don't belong to it — the Role check every Workspace
+// invite-issuance operation resolves against (ADR-0044).
+func (r *WorkspaceRepository) GetMember(ctx context.Context, workspaceID, userID int64) (WorkspaceMember, error) {
+	var m WorkspaceMember
+	err := r.db.QueryRowContext(ctx,
+		`SELECT workspace_id, user_id, role, created_at FROM workspace_members WHERE workspace_id = ? AND user_id = ?`,
+		workspaceID, userID,
+	).Scan(&m.WorkspaceID, &m.UserID, &m.Role, &m.CreatedAt)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return WorkspaceMember{}, ErrNotFound
+		}
+		return WorkspaceMember{}, fmt.Errorf("get workspace member: %w", err)
+	}
+	return m, nil
 }
 
 func (r *WorkspaceRepository) scanWorkspace(row *sql.Row) (Workspace, error) {

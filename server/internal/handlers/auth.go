@@ -59,6 +59,23 @@ var previewInviteErrors = []errorCase{
 	{service.ErrInviteInvalid, unauthorized("invite_invalid", "invite is invalid or has expired")},
 }
 
+var previewWorkspaceInviteErrors = []errorCase{
+	{service.ErrWorkspaceInviteInvalid, unauthorized("invite_invalid", "invite is invalid or has expired")},
+}
+
+var acceptWorkspaceInviteErrors = []errorCase{
+	{service.ErrWorkspaceInviteInvalid, unauthorized("invite_invalid", "invite is invalid or has expired")},
+	{service.ErrInvalidUsername, badRequest("name must not be empty, must not contain whitespace or a colon, and must be at most 64 characters")},
+	{service.ErrUsernameTaken, conflict("username_taken", "username is already taken")},
+	{service.ErrInvalidPassword, badRequest("password must not be empty")},
+}
+
+var joinWorkspaceInviteErrors = []errorCase{
+	{service.ErrWorkspaceInviteInvalid, unauthorized("invite_invalid", "invite is invalid or has expired")},
+	{service.ErrWorkspaceInviteEmailMismatch, conflict("invite_email_mismatch", service.ErrWorkspaceInviteEmailMismatch.Error())},
+	{service.ErrAlreadyWorkspaceMember, conflict("already_member", service.ErrAlreadyWorkspaceMember.Error())},
+}
+
 var updateEmailErrors = []errorCase{
 	{service.ErrInvalidEmail, badRequest("email is not a valid address")},
 }
@@ -185,6 +202,93 @@ func (h *AuthHandler) AcceptInvite(w http.ResponseWriter, r *http.Request) {
 		AccessToken:        result.AccessToken,
 		MustChangePassword: result.MustChangePassword,
 	})
+}
+
+type previewWorkspaceInviteResponse struct {
+	WorkspaceName string `json:"workspace_name"`
+	Email         string `json:"email"`
+	// UserExists tells the accept-workspace-invite page whether to collect a
+	// name and password (false: the invited email has no account yet) or
+	// just prompt the invitee to log in (true) before accepting (ADR-0044).
+	UserExists bool `json:"user_exists"`
+}
+
+// PreviewWorkspaceInvite is the public, unauthenticated lookup the
+// accept-workspace-invite page calls before the invitee does anything
+// (ADR-0044): it resolves a token to the Workspace and email it names,
+// without consuming it, and reports whether that email already has an
+// account — the page uses this to decide which form to show.
+func (h *AuthHandler) PreviewWorkspaceInvite(w http.ResponseWriter, r *http.Request) {
+	preview, err := h.auth.PreviewWorkspaceInvite(r.Context(), r.URL.Query().Get("token"))
+	if respondError(w, err, previewWorkspaceInviteErrors, "failed to preview invite") {
+		return
+	}
+
+	httpresponse.JSON(w, http.StatusOK, previewWorkspaceInviteResponse{
+		WorkspaceName: preview.WorkspaceName,
+		Email:         preview.Email,
+		UserExists:    preview.UserExists,
+	})
+}
+
+type acceptWorkspaceInviteRequest struct {
+	Token    string `json:"token"`
+	Name     string `json:"name"`
+	Password string `json:"password"`
+}
+
+// AcceptWorkspaceInvite is the public, unauthenticated new-account accept
+// path (ADR-0044): a live token naming an email with no existing User,
+// alongside a name and password, atomically creates the User, adds them as a
+// Member of the inviting Workspace, and logs them straight in — mirroring
+// AcceptInvite's shape for the account-level Invite this replaces.
+func (h *AuthHandler) AcceptWorkspaceInvite(w http.ResponseWriter, r *http.Request) {
+	var req acceptWorkspaceInviteRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httpresponse.Error(w, http.StatusBadRequest, "invalid_request", "request body must be valid JSON")
+		return
+	}
+
+	result, err := h.auth.AcceptWorkspaceInviteNewAccount(r.Context(), req.Token, req.Name, req.Password)
+	if respondError(w, err, acceptWorkspaceInviteErrors, "failed to accept invite") {
+		return
+	}
+
+	setRefreshCookie(w, result.RefreshToken, result.RefreshTokenExpiresAt)
+
+	httpresponse.JSON(w, http.StatusOK, loginResponse{
+		AccessToken:        result.AccessToken,
+		MustChangePassword: result.MustChangePassword,
+	})
+}
+
+type joinWorkspaceInviteRequest struct {
+	Token string `json:"token"`
+}
+
+// JoinWorkspaceInvite is the authenticated existing-account accept path
+// (ADR-0044): the caller must already be logged in as the User whose account
+// email matches the invite's, and accepting just adds a WorkspaceMember row
+// for the inviting Workspace — no new account, no password step.
+func (h *AuthHandler) JoinWorkspaceInvite(w http.ResponseWriter, r *http.Request) {
+	userID, ok := httpauth.UserIDFromContext(r.Context())
+	if !ok {
+		httpresponse.Error(w, http.StatusUnauthorized, "unauthorized", "authentication required")
+		return
+	}
+
+	var req joinWorkspaceInviteRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httpresponse.Error(w, http.StatusBadRequest, "invalid_request", "request body must be valid JSON")
+		return
+	}
+
+	workspace, err := h.auth.AcceptWorkspaceInviteExisting(r.Context(), userID, req.Token)
+	if respondError(w, err, joinWorkspaceInviteErrors, "failed to accept invite") {
+		return
+	}
+
+	httpresponse.JSON(w, http.StatusOK, toWorkspaceResponse(workspace))
 }
 
 type meResponse struct {
