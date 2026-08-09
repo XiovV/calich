@@ -443,6 +443,9 @@ func TestPropPatch_NonOwnerColorOverride_SucceedsOnSubscribedCalendar(t *testing
 	if err != nil {
 		t.Fatalf("create viewer: %v", err)
 	}
+	if err := env.workspaces.AddMember(t.Context(), env.workspaceID, viewer.ID, repository.WorkspaceRoleMember); err != nil {
+		t.Fatalf("add viewer as workspace member: %v", err)
+	}
 	if _, err := env.calendarService.Share(t.Context(), env.userID, subCalendar.ID, "viewer", repository.RoleViewer); err != nil {
 		t.Fatalf("share subscribed calendar: %v", err)
 	}

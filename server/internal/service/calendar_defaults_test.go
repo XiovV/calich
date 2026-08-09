@@ -32,7 +32,7 @@ func newTestCalendarServiceForUser(t *testing.T) (svc *CalendarService, userID, 
 		t.Fatalf("add workspace member: %v", err)
 	}
 
-	return NewCalendarService(repository.NewCalendarRepository(sqlDB), repository.NewCalendarShareRepository(sqlDB), users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo), user.ID, workspace.ID
+	return NewCalendarService(repository.NewCalendarRepository(sqlDB), repository.NewCalendarShareRepository(sqlDB), users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo, repository.NewCalendarGroupShareRepository(sqlDB), repository.NewGroupRepository(sqlDB)), user.ID, workspace.ID
 }
 
 func TestEnsureDefaultCalendars_SeedsPersonalWorkFamily(t *testing.T) {
@@ -128,7 +128,7 @@ func TestBootstrapCreatedFlag_GatesSeedingSoDeletedCalendarsStayDeleted(t *testi
 	users := repository.NewUserRepository(sqlDB)
 	workspaces := NewWorkspaceService(sqlDB, repository.NewWorkspaceRepository(sqlDB), repository.NewWorkspaceInviteRepository(sqlDB))
 	authSvc := NewAuthService(users, repository.NewSessionRepository(sqlDB), workspaces, repository.NewWorkspaceInviteRepository(sqlDB), []byte("test-secret"), "admin", "admin", false)
-	calendarSvc := NewCalendarService(repository.NewCalendarRepository(sqlDB), repository.NewCalendarShareRepository(sqlDB), users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), repository.NewWorkspaceRepository(sqlDB))
+	calendarSvc := NewCalendarService(repository.NewCalendarRepository(sqlDB), repository.NewCalendarShareRepository(sqlDB), users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), repository.NewWorkspaceRepository(sqlDB), repository.NewCalendarGroupShareRepository(sqlDB), repository.NewGroupRepository(sqlDB))
 	ctx := context.Background()
 
 	user, created, err := authSvc.Bootstrap(ctx)

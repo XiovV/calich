@@ -23,12 +23,13 @@ func NewWorkspaceHandler(workspaces *service.WorkspaceService) *WorkspaceHandler
 }
 
 type workspaceResponse struct {
-	ID   int64  `json:"id"`
-	Name string `json:"name"`
+	ID                  int64  `json:"id"`
+	Name                string `json:"name"`
+	DefaultSharePrivacy string `json:"defaultSharePrivacy"`
 }
 
 func toWorkspaceResponse(w repository.Workspace) workspaceResponse {
-	return workspaceResponse{ID: w.ID, Name: w.Name}
+	return workspaceResponse{ID: w.ID, Name: w.Name, DefaultSharePrivacy: w.DefaultSharePrivacy}
 }
 
 // List returns every Workspace the caller belongs to (ADR-0044) — the

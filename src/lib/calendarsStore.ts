@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import { useAuthStore } from "./authStore";
-import { calendarsApi, type Role, type Share } from "./calendarsApi";
+import { calendarsApi, type GroupShare, type Role, type Share } from "./calendarsApi";
 import { useEventsStore } from "./eventsStore";
 import { getCalendarById, type Calendar } from "./calendar";
 import { toast } from "./toast";
@@ -70,6 +70,13 @@ interface CalendarsState {
   // counterpart to leaveCalendar. Re-fetches Calendars afterward for the
   // same shareCount-freshness reason as shareCalendar. Rethrows on failure.
   revokeCalendarShare: (id: string, userId: number) => Promise<void>;
+  // shareCalendarWithGroup grants a new Group Share (#159, ADR-0045) —
+  // shareCalendar's Group-targeted sibling, same shareCount-refresh and
+  // rethrow-on-failure contract.
+  shareCalendarWithGroup: (id: string, groupId: number, role: Role) => Promise<GroupShare>;
+  // revokeCalendarGroupShare removes a Group Share (#159, ADR-0045) —
+  // revokeCalendarShare's Group-targeted sibling.
+  revokeCalendarGroupShare: (id: string, groupId: number) => Promise<void>;
 }
 
 function requireAccessToken(): string {
@@ -252,6 +259,17 @@ export const useCalendarsStore = create<CalendarsState>((set, get) => ({
 
   revokeCalendarShare: async (id, userId) => {
     await calendarsApi.revokeShare(requireAccessToken(), id, userId);
+    await get().fetchCalendars();
+  },
+
+  shareCalendarWithGroup: async (id, groupId, role) => {
+    const share = await calendarsApi.shareWithGroup(requireAccessToken(), id, groupId, role);
+    await get().fetchCalendars();
+    return share;
+  },
+
+  revokeCalendarGroupShare: async (id, groupId) => {
+    await calendarsApi.revokeGroupShare(requireAccessToken(), id, groupId);
     await get().fetchCalendars();
   },
 }));

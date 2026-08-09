@@ -40,6 +40,7 @@ type testCalDAVEnv struct {
 	calendarService    *service.CalendarService
 	attachmentService  *service.AttachmentService
 	users              *repository.UserRepository
+	workspaces         *repository.WorkspaceRepository
 }
 
 func newTestCalDAVEnv(t *testing.T) testCalDAVEnv {
@@ -70,7 +71,7 @@ func newTestCalDAVEnv(t *testing.T) testCalDAVEnv {
 	}
 	workspaceID := userWorkspaces[0].ID
 
-	calendarService := service.NewCalendarService(repository.NewCalendarRepository(sqlDB), repository.NewCalendarShareRepository(sqlDB), users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo)
+	calendarService := service.NewCalendarService(repository.NewCalendarRepository(sqlDB), repository.NewCalendarShareRepository(sqlDB), users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo, repository.NewCalendarGroupShareRepository(sqlDB), repository.NewGroupRepository(sqlDB))
 	const calendarID = "cal-1"
 	if _, err := calendarService.Create(context.Background(), user.ID, workspaceID, calendarID, service.CalendarWrite{Name: "Personal", Color: "#12809CFF"}); err != nil {
 		t.Fatalf("create calendar: %v", err)
@@ -111,6 +112,7 @@ func newTestCalDAVEnv(t *testing.T) testCalDAVEnv {
 		calendarService:    calendarService,
 		attachmentService:  attachmentService,
 		users:              users,
+		workspaces:         workspaceRepo,
 	}
 }
 
@@ -124,6 +126,11 @@ func (env testCalDAVEnv) addSharedUser(t *testing.T, username, role string) (use
 	other, err := env.users.Create(context.Background(), username, "hash", false)
 	if err != nil {
 		t.Fatalf("create user %q: %v", username, err)
+	}
+	// A Share can only reach someone already inside the Calendar's own
+	// Workspace (#159, ADR-0045).
+	if err := env.workspaces.AddMember(context.Background(), env.workspaceID, other.ID, repository.WorkspaceRoleMember); err != nil {
+		t.Fatalf("add %q as workspace member: %v", username, err)
 	}
 
 	if _, err := env.calendarService.Share(context.Background(), env.userID, env.calendarID, username, role); err != nil {

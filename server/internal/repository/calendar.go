@@ -198,21 +198,48 @@ type CalendarWithRole struct {
 	Role string
 }
 
-// ListSharedWithUser returns every Calendar a Share grants userID Access to
-// — the other half of "which Calendars can this User see" alongside
-// ListByUser's owned Calendars (ADR-0034). Ordered by when each Calendar
-// was created, matching ListByUser, so CalendarService.ListAccessible can
-// merge the two without re-sorting by anything Share-specific.
+// sharedWithUserGrantsCTE unions calendar_shares' direct per-User grants
+// with calendar_group_shares' Group grants resolved off userID's *current*
+// group_members rows (ADR-0045) — never a snapshot taken at share time, so a
+// Group membership change changes what this returns on the next call with
+// no other write involved. Each Calendar appears at most once, carrying the
+// most permissive Role among every grant that reaches it (editor beats
+// viewer) — ResolveAccess's "max(direct share role, any group share role)"
+// (ADR-0045), computed here in SQL rather than in Go so ListSharedWithUser
+// and ListSharedWithUserAndWorkspace can both build on the same join.
+const sharedWithUserGrantsCTE = `
+	WITH grants AS (
+		SELECT calendar_id, CASE role WHEN 'editor' THEN 2 ELSE 1 END AS role_rank
+		FROM calendar_shares
+		WHERE user_id = ?
+		UNION ALL
+		SELECT cgs.calendar_id, CASE cgs.role WHEN 'editor' THEN 2 ELSE 1 END AS role_rank
+		FROM calendar_group_shares cgs
+		JOIN group_members gm ON gm.group_id = cgs.group_id
+		WHERE gm.user_id = ?
+	)
+`
+
+// ListSharedWithUser returns every Calendar a direct or Group Share grants
+// userID Access to — the other half of "which Calendars can this User see"
+// alongside ListByUser's owned Calendars (ADR-0034, ADR-0045). Ordered by
+// when each Calendar was created, matching ListByUser, so
+// CalendarService.ListAccessible can merge the two without re-sorting by
+// anything Share-specific. A Calendar userID owns is excluded even if some
+// Group they belong to also holds a Share on it, since ListAccessible
+// already lists it once via ListByUser with unclamped ownership.
 func (r *CalendarRepository) ListSharedWithUser(ctx context.Context, userID int64) ([]CalendarWithRole, error) {
 	rows, err := r.db.QueryContext(ctx,
-		`SELECT c.id, c.user_id, c.workspace_id, c.name, c.color, c.source_url, c.created_at, c.last_synced_at, c.etag, c.last_modified, c.content_hash,
-		        c.next_refresh_at, c.refresh_interval_seconds, c.failure_count, c.error_class, c.error_message, c.keep_alarms, c.feed_name, c.feed_color,
-		        s.role
-		 FROM calendars c
-		 JOIN calendar_shares s ON s.calendar_id = c.id
-		 WHERE s.user_id = ?
-		 ORDER BY c.created_at, c.id`,
-		userID,
+		sharedWithUserGrantsCTE+
+			`SELECT c.id, c.user_id, c.workspace_id, c.name, c.color, c.source_url, c.created_at, c.last_synced_at, c.etag, c.last_modified, c.content_hash,
+			        c.next_refresh_at, c.refresh_interval_seconds, c.failure_count, c.error_class, c.error_message, c.keep_alarms, c.feed_name, c.feed_color,
+			        MAX(g.role_rank)
+			 FROM calendars c
+			 JOIN grants g ON g.calendar_id = c.id
+			 WHERE c.user_id != ?
+			 GROUP BY c.id
+			 ORDER BY c.created_at, c.id`,
+		userID, userID, userID,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("list shared calendars: %w", err)
@@ -221,11 +248,9 @@ func (r *CalendarRepository) ListSharedWithUser(ctx context.Context, userID int6
 
 	calendars := []CalendarWithRole{}
 	for rows.Next() {
-		var c CalendarWithRole
-		if err := rows.Scan(&c.ID, &c.UserID, &c.WorkspaceID, &c.Name, &c.Color, &c.SourceURL, &c.CreatedAt, &c.LastSyncedAt, &c.ETag, &c.LastModified, &c.ContentHash,
-			&c.NextRefreshAt, &c.RefreshIntervalSeconds, &c.FailureCount, &c.ErrorClass, &c.ErrorMessage, &c.KeepAlarms, &c.FeedName, &c.FeedColor,
-			&c.Role); err != nil {
-			return nil, fmt.Errorf("scan shared calendar: %w", err)
+		c, err := scanSharedCalendarRow(rows)
+		if err != nil {
+			return nil, err
 		}
 		calendars = append(calendars, c)
 	}
@@ -235,19 +260,21 @@ func (r *CalendarRepository) ListSharedWithUser(ctx context.Context, userID int6
 	return calendars, nil
 }
 
-// ListSharedWithUserAndWorkspace returns every Calendar a Share grants
-// userID Access to, scoped to workspaceID — the workspace-scoped sibling of
-// ListSharedWithUser (#155, ADR-0045).
+// ListSharedWithUserAndWorkspace returns every Calendar a direct or Group
+// Share grants userID Access to, scoped to workspaceID — the
+// workspace-scoped sibling of ListSharedWithUser (#155, ADR-0045).
 func (r *CalendarRepository) ListSharedWithUserAndWorkspace(ctx context.Context, userID, workspaceID int64) ([]CalendarWithRole, error) {
 	rows, err := r.db.QueryContext(ctx,
-		`SELECT c.id, c.user_id, c.workspace_id, c.name, c.color, c.source_url, c.created_at, c.last_synced_at, c.etag, c.last_modified, c.content_hash,
-		        c.next_refresh_at, c.refresh_interval_seconds, c.failure_count, c.error_class, c.error_message, c.keep_alarms, c.feed_name, c.feed_color,
-		        s.role
-		 FROM calendars c
-		 JOIN calendar_shares s ON s.calendar_id = c.id
-		 WHERE s.user_id = ? AND c.workspace_id = ?
-		 ORDER BY c.created_at, c.id`,
-		userID, workspaceID,
+		sharedWithUserGrantsCTE+
+			`SELECT c.id, c.user_id, c.workspace_id, c.name, c.color, c.source_url, c.created_at, c.last_synced_at, c.etag, c.last_modified, c.content_hash,
+			        c.next_refresh_at, c.refresh_interval_seconds, c.failure_count, c.error_class, c.error_message, c.keep_alarms, c.feed_name, c.feed_color,
+			        MAX(g.role_rank)
+			 FROM calendars c
+			 JOIN grants g ON g.calendar_id = c.id
+			 WHERE c.user_id != ? AND c.workspace_id = ?
+			 GROUP BY c.id
+			 ORDER BY c.created_at, c.id`,
+		userID, userID, userID, workspaceID,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("list shared calendars: %w", err)
@@ -256,11 +283,9 @@ func (r *CalendarRepository) ListSharedWithUserAndWorkspace(ctx context.Context,
 
 	calendars := []CalendarWithRole{}
 	for rows.Next() {
-		var c CalendarWithRole
-		if err := rows.Scan(&c.ID, &c.UserID, &c.WorkspaceID, &c.Name, &c.Color, &c.SourceURL, &c.CreatedAt, &c.LastSyncedAt, &c.ETag, &c.LastModified, &c.ContentHash,
-			&c.NextRefreshAt, &c.RefreshIntervalSeconds, &c.FailureCount, &c.ErrorClass, &c.ErrorMessage, &c.KeepAlarms, &c.FeedName, &c.FeedColor,
-			&c.Role); err != nil {
-			return nil, fmt.Errorf("scan shared calendar: %w", err)
+		c, err := scanSharedCalendarRow(rows)
+		if err != nil {
+			return nil, err
 		}
 		calendars = append(calendars, c)
 	}
@@ -268,6 +293,25 @@ func (r *CalendarRepository) ListSharedWithUserAndWorkspace(ctx context.Context,
 		return nil, fmt.Errorf("iterate shared calendars: %w", err)
 	}
 	return calendars, nil
+}
+
+// scanSharedCalendarRow scans a ListSharedWithUser/ListSharedWithUserAndWorkspace
+// row, translating the aggregated role_rank back into calendar_shares'
+// stored Role strings ("editor"/"viewer").
+func scanSharedCalendarRow(rows *sql.Rows) (CalendarWithRole, error) {
+	var c CalendarWithRole
+	var roleRank int
+	if err := rows.Scan(&c.ID, &c.UserID, &c.WorkspaceID, &c.Name, &c.Color, &c.SourceURL, &c.CreatedAt, &c.LastSyncedAt, &c.ETag, &c.LastModified, &c.ContentHash,
+		&c.NextRefreshAt, &c.RefreshIntervalSeconds, &c.FailureCount, &c.ErrorClass, &c.ErrorMessage, &c.KeepAlarms, &c.FeedName, &c.FeedColor,
+		&roleRank); err != nil {
+		return CalendarWithRole{}, fmt.Errorf("scan shared calendar: %w", err)
+	}
+	if roleRank >= 2 {
+		c.Role = RoleEditor
+	} else {
+		c.Role = RoleViewer
+	}
+	return c, nil
 }
 
 // ListDueForRefresh returns every Subscribed Calendar (source_url set) whose

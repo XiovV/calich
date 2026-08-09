@@ -32,6 +32,33 @@ export interface Share {
   createdAt: string;
 }
 
+// GroupShare is a Group-targeted Share (#159, ADR-0045): the grant binding
+// one Calendar to one Group with one Role, mirroring Share.
+export interface GroupShare {
+  groupId: number;
+  groupName: string;
+  role: Role;
+  createdAt: string;
+}
+
+// ShareTargetUser and ShareTargetGroup are the share dialog's Workspace-
+// scoped picker entries (#159, ADR-0045) — every other Member and every
+// Group of the Calendar's own Workspace.
+export interface ShareTargetUser {
+  userId: number;
+  username: string;
+}
+
+export interface ShareTargetGroup {
+  groupId: number;
+  name: string;
+}
+
+export interface ShareTargets {
+  users: ShareTargetUser[];
+  groups: ShareTargetGroup[];
+}
+
 export const calendarsApi = {
   async list(accessToken: string): Promise<Calendar[]> {
     const response = await authedFetch(accessToken, "/api/calendars/", {
@@ -225,6 +252,58 @@ export const calendarsApi = {
   async leave(accessToken: string, id: string): Promise<void> {
     const response = await authedFetch(accessToken, `/api/calendars/${id}/leave`, {
       method: "POST",
+      credentials: "include",
+    });
+    if (!response.ok) throw await errorFromResponse(response);
+  },
+
+  // shareTargets returns every User and Group of id's own Workspace the
+  // share dialog may offer as a target (#159, ADR-0045). Owner-only.
+  async shareTargets(accessToken: string, id: string): Promise<ShareTargets> {
+    const response = await authedFetch(accessToken, `/api/calendars/${id}/share-targets`, {
+      credentials: "include",
+    });
+    if (!response.ok) throw await errorFromResponse(response);
+
+    return (await response.json()) as ShareTargets;
+  },
+
+  // listGroupShares returns every Group Share on id, Owner-only (#159,
+  // ADR-0045).
+  async listGroupShares(accessToken: string, id: string): Promise<GroupShare[]> {
+    const response = await authedFetch(accessToken, `/api/calendars/${id}/group-shares`, {
+      credentials: "include",
+    });
+    if (!response.ok) throw await errorFromResponse(response);
+
+    return (await response.json()) as GroupShare[];
+  },
+
+  // shareWithGroup grants id a Share to groupId with role, or changes an
+  // existing Group Share's role if groupId already has one (#159,
+  // ADR-0045). Owner-only.
+  async shareWithGroup(
+    accessToken: string,
+    id: string,
+    groupId: number,
+    role: Role,
+  ): Promise<GroupShare> {
+    const response = await authedFetch(accessToken, `/api/calendars/${id}/group-shares`, {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ groupId, role }),
+    });
+    if (!response.ok) throw await errorFromResponse(response);
+
+    return (await response.json()) as GroupShare;
+  },
+
+  // revokeGroupShare removes groupId's Share on id (#159, ADR-0045).
+  // Owner-only.
+  async revokeGroupShare(accessToken: string, id: string, groupId: number): Promise<void> {
+    const response = await authedFetch(accessToken, `/api/calendars/${id}/group-shares/${groupId}`, {
+      method: "DELETE",
       credentials: "include",
     });
     if (!response.ok) throw await errorFromResponse(response);

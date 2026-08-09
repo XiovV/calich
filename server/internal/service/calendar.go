@@ -32,6 +32,14 @@ var (
 	// ADR-0045) — a Calendar's Workspace is set from the caller's active
 	// Workspace, which they must actually belong to.
 	ErrNotWorkspaceMember = errors.New("user is not a member of this workspace")
+	// ErrShareTargetNotInWorkspace is returned by Share and ShareWithGroup
+	// when the target User or Group doesn't belong to the Calendar's own
+	// Workspace (#159, ADR-0045) — a Share, direct or Group, can only ever
+	// reach someone who's already inside the Calendar's Workspace.
+	ErrShareTargetNotInWorkspace = errors.New("share target does not belong to this workspace")
+	// ErrGroupNotFound is returned by ShareWithGroup when groupID doesn't
+	// exist.
+	ErrGroupNotFound = errors.New("group not found")
 )
 
 type CalendarService struct {
@@ -41,10 +49,12 @@ type CalendarService struct {
 	reminderOverrides *repository.ReminderOverrideRepository
 	colorOverrides    *repository.CalendarUserColorRepository
 	workspaces        *repository.WorkspaceRepository
+	groupShares       *repository.CalendarGroupShareRepository
+	groups            *repository.GroupRepository
 }
 
-func NewCalendarService(calendars *repository.CalendarRepository, shares *repository.CalendarShareRepository, users *repository.UserRepository, reminderOverrides *repository.ReminderOverrideRepository, colorOverrides *repository.CalendarUserColorRepository, workspaces *repository.WorkspaceRepository) *CalendarService {
-	return &CalendarService{calendars: calendars, shares: shares, users: users, reminderOverrides: reminderOverrides, colorOverrides: colorOverrides, workspaces: workspaces}
+func NewCalendarService(calendars *repository.CalendarRepository, shares *repository.CalendarShareRepository, users *repository.UserRepository, reminderOverrides *repository.ReminderOverrideRepository, colorOverrides *repository.CalendarUserColorRepository, workspaces *repository.WorkspaceRepository, groupShares *repository.CalendarGroupShareRepository, groups *repository.GroupRepository) *CalendarService {
+	return &CalendarService{calendars: calendars, shares: shares, users: users, reminderOverrides: reminderOverrides, colorOverrides: colorOverrides, workspaces: workspaces, groupShares: groupShares, groups: groups}
 }
 
 // requireMember refuses userID unless they're a Member of workspaceID (#155,
@@ -297,19 +307,24 @@ func (s *CalendarService) AccessWithColor(ctx context.Context, userID int64, id 
 // OwnershipMeta resolves calendar's un-clamped ownership answer for userID
 // (calendar.UserID == userID — never Access.IsOwner(), which a Subscription
 // clamps to false, #111), the Calendar's Owner's Username, and its Share
-// count. Every REST Calendar response resolves these here, so a caller
-// never has to re-derive ownership from Access, which is deliberately lossy
-// about it (ADR-0034).
+// count — direct and Group Shares summed (ADR-0045), since both count
+// towards "would more than one person be notified" (#111). Every REST
+// Calendar response resolves these here, so a caller never has to re-derive
+// ownership from Access, which is deliberately lossy about it (ADR-0034).
 func (s *CalendarService) OwnershipMeta(ctx context.Context, userID int64, calendar repository.Calendar) (isOwner bool, ownerUsername string, shareCount int, err error) {
 	owner, err := s.users.GetByID(ctx, calendar.UserID)
 	if err != nil {
 		return false, "", 0, fmt.Errorf("get calendar owner: %w", err)
 	}
-	shareCount, err = s.shares.CountByCalendar(ctx, calendar.ID)
+	directCount, err := s.shares.CountByCalendar(ctx, calendar.ID)
 	if err != nil {
 		return false, "", 0, fmt.Errorf("count calendar shares: %w", err)
 	}
-	return calendar.UserID == userID, owner.Username, shareCount, nil
+	groupCount, err := s.groupShares.CountByCalendar(ctx, calendar.ID)
+	if err != nil {
+		return false, "", 0, fmt.Errorf("count calendar group shares: %w", err)
+	}
+	return calendar.UserID == userID, owner.Username, directCount + groupCount, nil
 }
 
 // requireRead resolves calendarID and refuses it unless userID has at least
@@ -365,9 +380,9 @@ func (s *CalendarService) ClearColorOverride(ctx context.Context, userID int64, 
 	return nil
 }
 
-// Access resolves userID's Access to id's Calendar (ADR-0034) — the single
-// place every Calendar and Event permission check goes through. Unlike
-// Get, it fetches id regardless of who owns it, since the point is to
+// Access resolves userID's Access to id's Calendar (ADR-0034, ADR-0045) —
+// the single place every Calendar and Event permission check goes through.
+// Unlike Get, it fetches id regardless of who owns it, since the point is to
 // compute the answer rather than assume it.
 func (s *CalendarService) Access(ctx context.Context, userID int64, id string) (Access, repository.Calendar, error) {
 	calendar, err := s.calendars.GetByIDAny(ctx, id)
@@ -384,9 +399,31 @@ func (s *CalendarService) Access(ctx context.Context, userID int64, id string) (
 		if err == nil {
 			role = &share.Role
 		}
+
+		// max(direct share role, any group share role for a group userID
+		// currently belongs to) (ADR-0045) — resolved fresh on every call,
+		// never a snapshot, so a Group membership change changes Access
+		// immediately with no Calendar or Share row touched.
+		groupRole, err := s.groupShares.BestRoleForUser(ctx, id, userID)
+		if err != nil && !errors.Is(err, repository.ErrNotFound) {
+			return AccessNone, repository.Calendar{}, fmt.Errorf("get calendar group share: %w", err)
+		}
+		if err == nil && roleAccess(groupRole) > roleAccess(derefRole(role)) {
+			role = &groupRole
+		}
 	}
 
 	return ResolveAccess(userID, calendar, role), calendar, nil
+}
+
+// derefRole returns "" for a nil role, the empty string roleAccess already
+// maps to AccessNone — the zero-value comparand Access's direct-vs-group
+// max in Access needs without a nil-check at every call site.
+func derefRole(role *string) string {
+	if role == nil {
+		return ""
+	}
+	return *role
 }
 
 // requireOwner resolves id and refuses it unless userID owns it —
@@ -440,6 +477,15 @@ func (s *CalendarService) Share(ctx context.Context, ownerID int64, calendarID, 
 		return repository.CalendarShare{}, ErrCannotShareWithSelf
 	}
 
+	// A Share, direct or Group, can only ever reach someone already inside
+	// the Calendar's own Workspace (#159, ADR-0045).
+	if _, err := s.workspaces.GetMember(ctx, calendar.WorkspaceID, target.ID); err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			return repository.CalendarShare{}, ErrShareTargetNotInWorkspace
+		}
+		return repository.CalendarShare{}, fmt.Errorf("get workspace member: %w", err)
+	}
+
 	share, err := s.shares.Upsert(ctx, calendarID, target.ID, role)
 	if err != nil {
 		return repository.CalendarShare{}, fmt.Errorf("upsert share: %w", err)
@@ -477,6 +523,90 @@ func (s *CalendarService) ListShares(ctx context.Context, ownerID int64, calenda
 		return nil, err
 	}
 	return s.shares.ListByCalendarWithUsername(ctx, calendarID)
+}
+
+// ShareWithGroup grants calendarID a Share to groupID with role, or changes
+// an existing Group Share's role if groupID already has one (ADR-0045).
+// Only calendarID's Owner may call this. groupID must belong to calendarID's
+// own Workspace.
+func (s *CalendarService) ShareWithGroup(ctx context.Context, ownerID int64, calendarID string, groupID int64, role string) (repository.CalendarGroupShareWithGroupName, error) {
+	if !isValidRole(role) {
+		return repository.CalendarGroupShareWithGroupName{}, ErrInvalidRole
+	}
+
+	calendar, err := s.requireOwner(ctx, ownerID, calendarID)
+	if err != nil {
+		return repository.CalendarGroupShareWithGroupName{}, err
+	}
+
+	group, err := s.groups.GetByID(ctx, groupID)
+	if err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			return repository.CalendarGroupShareWithGroupName{}, ErrGroupNotFound
+		}
+		return repository.CalendarGroupShareWithGroupName{}, fmt.Errorf("look up group: %w", err)
+	}
+	if group.WorkspaceID != calendar.WorkspaceID {
+		return repository.CalendarGroupShareWithGroupName{}, ErrShareTargetNotInWorkspace
+	}
+
+	share, err := s.groupShares.Upsert(ctx, calendarID, group.ID, role)
+	if err != nil {
+		return repository.CalendarGroupShareWithGroupName{}, fmt.Errorf("upsert group share: %w", err)
+	}
+	return repository.CalendarGroupShareWithGroupName{CalendarGroupShare: share, GroupName: group.Name}, nil
+}
+
+// RevokeGroupShare removes groupID's Share on calendarID. Only calendarID's
+// Owner may call this. Unlike RevokeShare, there are no per-User overrides
+// to clear here: a Group Share grants no User-specific row of its own, and
+// every Group Member's own overrides live keyed to their user id, untouched
+// by a change to the Group's Share.
+func (s *CalendarService) RevokeGroupShare(ctx context.Context, ownerID int64, calendarID string, groupID int64) error {
+	if _, err := s.requireOwner(ctx, ownerID, calendarID); err != nil {
+		return err
+	}
+	return s.groupShares.Delete(ctx, calendarID, groupID)
+}
+
+// ListGroupShares returns every Group Share on calendarID, each carrying the
+// Name of the Group it was granted to — the Group-Share sibling of
+// ListShares (ADR-0045). Only calendarID's Owner may call this.
+func (s *CalendarService) ListGroupShares(ctx context.Context, ownerID int64, calendarID string) ([]repository.CalendarGroupShareWithGroupName, error) {
+	if _, err := s.requireOwner(ctx, ownerID, calendarID); err != nil {
+		return nil, err
+	}
+	return s.groupShares.ListByCalendarWithGroupName(ctx, calendarID)
+}
+
+// ShareTargets returns every User and Group the share dialog may offer as a
+// target for calendarID — every Member and every Group of calendarID's own
+// Workspace, excluding the Calendar's own Owner (#159, ADR-0045). Only
+// calendarID's Owner may call this, mirroring ListShares.
+func (s *CalendarService) ShareTargets(ctx context.Context, ownerID int64, calendarID string) ([]repository.WorkspaceMemberWithUsername, []repository.Group, error) {
+	calendar, err := s.requireOwner(ctx, ownerID, calendarID)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	members, err := s.workspaces.ListMembersWithUsername(ctx, calendar.WorkspaceID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("list workspace members: %w", err)
+	}
+	users := make([]repository.WorkspaceMemberWithUsername, 0, len(members))
+	for _, m := range members {
+		if m.UserID == calendar.UserID {
+			continue
+		}
+		users = append(users, m)
+	}
+
+	groups, err := s.groups.ListByWorkspace(ctx, calendar.WorkspaceID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("list workspace groups: %w", err)
+	}
+
+	return users, groups, nil
 }
 
 // LeaveShare removes userID's own Share on calendarID — a User renouncing

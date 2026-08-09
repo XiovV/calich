@@ -67,7 +67,10 @@ func main() {
 	workspaceInviteRepo := repository.NewWorkspaceInviteRepository(sqlDB)
 	workspaceService := service.NewWorkspaceService(sqlDB, workspaceRepo, workspaceInviteRepo)
 	authService := service.NewAuthService(users, sessions, workspaceService, workspaceInviteRepo, jwtSecret, cfg.InitialUsername, cfg.InitialPassword, cfg.EnableSignups)
-	calendarService := service.NewCalendarService(calendarRepo, shareRepo, users, reminderOverrideRepo, colorOverrideRepo, workspaceRepo)
+	groupShareRepo := repository.NewCalendarGroupShareRepository(sqlDB)
+	groupRepo := repository.NewGroupRepository(sqlDB)
+	groupService := service.NewGroupService(groupRepo, workspaceRepo)
+	calendarService := service.NewCalendarService(calendarRepo, shareRepo, users, reminderOverrideRepo, colorOverrideRepo, workspaceRepo, groupShareRepo, groupRepo)
 	attachmentRepo := repository.NewAttachmentRepository(sqlDB)
 	eventRepo := repository.NewEventRepository(sqlDB)
 	eventService := service.NewEventService(sqlDB, eventRepo, repository.NewEventExceptionRepository(sqlDB), repository.NewEventReminderRepository(sqlDB), reminderOverrideRepo, repository.NewSyncRepository(sqlDB), calendarService, users, attachmentRepo)
@@ -120,9 +123,10 @@ func main() {
 	userService := service.NewUserService(users)
 	userHandler := handlers.NewUserHandler(userService)
 	workspaceHandler := handlers.NewWorkspaceHandler(workspaceService)
+	groupHandler := handlers.NewGroupHandler(groupService)
 	calDAVHandler := caldavserver.NewHTTPHandler(caldavserver.NewBackend(calendarService, eventService, attachmentService, cfg.MaxAttachmentSize, cfg.MaxAttachmentsPerEvent))
 
-	handler, err := router.New(logger, authHandler, calendarHandler, eventHandler, attachmentHandler, notificationHandler, appPasswordHandler, accountHandler, userHandler, workspaceHandler, calDAVHandler, authService, authService, appPasswordService, authService, workspaceService)
+	handler, err := router.New(logger, authHandler, calendarHandler, eventHandler, attachmentHandler, notificationHandler, appPasswordHandler, accountHandler, userHandler, workspaceHandler, groupHandler, calDAVHandler, authService, authService, appPasswordService, authService, workspaceService)
 	if err != nil {
 		logger.Error("failed to build router", "error", err)
 		os.Exit(1)

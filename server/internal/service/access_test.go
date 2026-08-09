@@ -146,7 +146,7 @@ func TestCalendarService_Access(t *testing.T) {
 		t.Fatalf("add workspace member: %v", err)
 	}
 
-	svc := NewCalendarService(repository.NewCalendarRepository(sqlDB), repository.NewCalendarShareRepository(sqlDB), users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo)
+	svc := NewCalendarService(repository.NewCalendarRepository(sqlDB), repository.NewCalendarShareRepository(sqlDB), users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo, repository.NewCalendarGroupShareRepository(sqlDB), repository.NewGroupRepository(sqlDB))
 	ctx := context.Background()
 	calendar, err := svc.Create(ctx, owner.ID, workspace.ID, "cal-1", CalendarWrite{Name: "Personal", Color: "#12809CFF"})
 	if err != nil {
@@ -166,6 +166,14 @@ func TestCalendarService_Access(t *testing.T) {
 	}
 	if access, _, err := svc.Access(ctx, owner.ID, subscribed.ID); err != nil || access != AccessViewer {
 		t.Fatalf("owner Access to subscribed calendar = %v, %v; want AccessViewer (clamped), nil err", access, err)
+	}
+
+	// A Share can only reach someone already inside the Calendar's own
+	// Workspace (#159, ADR-0045) — stranger joins here, after the
+	// not-yet-shared AccessNone assertion above, so that assertion still
+	// covers "no Access" rather than "not even in the Workspace".
+	if err := workspaceRepo.AddMember(ctx, workspace.ID, stranger.ID, repository.WorkspaceRoleMember); err != nil {
+		t.Fatalf("add stranger as workspace member: %v", err)
 	}
 
 	if _, err := svc.Share(ctx, owner.ID, calendar.ID, "stranger", repository.RoleEditor); err != nil {

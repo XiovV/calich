@@ -15,7 +15,7 @@ import (
 	"github.com/XiovV/calendar/server/internal/static"
 )
 
-func New(logger *slog.Logger, authHandler *handlers.AuthHandler, calendarHandler *handlers.CalendarHandler, eventHandler *handlers.EventHandler, attachmentHandler *handlers.AttachmentHandler, notificationHandler *handlers.NotificationHandler, appPasswordHandler *handlers.AppPasswordHandler, accountHandler *handlers.AccountHandler, userHandler *handlers.UserHandler, workspaceHandler *handlers.WorkspaceHandler, calDAVHandler http.Handler, authenticator httpauth.Authenticator, activeUserChecker httpauth.ActiveUserChecker, calDAVAuthenticator httpauth.CalDAVAuthenticator, enabledChecker httpauth.DisabledChecker, workspaceMembershipChecker httpauth.WorkspaceMembershipChecker) (http.Handler, error) {
+func New(logger *slog.Logger, authHandler *handlers.AuthHandler, calendarHandler *handlers.CalendarHandler, eventHandler *handlers.EventHandler, attachmentHandler *handlers.AttachmentHandler, notificationHandler *handlers.NotificationHandler, appPasswordHandler *handlers.AppPasswordHandler, accountHandler *handlers.AccountHandler, userHandler *handlers.UserHandler, workspaceHandler *handlers.WorkspaceHandler, groupHandler *handlers.GroupHandler, calDAVHandler http.Handler, authenticator httpauth.Authenticator, activeUserChecker httpauth.ActiveUserChecker, calDAVAuthenticator httpauth.CalDAVAuthenticator, enabledChecker httpauth.DisabledChecker, workspaceMembershipChecker httpauth.WorkspaceMembershipChecker) (http.Handler, error) {
 	r := chi.NewRouter()
 	r.Use(requestLogger(logger))
 	r.Use(middleware.Recoverer)
@@ -87,6 +87,16 @@ func New(logger *slog.Logger, authHandler *handlers.AuthHandler, calendarHandler
 			r.Post("/{id}/shares", calendarHandler.Share)
 			r.Delete("/{id}/shares/{userId}", calendarHandler.RevokeShare)
 			r.Post("/{id}/leave", calendarHandler.LeaveShare)
+
+			// Group Shares (#159, ADR-0045): the Group-targeted sibling of
+			// Shares above, same Owner-only gating.
+			r.Get("/{id}/group-shares", calendarHandler.ListGroupShares)
+			r.Post("/{id}/group-shares", calendarHandler.ShareWithGroup)
+			r.Delete("/{id}/group-shares/{groupId}", calendarHandler.RevokeGroupShare)
+
+			// ShareTargets (#159, ADR-0045): the share dialog's Workspace-scoped
+			// User/Group picker data, Owner-only like the routes above.
+			r.Get("/{id}/share-targets", calendarHandler.ShareTargets)
 		})
 
 		r.Route("/events", func(r chi.Router) {
@@ -161,6 +171,18 @@ func New(logger *slog.Logger, authHandler *handlers.AuthHandler, calendarHandler
 			// Admin, so no extra middleware gate is needed here.
 			r.Post("/{id}/invites", workspaceHandler.CreateInvite)
 			r.Post("/invites/{id}/reissue", workspaceHandler.ReissueInvite)
+		})
+
+		// Groups (#159, ADR-0045): currently just the listing the Calendar
+		// share dialog's Group picker needs — Create/Rename/Delete/membership
+		// management stay HTTP-unreached until #167 (Groups management UI).
+		r.Route("/groups", func(r chi.Router) {
+			r.Use(httpauth.RequireAuth(authenticator))
+			r.Use(httpauth.RequireActiveUser(activeUserChecker))
+			r.Use(httpauth.RequireEnabledUser(enabledChecker))
+			r.Use(httpauth.RequireWorkspace(workspaceMembershipChecker))
+
+			r.Get("/", groupHandler.List)
 		})
 
 		// Self-service account lifecycle (ADR-0044): a User acting on their

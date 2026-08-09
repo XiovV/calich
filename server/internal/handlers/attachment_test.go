@@ -64,7 +64,7 @@ func newAttachmentTestServer(t *testing.T, maxAttachmentSize int64, maxAttachmen
 
 	calendarRepo := repository.NewCalendarRepository(sqlDB)
 	shareRepo := repository.NewCalendarShareRepository(sqlDB)
-	calendars := service.NewCalendarService(calendarRepo, shareRepo, users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo)
+	calendars := service.NewCalendarService(calendarRepo, shareRepo, users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo, repository.NewCalendarGroupShareRepository(sqlDB), repository.NewGroupRepository(sqlDB))
 
 	if _, err := auth.Register(ctx, "editor", "editor@example.com", "temp-password"); err != nil {
 		t.Fatalf("register editor: %v", err)
@@ -96,6 +96,23 @@ func newAttachmentTestServer(t *testing.T, maxAttachmentSize int64, maxAttachmen
 	ownerID, err := auth.Authenticate(ctx, ownerLogin.AccessToken)
 	if err != nil {
 		t.Fatalf("authenticate owner: %v", err)
+	}
+	editorID, err := auth.Authenticate(ctx, editorLogin.AccessToken)
+	if err != nil {
+		t.Fatalf("authenticate editor: %v", err)
+	}
+	viewerID, err := auth.Authenticate(ctx, viewerLogin.AccessToken)
+	if err != nil {
+		t.Fatalf("authenticate viewer: %v", err)
+	}
+	// A Share can only reach someone already inside the Calendar's own
+	// Workspace (#159, ADR-0045) — stranger is deliberately left out of
+	// owner's Workspace, since this fixture also covers "no Access at all".
+	if err := workspaceRepo.AddMember(ctx, ownerWorkspaceID, editorID, repository.WorkspaceRoleMember); err != nil {
+		t.Fatalf("add editor as workspace member: %v", err)
+	}
+	if err := workspaceRepo.AddMember(ctx, ownerWorkspaceID, viewerID, repository.WorkspaceRoleMember); err != nil {
+		t.Fatalf("add viewer as workspace member: %v", err)
 	}
 
 	cal, err := calendars.Create(ctx, ownerID, ownerWorkspaceID, "cal-1", service.CalendarWrite{Name: "Family", Color: "#12809CFF"})

@@ -65,8 +65,16 @@ func newAttachmentTestFixture(t *testing.T, maxPerEvent int) attachmentTestFixtu
 	if err := workspaceRepo.AddMember(ctx, workspace.ID, owner.ID, repository.WorkspaceRoleOwner); err != nil {
 		t.Fatalf("add workspace member: %v", err)
 	}
+	// A Share can only reach someone already inside the Calendar's own
+	// Workspace (#159, ADR-0045) — stranger is deliberately left out.
+	if err := workspaceRepo.AddMember(ctx, workspace.ID, editor.ID, repository.WorkspaceRoleMember); err != nil {
+		t.Fatalf("add editor as workspace member: %v", err)
+	}
+	if err := workspaceRepo.AddMember(ctx, workspace.ID, viewer.ID, repository.WorkspaceRoleMember); err != nil {
+		t.Fatalf("add viewer as workspace member: %v", err)
+	}
 
-	calendars := NewCalendarService(repository.NewCalendarRepository(sqlDB), repository.NewCalendarShareRepository(sqlDB), users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo)
+	calendars := NewCalendarService(repository.NewCalendarRepository(sqlDB), repository.NewCalendarShareRepository(sqlDB), users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo, repository.NewCalendarGroupShareRepository(sqlDB), repository.NewGroupRepository(sqlDB))
 	cal, err := calendars.Create(ctx, owner.ID, workspace.ID, "cal-1", CalendarWrite{Name: "Family", Color: "#12809CFF"})
 	if err != nil {
 		t.Fatalf("create calendar: %v", err)
@@ -303,7 +311,7 @@ func TestAttachmentService_Upload_SubscribedCalendarRefused(t *testing.T) {
 		t.Fatalf("create subscribed calendar: %v", err)
 	}
 
-	calendars := NewCalendarService(calendarRepo, repository.NewCalendarShareRepository(sqlDB), users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo)
+	calendars := NewCalendarService(calendarRepo, repository.NewCalendarShareRepository(sqlDB), users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo, repository.NewCalendarGroupShareRepository(sqlDB), repository.NewGroupRepository(sqlDB))
 	attachmentsRepo := repository.NewAttachmentRepository(sqlDB)
 	eventsRepo := repository.NewEventRepository(sqlDB)
 	events := NewEventService(sqlDB, eventsRepo, repository.NewEventExceptionRepository(sqlDB), repository.NewEventReminderRepository(sqlDB), repository.NewReminderOverrideRepository(sqlDB), repository.NewSyncRepository(sqlDB), calendars, users, attachmentsRepo)

@@ -28,6 +28,8 @@ type shareTestServer struct {
 	otherUserID            int64
 	calendars              *service.CalendarService
 	workspaceID            string
+	groups                 *repository.GroupRepository
+	groupID                int64
 }
 
 func newShareTestServer(t *testing.T) shareTestServer {
@@ -59,7 +61,8 @@ func newShareTestServer(t *testing.T) shareTestServer {
 	}
 	calendarRepo := repository.NewCalendarRepository(sqlDB)
 	shareRepo := repository.NewCalendarShareRepository(sqlDB)
-	calendars := service.NewCalendarService(calendarRepo, shareRepo, users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo)
+	groupRepo := repository.NewGroupRepository(sqlDB)
+	calendars := service.NewCalendarService(calendarRepo, shareRepo, users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo, repository.NewCalendarGroupShareRepository(sqlDB), groupRepo)
 
 	ownerLogin, err := auth.Login(ctx, "owner", "hunter2")
 	if err != nil {
@@ -104,6 +107,10 @@ func newShareTestServer(t *testing.T) shareTestServer {
 		r.Post("/{id}/shares", calendarHandler.Share)
 		r.Delete("/{id}/shares/{userId}", calendarHandler.RevokeShare)
 		r.Post("/{id}/leave", calendarHandler.LeaveShare)
+		r.Get("/{id}/group-shares", calendarHandler.ListGroupShares)
+		r.Post("/{id}/group-shares", calendarHandler.ShareWithGroup)
+		r.Delete("/{id}/group-shares/{groupId}", calendarHandler.RevokeGroupShare)
+		r.Get("/{id}/share-targets", calendarHandler.ShareTargets)
 	})
 
 	srv := httptest.NewServer(r)
@@ -119,7 +126,12 @@ func newShareTestServer(t *testing.T) shareTestServer {
 	}
 	resp.Body.Close()
 
-	return shareTestServer{baseURL: srv.URL, ownerToken: ownerLogin.AccessToken, otherToken: otherLogin.AccessToken, calendarID: created.ID, otherUserID: other.ID, calendars: calendars, workspaceID: ownerWorkspaceID}
+	group, err := groupRepo.Create(ctx, ownerWorkspaces[0].ID, "Tech team")
+	if err != nil {
+		t.Fatalf("create group: %v", err)
+	}
+
+	return shareTestServer{baseURL: srv.URL, ownerToken: ownerLogin.AccessToken, otherToken: otherLogin.AccessToken, calendarID: created.ID, otherUserID: other.ID, calendars: calendars, workspaceID: ownerWorkspaceID, groups: groupRepo, groupID: group.ID}
 }
 
 func doJSON(t *testing.T, method, url, accessToken string, body any) *http.Response {
@@ -400,5 +412,91 @@ func TestCalendarHandler_LeaveShare(t *testing.T) {
 	defer getResp.Body.Close()
 	if getResp.StatusCode != http.StatusNotFound {
 		t.Fatalf("expected 404 after leaving, got %d", getResp.StatusCode)
+	}
+}
+
+// TestCalendarHandler_ShareWithGroup_And_ListGroupShares covers #159's
+// Group-targeted Share REST surface end to end: granting one and listing it
+// back.
+func TestCalendarHandler_ShareWithGroup_And_ListGroupShares(t *testing.T) {
+	s := newShareTestServer(t)
+
+	resp := doJSON(t, http.MethodPost, s.baseURL+"/api/calendars/"+s.calendarID+"/group-shares", s.ownerToken, groupShareRequest{GroupID: s.groupID, Role: repository.RoleEditor})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	var got groupShareResponse
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got.GroupID != s.groupID || got.GroupName != "Tech team" || got.Role != repository.RoleEditor {
+		t.Fatalf("unexpected group share: %+v", got)
+	}
+
+	listResp, err := authenticatedGet(s.baseURL+"/api/calendars/"+s.calendarID+"/group-shares", s.ownerToken)
+	if err != nil {
+		t.Fatalf("list group shares: %v", err)
+	}
+	defer listResp.Body.Close()
+	var shares []groupShareResponse
+	if err := json.NewDecoder(listResp.Body).Decode(&shares); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(shares) != 1 || shares[0].GroupID != s.groupID {
+		t.Fatalf("unexpected group shares: %+v", shares)
+	}
+}
+
+// TestCalendarHandler_RevokeGroupShare covers revoking a Group Share over
+// REST.
+func TestCalendarHandler_RevokeGroupShare(t *testing.T) {
+	s := newShareTestServer(t)
+
+	shareResp := doJSON(t, http.MethodPost, s.baseURL+"/api/calendars/"+s.calendarID+"/group-shares", s.ownerToken, groupShareRequest{GroupID: s.groupID, Role: repository.RoleViewer})
+	shareResp.Body.Close()
+
+	resp := doJSON(t, http.MethodDelete, s.baseURL+"/api/calendars/"+s.calendarID+"/group-shares/"+strconv.FormatInt(s.groupID, 10), s.ownerToken, nil)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("expected 204, got %d", resp.StatusCode)
+	}
+
+	listResp, err := authenticatedGet(s.baseURL+"/api/calendars/"+s.calendarID+"/group-shares", s.ownerToken)
+	if err != nil {
+		t.Fatalf("list group shares: %v", err)
+	}
+	defer listResp.Body.Close()
+	var shares []groupShareResponse
+	if err := json.NewDecoder(listResp.Body).Decode(&shares); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(shares) != 0 {
+		t.Fatalf("expected no group shares after revoke, got %+v", shares)
+	}
+}
+
+// TestCalendarHandler_ShareTargets covers #159's share-dialog data source:
+// every other Member and every Group of the Calendar's own Workspace.
+func TestCalendarHandler_ShareTargets(t *testing.T) {
+	s := newShareTestServer(t)
+
+	resp, err := authenticatedGet(s.baseURL+"/api/calendars/"+s.calendarID+"/share-targets", s.ownerToken)
+	if err != nil {
+		t.Fatalf("share targets: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	var got shareTargetsResponse
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(got.Users) != 1 || got.Users[0].Username != "other" {
+		t.Fatalf("unexpected user targets: %+v", got.Users)
+	}
+	if len(got.Groups) != 1 || got.Groups[0].GroupID != s.groupID {
+		t.Fatalf("unexpected group targets: %+v", got.Groups)
 	}
 }

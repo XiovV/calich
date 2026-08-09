@@ -51,13 +51,14 @@ func newReminderOverrideTestServer(t *testing.T) reminderOverrideTestServer {
 	if err != nil {
 		t.Fatalf("hash other user's password: %v", err)
 	}
-	if _, err := users.Create(ctx, "other", string(otherHash), false); err != nil {
+	otherUser, err := users.Create(ctx, "other", string(otherHash), false)
+	if err != nil {
 		t.Fatalf("create other user: %v", err)
 	}
 
 	calendarRepo := repository.NewCalendarRepository(sqlDB)
 	shareRepo := repository.NewCalendarShareRepository(sqlDB)
-	calendars := service.NewCalendarService(calendarRepo, shareRepo, users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo)
+	calendars := service.NewCalendarService(calendarRepo, shareRepo, users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo, repository.NewCalendarGroupShareRepository(sqlDB), repository.NewGroupRepository(sqlDB))
 
 	ownerLogin, err := auth.Login(ctx, "owner", "hunter2")
 	if err != nil {
@@ -73,6 +74,11 @@ func newReminderOverrideTestServer(t *testing.T) reminderOverrideTestServer {
 		t.Fatalf("list owner's workspaces: %v", err)
 	}
 	ownerWorkspaceID := strconv.FormatInt(ownerWorkspaces[0].ID, 10)
+	// A Share can only reach someone already inside the Calendar's own
+	// Workspace (#159, ADR-0045).
+	if err := workspaceRepo.AddMember(ctx, ownerWorkspaces[0].ID, otherUser.ID, repository.WorkspaceRoleMember); err != nil {
+		t.Fatalf("add other as workspace member: %v", err)
+	}
 
 	events := service.NewEventService(sqlDB, repository.NewEventRepository(sqlDB), repository.NewEventExceptionRepository(sqlDB), repository.NewEventReminderRepository(sqlDB), repository.NewReminderOverrideRepository(sqlDB), repository.NewSyncRepository(sqlDB), calendars, users, repository.NewAttachmentRepository(sqlDB))
 	attachmentStore := attachmentstore.New(t.TempDir())

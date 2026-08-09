@@ -40,8 +40,14 @@ func newTestShareService(t *testing.T) (svc *CalendarService, users *repository.
 	if err := workspaceRepo.AddMember(context.Background(), workspace.ID, owner.ID, repository.WorkspaceRoleOwner); err != nil {
 		t.Fatalf("add workspace member: %v", err)
 	}
+	// A Share can only ever reach someone already inside the Calendar's own
+	// Workspace (#159, ADR-0045), so the fixture's share target must be a
+	// Member of it too.
+	if err := workspaceRepo.AddMember(context.Background(), workspace.ID, other.ID, repository.WorkspaceRoleMember); err != nil {
+		t.Fatalf("add other as workspace member: %v", err)
+	}
 
-	svc = NewCalendarService(repository.NewCalendarRepository(sqlDB), repository.NewCalendarShareRepository(sqlDB), users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo)
+	svc = NewCalendarService(repository.NewCalendarRepository(sqlDB), repository.NewCalendarShareRepository(sqlDB), users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo, repository.NewCalendarGroupShareRepository(sqlDB), repository.NewGroupRepository(sqlDB))
 	calendar, err := svc.Create(context.Background(), owner.ID, workspace.ID, "cal-1", CalendarWrite{Name: "Family", Color: "#12809CFF"})
 	if err != nil {
 		t.Fatalf("create calendar: %v", err)

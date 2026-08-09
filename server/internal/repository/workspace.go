@@ -211,6 +211,47 @@ func (r *WorkspaceRepository) ListMembers(ctx context.Context, workspaceID int64
 	return members, nil
 }
 
+// WorkspaceMemberWithUsername pairs a WorkspaceMember with the Username of
+// the User it belongs to — ListMembersWithUsername's row, mirroring
+// CalendarShareWithUsername.
+type WorkspaceMemberWithUsername struct {
+	WorkspaceMember
+	Username string
+}
+
+// ListMembersWithUsername returns every enabled Member of workspaceID joined
+// against users, ordered by Username — the Calendar share dialog's
+// Workspace-scoped User picker (#159, ADR-0045). A Disabled User is excluded,
+// mirroring CalendarService.Share hiding them from the per-User share picker
+// (ADR-0037).
+func (r *WorkspaceRepository) ListMembersWithUsername(ctx context.Context, workspaceID int64) ([]WorkspaceMemberWithUsername, error) {
+	rows, err := r.db.QueryContext(ctx,
+		`SELECT m.workspace_id, m.user_id, m.role, m.created_at, u.username
+		 FROM workspace_members m
+		 JOIN users u ON u.id = m.user_id
+		 WHERE m.workspace_id = ? AND u.is_disabled = 0
+		 ORDER BY u.username`,
+		workspaceID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list workspace members with username: %w", err)
+	}
+	defer rows.Close()
+
+	members := []WorkspaceMemberWithUsername{}
+	for rows.Next() {
+		var m WorkspaceMemberWithUsername
+		if err := rows.Scan(&m.WorkspaceID, &m.UserID, &m.Role, &m.CreatedAt, &m.Username); err != nil {
+			return nil, fmt.Errorf("scan workspace member with username: %w", err)
+		}
+		members = append(members, m)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate workspace members with username: %w", err)
+	}
+	return members, nil
+}
+
 // SetMemberRole updates userID's Role within workspaceID (#156) — the Owner
 // grant/revoke-Admin operation.
 func (r *WorkspaceRepository) SetMemberRole(ctx context.Context, workspaceID, userID int64, role string) (WorkspaceMember, error) {
