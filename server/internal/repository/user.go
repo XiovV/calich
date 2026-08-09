@@ -49,7 +49,28 @@ type User struct {
 	// Nil means no shading (ADR-0039).
 	WorkingHoursStart *int
 	WorkingHoursEnd   *int
+
+	// InviteTokenHash and InviteExpiresAt are set together, by CreatePending
+	// or SetInvite, and cleared together by AcceptInvite (ADR-0042). Nil
+	// means this User has no outstanding Invite — always true once Active.
+	InviteTokenHash *string
+	InviteExpiresAt *time.Time
 }
+
+// IsPending reports whether this User was created via an Invite and has
+// never set their own password (ADR-0042). It is a domain state distinct
+// from IsDisabled even though it reuses the same column to block Login,
+// Refresh, and CalDAV Basic auth: Disabled is something an Admin does to a
+// User who was Active, where Pending is a User who has never been Active.
+func (u User) IsPending() bool {
+	return u.IsDisabled && u.PasswordHash == ""
+}
+
+// userColumns is the column list every SELECT against users shares, in the
+// exact order scanUserFields expects — kept as one constant so the two never
+// drift apart across GetByID, GetByIDs, GetByUsername, List,
+// ListEnabledExcluding, and First.
+const userColumns = `id, username, password_hash, must_change_password, email, synced_device_reminders_enabled, is_admin, is_disabled, created_at, week_start, default_view, time_format, working_hours_start, working_hours_end, invite_token_hash, invite_expires_at`
 
 type UserRepository struct {
 	db DBTX
@@ -93,7 +114,7 @@ func (r *UserRepository) Create(ctx context.Context, username, passwordHash stri
 
 func (r *UserRepository) GetByID(ctx context.Context, id int64) (User, error) {
 	return r.scanUser(r.db.QueryRowContext(ctx,
-		`SELECT id, username, password_hash, must_change_password, email, synced_device_reminders_enabled, is_admin, is_disabled, created_at, week_start, default_view, time_format, working_hours_start, working_hours_end FROM users WHERE id = ?`, id,
+		`SELECT ` + userColumns + ` FROM users WHERE id = ?`, id,
 	))
 }
 
@@ -107,7 +128,7 @@ func (r *UserRepository) GetByIDs(ctx context.Context, ids []int64) (map[int64]U
 		return result, nil
 	}
 
-	query := `SELECT id, username, password_hash, must_change_password, email, synced_device_reminders_enabled, is_admin, is_disabled, created_at, week_start, default_view, time_format, working_hours_start, working_hours_end FROM users WHERE id IN (` + placeholders(len(ids)) + `)`
+	query := `SELECT ` + userColumns + ` FROM users WHERE id IN (` + placeholders(len(ids)) + `)`
 	args := make([]any, len(ids))
 	for i, id := range ids {
 		args[i] = id
@@ -135,7 +156,7 @@ func (r *UserRepository) GetByIDs(ctx context.Context, ids []int64) (map[int64]U
 
 func (r *UserRepository) GetByUsername(ctx context.Context, username string) (User, error) {
 	return r.scanUser(r.db.QueryRowContext(ctx,
-		`SELECT id, username, password_hash, must_change_password, email, synced_device_reminders_enabled, is_admin, is_disabled, created_at, week_start, default_view, time_format, working_hours_start, working_hours_end FROM users WHERE username = ?`, username,
+		`SELECT ` + userColumns + ` FROM users WHERE username = ?`, username,
 	))
 }
 
@@ -143,7 +164,7 @@ func (r *UserRepository) GetByUsername(ctx context.Context, username string) (Us
 // order) so the bootstrapped Admin always leads the list.
 func (r *UserRepository) List(ctx context.Context) ([]User, error) {
 	rows, err := r.db.QueryContext(ctx,
-		`SELECT id, username, password_hash, must_change_password, email, synced_device_reminders_enabled, is_admin, is_disabled, created_at, week_start, default_view, time_format, working_hours_start, working_hours_end FROM users ORDER BY id`,
+		`SELECT ` + userColumns + ` FROM users ORDER BY id`,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("query users: %w", err)
@@ -172,7 +193,7 @@ func (r *UserRepository) List(ctx context.Context) ([]User, error) {
 // and the caller never sees themselves in their own picker.
 func (r *UserRepository) ListEnabledExcluding(ctx context.Context, excludeID int64) ([]User, error) {
 	rows, err := r.db.QueryContext(ctx,
-		`SELECT id, username, password_hash, must_change_password, email, synced_device_reminders_enabled, is_admin, is_disabled, created_at, week_start, default_view, time_format, working_hours_start, working_hours_end
+		`SELECT `+userColumns+`
 		 FROM users WHERE is_disabled = 0 AND id != ? ORDER BY username`, excludeID,
 	)
 	if err != nil {
@@ -294,7 +315,7 @@ func (r *UserRepository) UpdatePassword(ctx context.Context, userID int64, passw
 // single-user instance (ADR-0010).
 func (r *UserRepository) First(ctx context.Context) (User, error) {
 	return r.scanUser(r.db.QueryRowContext(ctx,
-		`SELECT id, username, password_hash, must_change_password, email, synced_device_reminders_enabled, is_admin, is_disabled, created_at, week_start, default_view, time_format, working_hours_start, working_hours_end FROM users ORDER BY id LIMIT 1`,
+		`SELECT ` + userColumns + ` FROM users ORDER BY id LIMIT 1`,
 	))
 }
 
@@ -378,6 +399,68 @@ func (r *UserRepository) ResetPassword(ctx context.Context, userID int64, passwo
 	return nil
 }
 
+// CreatePending inserts a new User in the Pending state (ADR-0042): no
+// password, is_disabled set so Login, Refresh, and CalDAV Basic auth all
+// refuse it the same way they refuse a Disabled account, and the given
+// Invite token hash and expiry already attached. must_change_password is
+// left false — that gate is for a password someone else chose, and a
+// Pending User has none yet.
+func (r *UserRepository) CreatePending(ctx context.Context, username, inviteTokenHash string, inviteExpiresAt time.Time) (User, error) {
+	res, err := r.db.ExecContext(ctx,
+		`INSERT INTO users (username, password_hash, is_disabled, invite_token_hash, invite_expires_at) VALUES (?, '', 1, ?, ?)`,
+		username, inviteTokenHash, inviteExpiresAt,
+	)
+	if err != nil {
+		if strings.Contains(err.Error(), "UNIQUE constraint failed") {
+			return User{}, ErrUsernameTaken
+		}
+		return User{}, fmt.Errorf("insert pending user: %w", err)
+	}
+
+	id, err := res.LastInsertId()
+	if err != nil {
+		return User{}, fmt.Errorf("get inserted user id: %w", err)
+	}
+
+	return r.GetByID(ctx, id)
+}
+
+// SetInvite overwrites userID's outstanding Invite with a new token hash and
+// expiry (ADR-0042's reissue) — the previous token stops matching
+// GetByInviteTokenHash the moment this commits.
+func (r *UserRepository) SetInvite(ctx context.Context, userID int64, inviteTokenHash string, inviteExpiresAt time.Time) (User, error) {
+	if _, err := r.db.ExecContext(ctx,
+		`UPDATE users SET invite_token_hash = ?, invite_expires_at = ? WHERE id = ?`,
+		inviteTokenHash, inviteExpiresAt, userID,
+	); err != nil {
+		return User{}, fmt.Errorf("set invite: %w", err)
+	}
+	return r.GetByID(ctx, userID)
+}
+
+// GetByInviteTokenHash looks up the User an Invite token hashes to
+// (ADR-0042) — used by AuthService.AcceptInvite, which only ever has the
+// hash, never a userID.
+func (r *UserRepository) GetByInviteTokenHash(ctx context.Context, inviteTokenHash string) (User, error) {
+	return r.scanUser(r.db.QueryRowContext(ctx,
+		`SELECT `+userColumns+` FROM users WHERE invite_token_hash = ?`, inviteTokenHash,
+	))
+}
+
+// AcceptInvite sets userID's password hash, clears the Invite token and
+// expiry so the token cannot be reused, and clears is_disabled — the single
+// write that flips a Pending User to Active (ADR-0042).
+func (r *UserRepository) AcceptInvite(ctx context.Context, userID int64, passwordHash string) error {
+	_, err := r.db.ExecContext(ctx,
+		`UPDATE users SET password_hash = ?, is_disabled = 0, invite_token_hash = NULL, invite_expires_at = NULL WHERE id = ?`,
+		passwordHash, userID,
+	)
+	if err != nil {
+		return fmt.Errorf("accept invite: %w", err)
+	}
+	return nil
+}
+
 func (r *UserRepository) scanUser(row *sql.Row) (User, error) {
 	u, err := scanUserFields(row.Scan)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -404,17 +487,26 @@ func scanUserFields(scan func(dest ...any) error) (User, error) {
 	var u User
 	var email sql.NullString
 	var workingHoursStart, workingHoursEnd sql.NullInt64
+	var inviteTokenHash sql.NullString
+	var inviteExpiresAt sql.NullTime
 	// modernc.org/sqlite converts the TIMESTAMP column straight into time.Time
 	// based on the declared column type — no manual parsing needed here.
 	err := scan(
 		&u.ID, &u.Username, &u.PasswordHash, &u.MustChangePassword, &email, &u.SyncedDeviceRemindersEnabled, &u.IsAdmin, &u.IsDisabled, &u.CreatedAt,
 		&u.WeekStart, &u.DefaultView, &u.TimeFormat, &workingHoursStart, &workingHoursEnd,
+		&inviteTokenHash, &inviteExpiresAt,
 	)
 	if err != nil {
 		return User{}, err
 	}
 	if email.Valid {
 		u.Email = &email.String
+	}
+	if inviteTokenHash.Valid {
+		u.InviteTokenHash = &inviteTokenHash.String
+	}
+	if inviteExpiresAt.Valid {
+		u.InviteExpiresAt = &inviteExpiresAt.Time
 	}
 	if workingHoursStart.Valid {
 		v := int(workingHoursStart.Int64)

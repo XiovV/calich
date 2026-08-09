@@ -41,6 +41,11 @@ var loginErrors = []errorCase{
 	{service.ErrAccountDisabled, unauthorized("account_disabled", "this account has been disabled")},
 }
 
+var acceptInviteErrors = []errorCase{
+	{service.ErrInviteInvalid, unauthorized("invite_invalid", "invite is invalid or has expired")},
+	{service.ErrInvalidPassword, badRequest("password must not be empty")},
+}
+
 var updateEmailErrors = []errorCase{
 	{service.ErrInvalidEmail, badRequest("email is not a valid address")},
 }
@@ -78,6 +83,35 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 
 	result, err := h.auth.Login(r.Context(), req.Username, req.Password)
 	if respondError(w, err, loginErrors, "failed to log in") {
+		return
+	}
+
+	setRefreshCookie(w, result.RefreshToken, result.RefreshTokenExpiresAt)
+
+	httpresponse.JSON(w, http.StatusOK, loginResponse{
+		AccessToken:        result.AccessToken,
+		MustChangePassword: result.MustChangePassword,
+	})
+}
+
+type acceptInviteRequest struct {
+	Token    string `json:"token"`
+	Password string `json:"password"`
+}
+
+// AcceptInvite is the public, unauthenticated counterpart to Login for a
+// Pending account (ADR-0042): a valid token and a new password set the
+// password, flip the account to Active, and log the caller straight in —
+// there is no separate "invite accepted, now please log in" step.
+func (h *AuthHandler) AcceptInvite(w http.ResponseWriter, r *http.Request) {
+	var req acceptInviteRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httpresponse.Error(w, http.StatusBadRequest, "invalid_request", "request body must be valid JSON")
+		return
+	}
+
+	result, err := h.auth.AcceptInvite(r.Context(), req.Token, req.Password)
+	if respondError(w, err, acceptInviteErrors, "failed to accept invite") {
 		return
 	}
 

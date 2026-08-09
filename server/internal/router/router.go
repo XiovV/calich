@@ -27,6 +27,10 @@ func New(logger *slog.Logger, authHandler *handlers.AuthHandler, calendarHandler
 			r.Post("/login", authHandler.Login)
 			r.Post("/refresh", authHandler.Refresh)
 			r.Post("/logout", authHandler.Logout)
+			// Accept-invite (ADR-0042) is public like the three routes above
+			// it: it establishes a Session rather than requiring one, proving
+			// identity via a single-use token instead of a bearer token.
+			r.Post("/accept-invite", authHandler.AcceptInvite)
 
 			r.With(httpauth.RequireAuth(authenticator)).Post("/change-password", authHandler.ChangePassword)
 
@@ -133,6 +137,9 @@ func New(logger *slog.Logger, authHandler *handlers.AuthHandler, calendarHandler
 
 			r.Get("/", accountHandler.List)
 			r.Post("/", accountHandler.Create)
+			r.Post("/invite", accountHandler.CreateInvite)
+			r.Post("/{id}/invite/reissue", accountHandler.ReissueInvite)
+			r.Delete("/{id}/invite", accountHandler.CancelInvite)
 			r.Post("/{id}/reset-password", accountHandler.ResetPassword)
 			r.Put("/{id}/admin", accountHandler.SetAdmin)
 			r.Put("/{id}/disabled", accountHandler.SetDisabled)

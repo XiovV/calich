@@ -25,12 +25,19 @@ func NewAccountHandler(accounts *service.AccountService) *AccountHandler {
 }
 
 type accountResponse struct {
-	ID                 int64     `json:"id"`
-	Username           string    `json:"username"`
-	IsAdmin            bool      `json:"is_admin"`
-	IsDisabled         bool      `json:"is_disabled"`
-	MustChangePassword bool      `json:"must_change_password"`
-	CreatedAt          time.Time `json:"created_at"`
+	ID                 int64      `json:"id"`
+	Username           string     `json:"username"`
+	IsAdmin            bool       `json:"is_admin"`
+	IsDisabled         bool       `json:"is_disabled"`
+	MustChangePassword bool       `json:"must_change_password"`
+	CreatedAt          time.Time  `json:"created_at"`
+	// IsPending is whether this account was created via an Invite and hasn't
+	// accepted it yet (ADR-0042) — a distinct state from IsDisabled even
+	// though both block Login, Refresh, and CalDAV Basic auth.
+	IsPending bool `json:"is_pending"`
+	// InviteExpiresAt is when the current outstanding Invite token stops
+	// being acceptable; nil once IsPending is false.
+	InviteExpiresAt *time.Time `json:"invite_expires_at,omitempty"`
 }
 
 func toAccountResponse(u repository.User) accountResponse {
@@ -41,7 +48,21 @@ func toAccountResponse(u repository.User) accountResponse {
 		IsDisabled:         u.IsDisabled,
 		MustChangePassword: u.MustChangePassword,
 		CreatedAt:          u.CreatedAt,
+		IsPending:          u.IsPending(),
+		InviteExpiresAt:    u.InviteExpiresAt,
 	}
+}
+
+// inviteResponse is CreateInvite's and ReissueInvite's response — the
+// resulting Pending account alongside the plaintext Invite token, which is
+// never retrievable again once this response is sent (ADR-0042).
+type inviteResponse struct {
+	Account accountResponse `json:"account"`
+	Token   string          `json:"token"`
+}
+
+func toInviteResponse(result service.InviteResult) inviteResponse {
+	return inviteResponse{Account: toAccountResponse(result.User), Token: result.Token}
 }
 
 var createAccountErrors = []errorCase{
@@ -50,20 +71,27 @@ var createAccountErrors = []errorCase{
 	{service.ErrUsernameTaken, conflict("username_taken", "username is already taken")},
 }
 
-var resetPasswordErrors = []errorCase{
-	{service.ErrInvalidPassword, badRequest("temporary password must not be empty")},
-	{repository.ErrNotFound, notFound("account not found")},
+// pendingAccountErrors is shared by every operation ADR-0037 wrote for an
+// already-Active account — ResetPassword, SetAdmin, SetDisabled — which
+// AccountService refuses against a Pending one instead (ErrUserIsPending).
+var pendingAccountErrors = []errorCase{
+	{service.ErrUserIsPending, conflict("account_pending", service.ErrUserIsPending.Error())},
 }
 
-var setAdminErrors = []errorCase{
-	{service.ErrLastAdmin, conflict("last_admin", "cannot remove the last remaining admin")},
-	{repository.ErrNotFound, notFound("account not found")},
-}
+var resetPasswordErrors = alsoHandling(pendingAccountErrors,
+	errorCase{service.ErrInvalidPassword, badRequest("temporary password must not be empty")},
+	errorCase{repository.ErrNotFound, notFound("account not found")},
+)
 
-var setDisabledErrors = []errorCase{
-	{service.ErrLastAdmin, conflict("last_admin", "cannot disable the last remaining admin")},
-	{repository.ErrNotFound, notFound("account not found")},
-}
+var setAdminErrors = alsoHandling(pendingAccountErrors,
+	errorCase{service.ErrLastAdmin, conflict("last_admin", "cannot remove the last remaining admin")},
+	errorCase{repository.ErrNotFound, notFound("account not found")},
+)
+
+var setDisabledErrors = alsoHandling(pendingAccountErrors,
+	errorCase{service.ErrLastAdmin, conflict("last_admin", "cannot disable the last remaining admin")},
+	errorCase{repository.ErrNotFound, notFound("account not found")},
+)
 
 var setUsernameErrors = []errorCase{
 	{service.ErrInvalidUsername, badRequest("username must not be empty, must not contain whitespace or a colon, and must be at most 64 characters")},
@@ -78,6 +106,22 @@ var usernameImpactErrors = []errorCase{
 var deleteImpactErrors = []errorCase{
 	{repository.ErrNotFound, notFound("account not found")},
 }
+
+var createInviteErrors = []errorCase{
+	{service.ErrInvalidUsername, badRequest("username must not be empty, must not contain whitespace or a colon, and must be at most 64 characters")},
+	{service.ErrUsernameTaken, conflict("username_taken", "username is already taken")},
+}
+
+// notPendingErrors is shared by ReissueInvite and CancelInvite, the two
+// operations that only make sense against a Pending account.
+var notPendingErrors = []errorCase{
+	{service.ErrUserNotPending, conflict("not_pending", service.ErrUserNotPending.Error())},
+	{repository.ErrNotFound, notFound("account not found")},
+}
+
+var reissueInviteErrors = notPendingErrors
+
+var cancelInviteErrors = notPendingErrors
 
 var deleteAccountErrors = []errorCase{
 	{service.ErrInvalidDisposition, badRequest(service.ErrInvalidDisposition.Error())},
@@ -106,6 +150,62 @@ func (h *AccountHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 
 	httpresponse.JSON(w, http.StatusCreated, toAccountResponse(user))
+}
+
+type createInviteRequest struct {
+	Username string `json:"username"`
+}
+
+// CreateInvite makes a new Pending account and issues its Invite (ADR-0042)
+// — the returned token is shown to the Admin exactly once, to distribute
+// however they choose.
+func (h *AccountHandler) CreateInvite(w http.ResponseWriter, r *http.Request) {
+	var req createInviteRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httpresponse.Error(w, http.StatusBadRequest, "invalid_request", "request body must be valid JSON")
+		return
+	}
+
+	result, err := h.accounts.CreateInvite(r.Context(), req.Username)
+	if respondError(w, err, createInviteErrors, "failed to create invite") {
+		return
+	}
+
+	httpresponse.JSON(w, http.StatusCreated, toInviteResponse(result))
+}
+
+// ReissueInvite replaces id's outstanding Invite with a fresh token and
+// expiry (ADR-0042), invalidating whichever token came before it.
+func (h *AccountHandler) ReissueInvite(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		httpresponse.Error(w, http.StatusBadRequest, "invalid_request", "id must be a number")
+		return
+	}
+
+	result, err := h.accounts.ReissueInvite(r.Context(), id)
+	if respondError(w, err, reissueInviteErrors, "failed to reissue invite") {
+		return
+	}
+
+	httpresponse.JSON(w, http.StatusOK, toInviteResponse(result))
+}
+
+// CancelInvite deletes id's Pending account outright (ADR-0042) — no
+// disposition for owned Calendars, since a Pending account owns nothing a
+// disposition would need to decide about.
+func (h *AccountHandler) CancelInvite(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		httpresponse.Error(w, http.StatusBadRequest, "invalid_request", "id must be a number")
+		return
+	}
+
+	if err := h.accounts.CancelInvite(r.Context(), id); respondError(w, err, cancelInviteErrors, "failed to cancel invite") {
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (h *AccountHandler) List(w http.ResponseWriter, r *http.Request) {

@@ -37,6 +37,12 @@ var (
 	// User (ADR-0037) — two of the three points Disable must be enforced at,
 	// the third being CalDAV Basic auth (AppPasswordService.Authenticate).
 	ErrAccountDisabled = errors.New("account is disabled")
+	// ErrInviteInvalid is returned by AcceptInvite for a token that doesn't
+	// match any outstanding Invite, has expired, or has already been
+	// consumed (ADR-0042) — deliberately one error for all three, since
+	// telling them apart would tell an attacker holding a dead token which
+	// kind of dead it is.
+	ErrInviteInvalid = errors.New("invite is invalid or has expired")
 	// ErrInvalidWeekStart is returned by UpdatePreferences for a Week start
 	// outside the date-fns weekStartsOn range (ADR-0039).
 	ErrInvalidWeekStart = errors.New("week_start must be between 0 and 6")
@@ -204,6 +210,48 @@ func (s *AuthService) Login(ctx context.Context, username, password string) (Log
 		sessionTokens:      tokens,
 		MustChangePassword: user.MustChangePassword,
 	}, nil
+}
+
+// AcceptInvite sets a password for the Pending User a live Invite token
+// names and logs them straight in (ADR-0042): the form that sets the
+// password has already proven who's asking, so there's no separate "invite
+// accepted, now please log in" step. A token that doesn't match any User, no
+// longer names a Pending one, or has expired is rejected the same way —
+// ErrInviteInvalid — and a token, once accepted, cannot be reused because
+// UserRepository.AcceptInvite clears it from the row it minted a password
+// hash into.
+func (s *AuthService) AcceptInvite(ctx context.Context, token, password string) (LoginResult, error) {
+	if password == "" {
+		return LoginResult{}, ErrInvalidPassword
+	}
+
+	user, err := s.users.GetByInviteTokenHash(ctx, hashToken(token))
+	if errors.Is(err, repository.ErrNotFound) {
+		return LoginResult{}, ErrInviteInvalid
+	}
+	if err != nil {
+		return LoginResult{}, fmt.Errorf("get user by invite token: %w", err)
+	}
+
+	if !user.IsPending() || user.InviteExpiresAt == nil || time.Now().After(*user.InviteExpiresAt) {
+		return LoginResult{}, ErrInviteInvalid
+	}
+
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	if err != nil {
+		return LoginResult{}, fmt.Errorf("hash password: %w", err)
+	}
+
+	if err := s.users.AcceptInvite(ctx, user.ID, string(hash)); err != nil {
+		return LoginResult{}, fmt.Errorf("accept invite: %w", err)
+	}
+
+	tokens, err := s.issueSession(ctx, user.ID)
+	if err != nil {
+		return LoginResult{}, err
+	}
+
+	return LoginResult{sessionTokens: tokens, MustChangePassword: false}, nil
 }
 
 // Authenticate validates an access token and returns the user id it was

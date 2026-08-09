@@ -40,10 +40,24 @@ const pathPrefix = "/dav"
 const attachmentsBasePath = pathPrefix + "/attachments/"
 
 // attachmentDownloadPath is one Attachment's full managed-attachment path —
-// the value ATTACH's URI carries and the CalDAV POST actions' Location
-// header returns.
+// the value the CalDAV POST actions' Location header returns.
 func attachmentDownloadPath(id string) string {
 	return attachmentsBasePath + id
+}
+
+// attachmentsURIPrefix returns attachmentsBasePath made absolute with the
+// scheme+host string dispatchHandler derived from the request in ctx, so ATTACH's
+// URI (plain iCalendar text, unlike a WebDAV href, with no request to
+// resolve a bare path against once it's sitting in a client's calendar
+// store — #142) is a fully-qualified URL a native CalDAV client can
+// actually dereference. Falls back to the path-only form if ctx carries no
+// request (e.g. a test calling the Backend directly).
+func attachmentsURIPrefix(ctx context.Context) string {
+	baseURL, ok := baseURLFromContext(ctx)
+	if !ok {
+		return attachmentsBasePath
+	}
+	return baseURL + attachmentsBasePath
 }
 
 // chi only routes its own fixed set of HTTP methods by default; CalDAV
@@ -248,7 +262,7 @@ func (b *Backend) listSeriesObjects(ctx context.Context, path string, include fu
 			continue
 		}
 
-		object, err := buildCalendarObject(userID, master, overridesByParent[master.ID])
+		object, err := buildCalendarObject(ctx, userID, master, overridesByParent[master.ID])
 		if err != nil {
 			return nil, err
 		}
@@ -335,8 +349,8 @@ func seriesHasOccurrenceInRange(master repository.Event, from, to time.Time) (bo
 // buildCalendarObject recomposes master and its overrides into the
 // CalendarObject GetCalendarObject/ListCalendarObjects/QueryCalendarObjects
 // all serve (ADR-0025).
-func buildCalendarObject(userID int64, master repository.Event, overrides []repository.Event) (*caldav.CalendarObject, error) {
-	cal, err := icalendar.SeriesToICal(master, overrides, icalendar.CalDAVTarget(attachmentsBasePath))
+func buildCalendarObject(ctx context.Context, userID int64, master repository.Event, overrides []repository.Event) (*caldav.CalendarObject, error) {
+	cal, err := icalendar.SeriesToICal(master, overrides, icalendar.CalDAVTarget(attachmentsURIPrefix(ctx)))
 	if err != nil {
 		return nil, fmt.Errorf("serialize series %q: %w", master.ID, err)
 	}
@@ -380,7 +394,7 @@ func (b *Backend) GetCalendarObject(ctx context.Context, path string, req *calda
 		return nil, webdav.NewHTTPError(http.StatusNotFound, fmt.Errorf("calendar object not found"))
 	}
 
-	return buildCalendarObject(userID, master, overrides)
+	return buildCalendarObject(ctx, userID, master, overrides)
 }
 
 // PutCalendarObject decomposes calendar into masterID's Master, Overrides,
@@ -423,7 +437,7 @@ func (b *Backend) PutCalendarObject(ctx context.Context, path string, calendar *
 		return nil, mapPutSeriesError(err)
 	}
 
-	return buildCalendarObject(userID, master, overrides)
+	return buildCalendarObject(ctx, userID, master, overrides)
 }
 
 // checkPutPreconditions enforces opts' RFC 2068 conditional headers against
@@ -473,7 +487,7 @@ func (b *Backend) currentObjectETag(ctx context.Context, userID int64, calendarI
 		return false, "", nil
 	}
 
-	cal, err := icalendar.SeriesToICal(master, overrides, icalendar.CalDAVTarget(attachmentsBasePath))
+	cal, err := icalendar.SeriesToICal(master, overrides, icalendar.CalDAVTarget(attachmentsURIPrefix(ctx)))
 	if err != nil {
 		return false, "", err
 	}

@@ -870,3 +870,205 @@ func TestAccountService_UsernameImpact_UnknownID_ReturnsErrNotFound(t *testing.T
 		t.Fatalf("expected ErrNotFound, got %v", err)
 	}
 }
+
+func TestAccountService_CreateInvite_CreatesPendingUserWithTokenAndDefaults(t *testing.T) {
+	accounts := newTestAccountService(t)
+	ctx := context.Background()
+
+	result, err := accounts.CreateInvite(ctx, "alice")
+	if err != nil {
+		t.Fatalf("create invite: %v", err)
+	}
+	if result.Token == "" {
+		t.Fatalf("expected a non-empty invite token")
+	}
+	if result.User.Username != "alice" {
+		t.Fatalf("expected username alice, got %q", result.User.Username)
+	}
+	if !result.User.IsPending() {
+		t.Fatalf("expected a freshly invited account to be pending")
+	}
+	if result.User.PasswordHash != "" {
+		t.Fatalf("expected a freshly invited account to have no password")
+	}
+	if result.User.MustChangePassword {
+		t.Fatalf("expected must_change_password to not apply to a pending account")
+	}
+
+	calendars, err := accounts.calendars.List(ctx, result.User.ID)
+	if err != nil {
+		t.Fatalf("list calendars: %v", err)
+	}
+	if len(calendars) == 0 {
+		t.Fatalf("expected the invited account to start with default calendars")
+	}
+}
+
+func TestAccountService_CreateInvite_EmptyUsername_ReturnsErrInvalidUsername(t *testing.T) {
+	accounts := newTestAccountService(t)
+
+	if _, err := accounts.CreateInvite(context.Background(), "  "); !errors.Is(err, ErrInvalidUsername) {
+		t.Fatalf("expected ErrInvalidUsername, got %v", err)
+	}
+}
+
+func TestAccountService_CreateInvite_DuplicateUsername_ReturnsErrUsernameTaken(t *testing.T) {
+	accounts := newTestAccountService(t)
+	ctx := context.Background()
+
+	if _, err := accounts.Create(ctx, "alice", "temp-secret"); err != nil {
+		t.Fatalf("create alice: %v", err)
+	}
+
+	if _, err := accounts.CreateInvite(ctx, "alice"); !errors.Is(err, ErrUsernameTaken) {
+		t.Fatalf("expected ErrUsernameTaken, got %v", err)
+	}
+}
+
+func TestAccountService_ReissueInvite_ReplacesTokenAndExtendsExpiry(t *testing.T) {
+	accounts := newTestAccountService(t)
+	ctx := context.Background()
+
+	first, err := accounts.CreateInvite(ctx, "alice")
+	if err != nil {
+		t.Fatalf("create invite: %v", err)
+	}
+
+	second, err := accounts.ReissueInvite(ctx, first.User.ID)
+	if err != nil {
+		t.Fatalf("reissue invite: %v", err)
+	}
+	if second.Token == "" || second.Token == first.Token {
+		t.Fatalf("expected a fresh, different token")
+	}
+	if !second.User.IsPending() {
+		t.Fatalf("expected the account to remain pending after reissue")
+	}
+
+	// The old token must no longer resolve to anything.
+	if _, err := accounts.users.GetByInviteTokenHash(ctx, hashToken(first.Token)); !errors.Is(err, repository.ErrNotFound) {
+		t.Fatalf("expected the previous token to be invalidated, got %v", err)
+	}
+	if _, err := accounts.users.GetByInviteTokenHash(ctx, hashToken(second.Token)); err != nil {
+		t.Fatalf("expected the new token to resolve, got %v", err)
+	}
+}
+
+func TestAccountService_ReissueInvite_NotPending_ReturnsErrUserNotPending(t *testing.T) {
+	accounts := newTestAccountService(t)
+	ctx := context.Background()
+
+	alice, err := accounts.Create(ctx, "alice", "temp-secret")
+	if err != nil {
+		t.Fatalf("create alice: %v", err)
+	}
+
+	if _, err := accounts.ReissueInvite(ctx, alice.ID); !errors.Is(err, ErrUserNotPending) {
+		t.Fatalf("expected ErrUserNotPending, got %v", err)
+	}
+}
+
+func TestAccountService_ReissueInvite_UnknownID_ReturnsErrNotFound(t *testing.T) {
+	accounts := newTestAccountService(t)
+
+	if _, err := accounts.ReissueInvite(context.Background(), 999); !errors.Is(err, repository.ErrNotFound) {
+		t.Fatalf("expected ErrNotFound, got %v", err)
+	}
+}
+
+func TestAccountService_CancelInvite_DeletesPendingUser(t *testing.T) {
+	accounts := newTestAccountService(t)
+	ctx := context.Background()
+
+	invite, err := accounts.CreateInvite(ctx, "alice")
+	if err != nil {
+		t.Fatalf("create invite: %v", err)
+	}
+
+	if err := accounts.CancelInvite(ctx, invite.User.ID); err != nil {
+		t.Fatalf("cancel invite: %v", err)
+	}
+
+	if _, err := accounts.users.GetByID(ctx, invite.User.ID); !errors.Is(err, repository.ErrNotFound) {
+		t.Fatalf("expected the pending user to be deleted, got %v", err)
+	}
+}
+
+func TestAccountService_CancelInvite_NotPending_ReturnsErrUserNotPending(t *testing.T) {
+	accounts := newTestAccountService(t)
+	ctx := context.Background()
+
+	alice, err := accounts.Create(ctx, "alice", "temp-secret")
+	if err != nil {
+		t.Fatalf("create alice: %v", err)
+	}
+
+	if err := accounts.CancelInvite(ctx, alice.ID); !errors.Is(err, ErrUserNotPending) {
+		t.Fatalf("expected ErrUserNotPending, got %v", err)
+	}
+
+	if _, err := accounts.users.GetByID(ctx, alice.ID); err != nil {
+		t.Fatalf("expected the active account to survive a refused cancel, got %v", err)
+	}
+}
+
+func TestAccountService_SetDisabled_RefusesPendingAccount(t *testing.T) {
+	accounts := newTestAccountService(t)
+	ctx := context.Background()
+
+	invite, err := accounts.CreateInvite(ctx, "alice")
+	if err != nil {
+		t.Fatalf("create invite: %v", err)
+	}
+
+	if _, err := accounts.SetDisabled(ctx, invite.User.ID, true); !errors.Is(err, ErrUserIsPending) {
+		t.Fatalf("expected ErrUserIsPending, got %v", err)
+	}
+	if _, err := accounts.SetDisabled(ctx, invite.User.ID, false); !errors.Is(err, ErrUserIsPending) {
+		t.Fatalf("expected ErrUserIsPending, got %v", err)
+	}
+}
+
+func TestAccountService_SetAdmin_RefusesPendingAccount(t *testing.T) {
+	accounts := newTestAccountService(t)
+	ctx := context.Background()
+
+	invite, err := accounts.CreateInvite(ctx, "alice")
+	if err != nil {
+		t.Fatalf("create invite: %v", err)
+	}
+
+	if _, err := accounts.SetAdmin(ctx, invite.User.ID, true); !errors.Is(err, ErrUserIsPending) {
+		t.Fatalf("expected ErrUserIsPending, got %v", err)
+	}
+}
+
+func TestAccountService_ResetPassword_RefusesPendingAccount(t *testing.T) {
+	accounts := newTestAccountService(t)
+	ctx := context.Background()
+
+	invite, err := accounts.CreateInvite(ctx, "alice")
+	if err != nil {
+		t.Fatalf("create invite: %v", err)
+	}
+
+	if _, err := accounts.ResetPassword(ctx, invite.User.ID, "new-temp-secret"); !errors.Is(err, ErrUserIsPending) {
+		t.Fatalf("expected ErrUserIsPending, got %v", err)
+	}
+}
+
+func TestAccountService_Create_StillProducesImmediatelyActiveUser(t *testing.T) {
+	accounts := newTestAccountService(t)
+	ctx := context.Background()
+
+	user, err := accounts.Create(ctx, "alice", "temp-secret")
+	if err != nil {
+		t.Fatalf("create account: %v", err)
+	}
+	if user.IsPending() {
+		t.Fatalf("expected the temp-password flow to produce an immediately-active account, not a pending one")
+	}
+	if user.IsDisabled {
+		t.Fatalf("expected the temp-password flow to produce an enabled account")
+	}
+}

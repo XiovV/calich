@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 	"unicode"
 
 	"golang.org/x/crypto/bcrypt"
@@ -51,7 +52,26 @@ var (
 	// being deleted — their Calendars can't be reassigned to themselves,
 	// since they're about to stop existing.
 	ErrCannotTransferToSelf = errors.New("cannot transfer calendars to the user being deleted")
+	// ErrUserNotPending is returned by ReissueInvite and CancelInvite when
+	// userID names a User who isn't Pending — either never invited, or
+	// already Active (ADR-0042).
+	ErrUserNotPending = errors.New("account does not have an outstanding invite")
+	// ErrUserIsPending is returned by operations ADR-0037 wrote for an
+	// already-Active account — SetAdmin, SetDisabled, ResetPassword — when
+	// called against a Pending one instead. Pending is a state of its own
+	// (ADR-0042): it has no password to reset, can't hold Admin, and
+	// "disabled" already describes why it can't log in, so re-running those
+	// operations on it would either do nothing meaningful or, for
+	// ResetPassword, quietly turn it into an Active-but-still-flagged-disabled
+	// account. Use the Invite endpoints instead.
+	ErrUserIsPending = errors.New("account has an outstanding invite; use the invite endpoints instead")
 )
+
+// inviteTokenTTL is how long an Invite token is valid for (ADR-0042) —
+// shorter than the 30-day refresh token (ADR-0009) because this token
+// doesn't extend a Session, it creates one: anyone holding a live link can
+// become the User outright.
+const inviteTokenTTL = 7 * 24 * time.Hour
 
 // AccountService is account administration (ADR-0037): creating accounts,
 // listing them, resetting a password, granting or revoking Admin, renaming,
@@ -125,6 +145,95 @@ func (s *AccountService) Create(ctx context.Context, username, tempPassword stri
 	return user, nil
 }
 
+// InviteResult is a Pending User alongside the plaintext Invite token
+// (ADR-0042) — the token exists only at issuance, exactly like
+// CreateResult.Secret for an App password; nothing else ever returns it
+// again, since only its hash is stored.
+type InviteResult struct {
+	User  repository.User
+	Token string
+}
+
+// CreateInvite makes a new Pending account (ADR-0042): username is validated
+// exactly as Create validates one, since the Admin still picks it either
+// way, and the same default Calendars are seeded so a Pending row looks like
+// any other account the moment it accepts. Unlike Create, no password is set
+// — the invitee sets their own via AuthService.AcceptInvite — so the account
+// starts blocked from Login, Refresh, and CalDAV Basic auth the same way a
+// Disabled one is, until accepted.
+func (s *AccountService) CreateInvite(ctx context.Context, username string) (InviteResult, error) {
+	username, err := validateUsername(username)
+	if err != nil {
+		return InviteResult{}, err
+	}
+
+	token, hash, err := newOpaqueToken()
+	if err != nil {
+		return InviteResult{}, fmt.Errorf("generate invite token: %w", err)
+	}
+
+	user, err := s.users.CreatePending(ctx, username, hash, time.Now().Add(inviteTokenTTL))
+	if err != nil {
+		if errors.Is(err, repository.ErrUsernameTaken) {
+			return InviteResult{}, ErrUsernameTaken
+		}
+		return InviteResult{}, fmt.Errorf("create pending user: %w", err)
+	}
+
+	if err := s.calendars.EnsureDefaults(ctx, user.ID); err != nil {
+		return InviteResult{}, fmt.Errorf("seed default calendars: %w", err)
+	}
+
+	return InviteResult{User: user, Token: token}, nil
+}
+
+// ReissueInvite overwrites userID's outstanding Invite with a fresh token and
+// a reset 7-day expiry (ADR-0042), invalidating whichever token came before
+// it. Unlike CreateInvite, it does not re-validate the username or re-run
+// EnsureDefaults — the account and its default Calendars already exist; only
+// the credential to activate it is being replaced. Available before or after
+// the previous token's expiry, so an expired Invite is never a dead end.
+func (s *AccountService) ReissueInvite(ctx context.Context, userID int64) (InviteResult, error) {
+	user, err := s.users.GetByID(ctx, userID)
+	if err != nil {
+		return InviteResult{}, fmt.Errorf("get user: %w", err)
+	}
+	if !user.IsPending() {
+		return InviteResult{}, ErrUserNotPending
+	}
+
+	token, hash, err := newOpaqueToken()
+	if err != nil {
+		return InviteResult{}, fmt.Errorf("generate invite token: %w", err)
+	}
+
+	user, err = s.users.SetInvite(ctx, userID, hash, time.Now().Add(inviteTokenTTL))
+	if err != nil {
+		return InviteResult{}, fmt.Errorf("set invite: %w", err)
+	}
+
+	return InviteResult{User: user, Token: token}, nil
+}
+
+// CancelInvite deletes a Pending User's row outright (ADR-0042). Unlike
+// Delete, it takes no disposition for owned Calendars: a Pending User has
+// never logged in, so their default Calendars carry no Events and no Shares,
+// and cascade-delete with the row like any other child row would.
+func (s *AccountService) CancelInvite(ctx context.Context, userID int64) error {
+	user, err := s.users.GetByID(ctx, userID)
+	if err != nil {
+		return fmt.Errorf("get user: %w", err)
+	}
+	if !user.IsPending() {
+		return ErrUserNotPending
+	}
+
+	if err := s.users.Delete(ctx, userID); err != nil {
+		return fmt.Errorf("delete pending user: %w", err)
+	}
+	return nil
+}
+
 // List returns every account on the instance.
 func (s *AccountService) List(ctx context.Context) ([]repository.User, error) {
 	users, err := s.users.List(ctx)
@@ -140,6 +249,14 @@ func (s *AccountService) List(ctx context.Context) ([]repository.User, error) {
 // login. Every existing Session is invalidated, mirroring what a
 // self-service password change already does.
 func (s *AccountService) ResetPassword(ctx context.Context, userID int64, tempPassword string) (repository.User, error) {
+	user, err := s.users.GetByID(ctx, userID)
+	if err != nil {
+		return repository.User{}, fmt.Errorf("get user: %w", err)
+	}
+	if user.IsPending() {
+		return repository.User{}, ErrUserIsPending
+	}
+
 	if tempPassword == "" {
 		return repository.User{}, ErrInvalidPassword
 	}
@@ -165,20 +282,21 @@ func (s *AccountService) ResetPassword(ctx context.Context, userID int64, tempPa
 // unadministrable, with nobody left who can create accounts or promote
 // anyone back.
 func (s *AccountService) SetAdmin(ctx context.Context, userID int64, isAdmin bool) (repository.User, error) {
-	if !isAdmin {
-		user, err := s.users.GetByID(ctx, userID)
-		if err != nil {
-			return repository.User{}, fmt.Errorf("get user: %w", err)
-		}
+	existing, err := s.users.GetByID(ctx, userID)
+	if err != nil {
+		return repository.User{}, fmt.Errorf("get user: %w", err)
+	}
+	if existing.IsPending() {
+		return repository.User{}, ErrUserIsPending
+	}
 
-		if user.IsAdmin {
-			count, err := s.users.CountAdmins(ctx)
-			if err != nil {
-				return repository.User{}, fmt.Errorf("count admins: %w", err)
-			}
-			if count <= 1 {
-				return repository.User{}, ErrLastAdmin
-			}
+	if !isAdmin && existing.IsAdmin {
+		count, err := s.users.CountAdmins(ctx)
+		if err != nil {
+			return repository.User{}, fmt.Errorf("count admins: %w", err)
+		}
+		if count <= 1 {
+			return repository.User{}, ErrLastAdmin
 		}
 	}
 
@@ -200,6 +318,9 @@ func (s *AccountService) SetDisabled(ctx context.Context, userID int64, isDisabl
 	user, err := s.users.GetByID(ctx, userID)
 	if err != nil {
 		return repository.User{}, fmt.Errorf("get user: %w", err)
+	}
+	if user.IsPending() {
+		return repository.User{}, ErrUserIsPending
 	}
 
 	if isDisabled && user.IsAdmin {

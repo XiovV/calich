@@ -36,6 +36,38 @@ func ifMatchFromContext(ctx context.Context) (string, bool) {
 	return v, ok
 }
 
+type baseURLContextKey struct{}
+
+// baseURLFromContext returns the scheme+host string dispatchHandler derived
+// from the incoming request (see requestBaseURL), if any.
+func baseURLFromContext(ctx context.Context) (string, bool) {
+	v, ok := ctx.Value(baseURLContextKey{}).(string)
+	return v, ok
+}
+
+// requestBaseURL derives the scheme and host a client outside this process
+// would use to reach it, so an ATTACH property (a plain-text URI with no
+// resolution context of its own, unlike a WebDAV href — #142) can be built
+// as a fully-qualified URL. X-Forwarded-Proto/X-Forwarded-Host take
+// precedence when present, for a reverse-proxied deployment; otherwise the
+// request's own TLS state and Host header apply.
+func requestBaseURL(r *http.Request) string {
+	scheme := "http"
+	if r.TLS != nil {
+		scheme = "https"
+	}
+	if proto := r.Header.Get("X-Forwarded-Proto"); proto != "" {
+		scheme = proto
+	}
+
+	host := r.Host
+	if fwdHost := r.Header.Get("X-Forwarded-Host"); fwdHost != "" {
+		host = fwdHost
+	}
+
+	return scheme + "://" + host
+}
+
 // NewHTTPHandler returns the http.Handler that serves everything under
 // pathPrefix: base CalDAV (discovery, GET/PUT/DELETE, calendar-query and
 // calendar-multiget REPORTs) via go-webdav, plus sync-collection, getctag,
@@ -49,6 +81,8 @@ func NewHTTPHandler(backend *Backend) http.Handler {
 }
 
 func (h *dispatchHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	r = r.WithContext(context.WithValue(r.Context(), baseURLContextKey{}, requestBaseURL(r)))
+
 	// GET /dav/attachments/{managed-id} lives outside go-webdav's own
 	// resource tree entirely (it isn't a calendar, a calendar object, or a
 	// principal), so it's matched on its own reserved path prefix before the

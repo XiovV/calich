@@ -1021,3 +1021,132 @@ func TestLogout_NoopForUnknownToken(t *testing.T) {
 		t.Fatalf("expected logout to be a no-op for an unknown token, got %v", err)
 	}
 }
+
+// createPendingUser mirrors AccountService.CreateInvite's write, without
+// pulling in AccountService (and its CalendarService dependency) just to get
+// a Pending row for AuthService's own tests.
+func createPendingUser(t *testing.T, svc *AuthService, username, rawToken string, expiresAt time.Time) repository.User {
+	t.Helper()
+
+	user, err := svc.users.CreatePending(context.Background(), username, hashToken(rawToken), expiresAt)
+	if err != nil {
+		t.Fatalf("create pending user: %v", err)
+	}
+	return user
+}
+
+func TestLogin_RejectsPendingAccount(t *testing.T) {
+	svc := newTestAuthService(t, "", "")
+	ctx := context.Background()
+
+	createPendingUser(t, svc, "alice", "raw-token", time.Now().Add(time.Hour))
+
+	// A Pending account has no password at all, so any attempt fails the
+	// same way a wrong password would — there is no separate "pending"
+	// signal at Login, unlike Disabled.
+	if _, err := svc.Login(ctx, "alice", "anything"); !errors.Is(err, ErrInvalidCredentials) {
+		t.Fatalf("expected ErrInvalidCredentials, got %v", err)
+	}
+}
+
+func TestRefresh_RejectsPendingAccount(t *testing.T) {
+	svc := newTestAuthService(t, "", "")
+	ctx := context.Background()
+
+	user := createPendingUser(t, svc, "alice", "raw-token", time.Now().Add(time.Hour))
+
+	// A Pending account can never have issued itself a session through
+	// Login, but Refresh's own guard must still hold if one exists some
+	// other way (e.g. a session surviving a state change).
+	refreshToken, refreshTokenHash, err := newOpaqueToken()
+	if err != nil {
+		t.Fatalf("generate refresh token: %v", err)
+	}
+	if _, err := svc.sessions.Create(ctx, user.ID, refreshTokenHash, time.Now().Add(24*time.Hour)); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	if _, err := svc.Refresh(ctx, refreshToken); !errors.Is(err, ErrAccountDisabled) {
+		t.Fatalf("expected ErrAccountDisabled, got %v", err)
+	}
+}
+
+func TestAcceptInvite_ActivatesAccountAndIssuesSession(t *testing.T) {
+	svc := newTestAuthService(t, "", "")
+	ctx := context.Background()
+
+	createPendingUser(t, svc, "alice", "raw-token", time.Now().Add(time.Hour))
+
+	result, err := svc.AcceptInvite(ctx, "raw-token", "new-password")
+	if err != nil {
+		t.Fatalf("accept invite: %v", err)
+	}
+	if result.AccessToken == "" || result.RefreshToken == "" {
+		t.Fatalf("expected a full session to be issued")
+	}
+	if result.MustChangePassword {
+		t.Fatalf("expected must_change_password to be false for an invitee-chosen password")
+	}
+
+	user, err := svc.users.GetByUsername(ctx, "alice")
+	if err != nil {
+		t.Fatalf("get user: %v", err)
+	}
+	if user.IsPending() {
+		t.Fatalf("expected the account to no longer be pending")
+	}
+	if user.IsDisabled {
+		t.Fatalf("expected the account to be active, not disabled")
+	}
+	if user.InviteTokenHash != nil || user.InviteExpiresAt != nil {
+		t.Fatalf("expected the invite to be cleared from the row")
+	}
+
+	// The chosen password now works for an ordinary login.
+	if _, err := svc.Login(ctx, "alice", "new-password"); err != nil {
+		t.Fatalf("login with the accepted password: %v", err)
+	}
+}
+
+func TestAcceptInvite_EmptyPassword_ReturnsErrInvalidPassword(t *testing.T) {
+	svc := newTestAuthService(t, "", "")
+
+	createPendingUser(t, svc, "alice", "raw-token", time.Now().Add(time.Hour))
+
+	if _, err := svc.AcceptInvite(context.Background(), "raw-token", ""); !errors.Is(err, ErrInvalidPassword) {
+		t.Fatalf("expected ErrInvalidPassword, got %v", err)
+	}
+}
+
+func TestAcceptInvite_UnknownToken_ReturnsErrInviteInvalid(t *testing.T) {
+	svc := newTestAuthService(t, "", "")
+
+	if _, err := svc.AcceptInvite(context.Background(), "not-a-real-token", "new-password"); !errors.Is(err, ErrInviteInvalid) {
+		t.Fatalf("expected ErrInviteInvalid, got %v", err)
+	}
+}
+
+func TestAcceptInvite_ExpiredToken_ReturnsErrInviteInvalid(t *testing.T) {
+	svc := newTestAuthService(t, "", "")
+
+	createPendingUser(t, svc, "alice", "raw-token", time.Now().Add(-time.Minute))
+
+	if _, err := svc.AcceptInvite(context.Background(), "raw-token", "new-password"); !errors.Is(err, ErrInviteInvalid) {
+		t.Fatalf("expected ErrInviteInvalid, got %v", err)
+	}
+}
+
+func TestAcceptInvite_TokenCannotBeReused(t *testing.T) {
+	svc := newTestAuthService(t, "", "")
+	ctx := context.Background()
+
+	createPendingUser(t, svc, "alice", "raw-token", time.Now().Add(time.Hour))
+
+	if _, err := svc.AcceptInvite(ctx, "raw-token", "first-password"); err != nil {
+		t.Fatalf("accept invite: %v", err)
+	}
+
+	if _, err := svc.AcceptInvite(ctx, "raw-token", "second-password"); !errors.Is(err, ErrInviteInvalid) {
+		t.Fatalf("expected a reused token to be rejected with ErrInviteInvalid, got %v", err)
+	}
+}

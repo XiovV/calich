@@ -26,6 +26,8 @@ RFC 8607 exists precisely because those three are the only alternatives and all 
 
 `CALDAV:managed-attachments-server-URL` is advertised on the calendar home collection as a path-only `DAV:href`; the client substitutes scheme and authority from its own request, so **the server never needs to know its external base URL** and no new configuration is required.
 
+**Amendment (#142):** that substitution rule is specific to a WebDAV `href` returned inside a PROPFIND response — it does not extend to `ATTACH` itself. `ATTACH`'s `VALUE=URI` is plain iCalendar text sitting in a `.ics` body with no request for a client to resolve a bare path against, so a native client that receives one (rather than following `managed-attachments-server-URL` itself) has no host to fall back on. `ATTACH` is therefore built as a fully-qualified URL, deriving scheme and host from the request that fetched the calendar object (`Host`, `X-Forwarded-Proto`/`X-Forwarded-Host`) — still no server configuration, since the source is the request, not a setting. `managed-attachments-server-URL` itself is unchanged.
+
 ## Storage on the Master, serialization onto every VEVENT
 
 RFC 8607's `rid` query parameter is per-instance, which collides with Master-only storage. The resolution:
@@ -88,3 +90,4 @@ Every response carries `Content-Disposition: attachment`, `X-Content-Type-Option
 - **The event modal gains a scroll container.** It is a fixed-width popup with no `max-height` today, so a recurring Event with several Reminders already overflows the viewport unrecoverably. Attachments make a latent bug acute rather than causing a new one.
 - **Refresh ignores `ATTACH` entirely** (ADR-0033). Import ingests attachment bytes because it is a one-time act with a human watching and an Import summary to disclose what happened; a Refresh is an unattended hourly poller against a URL the instance does not control, with no human, no disclosure channel, and no bound on what it would pull.
 - **Export is not covered here.** A managed attachment URI is meaningless outside the server that minted it, so Calendar files need a different representation — see ADR-0041, which amends ADR-0031 to allow it.
+- **macOS Calendar (#143) can view and download managed attachments but has no UI to add one.** Its CalDAV client follows `managed-attachments-server-URL` and renders `ATTACH` correctly, so the server side of RFC 8607 is exchanging data with it as designed. Apple's own event-editing UI simply never exposes an "Add Attachment" control over CalDAV, regardless of server support. This is a native-client limitation, accepted as such — not a server gap to re-investigate.

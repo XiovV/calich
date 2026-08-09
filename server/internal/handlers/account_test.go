@@ -43,12 +43,16 @@ func newAccountTestServer(t *testing.T) (*httptest.Server, string) {
 
 	r := chi.NewRouter()
 	r.Post("/api/auth/login", authHandler.Login)
+	r.Post("/api/auth/accept-invite", authHandler.AcceptInvite)
 	r.Route("/api/accounts", func(r chi.Router) {
 		r.Use(httpauth.RequireAuth(auth))
 		r.Use(httpauth.RequireAdmin(auth))
 
 		r.Get("/", h.List)
 		r.Post("/", h.Create)
+		r.Post("/invite", h.CreateInvite)
+		r.Post("/{id}/invite/reissue", h.ReissueInvite)
+		r.Delete("/{id}/invite", h.CancelInvite)
 		r.Post("/{id}/reset-password", h.ResetPassword)
 		r.Put("/{id}/admin", h.SetAdmin)
 		r.Put("/{id}/disabled", h.SetDisabled)
@@ -1043,4 +1047,284 @@ func TestAccountUsernameImpact_NonAdmin_Returns403(t *testing.T) {
 	if resp.StatusCode != http.StatusForbidden {
 		t.Fatalf("expected 403, got %d", resp.StatusCode)
 	}
+}
+
+func createInvite(t *testing.T, srv *httptest.Server, accessToken, username string) *http.Response {
+	t.Helper()
+
+	body, err := json.Marshal(createInviteRequest{Username: username})
+	if err != nil {
+		t.Fatalf("marshal create invite request: %v", err)
+	}
+
+	req, err := http.NewRequest(http.MethodPost, srv.URL+"/api/accounts/invite", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST /api/accounts/invite: %v", err)
+	}
+	return resp
+}
+
+func TestAccountCreateInvite_ReturnsPendingAccountAndToken(t *testing.T) {
+	srv, accessToken := newAccountTestServer(t)
+
+	resp := createInvite(t, srv, accessToken, "alice")
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("expected 201, got %d", resp.StatusCode)
+	}
+
+	var invite inviteResponse
+	if err := json.NewDecoder(resp.Body).Decode(&invite); err != nil {
+		t.Fatalf("decode invite response: %v", err)
+	}
+	if invite.Token == "" {
+		t.Fatalf("expected a non-empty invite token")
+	}
+	if !invite.Account.IsPending {
+		t.Fatalf("expected the account to be pending")
+	}
+	if invite.Account.InviteExpiresAt == nil {
+		t.Fatalf("expected an invite expiry to be set")
+	}
+}
+
+func TestAccountCreateInvite_DuplicateUsername_Returns409(t *testing.T) {
+	srv, accessToken := newAccountTestServer(t)
+
+	firstResp := createInvite(t, srv, accessToken, "alice")
+	defer firstResp.Body.Close()
+
+	resp := createInvite(t, srv, accessToken, "alice")
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("expected 409, got %d", resp.StatusCode)
+	}
+}
+
+func TestAccountCreateInvite_NonAdmin_Returns403(t *testing.T) {
+	srv, accessToken := newAccountTestServer(t)
+	aliceToken := nonAdminAccessToken(t, srv, accessToken)
+
+	resp := createInvite(t, srv, aliceToken, "bob")
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d", resp.StatusCode)
+	}
+}
+
+func TestAccountReissueInvite_ReplacesToken(t *testing.T) {
+	srv, accessToken := newAccountTestServer(t)
+
+	createResp := createInvite(t, srv, accessToken, "alice")
+	defer createResp.Body.Close()
+	var created inviteResponse
+	if err := json.NewDecoder(createResp.Body).Decode(&created); err != nil {
+		t.Fatalf("decode invite response: %v", err)
+	}
+
+	req, err := http.NewRequest(http.MethodPost, fmt.Sprintf("%s/api/accounts/%d/invite/reissue", srv.URL, created.Account.ID), nil)
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST invite/reissue: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	var reissued inviteResponse
+	if err := json.NewDecoder(resp.Body).Decode(&reissued); err != nil {
+		t.Fatalf("decode reissue response: %v", err)
+	}
+	if reissued.Token == "" || reissued.Token == created.Token {
+		t.Fatalf("expected a fresh, different token")
+	}
+
+	// The original token must no longer be acceptable.
+	acceptResp, err := http.Post(srv.URL+"/api/auth/accept-invite", "application/json",
+		bytes.NewReader(mustMarshal(t, acceptInviteRequest{Token: created.Token, Password: "new-password"})))
+	if err != nil {
+		t.Fatalf("POST accept-invite: %v", err)
+	}
+	defer acceptResp.Body.Close()
+	if acceptResp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected the reissued-away token to be refused with 401, got %d", acceptResp.StatusCode)
+	}
+}
+
+func TestAccountReissueInvite_NotPending_Returns409(t *testing.T) {
+	srv, accessToken := newAccountTestServer(t)
+
+	createResp := createAccount(t, srv, accessToken, "alice", "temp-secret")
+	defer createResp.Body.Close()
+	var created accountResponse
+	if err := json.NewDecoder(createResp.Body).Decode(&created); err != nil {
+		t.Fatalf("decode create response: %v", err)
+	}
+
+	req, err := http.NewRequest(http.MethodPost, fmt.Sprintf("%s/api/accounts/%d/invite/reissue", srv.URL, created.ID), nil)
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST invite/reissue: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("expected 409, got %d", resp.StatusCode)
+	}
+}
+
+func TestAccountCancelInvite_DeletesAccount(t *testing.T) {
+	srv, accessToken := newAccountTestServer(t)
+
+	createResp := createInvite(t, srv, accessToken, "alice")
+	defer createResp.Body.Close()
+	var created inviteResponse
+	if err := json.NewDecoder(createResp.Body).Decode(&created); err != nil {
+		t.Fatalf("decode invite response: %v", err)
+	}
+
+	req, err := http.NewRequest(http.MethodDelete, fmt.Sprintf("%s/api/accounts/%d/invite", srv.URL, created.Account.ID), nil)
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("DELETE invite: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("expected 204, got %d", resp.StatusCode)
+	}
+
+	listReq, err := http.NewRequest(http.MethodGet, srv.URL+"/api/accounts/", nil)
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	listReq.Header.Set("Authorization", "Bearer "+accessToken)
+	listResp, err := http.DefaultClient.Do(listReq)
+	if err != nil {
+		t.Fatalf("GET /api/accounts: %v", err)
+	}
+	defer listResp.Body.Close()
+
+	var accounts []accountResponse
+	if err := json.NewDecoder(listResp.Body).Decode(&accounts); err != nil {
+		t.Fatalf("decode accounts list: %v", err)
+	}
+	for _, a := range accounts {
+		if a.ID == created.Account.ID {
+			t.Fatalf("expected the pending account to be gone from the list")
+		}
+	}
+}
+
+func TestAccountCancelInvite_NotPending_Returns409(t *testing.T) {
+	srv, accessToken := newAccountTestServer(t)
+
+	createResp := createAccount(t, srv, accessToken, "alice", "temp-secret")
+	defer createResp.Body.Close()
+	var created accountResponse
+	if err := json.NewDecoder(createResp.Body).Decode(&created); err != nil {
+		t.Fatalf("decode create response: %v", err)
+	}
+
+	req, err := http.NewRequest(http.MethodDelete, fmt.Sprintf("%s/api/accounts/%d/invite", srv.URL, created.ID), nil)
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("DELETE invite: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("expected 409, got %d", resp.StatusCode)
+	}
+}
+
+func TestAcceptInvite_LogsInImmediately(t *testing.T) {
+	srv, accessToken := newAccountTestServer(t)
+
+	createResp := createInvite(t, srv, accessToken, "alice")
+	defer createResp.Body.Close()
+	var created inviteResponse
+	if err := json.NewDecoder(createResp.Body).Decode(&created); err != nil {
+		t.Fatalf("decode invite response: %v", err)
+	}
+
+	resp, err := http.Post(srv.URL+"/api/auth/accept-invite", "application/json",
+		bytes.NewReader(mustMarshal(t, acceptInviteRequest{Token: created.Token, Password: "new-password"})))
+	if err != nil {
+		t.Fatalf("POST accept-invite: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	var logged loginResponse
+	if err := json.NewDecoder(resp.Body).Decode(&logged); err != nil {
+		t.Fatalf("decode accept-invite response: %v", err)
+	}
+	if logged.AccessToken == "" {
+		t.Fatalf("expected an access token")
+	}
+
+	// The now-Active account logs in normally with the chosen password.
+	loginResp := login(t, srv, "alice", "new-password")
+	defer loginResp.Body.Close()
+	if loginResp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 logging in with the accepted password, got %d", loginResp.StatusCode)
+	}
+}
+
+func TestAcceptInvite_InvalidToken_Returns401(t *testing.T) {
+	srv, _ := newAccountTestServer(t)
+
+	resp, err := http.Post(srv.URL+"/api/auth/accept-invite", "application/json",
+		bytes.NewReader(mustMarshal(t, acceptInviteRequest{Token: "not-a-real-token", Password: "new-password"})))
+	if err != nil {
+		t.Fatalf("POST accept-invite: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", resp.StatusCode)
+	}
+}
+
+func mustMarshal(t *testing.T, v any) []byte {
+	t.Helper()
+	body, err := json.Marshal(v)
+	if err != nil {
+		t.Fatalf("marshal request: %v", err)
+	}
+	return body
 }
