@@ -117,10 +117,15 @@ export function PreferencesSection() {
   }
 
   async function handleClearWorkingHours() {
-    await run(() => updateWorkingHours(null));
+    setDraftStart(null);
+    setDraftEnd(null);
+    if (hasWorkingHours) {
+      await run(() => updateWorkingHours(null));
+    }
   }
 
   const hasWorkingHours = workingHoursStart !== null && workingHoursEnd !== null;
+  const hasAnyDraftValue = draftStart !== null || draftEnd !== null;
   const workingHoursInvalid =
     draftStart !== null && draftEnd !== null && draftStart >= draftEnd;
 
@@ -179,7 +184,7 @@ export function PreferencesSection() {
                 className="flex-1"
               />
             </div>
-            {hasWorkingHours && (
+            {hasAnyDraftValue && (
               <Button variant="ghost" color="secondary" size="small" onClick={handleClearWorkingHours}>
                 Clear
               </Button>
