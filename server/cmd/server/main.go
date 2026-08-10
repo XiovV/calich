@@ -74,7 +74,7 @@ func main() {
 	attachmentRepo := repository.NewAttachmentRepository(sqlDB)
 	eventRepo := repository.NewEventRepository(sqlDB)
 	attendeeRepo := repository.NewAttendeeRepository(sqlDB)
-	eventService := service.NewEventService(sqlDB, eventRepo, repository.NewEventExceptionRepository(sqlDB), repository.NewEventReminderRepository(sqlDB), reminderOverrideRepo, repository.NewSyncRepository(sqlDB), calendarService, users, attachmentRepo, attendeeRepo, workspaceRepo)
+	eventService := service.NewEventService(sqlDB, eventRepo, repository.NewEventExceptionRepository(sqlDB), repository.NewEventReminderRepository(sqlDB), reminderOverrideRepo, repository.NewSyncRepository(sqlDB), calendarService, users, attachmentRepo, attendeeRepo, workspaceRepo, groupRepo)
 	attachmentStore := attachmentstore.New(cfg.DataDir)
 	attachmentService := service.NewAttachmentService(attachmentRepo, eventRepo, calendarService, eventService, attachmentStore, cfg.MaxAttachmentsPerEvent)
 	notificationRepo := repository.NewNotificationRepository(sqlDB)

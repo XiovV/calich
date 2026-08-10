@@ -603,6 +603,50 @@ func (h *EventHandler) AddAttendee(w http.ResponseWriter, r *http.Request) {
 	httpresponse.JSON(w, http.StatusCreated, attendeeWire{UserID: attendee.UserID, Response: attendee.Response})
 }
 
+// addGroupAttendeeErrors is eventNotFoundErrors plus the Group-invite
+// failure modes (#162, ADR-0046) — the Group-target analog of
+// addAttendeeErrors.
+var addGroupAttendeeErrors = alsoHandling(eventNotFoundErrors,
+	errorCase{service.ErrGroupNotFound, badRequest("group not found")},
+	errorCase{service.ErrAttendeeTargetNotInWorkspace, badRequest("attendee target does not belong to this workspace")},
+)
+
+type addGroupAttendeeRequest struct {
+	GroupID int64 `json:"groupId"`
+}
+
+// AddGroupAttendee serves POST /api/events/{id}/attendees/group: invites
+// every current member of req.GroupID as an Attendee of id, a one-time
+// snapshot expansion rather than a dynamic Group Share (#162, ADR-0046).
+// Callable only by an Editor of id's Calendar, same as AddAttendee.
+func (h *EventHandler) AddGroupAttendee(w http.ResponseWriter, r *http.Request) {
+	userID, ok := httpauth.UserIDFromContext(r.Context())
+	if !ok {
+		httpresponse.Error(w, http.StatusUnauthorized, "unauthorized", "authentication required")
+		return
+	}
+
+	id := chi.URLParam(r, "id")
+
+	var req addGroupAttendeeRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httpresponse.Error(w, http.StatusBadRequest, "invalid_request", "request body must be valid JSON")
+		return
+	}
+
+	attendees, err := h.events.AddGroupAttendee(r.Context(), userID, id, req.GroupID)
+	if respondError(w, err, addGroupAttendeeErrors, "failed to add group attendees") {
+		return
+	}
+
+	response := make([]attendeeWire, len(attendees))
+	for i, a := range attendees {
+		response[i] = attendeeWire{UserID: a.UserID, Response: a.Response}
+	}
+
+	httpresponse.JSON(w, http.StatusCreated, response)
+}
+
 // RemoveAttendee serves DELETE /api/events/{id}/attendees/{userId}: revokes
 // userId's Attendee invite to id, callable only by an Editor of id's
 // Calendar (#161, ADR-0046).

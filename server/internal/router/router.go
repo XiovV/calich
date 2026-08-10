@@ -138,6 +138,7 @@ func New(logger *slog.Logger, authHandler *handlers.AuthHandler, calendarHandler
 			// always the caller's own, so it needs no such gate.
 			r.Get("/{id}/attendees", eventHandler.ListAttendees)
 			r.Post("/{id}/attendees", eventHandler.AddAttendee)
+			r.Post("/{id}/attendees/group", eventHandler.AddGroupAttendee)
 			r.Delete("/{id}/attendees/{userId}", eventHandler.RemoveAttendee)
 			r.Put("/{id}/attendees/response", eventHandler.SetAttendeeResponse)
 		})
