@@ -365,3 +365,56 @@ func TestEventService_ListAttendees_RefusesCallerWithNoVisibility(t *testing.T) 
 		t.Fatalf("expected ErrNotFound, got %v", err)
 	}
 }
+
+// A caller with ordinary Calendar Access gets CalendarName/CalendarColor
+// from List's already-loaded Access set (attachCalendarMeta's known map),
+// no extra Calendar lookup needed.
+func TestEventService_List_StampsCalendarMetaForAccessibleEvent(t *testing.T) {
+	svc, _, _, ownerID, _, _, calendarID := newTestAttendeeService(t)
+	ctx := context.Background()
+	createTestEvent(t, svc, ownerID, calendarID, "evt-1")
+
+	events, err := svc.List(ctx, ownerID, nil, nil)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("expected 1 event, got %+v", events)
+	}
+	if events[0].CalendarName != "Personal" || events[0].CalendarColor != "peacock" {
+		t.Fatalf("expected calendar meta {Personal, peacock}, got {%q, %q}", events[0].CalendarName, events[0].CalendarColor)
+	}
+}
+
+// An Attendee with no Calendar Access at all still gets CalendarName/
+// CalendarColor — attachCalendarMeta's fallback to a direct,
+// access-unchecked Calendar lookup (ADR-0046), since such a caller's Access
+// set never carried this Calendar to begin with.
+func TestEventService_List_StampsCalendarMetaForAttendeeOnlyEvent(t *testing.T) {
+	svc, _, _, ownerID, memberID, _, calendarID := newTestAttendeeService(t)
+	ctx := context.Background()
+	event := createTestEvent(t, svc, ownerID, calendarID, "evt-1")
+
+	if _, err := svc.AddAttendee(ctx, ownerID, event.ID, memberID); err != nil {
+		t.Fatalf("add attendee: %v", err)
+	}
+
+	events, err := svc.List(ctx, memberID, nil, nil)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("expected 1 event, got %+v", events)
+	}
+	if events[0].CalendarName != "Personal" || events[0].CalendarColor != "peacock" {
+		t.Fatalf("expected calendar meta {Personal, peacock}, got {%q, %q}", events[0].CalendarName, events[0].CalendarColor)
+	}
+
+	fetched, err := svc.Get(ctx, memberID, event.ID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if fetched.CalendarName != "Personal" || fetched.CalendarColor != "peacock" {
+		t.Fatalf("expected Get to carry the same calendar meta, got {%q, %q}", fetched.CalendarName, fetched.CalendarColor)
+	}
+}

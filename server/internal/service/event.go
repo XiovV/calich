@@ -519,6 +519,13 @@ func (s *EventService) List(ctx context.Context, userID int64, from, to *time.Ti
 	}
 	events = mergeEventsByID(events, attendeeEvents)
 
+	knownCalendars := make(map[string]CalendarWithAccess, len(calendars))
+	for _, c := range calendars {
+		knownCalendars[c.ID] = c
+	}
+	if err := s.attachCalendarMeta(ctx, events, knownCalendars); err != nil {
+		return nil, err
+	}
 	if err := s.attachExdates(ctx, events); err != nil {
 		return nil, err
 	}
@@ -532,6 +539,48 @@ func (s *EventService) List(ctx context.Context, userID int64, from, to *time.Ti
 		return nil, err
 	}
 	return events, nil
+}
+
+// attachCalendarMeta stamps each Event's CalendarName/CalendarColor
+// (display-only, mirroring attachCreatedByNames) from known — the caller's
+// own Calendar-Access set List already loaded — falling back to a single
+// batched, access-unchecked Calendar lookup for whichever Events' Calendars
+// aren't in known: an Attendee-only Event (ADR-0046), whose caller has no
+// Access row to have populated known with in the first place. That fallback
+// performs no visibility check of its own; it's safe only because every
+// caller of List/Get has already established visibility into the Event
+// itself.
+func (s *EventService) attachCalendarMeta(ctx context.Context, events []repository.Event, known map[string]CalendarWithAccess) error {
+	resolved := make(map[string]CalendarMeta, len(known))
+	for id, c := range known {
+		resolved[id] = CalendarMeta{Name: c.Name, Color: c.Color}
+	}
+
+	var missing []string
+	seen := make(map[string]bool)
+	for _, e := range events {
+		if _, ok := resolved[e.CalendarID]; ok || seen[e.CalendarID] {
+			continue
+		}
+		seen[e.CalendarID] = true
+		missing = append(missing, e.CalendarID)
+	}
+	if len(missing) > 0 {
+		fetched, err := s.calendars.AttendeeCalendarMetaByIDs(ctx, missing)
+		if err != nil {
+			return fmt.Errorf("resolve calendar meta: %w", err)
+		}
+		for id, meta := range fetched {
+			resolved[id] = meta
+		}
+	}
+
+	for i := range events {
+		meta := resolved[events[i].CalendarID]
+		events[i].CalendarName = meta.Name
+		events[i].CalendarColor = meta.Color
+	}
+	return nil
 }
 
 // ListAllWithReminders returns every Event that carries at least one
@@ -732,6 +781,9 @@ func (s *EventService) Get(ctx context.Context, userID int64, id string) (reposi
 		return repository.Event{}, err
 	}
 	events := []repository.Event{event}
+	if err := s.attachCalendarMeta(ctx, events, nil); err != nil {
+		return repository.Event{}, err
+	}
 	if err := s.attachExdates(ctx, events); err != nil {
 		return repository.Event{}, err
 	}

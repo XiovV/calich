@@ -416,6 +416,33 @@ func (s *CalendarService) Access(ctx context.Context, userID int64, id string) (
 	return ResolveAccess(userID, calendar, role), calendar, nil
 }
 
+// CalendarMeta is a Calendar's Name and Color, display-only — the shape
+// AttendeeCalendarMetaByIDs resolves for a caller with no Access of their
+// own to look one up any other way.
+type CalendarMeta struct {
+	Name  string
+	Color string
+}
+
+// AttendeeCalendarMetaByIDs resolves every one of ids' Name and Color for a
+// caller with no Access to any of them, in one query — safe only because
+// every caller of this reaches it through EventService's attachCalendarMeta,
+// which only calls it for Calendars backing Events the caller already has
+// independent visibility into (an Attendee invite with no Calendar Access
+// at all, ADR-0046); this performs no visibility check of its own, unlike
+// Access above. A missing id is simply absent from the result.
+func (s *CalendarService) AttendeeCalendarMetaByIDs(ctx context.Context, ids []string) (map[string]CalendarMeta, error) {
+	calendars, err := s.calendars.ListByIDsAny(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	result := make(map[string]CalendarMeta, len(calendars))
+	for _, c := range calendars {
+		result[c.ID] = CalendarMeta{Name: c.Name, Color: c.Color}
+	}
+	return result, nil
+}
+
 // derefRole returns "" for a nil role, the empty string roleAccess already
 // maps to AccessNone — the zero-value comparand Access's direct-vs-group
 // max in Access needs without a nil-check at every call site.

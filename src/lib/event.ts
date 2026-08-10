@@ -71,4 +71,12 @@ export interface Event {
   // This Event's Attachments (#132, ADR-0040). Undefined/empty on an
   // Override — it never carries its own — or when the Master has none.
   attachments?: Attachment[];
+  // calendarId's Name and resolved display Color, for display only — never
+  // consulted to decide what a User may do with an Event, which resolves
+  // through Calendar Access instead. Present on every Event; the sole
+  // reason it exists is so a User who can see this Event only as an
+  // Attendee (ADR-0046) — with no Access to calendarId, and thus no entry
+  // for it in calendarsStore — still has a Calendar name/color to render.
+  calendarName?: string;
+  calendarColor?: string;
 }

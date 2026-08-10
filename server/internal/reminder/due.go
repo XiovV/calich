@@ -74,9 +74,13 @@ func representativeReminder(reminders []repository.Reminder) repository.Reminder
 // half-open window (from, to], matching the scheduler's "just-elapsed tick"
 // semantics (ADR-0021). A recurring Event's RRULE is expanded (skipping any
 // Exdated Occurrence); a non-recurring Event is checked as a series of one.
-// Every User in event.RecipientUserIDs — the Calendar's Owner and every
-// Shared Editor and Viewer — is considered independently, so a shared
-// Calendar's Reminder fans out to everyone with Access (ADR-0036).
+// Every User in event.RecipientUserIDs — the Calendar's Owner, every Shared
+// Editor and Viewer, and every Attendee of the Event itself — is considered
+// independently, so a Reminder fans out to everyone with Access to the
+// Calendar unioned with everyone invited to the Event, regardless of Access
+// (ADR-0036, ADR-0046). event.RecipientUserIDs is already deduplicated by
+// its caller, so a User who is both an Access-holder and an Attendee is only
+// considered once.
 //
 // A recipient's own entry in event.Overrides (ADR-0036) changes what they
 // receive: a muted override drops them from every Reminder on this Event

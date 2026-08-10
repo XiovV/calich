@@ -41,6 +41,14 @@ func (r *AttendeeRepository) WithTx(tx *sql.Tx) *AttendeeRepository {
 	return &AttendeeRepository{db: tx}
 }
 
+// bindAttendeeRepository shares an already-open DBTX with a new
+// AttendeeRepository — for a same-package caller that already holds one
+// (EventRepository.ListAllWithReminders' fan-out join, ADR-0046) rather than
+// a caller with its own *sql.DB to construct one from scratch.
+func bindAttendeeRepository(db DBTX) *AttendeeRepository {
+	return &AttendeeRepository{db: db}
+}
+
 // ErrAlreadyAttendee is returned by Add when userID is already an Attendee
 // of eventID — the attendees primary key is (event_id, user_id).
 var ErrAlreadyAttendee = errors.New("user is already an attendee of this event")
@@ -107,6 +115,44 @@ func (r *AttendeeRepository) SetResponse(ctx context.Context, eventID string, us
 		return Attendee{}, err
 	}
 	return r.Get(ctx, eventID, userID)
+}
+
+// ListUserIDsByEventIDs returns every Attendee's user_id on any of eventIDs,
+// keyed by event id — the reminder fan-out's batched read path (ADR-0021,
+// ADR-0046), unioned onto RecipientUserIDs alongside each Event's Calendar
+// Access-holders rather than replacing them.
+func (r *AttendeeRepository) ListUserIDsByEventIDs(ctx context.Context, eventIDs []string) (map[string][]int64, error) {
+	result := make(map[string][]int64)
+	if len(eventIDs) == 0 {
+		return result, nil
+	}
+
+	args := make([]any, len(eventIDs))
+	for i, id := range eventIDs {
+		args[i] = id
+	}
+	rows, err := r.db.QueryContext(ctx,
+		`SELECT event_id, user_id FROM attendees WHERE event_id IN (`+placeholders(len(eventIDs))+`)`,
+		args...,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list attendee user ids: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var eventID string
+		var userID int64
+		if err := rows.Scan(&eventID, &userID); err != nil {
+			return nil, fmt.Errorf("scan attendee user id: %w", err)
+		}
+		result[eventID] = append(result[eventID], userID)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate attendee user ids: %w", err)
+	}
+
+	return result, nil
 }
 
 // AttendeeWithName pairs an Attendee with the display Name of the User it

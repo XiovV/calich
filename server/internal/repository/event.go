@@ -80,6 +80,16 @@ type Event struct {
 	// populated by the service layer from event_attachments, mirroring
 	// Reminders.
 	Attachments []Attachment
+	// CalendarName and CalendarColor are CalendarID's Name and resolved
+	// display Color, for display only — never consulted for authorization.
+	// Not a column — populated by the service layer (EventService's
+	// attachCalendarMeta), mirroring CreatedByName. Every List/Get caller
+	// already has independent visibility into this Event (Calendar Access,
+	// or an Attendee invite with none at all, ADR-0046) even when that
+	// visibility carries no Calendar row of its own to read a name/color
+	// from otherwise.
+	CalendarName  string
+	CalendarColor string
 }
 
 type EventRepository struct {
@@ -268,18 +278,21 @@ func filterRecurringByWindow(events []Event, from, to time.Time) ([]Event, error
 	return filtered, nil
 }
 
-// EventWithOwner pairs an Event with its Calendar's Owner and every other
-// User with Access to that Calendar — the reminder firing engine's
-// recipients (ADR-0021, ADR-0036): a Reminder fans out to the Owner and
-// every Editor and Viewer alike. Not a repository.Event field: an Event has
-// no owner of its own (ADR-0034), this is purely ListAllWithReminders' join
-// result.
+// EventWithOwner pairs an Event with its Calendar's Owner, every other User
+// with Access to that Calendar, and every Attendee of the Event itself — the
+// reminder firing engine's recipients (ADR-0021, ADR-0036, ADR-0046): a
+// Reminder fans out to the Owner, every Editor and Viewer alike, and every
+// invited Attendee, regardless of whether that Attendee has Calendar Access.
+// Not a repository.Event field: an Event has no owner of its own (ADR-0034),
+// this is purely ListAllWithReminders' join result.
 type EventWithOwner struct {
 	Event
 	CalendarOwnerID int64
-	// RecipientUserIDs is every User a Reminder on this Event fires for:
-	// the Calendar's Owner plus every Shared Editor and Viewer. Always
-	// includes CalendarOwnerID.
+	// RecipientUserIDs is every User a Reminder on this Event fires for: the
+	// Calendar's Owner, every Shared Editor and Viewer, and every Attendee of
+	// the Event — a deduplicated union, so a User who is both an
+	// Access-holder and an Attendee of the same Event appears once (ADR-0046).
+	// Always includes CalendarOwnerID.
 	RecipientUserIDs []int64
 	// Overrides is this Event's Reminder overrides (ADR-0036), keyed by the
 	// User who set them — a recipient absent from this map gets the
@@ -332,8 +345,15 @@ func (r *EventRepository) ListAllWithReminders(ctx context.Context) ([]EventWith
 		return nil, fmt.Errorf("list reminder overrides: %w", err)
 	}
 
+	attendeesByEvent, err := bindAttendeeRepository(r.db).ListUserIDsByEventIDs(ctx, ids)
+	if err != nil {
+		return nil, fmt.Errorf("list attendee user ids: %w", err)
+	}
+
 	for i := range events {
-		events[i].RecipientUserIDs = append([]int64{events[i].CalendarOwnerID}, sharedByCalendar[events[i].CalendarID]...)
+		recipients := append([]int64{events[i].CalendarOwnerID}, sharedByCalendar[events[i].CalendarID]...)
+		recipients = append(recipients, attendeesByEvent[events[i].ID]...)
+		events[i].RecipientUserIDs = dedupeInt64s(recipients)
 		events[i].Overrides = overridesByEvent[events[i].ID]
 	}
 
@@ -384,6 +404,21 @@ func (r *EventRepository) sharedUserIDsByCalendar(ctx context.Context, events []
 	}
 
 	return result, nil
+}
+
+// dedupeInt64s returns ids with duplicates removed, keeping each id's first
+// occurrence order — ListAllWithReminders' union of Access-holders and
+// Attendees can name the same User twice (ADR-0046).
+func dedupeInt64s(ids []int64) []int64 {
+	seen := make(map[int64]bool, len(ids))
+	out := make([]int64, 0, len(ids))
+	for _, id := range ids {
+		if !seen[id] {
+			seen[id] = true
+			out = append(out, id)
+		}
+	}
+	return out
 }
 
 // Update rewrites id's columns from f. f.ParentID and f.RecurrenceID are

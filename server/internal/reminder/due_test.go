@@ -253,6 +253,96 @@ func TestDue_FansOutOneDueReminderPerRecipient(t *testing.T) {
 	}
 }
 
+// An Attendee-only recipient — invited to the Event but holding no Share on
+// its Calendar — still receives a DueReminder exactly like an Access-holder
+// would. Due itself doesn't distinguish an Attendee from an Access-holder;
+// it treats RecipientUserIDs as one deduplicated recipient set, so the
+// union of Access-holders and Attendees is entirely the repository layer's
+// responsibility (ListAllWithReminders, ADR-0046) — this documents that Due
+// fans out to such a recipient exactly the same as any other.
+func TestDue_AttendeeOnlyRecipient_FiresLikeAnyOtherRecipient(t *testing.T) {
+	event := repository.Event{
+		ID:    "evt-1",
+		Title: "Discuss tech stack",
+		Start: at(2026, 1, 1, 9, 0),
+		End:   at(2026, 1, 1, 9, 30),
+		Reminders: []repository.Reminder{
+			{ID: 100, OffsetMinutes: 10, Channel: "notification"},
+		},
+	}
+
+	// User 2 is an Attendee with no Calendar Access; user 1 is the Calendar
+	// Owner. Both appear in RecipientUserIDs, exactly as ListAllWithReminders
+	// would produce for their union (ADR-0046).
+	due, err := Due(withRecipients(event, 1, 1, 2), at(2026, 1, 1, 8, 45), at(2026, 1, 1, 8, 55))
+	if err != nil {
+		t.Fatalf("due: %v", err)
+	}
+	if len(due) != 2 {
+		t.Fatalf("expected both the owner and the Attendee-only recipient to fire, got %+v", due)
+	}
+	gotUsers := map[int64]bool{}
+	for _, d := range due {
+		gotUsers[d.UserID] = true
+	}
+	if !gotUsers[1] || !gotUsers[2] {
+		t.Fatalf("expected a due reminder for both the owner and the Attendee-only recipient, got %+v", due)
+	}
+}
+
+// An Attendee-only recipient's own muted override suppresses their
+// Attendee-sourced Reminders exactly as it does for an Access-holder
+// (ADR-0046) — Due resolves an override purely off the recipient's User id,
+// regardless of whether they hold Calendar Access.
+func TestDue_AttendeeOnlyRecipient_MutedOverrideStillApplies(t *testing.T) {
+	event := repository.Event{
+		ID:    "evt-1",
+		Start: at(2026, 1, 1, 9, 0),
+		End:   at(2026, 1, 1, 9, 30),
+		Reminders: []repository.Reminder{
+			{ID: 100, OffsetMinutes: 10, Channel: "notification"},
+		},
+	}
+
+	// User 2 is an Attendee-only recipient with a muted override.
+	withOverride := withRecipients(event, 1, 1, 2)
+	withOverride.Overrides = map[int64]repository.ReminderOverride{2: {Muted: true}}
+
+	due, err := Due(withOverride, at(2026, 1, 1, 8, 45), at(2026, 1, 1, 8, 55))
+	if err != nil {
+		t.Fatalf("due: %v", err)
+	}
+	if len(due) != 1 || due[0].UserID != 1 {
+		t.Fatalf("expected the Attendee-only recipient's mute override to suppress their DueReminder, got %+v", due)
+	}
+}
+
+// An Attendee-only recipient's own offset override changes their trigger
+// exactly as it does for an Access-holder (ADR-0046).
+func TestDue_AttendeeOnlyRecipient_OffsetOverrideStillApplies(t *testing.T) {
+	event := repository.Event{
+		ID:    "evt-1",
+		Start: at(2026, 1, 1, 9, 0),
+		End:   at(2026, 1, 1, 9, 30),
+		Reminders: []repository.Reminder{
+			{ID: 100, OffsetMinutes: 10, Channel: "notification"},
+		},
+	}
+
+	// User 2 is an Attendee-only recipient with an offset override.
+	overriddenOffset := 120
+	withOverride := withRecipients(event, 1, 1, 2)
+	withOverride.Overrides = map[int64]repository.ReminderOverride{2: {OffsetMinutes: &overriddenOffset}}
+
+	due, err := Due(withOverride, at(2026, 1, 1, 6, 55), at(2026, 1, 1, 7, 0))
+	if err != nil {
+		t.Fatalf("due: %v", err)
+	}
+	if len(due) != 1 || due[0].UserID != 2 || due[0].OffsetMinutes != 120 {
+		t.Fatalf("expected the Attendee-only recipient's offset override to apply, got %+v", due)
+	}
+}
+
 // A muted override drops that recipient's DueReminder for the Event
 // entirely, while every other recipient still fires unchanged (ADR-0036).
 func TestDue_MutedOverride_SuppressesOnlyThatRecipient(t *testing.T) {

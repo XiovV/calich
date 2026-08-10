@@ -62,6 +62,7 @@ import { DiscardRecurrenceWarning } from "./DiscardRecurrenceWarning";
 import { ReminderRow } from "./ReminderRow";
 import { ReminderOverrideControl } from "./ReminderOverrideControl";
 import { AttachmentRow, type AttachmentDraft } from "./AttachmentRow";
+import { EventAttendeesSection } from "./EventAttendeesSection";
 
 /** A Reminder plus a local id, so its row keeps stable identity across
  * add/remove/reorder in the Reminders section (Reminder itself has no id —
@@ -214,6 +215,14 @@ export function EventModal(props: EventModalProps) {
   // canWriteCalendarEvents' undefined-is-unwritable default apply here too.
   const isReadOnlyEvent = mode === "edit" && !canWriteCalendarEvents(editedCalendar);
   const readOnlyReason = calendarReadOnlyReason(editedCalendar);
+  // resolveCalendarFill's fallback for an Attendee-only Event (ADR-0046):
+  // editedCalendar is undefined (no calendarsStore entry, no Calendar
+  // Access), so the Color swatch would otherwise default to the generic
+  // unresolved gray even when the wire already told us the real color.
+  const attendeeOnlyCalendarColor: { color: string } | undefined =
+    mode === "edit" && !editedCalendar && props.occurrence.event.calendarColor
+      ? { color: props.occurrence.event.calendarColor }
+      : undefined;
   // The personal Reminder override control (#117) is only meaningful once
   // there's someone else to distinguish "for everyone" from "for me" —
   // absent on a Calendar nobody else can see. Only an existing Event has an
@@ -830,6 +839,15 @@ export function EventModal(props: EventModalProps) {
                     ? `Calendar: ${editedCalendar.name} (subscribed) — read-only; only Refresh can update it.`
                     : `Calendar: ${editedCalendar.name} — read-only; you have Viewer access.`}
                 </p>
+              ) : mode === "edit" && !editedCalendar ? (
+                // editedCalendar is undefined: this Event's Calendar carries
+                // no Access row for the caller at all — an Attendee-only
+                // Event (ADR-0046), never reachable in create mode, where
+                // the picker only ever offers writableCalendars. calendarName
+                // is the wire's own fallback for exactly this case.
+                <p className="text-label-sm text-ink-muted">
+                  {`Calendar: ${props.occurrence.event.calendarName ?? "Unknown"} — you can see this event because you're invited as an Attendee.`}
+                </p>
               ) : calendarEmptyReason ? (
                 <div>
                   <p className="text-label-sm text-ink-muted">
@@ -861,7 +879,12 @@ export function EventModal(props: EventModalProps) {
             <div className="mt-4">
               <p className="mb-1.5 text-label-sm text-ink-muted">Color</p>
               <ColorSwatchPicker
-                value={color ?? resolveCalendarFill(getCalendarById(calendars, calendarId))}
+                value={
+                  color ??
+                  resolveCalendarFill(
+                    getCalendarById(calendars, calendarId) ?? attendeeOnlyCalendarColor,
+                  )
+                }
                 onValueChange={setColor}
                 disabled={isReadOnlyEvent}
               />
@@ -982,6 +1005,11 @@ export function EventModal(props: EventModalProps) {
                 </>
               )}
             </div>
+
+            <EventAttendeesSection
+              eventId={master?.id}
+              canManage={mode === "edit" && !isReadOnlyEvent}
+            />
 
             <div className="mt-5 flex items-center justify-between gap-2">
               {mode === "edit" && !isReadOnlyEvent ? (

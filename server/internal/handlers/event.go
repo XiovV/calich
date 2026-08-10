@@ -163,6 +163,13 @@ type eventResponse struct {
 	// Attachments is this Event's Attachments (#132, ADR-0040) — present
 	// only on a Master; an Override never carries its own.
 	Attachments []attachmentWire `json:"attachments,omitempty"`
+	// CalendarName and CalendarColor are CalendarID's Name and resolved
+	// display Color (ADR-0046) — display only, so a caller who can see this
+	// Event only as an Attendee (with no Calendar Access, and thus no
+	// GET /api/calendars row for CalendarID) still has something to render
+	// for its Calendar.
+	CalendarName  string `json:"calendarName,omitempty"`
+	CalendarColor string `json:"calendarColor,omitempty"`
 }
 
 func toEventResponse(e repository.Event) eventResponse {
@@ -185,6 +192,8 @@ func toEventResponse(e repository.Event) eventResponse {
 		CreatedBy:     e.CreatedBy,
 		CreatedByName: e.CreatedByName,
 		Attachments:   toAttachmentResponses(e.Attachments),
+		CalendarName:  e.CalendarName,
+		CalendarColor: e.CalendarColor,
 	}
 }
 

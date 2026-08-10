@@ -29,6 +29,11 @@ interface EventWire {
   createdByName?: string;
   // Present only on a Master with at least one Attachment (#132, ADR-0040).
   attachments?: AttachmentWire[];
+  // calendarId's Name and resolved display Color (ADR-0046) — always
+  // present, so an Attendee with no Access to calendarId still has
+  // something to render for it.
+  calendarName?: string;
+  calendarColor?: string;
 }
 
 interface AttachmentWire {
@@ -96,6 +101,8 @@ function fromWire(wire: EventWire): Event {
     color: wire.color ?? undefined,
     createdByName: wire.createdByName || undefined,
     attachments: wire.attachments?.map(attachmentFromWire),
+    calendarName: wire.calendarName || undefined,
+    calendarColor: wire.calendarColor || undefined,
   };
 }
 

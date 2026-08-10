@@ -135,6 +135,44 @@ func (r *CalendarRepository) GetByIDAny(ctx context.Context, id string) (Calenda
 	))
 }
 
+// ListByIDsAny is GetByIDAny's batched sibling: every one of ids' Calendar
+// rows, regardless of who owns them, in one query — CalendarService's
+// AttendeeCalendarMeta fallback (ADR-0046) uses this to resolve every
+// Attendee-only Event's Calendar name/color in a single round trip rather
+// than one per Calendar. A missing id is simply absent from the result,
+// never an error.
+func (r *CalendarRepository) ListByIDsAny(ctx context.Context, ids []string) ([]Calendar, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+
+	args := make([]any, len(ids))
+	for i, id := range ids {
+		args[i] = id
+	}
+	rows, err := r.db.QueryContext(ctx,
+		`SELECT `+calendarColumns+` FROM calendars WHERE id IN (`+placeholders(len(ids))+`)`, args...,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list calendars by id: %w", err)
+	}
+	defer rows.Close()
+
+	calendars := []Calendar{}
+	for rows.Next() {
+		c, err := scanCalendarRow(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan calendar: %w", err)
+		}
+		calendars = append(calendars, c)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate calendars: %w", err)
+	}
+
+	return calendars, nil
+}
+
 // ListByUser returns a user's calendars ordered by creation time, oldest first.
 func (r *CalendarRepository) ListByUser(ctx context.Context, userID int64) ([]Calendar, error) {
 	rows, err := r.db.QueryContext(ctx,

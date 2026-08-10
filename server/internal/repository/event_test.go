@@ -754,6 +754,148 @@ func TestEventRepository_ListAllWithReminders_RecipientUserIDsIncludeOwnerAndEve
 	}
 }
 
+// RecipientUserIDs must also carry every Attendee of the Event itself, even
+// one with no Share on its Calendar at all — an Attendee's Reminder fan-out
+// is independent of Calendar Access (ADR-0046).
+func TestEventRepository_ListAllWithReminders_RecipientUserIDsIncludeAttendeesWithoutAccess(t *testing.T) {
+	sqlDB, err := db.OpenInMemory()
+	if err != nil {
+		t.Fatalf("open in-memory db: %v", err)
+	}
+	t.Cleanup(func() { sqlDB.Close() })
+	ctx := context.Background()
+
+	users := NewUserRepository(sqlDB)
+	owner, err := users.Create(ctx, "owner", "owner@example.com", "hash", false)
+	if err != nil {
+		t.Fatalf("create owner: %v", err)
+	}
+	attendee, err := users.Create(ctx, "attendee", "attendee@example.com", "hash", false)
+	if err != nil {
+		t.Fatalf("create attendee: %v", err)
+	}
+
+	workspaces := NewWorkspaceRepository(sqlDB)
+	workspace, err := workspaces.Create(ctx, "workspace-owner", owner.ID)
+	if err != nil {
+		t.Fatalf("create workspace: %v", err)
+	}
+	if err := workspaces.AddMember(ctx, workspace.ID, owner.ID, WorkspaceRoleOwner); err != nil {
+		t.Fatalf("add owner workspace member: %v", err)
+	}
+	if err := workspaces.AddMember(ctx, workspace.ID, attendee.ID, WorkspaceRoleMember); err != nil {
+		t.Fatalf("add attendee workspace member: %v", err)
+	}
+
+	calendars := NewCalendarRepository(sqlDB)
+	cal, err := calendars.Create(ctx, owner.ID, workspace.ID, "cal-1", CalendarFields{Name: "Personal", Color: "peacock"})
+	if err != nil {
+		t.Fatalf("create calendar: %v", err)
+	}
+
+	repo := NewEventRepository(sqlDB)
+	reminders := NewEventReminderRepository(sqlDB)
+	mustCreateEvent(t, repo, "attendee-event", owner.ID, cal.ID, "2026-01-01T09:00:00Z", "2026-01-01T10:00:00Z")
+	if err := reminders.ReplaceByEventID(ctx, "attendee-event", []Reminder{{OffsetMinutes: 10, Channel: "notification"}}); err != nil {
+		t.Fatalf("replace by event id: %v", err)
+	}
+
+	attendees := NewAttendeeRepository(sqlDB)
+	if _, err := attendees.Add(ctx, "attendee-event", attendee.ID); err != nil {
+		t.Fatalf("add attendee: %v", err)
+	}
+
+	events, err := repo.ListAllWithReminders(ctx)
+	if err != nil {
+		t.Fatalf("list all with reminders: %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("expected 1 event, got %v", events)
+	}
+
+	got := map[int64]bool{}
+	for _, id := range events[0].RecipientUserIDs {
+		got[id] = true
+	}
+	if len(got) != 2 || !got[owner.ID] || !got[attendee.ID] {
+		t.Fatalf("expected recipients to be the owner and the Attendee (no Calendar Access), got %v", events[0].RecipientUserIDs)
+	}
+}
+
+// A User who is both an Access-holder (a Share) and an Attendee of the same
+// Event must appear exactly once in RecipientUserIDs, not twice — a shared
+// Reminder fires for them once, not as two separate DueReminders (ADR-0046).
+func TestEventRepository_ListAllWithReminders_RecipientUserIDsDedupesAccessHolderWhoIsAlsoAttendee(t *testing.T) {
+	sqlDB, err := db.OpenInMemory()
+	if err != nil {
+		t.Fatalf("open in-memory db: %v", err)
+	}
+	t.Cleanup(func() { sqlDB.Close() })
+	ctx := context.Background()
+
+	users := NewUserRepository(sqlDB)
+	owner, err := users.Create(ctx, "owner", "owner@example.com", "hash", false)
+	if err != nil {
+		t.Fatalf("create owner: %v", err)
+	}
+	editor, err := users.Create(ctx, "editor", "editor@example.com", "hash", false)
+	if err != nil {
+		t.Fatalf("create editor: %v", err)
+	}
+
+	workspaces := NewWorkspaceRepository(sqlDB)
+	workspace, err := workspaces.Create(ctx, "workspace-owner", owner.ID)
+	if err != nil {
+		t.Fatalf("create workspace: %v", err)
+	}
+	if err := workspaces.AddMember(ctx, workspace.ID, owner.ID, WorkspaceRoleOwner); err != nil {
+		t.Fatalf("add owner workspace member: %v", err)
+	}
+	if err := workspaces.AddMember(ctx, workspace.ID, editor.ID, WorkspaceRoleMember); err != nil {
+		t.Fatalf("add editor workspace member: %v", err)
+	}
+
+	calendars := NewCalendarRepository(sqlDB)
+	cal, err := calendars.Create(ctx, owner.ID, workspace.ID, "cal-1", CalendarFields{Name: "Personal", Color: "peacock"})
+	if err != nil {
+		t.Fatalf("create calendar: %v", err)
+	}
+	shares := NewCalendarShareRepository(sqlDB)
+	if _, err := shares.Upsert(ctx, cal.ID, editor.ID, RoleEditor); err != nil {
+		t.Fatalf("share with editor: %v", err)
+	}
+
+	repo := NewEventRepository(sqlDB)
+	reminders := NewEventReminderRepository(sqlDB)
+	mustCreateEvent(t, repo, "both-event", owner.ID, cal.ID, "2026-01-01T09:00:00Z", "2026-01-01T10:00:00Z")
+	if err := reminders.ReplaceByEventID(ctx, "both-event", []Reminder{{OffsetMinutes: 10, Channel: "notification"}}); err != nil {
+		t.Fatalf("replace by event id: %v", err)
+	}
+
+	attendees := NewAttendeeRepository(sqlDB)
+	if _, err := attendees.Add(ctx, "both-event", editor.ID); err != nil {
+		t.Fatalf("add attendee: %v", err)
+	}
+
+	events, err := repo.ListAllWithReminders(ctx)
+	if err != nil {
+		t.Fatalf("list all with reminders: %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("expected 1 event, got %v", events)
+	}
+
+	count := 0
+	for _, id := range events[0].RecipientUserIDs {
+		if id == editor.ID {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatalf("expected the Share-holding Attendee to appear exactly once, got %d times in %v", count, events[0].RecipientUserIDs)
+	}
+}
+
 func mustCreateEvent(t *testing.T, repo *EventRepository, id string, userID int64, calendarID, start, end string) {
 	t.Helper()
 	if _, err := repo.Create(context.Background(), id, &userID, EventFields{CalendarID: calendarID, Title: id, Start: mustParseTime(t, start), End: mustParseTime(t, end)}, 0); err != nil {
