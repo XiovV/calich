@@ -190,9 +190,11 @@ func New(logger *slog.Logger, authHandler *handlers.AuthHandler, calendarHandler
 			r.Delete("/{id}/members/{userId}", workspaceHandler.RemoveMember)
 		})
 
-		// Groups (#159, ADR-0045): currently just the listing the Calendar
-		// share dialog's Group picker needs — Create/Rename/Delete/membership
-		// management stay HTTP-unreached until #167 (Groups management UI).
+		// Groups (#159, #167, ADR-0045): List backs the Calendar share dialog's
+		// Group picker; Create/Rename/Delete/membership management back the
+		// Groups management screen. GroupService itself refuses a caller
+		// without Owner/Admin authority on the write routes, so no extra
+		// middleware gate is needed for those.
 		r.Route("/groups", func(r chi.Router) {
 			r.Use(httpauth.RequireAuth(authenticator))
 			r.Use(httpauth.RequireActiveUser(activeUserChecker))
@@ -200,6 +202,12 @@ func New(logger *slog.Logger, authHandler *handlers.AuthHandler, calendarHandler
 			r.Use(httpauth.RequireWorkspace(workspaceMembershipChecker))
 
 			r.Get("/", groupHandler.List)
+			r.Post("/", groupHandler.Create)
+			r.Patch("/{id}", groupHandler.Rename)
+			r.Delete("/{id}", groupHandler.Delete)
+			r.Get("/{id}/members", groupHandler.ListMembers)
+			r.Post("/{id}/members", groupHandler.AddMember)
+			r.Delete("/{id}/members/{userId}", groupHandler.RemoveMember)
 		})
 
 		// Self-service account lifecycle (ADR-0044): a User acting on their
