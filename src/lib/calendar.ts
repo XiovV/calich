@@ -11,8 +11,8 @@ export interface Calendar {
   // Subscribed Calendar, whose access above reads "viewer". The only
   // correct basis for gating Calendar management — see canManageCalendar.
   isOwner?: boolean;
-  // ownerUsername is the Calendar's Owner's username, for display (#111).
-  ownerUsername?: string;
+  // ownerName is the Calendar's Owner's display Name (#111).
+  ownerName?: string;
   // shareCount is how many Shares the Calendar carries — whether more than
   // one person would be notified by a change to it (#111).
   shareCount?: number;
@@ -85,7 +85,7 @@ export function canManageCalendar(calendar: Calendar | undefined): boolean {
 }
 
 // calendarPickerLabel is a Calendar picker option's label (#127): qualified
-// with its Owner's username when the caller doesn't own it, so two
+// with its Owner's Name when the caller doesn't own it, so two
 // same-named Calendars in one picker (yours and one shared with you) don't
 // read as indistinguishable. Uses canManageCalendar, not access, for the
 // same reason canManageCalendar itself does — a Subscribed Calendar's Owner
@@ -93,13 +93,13 @@ export function canManageCalendar(calendar: Calendar | undefined): boolean {
 // reads "viewer". Always qualifies a Calendar the caller doesn't own,
 // whether or not its name collides with anything else visible: a label that
 // only appears on collision would silently change if the other Calendar
-// were renamed or removed. ownerUsername is optional on Calendar (like every
+// were renamed or removed. ownerName is optional on Calendar (like every
 // other reader of it — CalendarList, CalendarModal,
 // LeaveCalendarConfirmation), so an unresolved one falls back to the bare
 // name rather than rendering "(undefined)".
 export function calendarPickerLabel(calendar: Calendar): string {
-  if (canManageCalendar(calendar) || !calendar.ownerUsername) return calendar.name;
-  return `${calendar.name} (${calendar.ownerUsername})`;
+  if (canManageCalendar(calendar) || !calendar.ownerName) return calendar.name;
+  return `${calendar.name} (${calendar.ownerName})`;
 }
 
 // CalendarReadOnlyReason explains why an unwritable Calendar's Events can't

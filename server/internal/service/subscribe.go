@@ -468,15 +468,15 @@ func (s *SubscribeService) doRefresh(ctx context.Context, userID int64, calendar
 	newColor, newFeedColor := resolveFollowedField(calendar.Color, calendar.FeedColor, feedColorValue)
 
 	return RefreshResult{
-		Created:     summary.Created,
-		Updated:     summary.Updated,
-		Tombstoned:  summary.Tombstoned,
-		Unparseable: result.SkippedCount,
-		NoOp:        result.NoOpCount,
-	}, refreshSyncOutcome{
-		etag: fetched.ETag, lastModified: fetched.LastModified, contentHash: &hash, refreshIntervalSeconds: durationSecondsPtr(parsed.RefreshInterval),
-		name: newName, color: newColor, feedName: newFeedName, feedColor: newFeedColor,
-	}, nil
+			Created:     summary.Created,
+			Updated:     summary.Updated,
+			Tombstoned:  summary.Tombstoned,
+			Unparseable: result.SkippedCount,
+			NoOp:        result.NoOpCount,
+		}, refreshSyncOutcome{
+			etag: fetched.ETag, lastModified: fetched.LastModified, contentHash: &hash, refreshIntervalSeconds: durationSecondsPtr(parsed.RefreshInterval),
+			name: newName, color: newColor, feedName: newFeedName, feedColor: newFeedColor,
+		}, nil
 }
 
 // resolveFollowedField applies #88's name/color-follows-publisher rule to

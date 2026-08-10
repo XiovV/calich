@@ -25,7 +25,7 @@ func TestSessionRepository_CreateAndGetByRefreshTokenHash(t *testing.T) {
 	sessions, users := newTestSessionRepository(t)
 	ctx := context.Background()
 
-	user, err := users.Create(ctx, "admin", "hash", true)
+	user, err := users.Create(ctx, "admin", "admin@example.com", "hash", true)
 	if err != nil {
 		t.Fatalf("create user: %v", err)
 	}
@@ -65,7 +65,7 @@ func TestSessionRepository_Delete(t *testing.T) {
 	sessions, users := newTestSessionRepository(t)
 	ctx := context.Background()
 
-	user, err := users.Create(ctx, "admin", "hash", true)
+	user, err := users.Create(ctx, "admin", "admin@example.com", "hash", true)
 	if err != nil {
 		t.Fatalf("create user: %v", err)
 	}
@@ -89,11 +89,11 @@ func TestSessionRepository_DeleteAllForUser(t *testing.T) {
 	sessions, users := newTestSessionRepository(t)
 	ctx := context.Background()
 
-	userA, err := users.Create(ctx, "admin", "hash", true)
+	userA, err := users.Create(ctx, "admin", "admin@example.com", "hash", true)
 	if err != nil {
 		t.Fatalf("create user: %v", err)
 	}
-	userB, err := users.Create(ctx, "someone-else", "hash", true)
+	userB, err := users.Create(ctx, "someone-else", "someone-else@example.com", "hash", true)
 	if err != nil {
 		t.Fatalf("create user: %v", err)
 	}

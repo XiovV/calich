@@ -18,7 +18,7 @@ func newTestCalendarServiceForUser(t *testing.T) (svc *CalendarService, userID, 
 	t.Cleanup(func() { sqlDB.Close() })
 
 	users := repository.NewUserRepository(sqlDB)
-	user, err := users.Create(context.Background(), "admin", "hash", true)
+	user, err := users.Create(context.Background(), "admin", "admin@example.com", "hash", true)
 	if err != nil {
 		t.Fatalf("create user: %v", err)
 	}
@@ -126,9 +126,10 @@ func TestBootstrapCreatedFlag_GatesSeedingSoDeletedCalendarsStayDeleted(t *testi
 	t.Cleanup(func() { sqlDB.Close() })
 
 	users := repository.NewUserRepository(sqlDB)
-	workspaces := NewWorkspaceService(sqlDB, repository.NewWorkspaceRepository(sqlDB), repository.NewWorkspaceInviteRepository(sqlDB), repository.NewCalendarRepository(sqlDB), repository.NewCalendarShareRepository(sqlDB))
-	authSvc := NewAuthService(users, repository.NewSessionRepository(sqlDB), workspaces, repository.NewWorkspaceInviteRepository(sqlDB), []byte("test-secret"), "admin", "admin", false)
-	calendarSvc := NewCalendarService(repository.NewCalendarRepository(sqlDB), repository.NewCalendarShareRepository(sqlDB), users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), repository.NewWorkspaceRepository(sqlDB), repository.NewCalendarGroupShareRepository(sqlDB), repository.NewGroupRepository(sqlDB))
+	workspaceRepo := repository.NewWorkspaceRepository(sqlDB)
+	workspaces := NewWorkspaceService(sqlDB, workspaceRepo, repository.NewWorkspaceInviteRepository(sqlDB), repository.NewCalendarRepository(sqlDB), repository.NewCalendarShareRepository(sqlDB))
+	calendarSvc := NewCalendarService(repository.NewCalendarRepository(sqlDB), repository.NewCalendarShareRepository(sqlDB), users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo, repository.NewCalendarGroupShareRepository(sqlDB), repository.NewGroupRepository(sqlDB))
+	authSvc := NewAuthService(users, repository.NewSessionRepository(sqlDB), workspaces, repository.NewWorkspaceInviteRepository(sqlDB), calendarSvc, []byte("test-secret"), "admin", "admin@example.com", "admin", false)
 	ctx := context.Background()
 
 	user, created, err := authSvc.Bootstrap(ctx)

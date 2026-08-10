@@ -27,14 +27,18 @@ func newNotificationTestServer(t *testing.T) (baseURL, accessToken string, userI
 
 	users := repository.NewUserRepository(sqlDB)
 	sessions := repository.NewSessionRepository(sqlDB)
-	workspaceSvc := service.NewWorkspaceService(sqlDB, repository.NewWorkspaceRepository(sqlDB), repository.NewWorkspaceInviteRepository(sqlDB), repository.NewCalendarRepository(sqlDB), repository.NewCalendarShareRepository(sqlDB))
-	auth := service.NewAuthService(users, sessions, workspaceSvc, repository.NewWorkspaceInviteRepository(sqlDB), []byte("test-secret"), "alice", "hunter2", false)
+	workspaceRepo := repository.NewWorkspaceRepository(sqlDB)
+	calendarRepo := repository.NewCalendarRepository(sqlDB)
+	shareRepo := repository.NewCalendarShareRepository(sqlDB)
+	workspaceSvc := service.NewWorkspaceService(sqlDB, workspaceRepo, repository.NewWorkspaceInviteRepository(sqlDB), calendarRepo, shareRepo)
+	calendarService := service.NewCalendarService(calendarRepo, shareRepo, users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo, repository.NewCalendarGroupShareRepository(sqlDB), repository.NewGroupRepository(sqlDB))
+	auth := service.NewAuthService(users, sessions, workspaceSvc, repository.NewWorkspaceInviteRepository(sqlDB), calendarService, []byte("test-secret"), "alice", "alice@example.com", "hunter2", false)
 	user, _, err := auth.Bootstrap(context.Background())
 	if err != nil {
 		t.Fatalf("bootstrap: %v", err)
 	}
 
-	loginResult, err := auth.Login(context.Background(), "alice", "hunter2")
+	loginResult, err := auth.Login(context.Background(), "alice@example.com", "hunter2")
 	if err != nil {
 		t.Fatalf("login: %v", err)
 	}

@@ -74,8 +74,8 @@ func (h *AccountHandler) SetDisabled(w http.ResponseWriter, r *http.Request) {
 }
 
 type transferCandidateResponse struct {
-	ID       int64  `json:"id"`
-	Username string `json:"username"`
+	ID   int64  `json:"id"`
+	Name string `json:"name"`
 }
 
 type calendarImpactResponse struct {
@@ -113,7 +113,7 @@ func (h *AccountHandler) DeleteImpact(w http.ResponseWriter, r *http.Request) {
 	for i, c := range impact.Calendars {
 		candidates := make([]transferCandidateResponse, len(c.TransferCandidates))
 		for j, candidate := range c.TransferCandidates {
-			candidates[j] = transferCandidateResponse{ID: candidate.ID, Username: candidate.Username}
+			candidates[j] = transferCandidateResponse{ID: candidate.ID, Name: candidate.Name}
 		}
 		calendars[i] = calendarImpactResponse{
 			ID:                 c.ID,

@@ -128,11 +128,11 @@ func TestCalendarService_Access(t *testing.T) {
 	t.Cleanup(func() { sqlDB.Close() })
 
 	users := repository.NewUserRepository(sqlDB)
-	owner, err := users.Create(context.Background(), "owner", "hash", false)
+	owner, err := users.Create(context.Background(), "owner", "owner@example.com", "hash", false)
 	if err != nil {
 		t.Fatalf("create owner: %v", err)
 	}
-	stranger, err := users.Create(context.Background(), "stranger", "hash", false)
+	stranger, err := users.Create(context.Background(), "stranger", "stranger@example.com", "hash", false)
 	if err != nil {
 		t.Fatalf("create stranger: %v", err)
 	}
@@ -176,14 +176,14 @@ func TestCalendarService_Access(t *testing.T) {
 		t.Fatalf("add stranger as workspace member: %v", err)
 	}
 
-	if _, err := svc.Share(ctx, owner.ID, calendar.ID, "stranger", repository.RoleEditor); err != nil {
+	if _, _, err := svc.Share(ctx, owner.ID, calendar.ID, "stranger@example.com", repository.RoleEditor); err != nil {
 		t.Fatalf("share: %v", err)
 	}
 	if access, _, err := svc.Access(ctx, stranger.ID, calendar.ID); err != nil || access != AccessEditor {
 		t.Fatalf("editor Access = %v, %v; want AccessEditor, nil err", access, err)
 	}
 
-	if _, err := svc.Share(ctx, owner.ID, subscribed.ID, "stranger", repository.RoleEditor); err != nil {
+	if _, _, err := svc.Share(ctx, owner.ID, subscribed.ID, "stranger@example.com", repository.RoleEditor); err != nil {
 		t.Fatalf("share subscribed calendar: %v", err)
 	}
 	if access, _, err := svc.Access(ctx, stranger.ID, subscribed.ID); err != nil || access != AccessViewer {

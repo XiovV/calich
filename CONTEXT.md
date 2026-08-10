@@ -144,8 +144,16 @@ _Avoid_: business hours, office hours, availability, day bounds
 ## Authentication
 
 **User**:
-The account record a Session belongs to, validated by the backend. An instance's first User is always bootstrapped (ADR-0010); every subsequent one either self-registers (gated by `ENABLE_SIGNUPS`, ADR-0044) or is created by accepting a Workspace Invite. A User is Active or Disabled, and belongs to zero or more Workspaces. There is no instance-wide role on a User — authority over other Users exists only inside a Workspace, as a Role on that Workspace's membership.
+The account record a Session belongs to, validated by the backend. An instance's first User is always bootstrapped (ADR-0010); every subsequent one either self-registers (gated by `ENABLE_SIGNUPS`, ADR-0044) or is created by accepting a Workspace Invite. A User is Active or Disabled, and belongs to zero or more Workspaces. There is no instance-wide role on a User — authority over other Users exists only inside a Workspace, as a Role on that Workspace's membership. Identified by Email; named, for display, by Name.
 _Avoid_: account, profile
+
+**Email**:
+A User's unique, required login identifier — what a person types to sign in, what CalDAV Basic auth authenticates against (ADR-0024), and what a Share or Workspace Invite names to resolve an account. Also the Email-Channel Reminder's recipient (ADR-0021) — every User always has one, so Email-Channel availability depends only on whether the self-hoster has SMTP configured, not on anything per-User. See ADR-0047.
+_Avoid_: username, login, identifier (in prose)
+
+**Name**:
+A User's display-only label — shown wherever a User is named in the UI (Share lists, the User directory, Workspace membership, Event/Attachment attribution). Not unique: two Users may share one. Never used for authentication or to resolve an account. See ADR-0047.
+_Avoid_: username, display name (redundant once "Name" is the established term)
 
 **Disabled**:
 The reversible account state in which a User cannot log in, refresh a Session, or authenticate over CalDAV, and receives no Reminders. Self-chosen and self-reversible only — with no instance-wide Admin (ADR-0044), nobody can disable another User's account for them. Blocked while the User is the sole Owner of any Workspace that still has other Members in it. Everything they own stays live and unchanged for everyone else. Distinct from deletion, which removes the account and demands an explicit disposition for the Calendars it owned. See ADR-0037, ADR-0044.

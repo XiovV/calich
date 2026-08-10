@@ -24,9 +24,9 @@ interface EventWire {
   location?: string;
   // Absent means "inherit the Calendar's color" (ADR-0043).
   color?: string;
-  // createdByUsername is absent when the creator's account has been
+  // createdByName is absent when the creator's account has been
   // deleted or the Event predates this column (#118).
-  createdByUsername?: string;
+  createdByName?: string;
   // Present only on a Master with at least one Attachment (#132, ADR-0040).
   attachments?: AttachmentWire[];
 }
@@ -37,7 +37,7 @@ interface AttachmentWire {
   contentType: string;
   sizeBytes: number;
   uploadedBy?: number;
-  uploadedByUsername?: string;
+  uploadedByName?: string;
   createdAt: string;
 }
 
@@ -47,7 +47,7 @@ export function attachmentFromWire(wire: AttachmentWire): Attachment {
     filename: wire.filename,
     contentType: wire.contentType,
     sizeBytes: wire.sizeBytes,
-    uploadedByUsername: wire.uploadedByUsername || undefined,
+    uploadedByName: wire.uploadedByName || undefined,
     createdAt: new Date(wire.createdAt),
   };
 }
@@ -94,7 +94,7 @@ function fromWire(wire: EventWire): Event {
     description: wire.description || undefined,
     location: wire.location || undefined,
     color: wire.color ?? undefined,
-    createdByUsername: wire.createdByUsername || undefined,
+    createdByName: wire.createdByName || undefined,
     attachments: wire.attachments?.map(attachmentFromWire),
   };
 }

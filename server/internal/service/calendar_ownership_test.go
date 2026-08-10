@@ -50,7 +50,7 @@ func TestCalendarService_OwnershipMeta_UnclampedByAccess(t *testing.T) {
 
 	// A stranger reading the same un-clamped ownership question gets false,
 	// and sees the Owner's Username rather than their own.
-	if _, err := svc.Share(ctx, ownerID, calendarID, "other", repository.RoleViewer); err != nil {
+	if _, _, err := svc.Share(ctx, ownerID, calendarID, "other@example.com", repository.RoleViewer); err != nil {
 		t.Fatalf("share: %v", err)
 	}
 	_, ordinary, err := svc.Access(ctx, otherID, calendarID)
@@ -74,12 +74,12 @@ func TestCalendarService_OwnershipMeta_UnclampedByAccess(t *testing.T) {
 
 // TestCalendarService_ListAccessible_CarriesOwnershipMeta covers the List
 // endpoint's data source directly: every row — owned or shared — carries
-// IsOwner, OwnerUsername and ShareCount alongside Access (#111).
+// IsOwner, OwnerName and ShareCount alongside Access (#111).
 func TestCalendarService_ListAccessible_CarriesOwnershipMeta(t *testing.T) {
 	svc, _, ownerID, otherID, calendarID := newTestShareService(t)
 	ctx := context.Background()
 
-	if _, err := svc.Share(ctx, ownerID, calendarID, "other", repository.RoleEditor); err != nil {
+	if _, _, err := svc.Share(ctx, ownerID, calendarID, "other@example.com", repository.RoleEditor); err != nil {
 		t.Fatalf("share: %v", err)
 	}
 
@@ -93,8 +93,8 @@ func TestCalendarService_ListAccessible_CarriesOwnershipMeta(t *testing.T) {
 			ownerRow = c
 		}
 	}
-	if !ownerRow.IsOwner || ownerRow.OwnerUsername != "owner" || ownerRow.ShareCount != 1 {
-		t.Fatalf("owner's row = %+v, want IsOwner=true, OwnerUsername=owner, ShareCount=1", ownerRow)
+	if !ownerRow.IsOwner || ownerRow.OwnerName != "owner" || ownerRow.ShareCount != 1 {
+		t.Fatalf("owner's row = %+v, want IsOwner=true, OwnerName=owner, ShareCount=1", ownerRow)
 	}
 
 	otherList, err := svc.ListAccessible(ctx, otherID)
@@ -107,7 +107,7 @@ func TestCalendarService_ListAccessible_CarriesOwnershipMeta(t *testing.T) {
 			otherRow = c
 		}
 	}
-	if otherRow.IsOwner || otherRow.OwnerUsername != "owner" || otherRow.ShareCount != 1 {
-		t.Fatalf("editor's row = %+v, want IsOwner=false, OwnerUsername=owner, ShareCount=1", otherRow)
+	if otherRow.IsOwner || otherRow.OwnerName != "owner" || otherRow.ShareCount != 1 {
+		t.Fatalf("editor's row = %+v, want IsOwner=false, OwnerName=owner, ShareCount=1", otherRow)
 	}
 }

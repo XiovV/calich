@@ -7,20 +7,21 @@ import { Button } from "../components/ui/Button";
 import { Input } from "../components/ui/Input";
 import { DeleteAccountDialog } from "./DeleteAccountDialog";
 
-// The Settings page's Account section (#57, #125): username and the
-// Email-Channel Reminder recipient (ADR-0021). The Email Channel only
-// becomes selectable in the event modal once an email is set *and* the
-// self-hoster has SMTP configured — see reminderChannelOptions.
+// The Settings page's Account section (#57, #125, ADR-0047): Name (a display
+// label) and Email (the login identifier and Email-Channel Reminder
+// recipient, ADR-0021). The Email Channel only becomes selectable in the
+// event modal once the self-hoster has SMTP configured — see
+// reminderChannelOptions.
 export function AccountSection() {
   const user = useAuthStore((state) => state.user);
   const accessToken = useAuthStore((state) => state.accessToken);
-  const updateUsername = useAuthStore((state) => state.updateUsername);
+  const updateName = useAuthStore((state) => state.updateName);
   const updateEmail = useAuthStore((state) => state.updateEmail);
   const disableAccount = useAuthStore((state) => state.disableAccount);
 
-  const [username, setUsername] = useState(user?.username ?? "");
-  const [usernameSaved, setUsernameSaved] = useState(false);
-  const usernameAction = useAsyncAction();
+  const [name, setName] = useState(user?.name ?? "");
+  const [nameSaved, setNameSaved] = useState(false);
+  const nameAction = useAsyncAction();
 
   const [email, setEmail] = useState(user?.email ?? "");
   const [emailSaved, setEmailSaved] = useState(false);
@@ -30,35 +31,17 @@ export function AccountSection() {
   const [isDisabling, setIsDisabling] = useState(false);
   const [deletingAccount, setDeletingAccount] = useState(false);
 
-  const isUsernameUnchanged = username === (user?.username ?? "");
+  const isNameUnchanged = name === (user?.name ?? "");
   const isEmailUnchanged = email === (user?.email ?? "");
 
-  async function handleSubmitUsername(domEvent: React.FormEvent) {
+  async function handleSubmitName(domEvent: React.FormEvent) {
     domEvent.preventDefault();
-    if (isUsernameUnchanged || !username.trim()) return;
+    if (isNameUnchanged || !name.trim()) return;
 
-    await usernameAction.run(async () => {
-      setUsernameSaved(false);
-
-      // Renaming breaks CalDAV sync on every device already configured with
-      // the old username until it's updated there too (#125) — the App
-      // passwords themselves stay valid. Only worth interrupting for when
-      // there's actually a synced device to warn about.
-      if (accessToken) {
-        const appPasswords = await appPasswordsApi.list(accessToken);
-        if (appPasswords.length > 0) {
-          const count = appPasswords.length;
-          const proceed = window.confirm(
-            `You have ${count} app password${count === 1 ? "" : "s"} in use. Renaming will ` +
-              `stop those devices syncing until the username is updated in each. The app ` +
-              `passwords themselves stay valid.`,
-          );
-          if (!proceed) return;
-        }
-      }
-
-      await updateUsername(username.trim());
-      setUsernameSaved(true);
+    await nameAction.run(async () => {
+      setNameSaved(false);
+      await updateName(name.trim());
+      setNameSaved(true);
     });
   }
 
@@ -68,6 +51,24 @@ export function AccountSection() {
 
     await emailAction.run(async () => {
       setEmailSaved(false);
+
+      // Changing the login identifier breaks CalDAV sync on every device
+      // already configured with the old email until it's updated there too
+      // (ADR-0047) — the App passwords themselves stay valid. Only worth
+      // interrupting for when there's actually a synced device to warn about.
+      if (accessToken) {
+        const appPasswords = await appPasswordsApi.list(accessToken);
+        if (appPasswords.length > 0) {
+          const count = appPasswords.length;
+          const proceed = window.confirm(
+            `You have ${count} app password${count === 1 ? "" : "s"} in use. Changing your ` +
+              `email will stop those devices syncing until it's updated in each. The app ` +
+              `passwords themselves stay valid.`,
+          );
+          if (!proceed) return;
+        }
+      }
+
       await updateEmail(email);
       setEmailSaved(true);
     });
@@ -96,32 +97,34 @@ export function AccountSection() {
     <section>
       <h2 className="text-heading font-medium text-ink">Account</h2>
 
-      <form onSubmit={handleSubmitUsername} className="mt-4 flex items-end gap-2">
+      <form onSubmit={handleSubmitName} className="mt-4 flex items-end gap-2">
         <Input
-          label="Username"
-          value={username}
+          label="Name"
+          value={name}
           onChange={(domEvent) => {
-            setUsername(domEvent.target.value);
-            setUsernameSaved(false);
+            setName(domEvent.target.value);
+            setNameSaved(false);
           }}
           className="w-72"
         />
         <Button
           type="submit"
-          disabled={isUsernameUnchanged || !username.trim()}
-          loading={usernameAction.isSubmitting}
+          disabled={isNameUnchanged || !name.trim()}
+          loading={nameAction.isSubmitting}
         >
           Save
         </Button>
       </form>
-      {usernameAction.error && (
-        <p className="mt-2 text-label-sm text-danger">{usernameAction.error}</p>
+      {nameAction.error && (
+        <p className="mt-2 text-label-sm text-danger">{nameAction.error}</p>
       )}
-      {usernameSaved && !usernameAction.error && (
+      {nameSaved && !nameAction.error && (
         <p className="mt-2 text-label-sm text-ink-muted">Saved.</p>
       )}
 
-      <p className="mt-6 text-body text-ink-muted">Used to deliver Email-channel Reminders.</p>
+      <p className="mt-6 text-body text-ink-muted">
+        Used to sign in and to deliver Email-channel Reminders.
+      </p>
       <form onSubmit={handleSubmitEmail} className="mt-2 flex items-end gap-2">
         <Input
           label="Email"

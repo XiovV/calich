@@ -165,7 +165,7 @@ export function DeleteAccountDialog({ onClose }: DeleteAccountDialogProps) {
                             onValueChange={(value) => setTransferTo(c.id, value)}
                             options={c.transferCandidates.map((candidate) => ({
                               value: String(candidate.id),
-                              label: candidate.username,
+                              label: candidate.name,
                             }))}
                             aria-label={`Transfer ${c.name} to`}
                             className="mt-2"

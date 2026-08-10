@@ -86,7 +86,7 @@ func TestSharedCalendar_AppearsInAccessorsOwnHomeSet(t *testing.T) {
 	editorID, editorSecret := env.addSharedUser(t, "editor", repository.RoleEditor)
 
 	homeSetPath := fmt.Sprintf("/dav/%d/calendars/", editorID)
-	resp := propfind(t, env.srv, homeSetPath, "editor", editorSecret, "1", propfindDisplayName)
+	resp := propfind(t, env.srv, homeSetPath, "editor@example.com", editorSecret, "1", propfindDisplayName)
 	defer resp.Body.Close()
 
 	body := readBody(t, resp)
@@ -104,7 +104,7 @@ func TestSharedCalendar_ViewerPrivilegeSetIsReadOnly(t *testing.T) {
 	viewerID, viewerSecret := env.addSharedUser(t, "viewer", repository.RoleViewer)
 
 	path := calendarPath(viewerID, env.calendarID)
-	resp := propfind(t, env.srv, path, "viewer", viewerSecret, "0", propfindCurrentUserPrivilegeSet)
+	resp := propfind(t, env.srv, path, "viewer@example.com", viewerSecret, "0", propfindCurrentUserPrivilegeSet)
 	defer resp.Body.Close()
 
 	body := readBody(t, resp)
@@ -121,7 +121,7 @@ func TestSharedCalendar_EditorPrivilegeSetIsReadWrite(t *testing.T) {
 	editorID, editorSecret := env.addSharedUser(t, "editor", repository.RoleEditor)
 
 	path := calendarPath(editorID, env.calendarID)
-	resp := propfind(t, env.srv, path, "editor", editorSecret, "0", propfindCurrentUserPrivilegeSet)
+	resp := propfind(t, env.srv, path, "editor@example.com", editorSecret, "0", propfindCurrentUserPrivilegeSet)
 	defer resp.Body.Close()
 
 	body := readBody(t, resp)
@@ -147,7 +147,7 @@ func TestSharedCalendar_ViewerPutIsForbidden(t *testing.T) {
 	}
 
 	path := calendarObjectPath(viewerID, env.calendarID, master.ID)
-	resp := rawPutAsUser(t, env, path, "viewer", viewerSecret, cal, "")
+	resp := rawPutAsUser(t, env, path, "viewer@example.com", viewerSecret, cal, "")
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusForbidden {
@@ -172,7 +172,7 @@ func TestSharedCalendar_ViewerDeleteIsForbidden(t *testing.T) {
 	}
 
 	path := calendarObjectPath(viewerID, env.calendarID, created.ID)
-	resp := rawDeleteAsUser(t, env, path, "viewer", viewerSecret, "")
+	resp := rawDeleteAsUser(t, env, path, "viewer@example.com", viewerSecret, "")
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusForbidden {
@@ -201,7 +201,7 @@ func TestSharedCalendar_EditorCanCreateModifyDelete(t *testing.T) {
 	}
 	path := calendarObjectPath(editorID, env.calendarID, master.ID)
 
-	putResp := rawPutAsUser(t, env, path, "editor", editorSecret, cal, "")
+	putResp := rawPutAsUser(t, env, path, "editor@example.com", editorSecret, cal, "")
 	putResp.Body.Close()
 	if putResp.StatusCode != http.StatusCreated && putResp.StatusCode != http.StatusOK && putResp.StatusCode != http.StatusNoContent {
 		t.Fatalf("expected the Editor's create to succeed, got %d", putResp.StatusCode)
@@ -218,7 +218,7 @@ func TestSharedCalendar_EditorCanCreateModifyDelete(t *testing.T) {
 	if err != nil {
 		t.Fatalf("seriesToICal: %v", err)
 	}
-	editResp := rawPutAsUser(t, env, path, "editor", editorSecret, updatedCal, "")
+	editResp := rawPutAsUser(t, env, path, "editor@example.com", editorSecret, updatedCal, "")
 	editResp.Body.Close()
 	if editResp.StatusCode != http.StatusOK && editResp.StatusCode != http.StatusNoContent && editResp.StatusCode != http.StatusCreated {
 		t.Fatalf("expected the Editor's edit to succeed, got %d", editResp.StatusCode)
@@ -232,7 +232,7 @@ func TestSharedCalendar_EditorCanCreateModifyDelete(t *testing.T) {
 		t.Fatalf("expected the edit to take effect, got %+v", stored)
 	}
 
-	delResp := rawDeleteAsUser(t, env, path, "editor", editorSecret, "")
+	delResp := rawDeleteAsUser(t, env, path, "editor@example.com", editorSecret, "")
 	delResp.Body.Close()
 	if delResp.StatusCode != http.StatusOK && delResp.StatusCode != http.StatusNoContent {
 		t.Fatalf("expected the Editor's delete to succeed, got %d", delResp.StatusCode)
@@ -261,7 +261,7 @@ func TestSharedCalendar_ObjectBytesIdenticalForOwnerAndEditor(t *testing.T) {
 		t.Fatalf("owner GetCalendarObject: %v", err)
 	}
 
-	editorClient := newTestCalDAVClientAs(t, env, "editor", editorSecret)
+	editorClient := newTestCalDAVClientAs(t, env, "editor@example.com", editorSecret)
 	editorObj, err := editorClient.GetCalendarObject(context.Background(), calendarObjectPath(editorID, env.calendarID, created.ID))
 	if err != nil {
 		t.Fatalf("editor GetCalendarObject: %v", err)
@@ -301,7 +301,7 @@ func TestSharedCalendar_ObjectBytesUnchangedByReminderOverride(t *testing.T) {
 		t.Fatalf("create event: %v", err)
 	}
 
-	editorClient := newTestCalDAVClientAs(t, env, "editor", editorSecret)
+	editorClient := newTestCalDAVClientAs(t, env, "editor@example.com", editorSecret)
 	before, err := editorClient.GetCalendarObject(context.Background(), calendarObjectPath(editorID, env.calendarID, created.ID))
 	if err != nil {
 		t.Fatalf("editor GetCalendarObject before override: %v", err)
@@ -354,7 +354,7 @@ func TestSharedCalendar_CannotAddressOwnersPrincipalPath(t *testing.T) {
 	_, editorSecret := env.addSharedUser(t, "editor", repository.RoleEditor)
 
 	path := calendarPath(env.userID, env.calendarID)
-	resp := propfind(t, env.srv, path, "editor", editorSecret, "0", propfindDisplayName)
+	resp := propfind(t, env.srv, path, "editor@example.com", editorSecret, "0", propfindDisplayName)
 	defer resp.Body.Close()
 
 	body := readBody(t, resp)
@@ -379,7 +379,7 @@ func TestSharedCalendar_SyncCollectionWorksAtAccessorsOwnPath(t *testing.T) {
 	}
 
 	path := calendarPath(editorID, env.calendarID)
-	resp := report(t, env.srv, path, "editor", editorSecret, syncCollectionInitial)
+	resp := report(t, env.srv, path, "editor@example.com", editorSecret, syncCollectionInitial)
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusMultiStatus {
@@ -427,7 +427,7 @@ func TestSharedCalendar_EditorCannotRename(t *testing.T) {
 	editorID, editorSecret := env.addSharedUser(t, "editor", repository.RoleEditor)
 
 	path := calendarPath(editorID, env.calendarID)
-	resp := proppatch(t, env.srv, path, "editor", editorSecret, proppatchSetDisplayName("Renamed by editor"))
+	resp := proppatch(t, env.srv, path, "editor@example.com", editorSecret, proppatchSetDisplayName("Renamed by editor"))
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusMultiStatus {
@@ -456,7 +456,7 @@ func TestSharedCalendar_EditorRecolor_WritesOwnOverride_NotTheCalendarsColor(t *
 	editorID, editorSecret := env.addSharedUser(t, "editor", repository.RoleEditor)
 
 	path := calendarPath(editorID, env.calendarID)
-	resp := proppatch(t, env.srv, path, "editor", editorSecret, proppatchSetCalendarColor("#654321"))
+	resp := proppatch(t, env.srv, path, "editor@example.com", editorSecret, proppatchSetCalendarColor("#654321"))
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusMultiStatus {

@@ -21,11 +21,11 @@ func newTestCalendarShareRepository(t *testing.T) (repo *CalendarShareRepository
 	t.Cleanup(func() { sqlDB.Close() })
 
 	users := NewUserRepository(sqlDB)
-	owner, err := users.Create(context.Background(), "owner", "hash", false)
+	owner, err := users.Create(context.Background(), "owner", "owner@example.com", "hash", false)
 	if err != nil {
 		t.Fatalf("create owner: %v", err)
 	}
-	other, err := users.Create(context.Background(), "other", "hash", false)
+	other, err := users.Create(context.Background(), "other", "other@example.com", "hash", false)
 	if err != nil {
 		t.Fatalf("create other user: %v", err)
 	}
@@ -89,7 +89,7 @@ func TestCalendarShareRepository_UpsertChangesRole(t *testing.T) {
 		t.Fatalf("role = %q, want %q", updated.Role, RoleEditor)
 	}
 
-	shares, err := repo.ListByCalendarWithUsername(ctx, calendarID)
+	shares, err := repo.ListByCalendarWithUser(ctx, calendarID)
 	if err != nil {
 		t.Fatalf("list by calendar: %v", err)
 	}
@@ -136,7 +136,7 @@ func TestCalendarShareRepository_Delete_NotFound(t *testing.T) {
 	}
 }
 
-func TestCalendarShareRepository_ListByCalendarWithUsername(t *testing.T) {
+func TestCalendarShareRepository_ListByCalendarWithUser(t *testing.T) {
 	repo, _, otherID, calendarID := newTestCalendarShareRepository(t)
 	ctx := context.Background()
 
@@ -144,14 +144,14 @@ func TestCalendarShareRepository_ListByCalendarWithUsername(t *testing.T) {
 		t.Fatalf("upsert: %v", err)
 	}
 
-	shares, err := repo.ListByCalendarWithUsername(ctx, calendarID)
+	shares, err := repo.ListByCalendarWithUser(ctx, calendarID)
 	if err != nil {
 		t.Fatalf("list by calendar with username: %v", err)
 	}
 	if len(shares) != 1 {
 		t.Fatalf("expected one share, got %d", len(shares))
 	}
-	if shares[0].Username != "other" || shares[0].Role != RoleEditor {
+	if shares[0].Name != "other" || shares[0].Role != RoleEditor {
 		t.Fatalf("unexpected share: %+v", shares[0])
 	}
 }
@@ -191,11 +191,11 @@ func TestCalendarShareRepository_CascadesOnCalendarDelete(t *testing.T) {
 	t.Cleanup(func() { sqlDB.Close() })
 
 	users := NewUserRepository(sqlDB)
-	owner, err := users.Create(ctx, "owner", "hash", false)
+	owner, err := users.Create(ctx, "owner", "owner@example.com", "hash", false)
 	if err != nil {
 		t.Fatalf("create owner: %v", err)
 	}
-	other, err := users.Create(ctx, "other", "hash", false)
+	other, err := users.Create(ctx, "other", "other@example.com", "hash", false)
 	if err != nil {
 		t.Fatalf("create other user: %v", err)
 	}

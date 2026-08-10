@@ -26,15 +26,15 @@ func newTestAttendeeService(t *testing.T) (svc *EventService, workspaceRepo *rep
 	users = repository.NewUserRepository(sqlDB)
 	ctx := context.Background()
 
-	owner, err := users.Create(ctx, "owner", "hash", false)
+	owner, err := users.Create(ctx, "owner", "owner@example.com", "hash", false)
 	if err != nil {
 		t.Fatalf("create owner: %v", err)
 	}
-	member, err := users.Create(ctx, "member", "hash", false)
+	member, err := users.Create(ctx, "member", "member@example.com", "hash", false)
 	if err != nil {
 		t.Fatalf("create member: %v", err)
 	}
-	outsider, err := users.Create(ctx, "outsider", "hash", false)
+	outsider, err := users.Create(ctx, "outsider", "outsider@example.com", "hash", false)
 	if err != nil {
 		t.Fatalf("create outsider: %v", err)
 	}
@@ -347,8 +347,8 @@ func TestEventService_ListAttendees_VisibleToAttendeeWithNoCalendarAccess(t *tes
 	if len(attendees) != 1 || attendees[0].UserID != memberID {
 		t.Fatalf("expected [%d], got %+v", memberID, attendees)
 	}
-	if attendees[0].Username != "member" {
-		t.Fatalf("expected username %q, got %q", "member", attendees[0].Username)
+	if attendees[0].Name != "member" {
+		t.Fatalf("expected name %q, got %q", "member", attendees[0].Name)
 	}
 }
 

@@ -22,7 +22,7 @@ func newTestEventService(t *testing.T) (svc *EventService, userID int64, calenda
 	t.Cleanup(func() { sqlDB.Close() })
 
 	users := repository.NewUserRepository(sqlDB)
-	user, err := users.Create(context.Background(), "user-a", "hash", false)
+	user, err := users.Create(context.Background(), "user-a", "user-a@example.com", "hash", false)
 	if err != nil {
 		t.Fatalf("create user: %v", err)
 	}
@@ -386,7 +386,7 @@ func TestEventService_Update_AnotherUsersEventIsNotFound(t *testing.T) {
 	// the attacker has no Access to — exercising getOwnedEvent's guard
 	// specifically, distinct from Update_RejectsAnotherUsersCalendar's
 	// earlier write.CalendarID check.
-	attacker, err := repository.NewUserRepository(svc.db).Create(ctx, "attacker", "hash", false)
+	attacker, err := repository.NewUserRepository(svc.db).Create(ctx, "attacker", "attacker@example.com", "hash", false)
 	if err != nil {
 		t.Fatalf("create attacker: %v", err)
 	}

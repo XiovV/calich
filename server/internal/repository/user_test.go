@@ -20,11 +20,11 @@ func newTestUserRepository(t *testing.T) *UserRepository {
 	return NewUserRepository(sqlDB)
 }
 
-func TestUserRepository_CreateAndGetByUsername(t *testing.T) {
+func TestUserRepository_CreateAndGetByEmail(t *testing.T) {
 	repo := newTestUserRepository(t)
 	ctx := context.Background()
 
-	created, err := repo.Create(ctx, "admin", "hashed-password", true)
+	created, err := repo.Create(ctx, "admin", "admin@example.com", "hashed-password", true)
 	if err != nil {
 		t.Fatalf("create user: %v", err)
 	}
@@ -36,9 +36,9 @@ func TestUserRepository_CreateAndGetByUsername(t *testing.T) {
 		t.Fatalf("expected must_change_password to be true")
 	}
 
-	fetched, err := repo.GetByUsername(ctx, "admin")
+	fetched, err := repo.GetByEmail(ctx, "admin@example.com")
 	if err != nil {
-		t.Fatalf("get by username: %v", err)
+		t.Fatalf("get by email: %v", err)
 	}
 
 	if fetched != created {
@@ -46,25 +46,25 @@ func TestUserRepository_CreateAndGetByUsername(t *testing.T) {
 	}
 }
 
-func TestUserRepository_GetByUsername_NotFound(t *testing.T) {
+func TestUserRepository_GetByEmail_NotFound(t *testing.T) {
 	repo := newTestUserRepository(t)
 
-	_, err := repo.GetByUsername(context.Background(), "nobody")
+	_, err := repo.GetByEmail(context.Background(), "nobody@example.com")
 	if !errors.Is(err, ErrNotFound) {
 		t.Fatalf("expected ErrNotFound, got %v", err)
 	}
 }
 
-func TestUserRepository_Create_DuplicateUsername(t *testing.T) {
+func TestUserRepository_Create_DuplicateEmail(t *testing.T) {
 	repo := newTestUserRepository(t)
 	ctx := context.Background()
 
-	if _, err := repo.Create(ctx, "admin", "hash1", true); err != nil {
+	if _, err := repo.Create(ctx, "admin", "admin@example.com", "hash1", true); err != nil {
 		t.Fatalf("create first user: %v", err)
 	}
 
-	if _, err := repo.Create(ctx, "admin", "hash2", true); err == nil {
-		t.Fatalf("expected an error creating a duplicate username, got nil")
+	if _, err := repo.Create(ctx, "someone-else", "admin@example.com", "hash2", true); err == nil {
+		t.Fatalf("expected an error creating a duplicate email, got nil")
 	}
 }
 
@@ -72,7 +72,7 @@ func TestUserRepository_UpdatePassword(t *testing.T) {
 	repo := newTestUserRepository(t)
 	ctx := context.Background()
 
-	created, err := repo.Create(ctx, "admin", "old-hash", true)
+	created, err := repo.Create(ctx, "admin", "admin@example.com", "old-hash", true)
 	if err != nil {
 		t.Fatalf("create user: %v", err)
 	}
@@ -98,28 +98,37 @@ func TestUserRepository_UpdateEmail(t *testing.T) {
 	repo := newTestUserRepository(t)
 	ctx := context.Background()
 
-	created, err := repo.Create(ctx, "admin", "hash", false)
+	created, err := repo.Create(ctx, "admin", "admin@example.com", "hash", false)
 	if err != nil {
 		t.Fatalf("create user: %v", err)
 	}
-	if created.Email != nil {
-		t.Fatalf("expected a freshly created user to have no email, got %+v", created.Email)
+	if created.Email != "admin@example.com" {
+		t.Fatalf("expected the created user's email to be set, got %+v", created.Email)
 	}
 
-	updated, err := repo.UpdateEmail(ctx, created.ID, "admin@example.com")
+	updated, err := repo.UpdateEmail(ctx, created.ID, "admin2@example.com")
 	if err != nil {
 		t.Fatalf("update email: %v", err)
 	}
-	if updated.Email == nil || *updated.Email != "admin@example.com" {
+	if updated.Email != "admin2@example.com" {
 		t.Fatalf("expected email to be updated, got %+v", updated.Email)
 	}
+}
 
-	cleared, err := repo.UpdateEmail(ctx, created.ID, "")
-	if err != nil {
-		t.Fatalf("clear email: %v", err)
+func TestUserRepository_UpdateEmail_DuplicateReturnsErrEmailTaken(t *testing.T) {
+	repo := newTestUserRepository(t)
+	ctx := context.Background()
+
+	if _, err := repo.Create(ctx, "admin", "admin@example.com", "hash", false); err != nil {
+		t.Fatalf("create admin: %v", err)
 	}
-	if cleared.Email != nil {
-		t.Fatalf("expected email to be cleared, got %+v", cleared.Email)
+	other, err := repo.Create(ctx, "other", "other@example.com", "hash", false)
+	if err != nil {
+		t.Fatalf("create other: %v", err)
+	}
+
+	if _, err := repo.UpdateEmail(ctx, other.ID, "admin@example.com"); !errors.Is(err, ErrEmailTaken) {
+		t.Fatalf("expected ErrEmailTaken, got %v", err)
 	}
 }
 
@@ -135,7 +144,7 @@ func TestUserRepository_Count(t *testing.T) {
 		t.Fatalf("expected 0 users, got %d", count)
 	}
 
-	if _, err := repo.Create(ctx, "admin", "hash", true); err != nil {
+	if _, err := repo.Create(ctx, "admin", "admin@example.com", "hash", true); err != nil {
 		t.Fatalf("create user: %v", err)
 	}
 
@@ -152,7 +161,7 @@ func TestUserRepository_First(t *testing.T) {
 	repo := newTestUserRepository(t)
 	ctx := context.Background()
 
-	created, err := repo.Create(ctx, "admin", "hash", true)
+	created, err := repo.Create(ctx, "admin", "admin@example.com", "hash", true)
 	if err != nil {
 		t.Fatalf("create user: %v", err)
 	}
@@ -178,7 +187,7 @@ func TestUserRepository_First_NotFound(t *testing.T) {
 func TestUserRepository_SyncedDeviceRemindersEnabled_DefaultsOff(t *testing.T) {
 	repo := newTestUserRepository(t)
 
-	created, err := repo.Create(context.Background(), "admin", "hash", true)
+	created, err := repo.Create(context.Background(), "admin", "admin@example.com", "hash", true)
 	if err != nil {
 		t.Fatalf("create user: %v", err)
 	}
@@ -190,7 +199,7 @@ func TestUserRepository_SyncedDeviceRemindersEnabled_DefaultsOff(t *testing.T) {
 func TestUserRepository_Create_DefaultsWeekStartToMonday(t *testing.T) {
 	repo := newTestUserRepository(t)
 
-	created, err := repo.Create(context.Background(), "admin", "hash", true)
+	created, err := repo.Create(context.Background(), "admin", "admin@example.com", "hash", true)
 	if err != nil {
 		t.Fatalf("create user: %v", err)
 	}
@@ -203,7 +212,7 @@ func TestUserRepository_UpdateWeekStart(t *testing.T) {
 	repo := newTestUserRepository(t)
 	ctx := context.Background()
 
-	created, err := repo.Create(ctx, "admin", "hash", true)
+	created, err := repo.Create(ctx, "admin", "admin@example.com", "hash", true)
 	if err != nil {
 		t.Fatalf("create user: %v", err)
 	}
@@ -220,7 +229,7 @@ func TestUserRepository_UpdateWeekStart(t *testing.T) {
 func TestUserRepository_Create_DefaultsDefaultViewToWeek(t *testing.T) {
 	repo := newTestUserRepository(t)
 
-	created, err := repo.Create(context.Background(), "admin", "hash", true)
+	created, err := repo.Create(context.Background(), "admin", "admin@example.com", "hash", true)
 	if err != nil {
 		t.Fatalf("create user: %v", err)
 	}
@@ -233,7 +242,7 @@ func TestUserRepository_UpdateDefaultView(t *testing.T) {
 	repo := newTestUserRepository(t)
 	ctx := context.Background()
 
-	created, err := repo.Create(ctx, "admin", "hash", true)
+	created, err := repo.Create(ctx, "admin", "admin@example.com", "hash", true)
 	if err != nil {
 		t.Fatalf("create user: %v", err)
 	}
@@ -247,16 +256,32 @@ func TestUserRepository_UpdateDefaultView(t *testing.T) {
 	}
 }
 
-func TestUserRepository_Create_DuplicateUsername_ReturnsErrUsernameTaken(t *testing.T) {
+func TestUserRepository_Create_DuplicateEmail_ReturnsErrEmailTaken(t *testing.T) {
 	repo := newTestUserRepository(t)
 	ctx := context.Background()
 
-	if _, err := repo.Create(ctx, "admin", "hash1", true); err != nil {
+	if _, err := repo.Create(ctx, "admin", "admin@example.com", "hash1", true); err != nil {
 		t.Fatalf("create first user: %v", err)
 	}
 
-	if _, err := repo.Create(ctx, "admin", "hash2", true); !errors.Is(err, ErrUsernameTaken) {
-		t.Fatalf("expected ErrUsernameTaken, got %v", err)
+	if _, err := repo.Create(ctx, "someone-else", "admin@example.com", "hash2", true); !errors.Is(err, ErrEmailTaken) {
+		t.Fatalf("expected ErrEmailTaken, got %v", err)
+	}
+}
+
+// TestUserRepository_TwoUsersMayShareTheSameName covers ADR-0047: Name is a
+// display label, not an identifier, so two accounts may hold the same one —
+// only Email is required to be unique.
+func TestUserRepository_TwoUsersMayShareTheSameName(t *testing.T) {
+	repo := newTestUserRepository(t)
+	ctx := context.Background()
+
+	if _, err := repo.Create(ctx, "Jane Smith", "jane1@example.com", "hash1", true); err != nil {
+		t.Fatalf("create first jane: %v", err)
+	}
+
+	if _, err := repo.Create(ctx, "Jane Smith", "jane2@example.com", "hash2", true); err != nil {
+		t.Fatalf("expected two accounts to share a name, got: %v", err)
 	}
 }
 
@@ -264,7 +289,7 @@ func TestUserRepository_SetDisabled(t *testing.T) {
 	repo := newTestUserRepository(t)
 	ctx := context.Background()
 
-	created, err := repo.Create(ctx, "alice", "hash", true)
+	created, err := repo.Create(ctx, "alice", "alice@example.com", "hash", true)
 	if err != nil {
 		t.Fatalf("create user: %v", err)
 	}
@@ -293,7 +318,7 @@ func TestUserRepository_Delete(t *testing.T) {
 	repo := newTestUserRepository(t)
 	ctx := context.Background()
 
-	created, err := repo.Create(ctx, "alice", "hash", true)
+	created, err := repo.Create(ctx, "alice", "alice@example.com", "hash", true)
 	if err != nil {
 		t.Fatalf("create user: %v", err)
 	}
@@ -330,11 +355,11 @@ func TestUserRepository_Delete_CascadesOwnedCalendarsAndSharesGrantedToThem(t *t
 	ctx := context.Background()
 
 	users := NewUserRepository(sqlDB)
-	owner, err := users.Create(ctx, "owner", "hash", false)
+	owner, err := users.Create(ctx, "owner", "owner@example.com", "hash", false)
 	if err != nil {
 		t.Fatalf("create owner: %v", err)
 	}
-	other, err := users.Create(ctx, "other", "hash", false)
+	other, err := users.Create(ctx, "other", "other@example.com", "hash", false)
 	if err != nil {
 		t.Fatalf("create other: %v", err)
 	}
@@ -343,7 +368,7 @@ func TestUserRepository_Delete_CascadesOwnedCalendarsAndSharesGrantedToThem(t *t
 	// deletion (ADR-0044's sole-Owner guard — owner_user_id has no ON DELETE
 	// behaviour), and this test is about a Calendar Owner's deletion cascade,
 	// not Workspace ownership, so "owner" is only a Member here.
-	workspaceOwner, err := users.Create(ctx, "workspace-owner", "hash", false)
+	workspaceOwner, err := users.Create(ctx, "workspace-owner", "workspace-owner@example.com", "hash", false)
 	if err != nil {
 		t.Fatalf("create workspace owner: %v", err)
 	}
@@ -399,11 +424,11 @@ func TestUserRepository_Delete_CascadesSharesGrantedToTheDeletedUser(t *testing.
 	ctx := context.Background()
 
 	users := NewUserRepository(sqlDB)
-	owner, err := users.Create(ctx, "owner", "hash", false)
+	owner, err := users.Create(ctx, "owner", "owner@example.com", "hash", false)
 	if err != nil {
 		t.Fatalf("create owner: %v", err)
 	}
-	holder, err := users.Create(ctx, "holder", "hash", false)
+	holder, err := users.Create(ctx, "holder", "holder@example.com", "hash", false)
 	if err != nil {
 		t.Fatalf("create holder: %v", err)
 	}
@@ -443,19 +468,19 @@ func TestUserRepository_ListEnabledExcluding(t *testing.T) {
 	repo := newTestUserRepository(t)
 	ctx := context.Background()
 
-	caller, err := repo.Create(ctx, "caller", "hash", false)
+	caller, err := repo.Create(ctx, "caller", "caller@example.com", "hash", false)
 	if err != nil {
 		t.Fatalf("create caller: %v", err)
 	}
-	bob, err := repo.Create(ctx, "bob", "hash", false)
+	bob, err := repo.Create(ctx, "bob", "bob@example.com", "hash", false)
 	if err != nil {
 		t.Fatalf("create bob: %v", err)
 	}
-	alice, err := repo.Create(ctx, "alice", "hash", false)
+	alice, err := repo.Create(ctx, "alice", "alice@example.com", "hash", false)
 	if err != nil {
 		t.Fatalf("create alice: %v", err)
 	}
-	disabled, err := repo.Create(ctx, "ghost", "hash", false)
+	disabled, err := repo.Create(ctx, "ghost", "ghost@example.com", "hash", false)
 	if err != nil {
 		t.Fatalf("create ghost: %v", err)
 	}
@@ -468,7 +493,7 @@ func TestUserRepository_ListEnabledExcluding(t *testing.T) {
 		t.Fatalf("list enabled excluding: %v", err)
 	}
 	if len(users) != 2 || users[0] != alice || users[1] != bob {
-		t.Fatalf("expected [alice, bob] ordered by username, got %+v", users)
+		t.Fatalf("expected [alice, bob] ordered by name, got %+v", users)
 	}
 }
 
@@ -476,7 +501,7 @@ func TestUserRepository_ListEnabledExcluding_Empty(t *testing.T) {
 	repo := newTestUserRepository(t)
 	ctx := context.Background()
 
-	caller, err := repo.Create(ctx, "caller", "hash", false)
+	caller, err := repo.Create(ctx, "caller", "caller@example.com", "hash", false)
 	if err != nil {
 		t.Fatalf("create caller: %v", err)
 	}
@@ -494,7 +519,7 @@ func TestUserRepository_UpdateSyncedDeviceReminders(t *testing.T) {
 	repo := newTestUserRepository(t)
 	ctx := context.Background()
 
-	created, err := repo.Create(ctx, "admin", "hash", true)
+	created, err := repo.Create(ctx, "admin", "admin@example.com", "hash", true)
 	if err != nil {
 		t.Fatalf("create user: %v", err)
 	}
@@ -523,11 +548,11 @@ func TestUserRepository_GetByIDs(t *testing.T) {
 	repo := newTestUserRepository(t)
 	ctx := context.Background()
 
-	alice, err := repo.Create(ctx, "alice", "hash", false)
+	alice, err := repo.Create(ctx, "alice", "alice@example.com", "hash", false)
 	if err != nil {
 		t.Fatalf("create alice: %v", err)
 	}
-	bob, err := repo.Create(ctx, "bob", "hash", false)
+	bob, err := repo.Create(ctx, "bob", "bob@example.com", "hash", false)
 	if err != nil {
 		t.Fatalf("create bob: %v", err)
 	}

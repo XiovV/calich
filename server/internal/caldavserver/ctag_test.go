@@ -33,7 +33,7 @@ func TestPropfind_GetCTag_ExposedAsA200Property(t *testing.T) {
 	env := newTestCalDAVEnv(t)
 
 	path := calendarPath(env.userID, env.calendarID)
-	resp := propfind(t, env.srv, path, "admin", env.appPasswordSecret, "0", propfindGetCTag)
+	resp := propfind(t, env.srv, path, "admin@example.com", env.appPasswordSecret, "0", propfindGetCTag)
 	defer resp.Body.Close()
 
 	body := readBody(t, resp)
@@ -49,11 +49,11 @@ func TestPropfind_GetCTag_StableUntilCalendarMutates(t *testing.T) {
 
 	path := calendarPath(env.userID, env.calendarID)
 
-	resp1 := propfind(t, env.srv, path, "admin", env.appPasswordSecret, "0", propfindGetCTag)
+	resp1 := propfind(t, env.srv, path, "admin@example.com", env.appPasswordSecret, "0", propfindGetCTag)
 	ctag1 := extractGetCTag(t, readBody(t, resp1))
 	resp1.Body.Close()
 
-	resp2 := propfind(t, env.srv, path, "admin", env.appPasswordSecret, "0", propfindGetCTag)
+	resp2 := propfind(t, env.srv, path, "admin@example.com", env.appPasswordSecret, "0", propfindGetCTag)
 	ctag2 := extractGetCTag(t, readBody(t, resp2))
 	resp2.Body.Close()
 	if ctag1 != ctag2 {
@@ -64,7 +64,7 @@ func TestPropfind_GetCTag_StableUntilCalendarMutates(t *testing.T) {
 		t.Fatalf("create event: %v", err)
 	}
 
-	resp3 := propfind(t, env.srv, path, "admin", env.appPasswordSecret, "0", propfindGetCTag)
+	resp3 := propfind(t, env.srv, path, "admin@example.com", env.appPasswordSecret, "0", propfindGetCTag)
 	defer resp3.Body.Close()
 	ctag3 := extractGetCTag(t, readBody(t, resp3))
 	if ctag3 == ctag2 {

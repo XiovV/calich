@@ -80,11 +80,11 @@ export function GroupMembersDialog({ group, onClose }: GroupMembersDialogProps) 
                   key={member.userId}
                   className="flex items-center justify-between rounded-md border border-border px-3 py-2"
                 >
-                  <span className="text-body text-ink">{member.username}</span>
+                  <span className="text-body text-ink">{member.name}</span>
                   <IconButton
                     onClick={() => handleToggle(member.userId, isInGroup)}
                     disabled={busyUserId === member.userId || groupMembers === undefined}
-                    aria-label={isInGroup ? `Remove ${member.username} from ${group.name}` : `Add ${member.username} to ${group.name}`}
+                    aria-label={isInGroup ? `Remove ${member.name} from ${group.name}` : `Add ${member.name} to ${group.name}`}
                   >
                     {isInGroup ? <UserMinus className="size-4" /> : <UserPlus className="size-4" />}
                   </IconButton>

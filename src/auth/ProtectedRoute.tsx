@@ -19,6 +19,12 @@ export function ProtectedRoute({ children }: ProtectedRouteProps) {
     return <Navigate to="/login" replace />;
   }
 
+  // A fresh instance with zero accounts has nothing to sign in to (#169,
+  // ADR-0047) — go straight to Register instead.
+  if (status === "needs-setup") {
+    return <Navigate to="/register" replace />;
+  }
+
   if (status === "must-change-password") {
     return <ChangePasswordScreen />;
   }

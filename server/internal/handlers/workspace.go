@@ -241,10 +241,11 @@ func (h *WorkspaceHandler) CancelInvite(w http.ResponseWriter, r *http.Request) 
 }
 
 // workspaceMemberResponse is one Member row on the member-management screen
-// (#156, #165): their Username alongside their Workspace Role.
+// (#156, #165): their Name and Email alongside their Workspace Role.
 type workspaceMemberResponse struct {
 	UserID    int64     `json:"user_id"`
-	Username  string    `json:"username"`
+	Name      string    `json:"name"`
+	Email     string    `json:"email"`
 	Role      string    `json:"role"`
 	CreatedAt time.Time `json:"created_at"`
 }
@@ -265,14 +266,14 @@ func (h *WorkspaceHandler) ListMembers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	members, err := h.workspaces.ListMembersWithUsername(r.Context(), actorID, workspaceID)
+	members, err := h.workspaces.ListMembersWithUser(r.Context(), actorID, workspaceID)
 	if respondError(w, err, listWorkspaceMembersErrors, "failed to list members") {
 		return
 	}
 
 	responses := make([]workspaceMemberResponse, len(members))
 	for i, m := range members {
-		responses[i] = workspaceMemberResponse{UserID: m.UserID, Username: m.Username, Role: m.Role, CreatedAt: m.CreatedAt}
+		responses[i] = workspaceMemberResponse{UserID: m.UserID, Name: m.Name, Email: m.Email, Role: m.Role, CreatedAt: m.CreatedAt}
 	}
 
 	httpresponse.JSON(w, http.StatusOK, responses)
@@ -290,7 +291,7 @@ type setWorkspaceMemberRoleRequest struct {
 
 // workspaceMemberRoleResponse is SetMemberRole's response — deliberately
 // narrower than workspaceMemberResponse, since WorkspaceService.SetMemberRole
-// doesn't join against Username and callers here already have it from their
+// doesn't join against the User and callers here already have it from their
 // own ListMembers call.
 type workspaceMemberRoleResponse struct {
 	UserID    int64     `json:"user_id"`
@@ -361,7 +362,7 @@ func (h *WorkspaceHandler) RemoveMemberImpact(w http.ResponseWriter, r *http.Req
 	for i, c := range impact.Calendars {
 		candidates := make([]transferCandidateResponse, len(c.TransferCandidates))
 		for j, candidate := range c.TransferCandidates {
-			candidates[j] = transferCandidateResponse{ID: candidate.ID, Username: candidate.Username}
+			candidates[j] = transferCandidateResponse{ID: candidate.ID, Name: candidate.Name}
 		}
 		calendars[i] = calendarImpactResponse{
 			ID:                 c.ID,

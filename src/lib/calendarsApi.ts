@@ -27,7 +27,10 @@ export type Role = "viewer" | "editor";
 // it (#113).
 export interface Share {
   userId: number;
-  username: string;
+  // Name is a display-only label (ADR-0047); Email is the identifier used
+  // to grant a Share.
+  name: string;
+  email: string;
   role: Role;
   createdAt: string;
 }
@@ -46,7 +49,8 @@ export interface GroupShare {
 // Group of the Calendar's own Workspace.
 export interface ShareTargetUser {
   userId: number;
-  username: string;
+  name: string;
+  email: string;
 }
 
 export interface ShareTargetGroup {
@@ -219,19 +223,20 @@ export const calendarsApi = {
     return (await response.json()) as Share[];
   },
 
-  // share grants id a Share to username with role, or changes an existing
-  // Share's role if username already has one (#113, ADR-0034). Owner-only.
+  // share grants id a Share to the User named by email with role, or
+  // changes an existing Share's role if they already have one (#113,
+  // ADR-0034, ADR-0047). Owner-only.
   async share(
     accessToken: string,
     id: string,
-    username: string,
+    email: string,
     role: Role,
   ): Promise<Share> {
     const response = await authedFetch(accessToken, `/api/calendars/${id}/shares`, {
       method: "POST",
       credentials: "include",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ username, role }),
+      body: JSON.stringify({ email, role }),
     });
     if (!response.ok) throw await errorFromResponse(response);
 

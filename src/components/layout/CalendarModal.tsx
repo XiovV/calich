@@ -147,9 +147,9 @@ export function CalendarModal(props: CalendarModalProps) {
           <Dialog.Title className="text-heading font-medium text-ink">
             {mode === "edit" ? "Edit calendar" : "New calendar"}
           </Dialog.Title>
-          {mode === "edit" && !canManage && props.calendar.ownerUsername && (
+          {mode === "edit" && !canManage && props.calendar.ownerName && (
             <p className="mt-1 text-label-sm text-ink-muted">
-              Shared by {props.calendar.ownerUsername}
+              Shared by {props.calendar.ownerName}
             </p>
           )}
 

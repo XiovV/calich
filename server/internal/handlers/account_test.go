@@ -43,8 +43,8 @@ func newAccountHandlerTestServer(t *testing.T) *accountHandlerTestServer {
 	shareRepo := repository.NewCalendarShareRepository(sqlDB)
 	workspaceRepo := repository.NewWorkspaceRepository(sqlDB)
 	workspaces := service.NewWorkspaceService(sqlDB, workspaceRepo, repository.NewWorkspaceInviteRepository(sqlDB), repository.NewCalendarRepository(sqlDB), repository.NewCalendarShareRepository(sqlDB))
-	auth := service.NewAuthService(users, sessions, workspaces, repository.NewWorkspaceInviteRepository(sqlDB), []byte("test-secret"), "", "", true)
 	calendars := service.NewCalendarService(calendarRepo, shareRepo, users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo, repository.NewCalendarGroupShareRepository(sqlDB), repository.NewGroupRepository(sqlDB))
+	auth := service.NewAuthService(users, sessions, workspaces, repository.NewWorkspaceInviteRepository(sqlDB), calendars, []byte("test-secret"), "", "", "", true)
 	accounts := service.NewAccountService(sqlDB, users, sessions, calendarRepo, shareRepo, workspaceRepo, workspaces)
 
 	authHandler := NewAuthHandler(auth, false)
@@ -90,7 +90,7 @@ func (s *accountHandlerTestServer) register(t *testing.T, username string) (acce
 	}
 
 	users := repository.NewUserRepository(s.db)
-	user, err := users.GetByUsername(ctx, username)
+	user, err := users.GetByEmail(ctx, username+"@example.com")
 	if err != nil {
 		t.Fatalf("get %s: %v", username, err)
 	}
@@ -100,6 +100,22 @@ func (s *accountHandlerTestServer) register(t *testing.T, username string) (acce
 	}
 
 	return logged.AccessToken, user.ID, workspaces[0].ID
+}
+
+// deleteAllCalendars removes every Calendar userID currently owns — used to
+// clear register's seeded Personal/Work/Family defaults (#172) before a test
+// sets up its own exact Calendar list.
+func (s *accountHandlerTestServer) deleteAllCalendars(t *testing.T, userID int64) {
+	t.Helper()
+	existing, err := s.calendars.List(context.Background(), userID)
+	if err != nil {
+		t.Fatalf("list calendars for %d: %v", userID, err)
+	}
+	for _, c := range existing {
+		if err := s.calendars.Delete(context.Background(), userID, c.ID); err != nil {
+			t.Fatalf("delete calendar %s: %v", c.ID, err)
+		}
+	}
 }
 
 // addMember inserts a WorkspaceMember row directly, standing in for
@@ -214,6 +230,7 @@ func TestAccountSetDisabled_RefusesTheSoleOwnerOfANonEmptyWorkspace(t *testing.T
 func TestAccountDeleteImpact_ReportsOwnedCalendars(t *testing.T) {
 	s := newAccountHandlerTestServer(t)
 	accessToken, aliceID, aliceWorkspaceID := s.register(t, "alice")
+	s.deleteAllCalendars(t, aliceID)
 
 	if _, err := s.calendars.Create(context.Background(), aliceID, aliceWorkspaceID, "cal-1", service.CalendarWrite{Name: "Personal", Color: "#112233FF"}); err != nil {
 		t.Fatalf("create calendar: %v", err)
@@ -270,6 +287,7 @@ func deleteAccount(t *testing.T, srv *httptest.Server, accessToken string, req d
 func TestAccountDelete_DispositionDelete_RemovesAccount(t *testing.T) {
 	s := newAccountHandlerTestServer(t)
 	accessToken, aliceID, aliceWorkspaceID := s.register(t, "alice")
+	s.deleteAllCalendars(t, aliceID)
 
 	calendar, err := s.calendars.Create(context.Background(), aliceID, aliceWorkspaceID, "cal-1", service.CalendarWrite{Name: "Personal", Color: "#112233FF"})
 	if err != nil {
@@ -297,6 +315,7 @@ func TestAccountDelete_DispositionTransfer_ReassignsCalendar(t *testing.T) {
 	aliceToken, aliceID, aliceWorkspaceID := s.register(t, "alice")
 	_, bobID, _ := s.register(t, "bob")
 	s.addMember(t, aliceWorkspaceID, bobID, repository.WorkspaceRoleMember)
+	s.deleteAllCalendars(t, aliceID)
 
 	calendar, err := s.calendars.Create(context.Background(), aliceID, aliceWorkspaceID, "cal-1", service.CalendarWrite{Name: "Family", Color: "#112233FF"})
 	if err != nil {

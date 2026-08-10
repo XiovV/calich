@@ -22,11 +22,11 @@ func newTestEventRepository(t *testing.T) (repo *EventRepository, userID int64, 
 	t.Cleanup(func() { sqlDB.Close() })
 
 	users := NewUserRepository(sqlDB)
-	user, err := users.Create(context.Background(), "user-a", "hash", false)
+	user, err := users.Create(context.Background(), "user-a", "user-a@example.com", "hash", false)
 	if err != nil {
 		t.Fatalf("create user: %v", err)
 	}
-	other, err := users.Create(context.Background(), "user-b", "hash", false)
+	other, err := users.Create(context.Background(), "user-b", "user-b@example.com", "hash", false)
 	if err != nil {
 		t.Fatalf("create other user: %v", err)
 	}
@@ -400,7 +400,7 @@ func TestEventRepository_CascadeDeletesWhenCalendarDeleted(t *testing.T) {
 	t.Cleanup(func() { sqlDB.Close() })
 
 	users := NewUserRepository(sqlDB)
-	user, err := users.Create(context.Background(), "user-a", "hash", false)
+	user, err := users.Create(context.Background(), "user-a", "user-a@example.com", "hash", false)
 	if err != nil {
 		t.Fatalf("create user: %v", err)
 	}
@@ -447,11 +447,11 @@ func TestEventRepository_CreatedByPreservedWhenCreatingUserDeleted(t *testing.T)
 	ctx := context.Background()
 
 	users := NewUserRepository(sqlDB)
-	owner, err := users.Create(ctx, "owner", "hash", false)
+	owner, err := users.Create(ctx, "owner", "owner@example.com", "hash", false)
 	if err != nil {
 		t.Fatalf("create owner: %v", err)
 	}
-	creator, err := users.Create(ctx, "creator", "hash", false)
+	creator, err := users.Create(ctx, "creator", "creator@example.com", "hash", false)
 	if err != nil {
 		t.Fatalf("create creator: %v", err)
 	}
@@ -585,11 +585,11 @@ func TestEventRepository_ListAllWithReminders(t *testing.T) {
 	ctx := context.Background()
 
 	users := NewUserRepository(sqlDB)
-	userA, err := users.Create(ctx, "user-a", "hash", false)
+	userA, err := users.Create(ctx, "user-a", "user-a@example.com", "hash", false)
 	if err != nil {
 		t.Fatalf("create user a: %v", err)
 	}
-	userB, err := users.Create(ctx, "user-b", "hash", false)
+	userB, err := users.Create(ctx, "user-b", "user-b@example.com", "hash", false)
 	if err != nil {
 		t.Fatalf("create user b: %v", err)
 	}
@@ -669,19 +669,19 @@ func TestEventRepository_ListAllWithReminders_RecipientUserIDsIncludeOwnerAndEve
 	ctx := context.Background()
 
 	users := NewUserRepository(sqlDB)
-	owner, err := users.Create(ctx, "owner", "hash", false)
+	owner, err := users.Create(ctx, "owner", "owner@example.com", "hash", false)
 	if err != nil {
 		t.Fatalf("create owner: %v", err)
 	}
-	editor, err := users.Create(ctx, "editor", "hash", false)
+	editor, err := users.Create(ctx, "editor", "editor@example.com", "hash", false)
 	if err != nil {
 		t.Fatalf("create editor: %v", err)
 	}
-	viewer, err := users.Create(ctx, "viewer", "hash", false)
+	viewer, err := users.Create(ctx, "viewer", "viewer@example.com", "hash", false)
 	if err != nil {
 		t.Fatalf("create viewer: %v", err)
 	}
-	solo, err := users.Create(ctx, "solo", "hash", false)
+	solo, err := users.Create(ctx, "solo", "solo@example.com", "hash", false)
 	if err != nil {
 		t.Fatalf("create solo: %v", err)
 	}

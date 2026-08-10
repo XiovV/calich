@@ -23,7 +23,7 @@ describe("authApi.login", () => {
     );
     vi.stubGlobal("fetch", fetchMock);
 
-    const result = await authApi.login("admin", "admin");
+    const result = await authApi.login("admin@example.com", "admin");
 
     expect(result).toEqual({ accessToken: "token-123", mustChangePassword: true, isDisabled: false });
     expect(fetchMock).toHaveBeenCalledWith(
@@ -31,20 +31,20 @@ describe("authApi.login", () => {
       expect.objectContaining({
         method: "POST",
         credentials: "include",
-        body: JSON.stringify({ username: "admin", password: "admin" }),
+        body: JSON.stringify({ email: "admin@example.com", password: "admin" }),
       }),
     );
   });
 
   it("throws an ApiError with the backend's code and message on failure", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
-      jsonResponse(401, { error: { code: "invalid_credentials", message: "invalid username or password" } }),
+      jsonResponse(401, { error: { code: "invalid_credentials", message: "invalid email or password" } }),
     );
     vi.stubGlobal("fetch", fetchMock);
 
     await expect(authApi.login("admin", "wrong")).rejects.toMatchObject({
       code: "invalid_credentials",
-      message: "invalid username or password",
+      message: "invalid email or password",
       status: 401,
     });
   });
@@ -100,7 +100,7 @@ describe("authApi.me", () => {
     const fetchMock = vi.fn().mockResolvedValue(
       jsonResponse(200, {
         id: 1,
-        username: "admin",
+        name: "admin",
         must_change_password: false,
         email: "admin@example.com",
         email_reminder_channel_available: true,
@@ -115,7 +115,7 @@ describe("authApi.me", () => {
 
     expect(user).toEqual({
       id: 1,
-      username: "admin",
+      name: "admin",
       mustChangePassword: false,
       email: "admin@example.com",
       emailReminderChannelAvailable: true,
@@ -190,7 +190,7 @@ describe("authApi.updateEmail", () => {
     const fetchMock = vi.fn().mockResolvedValue(
       jsonResponse(200, {
         id: 1,
-        username: "admin",
+        name: "admin",
         must_change_password: false,
         email: "admin@example.com",
         email_reminder_channel_available: true,
@@ -202,7 +202,7 @@ describe("authApi.updateEmail", () => {
 
     expect(user).toEqual({
       id: 1,
-      username: "admin",
+      name: "admin",
       mustChangePassword: false,
       email: "admin@example.com",
       emailReminderChannelAvailable: true,
@@ -230,48 +230,60 @@ describe("authApi.updateEmail", () => {
   });
 });
 
-describe("authApi.updateUsername", () => {
-  it("sends the username and bearer token, and maps the response", async () => {
+describe("authApi.updateName", () => {
+  it("sends the name and bearer token, and maps the response", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       jsonResponse(200, {
         id: 1,
-        username: "newname",
+        name: "New Name",
         must_change_password: false,
-        email: null,
+        email: "admin@example.com",
         email_reminder_channel_available: false,
       }),
     );
     vi.stubGlobal("fetch", fetchMock);
 
-    const user = await authApi.updateUsername("token-123", "newname");
+    const user = await authApi.updateName("token-123", "New Name");
 
     expect(user).toEqual({
       id: 1,
-      username: "newname",
+      name: "New Name",
       mustChangePassword: false,
-      email: null,
+      email: "admin@example.com",
       emailReminderChannelAvailable: false,
     });
     expect(fetchMock).toHaveBeenCalledWith(
-      "/api/auth/username",
+      "/api/auth/name",
       expect.objectContaining({
         method: "PUT",
         credentials: "include",
         headers: expect.objectContaining({ Authorization: "Bearer token-123" }),
-        body: JSON.stringify({ username: "newname" }),
+        body: JSON.stringify({ name: "New Name" }),
       }),
     );
   });
 
-  it("throws username_taken on a conflict", async () => {
+  it("throws on failure", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
-      jsonResponse(409, { error: { code: "username_taken", message: "username is already taken" } }),
+      jsonResponse(400, { error: { code: "invalid_request", message: "name must not be empty" } }),
     );
     vi.stubGlobal("fetch", fetchMock);
 
-    await expect(authApi.updateUsername("token-123", "bob")).rejects.toMatchObject({
-      code: "username_taken",
+    await expect(authApi.updateName("token-123", "")).rejects.toMatchObject({
+      code: "invalid_request",
     });
+  });
+});
+
+describe("authApi.setupStatus", () => {
+  it("reports whether the instance has any accounts yet", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, { has_accounts: false }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await authApi.setupStatus();
+
+    expect(result).toEqual({ hasAccounts: false });
+    expect(fetchMock).toHaveBeenCalledWith("/api/auth/setup-status", { credentials: "include" });
   });
 });
 
@@ -280,9 +292,9 @@ describe("authApi.updateSyncedDeviceReminders", () => {
     const fetchMock = vi.fn().mockResolvedValue(
       jsonResponse(200, {
         id: 1,
-        username: "admin",
+        name: "admin",
         must_change_password: false,
-        email: null,
+        email: "admin@example.com",
         email_reminder_channel_available: false,
         synced_device_reminders_enabled: true,
         week_start: 1,
@@ -294,9 +306,9 @@ describe("authApi.updateSyncedDeviceReminders", () => {
 
     expect(user).toEqual({
       id: 1,
-      username: "admin",
+      name: "admin",
       mustChangePassword: false,
-      email: null,
+      email: "admin@example.com",
       emailReminderChannelAvailable: false,
       syncedDeviceRemindersEnabled: true,
       weekStart: 1,
@@ -329,9 +341,9 @@ describe("authApi.updatePreferences", () => {
     const fetchMock = vi.fn().mockResolvedValue(
       jsonResponse(200, {
         id: 1,
-        username: "admin",
+        name: "admin",
         must_change_password: false,
-        email: null,
+        email: "admin@example.com",
         email_reminder_channel_available: false,
         synced_device_reminders_enabled: false,
         week_start: 0,
@@ -344,9 +356,9 @@ describe("authApi.updatePreferences", () => {
 
     expect(user).toEqual({
       id: 1,
-      username: "admin",
+      name: "admin",
       mustChangePassword: false,
-      email: null,
+      email: "admin@example.com",
       emailReminderChannelAvailable: false,
       syncedDeviceRemindersEnabled: false,
       weekStart: 0,
@@ -367,9 +379,9 @@ describe("authApi.updatePreferences", () => {
     const fetchMock = vi.fn().mockResolvedValue(
       jsonResponse(200, {
         id: 1,
-        username: "admin",
+        name: "admin",
         must_change_password: false,
-        email: null,
+        email: "admin@example.com",
         email_reminder_channel_available: false,
         synced_device_reminders_enabled: false,
         week_start: 1,
@@ -396,9 +408,9 @@ describe("authApi.updatePreferences", () => {
     const fetchMock = vi.fn().mockResolvedValue(
       jsonResponse(200, {
         id: 1,
-        username: "admin",
+        name: "admin",
         must_change_password: false,
-        email: null,
+        email: "admin@example.com",
         email_reminder_channel_available: false,
         synced_device_reminders_enabled: false,
         week_start: 1,
@@ -426,9 +438,9 @@ describe("authApi.updatePreferences", () => {
     const fetchMock = vi.fn().mockResolvedValue(
       jsonResponse(200, {
         id: 1,
-        username: "admin",
+        name: "admin",
         must_change_password: false,
-        email: null,
+        email: "admin@example.com",
         email_reminder_channel_available: false,
         synced_device_reminders_enabled: false,
         week_start: 1,
@@ -459,9 +471,9 @@ describe("authApi.updatePreferences", () => {
     const fetchMock = vi.fn().mockResolvedValue(
       jsonResponse(200, {
         id: 1,
-        username: "admin",
+        name: "admin",
         must_change_password: false,
-        email: null,
+        email: "admin@example.com",
         email_reminder_channel_available: false,
         synced_device_reminders_enabled: false,
         week_start: 1,

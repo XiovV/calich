@@ -87,7 +87,7 @@ func TestPropPatch_SetArbitraryColor_Returns200AndPersistsExactly(t *testing.T) 
 	path := calendarPath(env.userID, env.calendarID)
 	// A color matching none of the app's 8 Swatches (ADR-0029: any hex is
 	// valid, not just a curated set) — round-trips exactly, no snapping.
-	resp := proppatch(t, env.srv, path, "admin", env.appPasswordSecret, proppatchSetCalendarColor("#8f45ae"))
+	resp := proppatch(t, env.srv, path, "admin@example.com", env.appPasswordSecret, proppatchSetCalendarColor("#8f45ae"))
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusMultiStatus {
@@ -114,7 +114,7 @@ func TestPropPatch_SetShortHexColor_WidensWithFFAlpha_Returns200(t *testing.T) {
 	// A PROPPATCH response only echoes property names with a status (RFC
 	// 4918 §14.16), never values, so the widened value is verified via a
 	// follow-up GET, not this response's body.
-	resp := proppatch(t, env.srv, path, "admin", env.appPasswordSecret, proppatchSetCalendarColor("#1af"))
+	resp := proppatch(t, env.srv, path, "admin@example.com", env.appPasswordSecret, proppatchSetCalendarColor("#1af"))
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusMultiStatus {
@@ -138,7 +138,7 @@ func TestPropPatch_SetMalformedColor_Returns409AndLeavesColorUnchanged(t *testin
 	env := newTestCalDAVEnv(t)
 
 	path := calendarPath(env.userID, env.calendarID)
-	resp := proppatch(t, env.srv, path, "admin", env.appPasswordSecret, proppatchSetCalendarColor("not-a-color"))
+	resp := proppatch(t, env.srv, path, "admin@example.com", env.appPasswordSecret, proppatchSetCalendarColor("not-a-color"))
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusMultiStatus {
@@ -162,7 +162,7 @@ func TestPropPatch_RemoveCalendarColor_Returns403AndLeavesColorUnchanged(t *test
 	env := newTestCalDAVEnv(t)
 
 	path := calendarPath(env.userID, env.calendarID)
-	resp := proppatch(t, env.srv, path, "admin", env.appPasswordSecret, proppatchRemoveCalendarColor)
+	resp := proppatch(t, env.srv, path, "admin@example.com", env.appPasswordSecret, proppatchRemoveCalendarColor)
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusMultiStatus {
@@ -186,7 +186,7 @@ func TestPropPatch_UnsupportedProperty_Returns403AndLeavesCalendarUnchanged(t *t
 	env := newTestCalDAVEnv(t)
 
 	path := calendarPath(env.userID, env.calendarID)
-	resp := proppatch(t, env.srv, path, "admin", env.appPasswordSecret, proppatchUnsupportedProperty)
+	resp := proppatch(t, env.srv, path, "admin@example.com", env.appPasswordSecret, proppatchUnsupportedProperty)
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusMultiStatus {
@@ -210,7 +210,7 @@ func TestPropPatch_SetDisplayName_Returns200AndPersists(t *testing.T) {
 	env := newTestCalDAVEnv(t)
 
 	path := calendarPath(env.userID, env.calendarID)
-	resp := proppatch(t, env.srv, path, "admin", env.appPasswordSecret, proppatchSetDisplayName("Renamed"))
+	resp := proppatch(t, env.srv, path, "admin@example.com", env.appPasswordSecret, proppatchSetDisplayName("Renamed"))
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusMultiStatus {
@@ -234,7 +234,7 @@ func TestPropPatch_SetEmptyDisplayName_Returns409AndLeavesNameUnchanged(t *testi
 	env := newTestCalDAVEnv(t)
 
 	path := calendarPath(env.userID, env.calendarID)
-	resp := proppatch(t, env.srv, path, "admin", env.appPasswordSecret, proppatchSetDisplayName(""))
+	resp := proppatch(t, env.srv, path, "admin@example.com", env.appPasswordSecret, proppatchSetDisplayName(""))
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusMultiStatus {
@@ -258,7 +258,7 @@ func TestPropPatch_RemoveDisplayName_Returns403AndLeavesNameUnchanged(t *testing
 	env := newTestCalDAVEnv(t)
 
 	path := calendarPath(env.userID, env.calendarID)
-	resp := proppatch(t, env.srv, path, "admin", env.appPasswordSecret, proppatchRemoveDisplayName)
+	resp := proppatch(t, env.srv, path, "admin@example.com", env.appPasswordSecret, proppatchRemoveDisplayName)
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusMultiStatus {
@@ -282,7 +282,7 @@ func TestPropPatch_SetDisplayNameAndCalendarColor_BothValid_BothApplied(t *testi
 	env := newTestCalDAVEnv(t)
 
 	path := calendarPath(env.userID, env.calendarID)
-	resp := proppatch(t, env.srv, path, "admin", env.appPasswordSecret, proppatchSetDisplayNameAndCalendarColor("Renamed", "#8e44ad"))
+	resp := proppatch(t, env.srv, path, "admin@example.com", env.appPasswordSecret, proppatchSetDisplayNameAndCalendarColor("Renamed", "#8e44ad"))
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusMultiStatus {
@@ -306,7 +306,7 @@ func TestPropPatch_SetDisplayNameAndMalformedColor_NeitherApplied_ValidPropertyR
 	env := newTestCalDAVEnv(t)
 
 	path := calendarPath(env.userID, env.calendarID)
-	resp := proppatch(t, env.srv, path, "admin", env.appPasswordSecret, proppatchSetDisplayNameAndCalendarColor("Renamed", "not-a-color"))
+	resp := proppatch(t, env.srv, path, "admin@example.com", env.appPasswordSecret, proppatchSetDisplayNameAndCalendarColor("Renamed", "not-a-color"))
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusMultiStatus {
@@ -336,10 +336,10 @@ func TestPropPatch_SetDisplayName_VisibleOnNextPropfind(t *testing.T) {
 	env := newTestCalDAVEnv(t)
 
 	path := calendarPath(env.userID, env.calendarID)
-	patchResp := proppatch(t, env.srv, path, "admin", env.appPasswordSecret, proppatchSetDisplayName("Renamed"))
+	patchResp := proppatch(t, env.srv, path, "admin@example.com", env.appPasswordSecret, proppatchSetDisplayName("Renamed"))
 	patchResp.Body.Close()
 
-	resp := propfind(t, env.srv, path, "admin", env.appPasswordSecret, "0", propfindDisplayName)
+	resp := propfind(t, env.srv, path, "admin@example.com", env.appPasswordSecret, "0", propfindDisplayName)
 	defer resp.Body.Close()
 
 	body := readBody(t, resp)
@@ -355,7 +355,7 @@ func TestPropPatch_UnknownCalendarPath_Returns404(t *testing.T) {
 	env := newTestCalDAVEnv(t)
 
 	path := calendarPath(env.userID, "does-not-exist")
-	resp := proppatch(t, env.srv, path, "admin", env.appPasswordSecret, proppatchSetCalendarColor("#8e44ad"))
+	resp := proppatch(t, env.srv, path, "admin@example.com", env.appPasswordSecret, proppatchSetCalendarColor("#8e44ad"))
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusNotFound {
@@ -367,14 +367,14 @@ func TestPropPatch_ThenPropfindTwice_RoundTripStable(t *testing.T) {
 	env := newTestCalDAVEnv(t)
 
 	path := calendarPath(env.userID, env.calendarID)
-	patchResp := proppatch(t, env.srv, path, "admin", env.appPasswordSecret, proppatchSetCalendarColor("#8f45ae"))
+	patchResp := proppatch(t, env.srv, path, "admin@example.com", env.appPasswordSecret, proppatchSetCalendarColor("#8f45ae"))
 	patchResp.Body.Close()
 
-	resp1 := propfind(t, env.srv, path, "admin", env.appPasswordSecret, "0", propfindCalendarColor)
+	resp1 := propfind(t, env.srv, path, "admin@example.com", env.appPasswordSecret, "0", propfindCalendarColor)
 	color1 := extractCalendarColor(t, readBody(t, resp1))
 	resp1.Body.Close()
 
-	resp2 := propfind(t, env.srv, path, "admin", env.appPasswordSecret, "0", propfindCalendarColor)
+	resp2 := propfind(t, env.srv, path, "admin@example.com", env.appPasswordSecret, "0", propfindCalendarColor)
 	defer resp2.Body.Close()
 	color2 := extractCalendarColor(t, readBody(t, resp2))
 
@@ -403,7 +403,7 @@ func TestPropPatch_SubscribedCalendarIsForbidden(t *testing.T) {
 	}
 
 	path := calendarPath(env.userID, subCalendar.ID)
-	resp := proppatch(t, env.srv, path, "admin", env.appPasswordSecret, proppatchSetDisplayNameAndCalendarColor("Renamed", "#8e44ad"))
+	resp := proppatch(t, env.srv, path, "admin@example.com", env.appPasswordSecret, proppatchSetDisplayNameAndCalendarColor("Renamed", "#8e44ad"))
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusMultiStatus {
@@ -439,14 +439,14 @@ func TestPropPatch_NonOwnerColorOverride_SucceedsOnSubscribedCalendar(t *testing
 	if err != nil {
 		t.Fatalf("create subscribed calendar: %v", err)
 	}
-	viewer, err := env.users.Create(t.Context(), "viewer", "hash", false)
+	viewer, err := env.users.Create(t.Context(), "viewer", "viewer@example.com", "hash", false)
 	if err != nil {
 		t.Fatalf("create viewer: %v", err)
 	}
 	if err := env.workspaces.AddMember(t.Context(), env.workspaceID, viewer.ID, repository.WorkspaceRoleMember); err != nil {
 		t.Fatalf("add viewer as workspace member: %v", err)
 	}
-	if _, err := env.calendarService.Share(t.Context(), env.userID, subCalendar.ID, "viewer", repository.RoleViewer); err != nil {
+	if _, _, err := env.calendarService.Share(t.Context(), env.userID, subCalendar.ID, "viewer@example.com", repository.RoleViewer); err != nil {
 		t.Fatalf("share subscribed calendar: %v", err)
 	}
 	created, err := env.appPasswordService.Create(t.Context(), viewer.ID, "Test device")
@@ -455,7 +455,7 @@ func TestPropPatch_NonOwnerColorOverride_SucceedsOnSubscribedCalendar(t *testing
 	}
 
 	path := calendarPath(viewer.ID, subCalendar.ID)
-	resp := proppatch(t, env.srv, path, "viewer", created.Secret, proppatchSetCalendarColor("#8e44ad"))
+	resp := proppatch(t, env.srv, path, "viewer@example.com", created.Secret, proppatchSetCalendarColor("#8e44ad"))
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusMultiStatus {
@@ -482,7 +482,7 @@ func TestPropPatch_OwnedCalendarMultiPropertyRename_StillWorks(t *testing.T) {
 	env := newTestCalDAVEnv(t)
 
 	path := calendarPath(env.userID, env.calendarID)
-	resp := proppatch(t, env.srv, path, "admin", env.appPasswordSecret, proppatchSetDisplayNameAndCalendarColor("Renamed", "#8e44ad"))
+	resp := proppatch(t, env.srv, path, "admin@example.com", env.appPasswordSecret, proppatchSetDisplayNameAndCalendarColor("Renamed", "#8e44ad"))
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusMultiStatus {
@@ -508,7 +508,7 @@ func TestPropPatch_ViewerSetsOwnColorOverride_Returns200(t *testing.T) {
 	viewerID, viewerSecret := env.addSharedUser(t, "viewer", repository.RoleViewer)
 
 	path := calendarPath(viewerID, env.calendarID)
-	resp := proppatch(t, env.srv, path, "viewer", viewerSecret, proppatchSetCalendarColor("#654321"))
+	resp := proppatch(t, env.srv, path, "viewer@example.com", viewerSecret, proppatchSetCalendarColor("#654321"))
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusMultiStatus {
@@ -550,7 +550,7 @@ func TestPropPatch_NonOwnerRemoveColorOverride_Returns200AndFallsBackToOwnersCol
 	}
 
 	path := calendarPath(editorID, env.calendarID)
-	resp := proppatch(t, env.srv, path, "editor", editorSecret, proppatchRemoveCalendarColor)
+	resp := proppatch(t, env.srv, path, "editor@example.com", editorSecret, proppatchRemoveCalendarColor)
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusMultiStatus {
@@ -577,7 +577,7 @@ func TestPropPatch_ViewerCannotRename(t *testing.T) {
 	viewerID, viewerSecret := env.addSharedUser(t, "viewer", repository.RoleViewer)
 
 	path := calendarPath(viewerID, env.calendarID)
-	resp := proppatch(t, env.srv, path, "viewer", viewerSecret, proppatchSetDisplayName("Renamed by viewer"))
+	resp := proppatch(t, env.srv, path, "viewer@example.com", viewerSecret, proppatchSetDisplayName("Renamed by viewer"))
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusMultiStatus {
@@ -601,7 +601,7 @@ func TestPropPatch_NoLongerReturns501(t *testing.T) {
 	env := newTestCalDAVEnv(t)
 
 	path := calendarPath(env.userID, env.calendarID)
-	resp := proppatch(t, env.srv, path, "admin", env.appPasswordSecret, proppatchSetCalendarColor("#8e44ad"))
+	resp := proppatch(t, env.srv, path, "admin@example.com", env.appPasswordSecret, proppatchSetCalendarColor("#8e44ad"))
 	defer resp.Body.Close()
 
 	if resp.StatusCode == http.StatusNotImplemented {

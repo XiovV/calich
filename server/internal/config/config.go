@@ -23,9 +23,13 @@ const (
 )
 
 type Config struct {
-	Port            string
-	DataDir         string
-	InitialUsername string
+	Port        string
+	DataDir     string
+	InitialName string
+	// InitialEmail is the bootstrap account's login identifier (ADR-0047) —
+	// required, alongside InitialPassword, for Bootstrap to create the first
+	// account.
+	InitialEmail    string
 	InitialPassword string
 	// MaxAttachmentSize and MaxAttachmentsPerEvent are Attachments' limits
 	// (#132, ADR-0040).
@@ -55,7 +59,8 @@ func Load() Config {
 	return Config{
 		Port:                        getEnv("PORT", "8080"),
 		DataDir:                     getEnv("DATA_DIR", "/data"),
-		InitialUsername:             getEnv("INITIAL_USERNAME", ""),
+		InitialName:                 getEnv("INITIAL_NAME", "Admin"),
+		InitialEmail:                getEnv("INITIAL_EMAIL", ""),
 		InitialPassword:             getEnv("INITIAL_PASSWORD", ""),
 		SMTPHost:                    getEnv("SMTP_HOST", ""),
 		SMTPPort:                    getEnv("SMTP_PORT", ""),

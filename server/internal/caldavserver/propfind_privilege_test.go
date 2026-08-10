@@ -19,7 +19,7 @@ func TestPropfind_CurrentUserPrivilegeSet_OwnedCalendarGrantsWrite(t *testing.T)
 	env := newTestCalDAVEnv(t)
 
 	path := calendarPath(env.userID, env.calendarID)
-	resp := propfind(t, env.srv, path, "admin", env.appPasswordSecret, "0", propfindCurrentUserPrivilegeSet)
+	resp := propfind(t, env.srv, path, "admin@example.com", env.appPasswordSecret, "0", propfindCurrentUserPrivilegeSet)
 	defer resp.Body.Close()
 
 	body := readBody(t, resp)
@@ -43,7 +43,7 @@ func TestPropfind_CurrentUserPrivilegeSet_SubscribedCalendarIsReadOnly(t *testin
 	}
 
 	path := calendarPath(env.userID, subCalendar.ID)
-	resp := propfind(t, env.srv, path, "admin", env.appPasswordSecret, "0", propfindCurrentUserPrivilegeSet)
+	resp := propfind(t, env.srv, path, "admin@example.com", env.appPasswordSecret, "0", propfindCurrentUserPrivilegeSet)
 	defer resp.Body.Close()
 
 	body := readBody(t, resp)

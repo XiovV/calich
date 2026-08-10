@@ -89,24 +89,24 @@ type attachmentWire struct {
 	Filename    string `json:"filename"`
 	ContentType string `json:"contentType"`
 	SizeBytes   int64  `json:"sizeBytes"`
-	// UploadedBy and UploadedByUsername are the Attachment's uploader, for
+	// UploadedBy and UploadedByName are the Attachment's uploader, for
 	// display only — never consulted for authorization, which resolves
 	// through the Event's Calendar instead (ADR-0034). Both absent when the
 	// uploader's account has been deleted.
-	UploadedBy         *int64    `json:"uploadedBy,omitempty"`
-	UploadedByUsername string    `json:"uploadedByUsername,omitempty"`
-	CreatedAt          time.Time `json:"createdAt"`
+	UploadedBy     *int64    `json:"uploadedBy,omitempty"`
+	UploadedByName string    `json:"uploadedByName,omitempty"`
+	CreatedAt      time.Time `json:"createdAt"`
 }
 
 func toAttachmentResponse(a repository.Attachment) attachmentWire {
 	return attachmentWire{
-		ID:                 a.ID,
-		Filename:           a.Filename,
-		ContentType:        a.ContentType,
-		SizeBytes:          a.SizeBytes,
-		UploadedBy:         a.UploadedBy,
-		UploadedByUsername: a.UploadedByUsername,
-		CreatedAt:          a.CreatedAt,
+		ID:             a.ID,
+		Filename:       a.Filename,
+		ContentType:    a.ContentType,
+		SizeBytes:      a.SizeBytes,
+		UploadedBy:     a.UploadedBy,
+		UploadedByName: a.UploadedByName,
+		CreatedAt:      a.CreatedAt,
 	}
 }
 
@@ -154,12 +154,12 @@ type eventResponse struct {
 	// Color is this Event's own color override — absent means "inherit the
 	// Calendar's color" (ADR-0043).
 	Color *string `json:"color,omitempty"`
-	// CreatedBy and CreatedByUsername are the Event's creator, for display
+	// CreatedBy and CreatedByName are the Event's creator, for display
 	// only — never consulted for authorization, which resolves through
 	// CalendarID instead (ADR-0034, #118). Both absent when the creator's
 	// account has been deleted or the Event predates this column.
-	CreatedBy         *int64 `json:"createdBy,omitempty"`
-	CreatedByUsername string `json:"createdByUsername,omitempty"`
+	CreatedBy     *int64 `json:"createdBy,omitempty"`
+	CreatedByName string `json:"createdByName,omitempty"`
 	// Attachments is this Event's Attachments (#132, ADR-0040) — present
 	// only on a Master; an Override never carries its own.
 	Attachments []attachmentWire `json:"attachments,omitempty"`
@@ -167,24 +167,24 @@ type eventResponse struct {
 
 func toEventResponse(e repository.Event) eventResponse {
 	return eventResponse{
-		ID:                e.ID,
-		CalendarID:        e.CalendarID,
-		Title:             e.Title,
-		Start:             formatEventTime(e.Start, e.AllDay),
-		End:               formatEventTime(e.End, e.AllDay),
-		AllDay:            e.AllDay,
-		Rrule:             e.Rrule,
-		ParentID:          e.ParentID,
-		RecurrenceID:      e.RecurrenceID,
-		Exdates:           e.Exdates,
-		Tzid:              e.Tzid,
-		Reminders:         toReminderWire(e.Reminders),
-		Description:       e.Description,
-		Location:          e.Location,
-		Color:             e.Color,
-		CreatedBy:         e.CreatedBy,
-		CreatedByUsername: e.CreatedByUsername,
-		Attachments:       toAttachmentResponses(e.Attachments),
+		ID:            e.ID,
+		CalendarID:    e.CalendarID,
+		Title:         e.Title,
+		Start:         formatEventTime(e.Start, e.AllDay),
+		End:           formatEventTime(e.End, e.AllDay),
+		AllDay:        e.AllDay,
+		Rrule:         e.Rrule,
+		ParentID:      e.ParentID,
+		RecurrenceID:  e.RecurrenceID,
+		Exdates:       e.Exdates,
+		Tzid:          e.Tzid,
+		Reminders:     toReminderWire(e.Reminders),
+		Description:   e.Description,
+		Location:      e.Location,
+		Color:         e.Color,
+		CreatedBy:     e.CreatedBy,
+		CreatedByName: e.CreatedByName,
+		Attachments:   toAttachmentResponses(e.Attachments),
 	}
 }
 
@@ -519,12 +519,12 @@ func (h *EventHandler) Reparent(w http.ResponseWriter, r *http.Request) {
 // representation.
 type attendeeWire struct {
 	UserID   int64  `json:"userId"`
-	Username string `json:"username,omitempty"`
+	Name     string `json:"name,omitempty"`
 	Response string `json:"response"`
 }
 
-func toAttendeeResponse(a repository.AttendeeWithUsername) attendeeWire {
-	return attendeeWire{UserID: a.UserID, Username: a.Username, Response: a.Response}
+func toAttendeeResponse(a repository.AttendeeWithName) attendeeWire {
+	return attendeeWire{UserID: a.UserID, Name: a.Name, Response: a.Response}
 }
 
 // attendeeVisibilityErrors renders EventService.ListAttendees' not-visible

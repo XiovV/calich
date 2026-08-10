@@ -39,7 +39,7 @@ func TestPropfind_CalendarColor_ExposedAsA200Property(t *testing.T) {
 	env := newTestCalDAVEnv(t)
 
 	path := calendarPath(env.userID, env.calendarID)
-	resp := propfind(t, env.srv, path, "admin", env.appPasswordSecret, "0", propfindCalendarColor)
+	resp := propfind(t, env.srv, path, "admin@example.com", env.appPasswordSecret, "0", propfindCalendarColor)
 	defer resp.Body.Close()
 
 	body := readBody(t, resp)
@@ -54,7 +54,7 @@ func TestPropfind_CalendarColor_ReflectsStoredColor(t *testing.T) {
 
 	// newTestCalDAVEnv creates the test calendar with color "#12809CFF".
 	path := calendarPath(env.userID, env.calendarID)
-	resp := propfind(t, env.srv, path, "admin", env.appPasswordSecret, "0", propfindCalendarColor)
+	resp := propfind(t, env.srv, path, "admin@example.com", env.appPasswordSecret, "0", propfindCalendarColor)
 	defer resp.Body.Close()
 
 	got := extractCalendarColor(t, readBody(t, resp))
@@ -69,11 +69,11 @@ func TestPropfind_CalendarColor_StableAcrossRepeatedGETs_ChangesAfterUpdate(t *t
 
 	path := calendarPath(env.userID, env.calendarID)
 
-	resp1 := propfind(t, env.srv, path, "admin", env.appPasswordSecret, "0", propfindCalendarColor)
+	resp1 := propfind(t, env.srv, path, "admin@example.com", env.appPasswordSecret, "0", propfindCalendarColor)
 	color1 := extractCalendarColor(t, readBody(t, resp1))
 	resp1.Body.Close()
 
-	resp2 := propfind(t, env.srv, path, "admin", env.appPasswordSecret, "0", propfindCalendarColor)
+	resp2 := propfind(t, env.srv, path, "admin@example.com", env.appPasswordSecret, "0", propfindCalendarColor)
 	color2 := extractCalendarColor(t, readBody(t, resp2))
 	resp2.Body.Close()
 	if color1 != color2 {
@@ -84,7 +84,7 @@ func TestPropfind_CalendarColor_StableAcrossRepeatedGETs_ChangesAfterUpdate(t *t
 		t.Fatalf("update calendar color: %v", err)
 	}
 
-	resp3 := propfind(t, env.srv, path, "admin", env.appPasswordSecret, "0", propfindCalendarColor)
+	resp3 := propfind(t, env.srv, path, "admin@example.com", env.appPasswordSecret, "0", propfindCalendarColor)
 	defer resp3.Body.Close()
 	color3 := extractCalendarColor(t, readBody(t, resp3))
 	if color3 != "#8E44ADFF" {
@@ -96,7 +96,7 @@ func TestPropfind_BothGetCTagAndCalendarColor_BothExposedInOnePass(t *testing.T)
 	env := newTestCalDAVEnv(t)
 
 	path := calendarPath(env.userID, env.calendarID)
-	resp := propfind(t, env.srv, path, "admin", env.appPasswordSecret, "0", propfindGetCTagAndCalendarColor)
+	resp := propfind(t, env.srv, path, "admin@example.com", env.appPasswordSecret, "0", propfindGetCTagAndCalendarColor)
 	defer resp.Body.Close()
 
 	body := readBody(t, resp)
@@ -114,7 +114,7 @@ func TestPropfind_GetCTagOnly_CalendarColorUntouched(t *testing.T) {
 	env := newTestCalDAVEnv(t)
 
 	path := calendarPath(env.userID, env.calendarID)
-	resp := propfind(t, env.srv, path, "admin", env.appPasswordSecret, "0", propfindGetCTag)
+	resp := propfind(t, env.srv, path, "admin@example.com", env.appPasswordSecret, "0", propfindGetCTag)
 	defer resp.Body.Close()
 
 	body := readBody(t, resp)
@@ -136,14 +136,14 @@ func TestPropfind_CalendarColor_ResolvesPerPrincipal_OverrideAppliesOnlyToTheEdi
 		t.Fatalf("set color override: %v", err)
 	}
 
-	editorResp := propfind(t, env.srv, calendarPath(editorID, env.calendarID), "editor", editorSecret, "0", propfindCalendarColor)
+	editorResp := propfind(t, env.srv, calendarPath(editorID, env.calendarID), "editor@example.com", editorSecret, "0", propfindCalendarColor)
 	defer editorResp.Body.Close()
 	editorColor := extractCalendarColor(t, readBody(t, editorResp))
 	if editorColor != "#654321FF" {
 		t.Fatalf("expected the editor's resolved colour to be their override, got %q", editorColor)
 	}
 
-	ownerResp := propfind(t, env.srv, calendarPath(env.userID, env.calendarID), "admin", env.appPasswordSecret, "0", propfindCalendarColor)
+	ownerResp := propfind(t, env.srv, calendarPath(env.userID, env.calendarID), "admin@example.com", env.appPasswordSecret, "0", propfindCalendarColor)
 	defer ownerResp.Body.Close()
 	ownerColor := extractCalendarColor(t, readBody(t, ownerResp))
 	if ownerColor != "#12809CFF" {
@@ -160,7 +160,7 @@ func TestPropfind_CalendarColorOnly_GetCTagUntouched(t *testing.T) {
 	}
 
 	path := calendarPath(env.userID, env.calendarID)
-	resp := propfind(t, env.srv, path, "admin", env.appPasswordSecret, "0", propfindCalendarColor)
+	resp := propfind(t, env.srv, path, "admin@example.com", env.appPasswordSecret, "0", propfindCalendarColor)
 	defer resp.Body.Close()
 
 	body := readBody(t, resp)

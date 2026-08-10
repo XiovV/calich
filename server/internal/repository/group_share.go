@@ -81,7 +81,7 @@ func (r *CalendarGroupShareRepository) CountByCalendar(ctx context.Context, cale
 
 // CalendarGroupShareWithGroupName pairs a Group Share with the Name of the
 // Group it grants Access to — ListByCalendarWithGroupName's row, mirroring
-// CalendarShareWithUsername.
+// CalendarShareWithUser.
 type CalendarGroupShareWithGroupName struct {
 	CalendarGroupShare
 	GroupName string

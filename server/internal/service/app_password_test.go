@@ -14,11 +14,11 @@ import (
 func newTestAppPasswordService(t *testing.T) (svc *AppPasswordService, userID int64) {
 	t.Helper()
 
-	svc, userID, _ = newTestAppPasswordServiceWithUsername(t)
+	svc, userID, _ = newTestAppPasswordServiceWithEmail(t)
 	return svc, userID
 }
 
-func newTestAppPasswordServiceWithUsername(t *testing.T) (svc *AppPasswordService, userID int64, username string) {
+func newTestAppPasswordServiceWithEmail(t *testing.T) (svc *AppPasswordService, userID int64, email string) {
 	t.Helper()
 
 	sqlDB, err := db.OpenInMemory()
@@ -28,12 +28,12 @@ func newTestAppPasswordServiceWithUsername(t *testing.T) (svc *AppPasswordServic
 	t.Cleanup(func() { sqlDB.Close() })
 
 	users := repository.NewUserRepository(sqlDB)
-	user, err := users.Create(context.Background(), "user-a", "hash", false)
+	user, err := users.Create(context.Background(), "user-a", "user-a@example.com", "hash", false)
 	if err != nil {
 		t.Fatalf("create user: %v", err)
 	}
 
-	return NewAppPasswordService(repository.NewAppPasswordRepository(sqlDB), users), user.ID, user.Username
+	return NewAppPasswordService(repository.NewAppPasswordRepository(sqlDB), users), user.ID, user.Email
 }
 
 func TestAppPasswordService_Create(t *testing.T) {
@@ -134,7 +134,7 @@ func TestAppPasswordService_Revoke_NotFound(t *testing.T) {
 }
 
 func TestAppPasswordService_Authenticate_Success(t *testing.T) {
-	svc, userID, username := newTestAppPasswordServiceWithUsername(t)
+	svc, userID, email := newTestAppPasswordServiceWithEmail(t)
 	ctx := context.Background()
 
 	created, err := svc.Create(ctx, userID, "iPhone")
@@ -142,7 +142,7 @@ func TestAppPasswordService_Authenticate_Success(t *testing.T) {
 		t.Fatalf("create app password: %v", err)
 	}
 
-	gotUserID, err := svc.Authenticate(ctx, username, created.Secret)
+	gotUserID, err := svc.Authenticate(ctx, email, created.Secret)
 	if err != nil {
 		t.Fatalf("authenticate: %v", err)
 	}
@@ -160,30 +160,30 @@ func TestAppPasswordService_Authenticate_Success(t *testing.T) {
 }
 
 func TestAppPasswordService_Authenticate_RejectsWrongSecret(t *testing.T) {
-	svc, userID, username := newTestAppPasswordServiceWithUsername(t)
+	svc, userID, email := newTestAppPasswordServiceWithEmail(t)
 	ctx := context.Background()
 
 	if _, err := svc.Create(ctx, userID, "iPhone"); err != nil {
 		t.Fatalf("create app password: %v", err)
 	}
 
-	_, err := svc.Authenticate(ctx, username, "not-the-right-secret")
+	_, err := svc.Authenticate(ctx, email, "not-the-right-secret")
 	if !errors.Is(err, ErrInvalidAppPasswordCredentials) {
 		t.Fatalf("expected ErrInvalidAppPasswordCredentials, got %v", err)
 	}
 }
 
-func TestAppPasswordService_Authenticate_RejectsUnknownUsername(t *testing.T) {
-	svc, _, _ := newTestAppPasswordServiceWithUsername(t)
+func TestAppPasswordService_Authenticate_RejectsUnknownEmail(t *testing.T) {
+	svc, _, _ := newTestAppPasswordServiceWithEmail(t)
 
-	_, err := svc.Authenticate(context.Background(), "no-such-user", "whatever")
+	_, err := svc.Authenticate(context.Background(), "no-such-user@example.com", "whatever")
 	if !errors.Is(err, ErrInvalidAppPasswordCredentials) {
 		t.Fatalf("expected ErrInvalidAppPasswordCredentials, got %v", err)
 	}
 }
 
 func TestAppPasswordService_Authenticate_RejectsDisabledAccount(t *testing.T) {
-	svc, userID, username := newTestAppPasswordServiceWithUsername(t)
+	svc, userID, email := newTestAppPasswordServiceWithEmail(t)
 	ctx := context.Background()
 
 	created, err := svc.Create(ctx, userID, "iPhone")
@@ -194,14 +194,14 @@ func TestAppPasswordService_Authenticate_RejectsDisabledAccount(t *testing.T) {
 		t.Fatalf("disable account: %v", err)
 	}
 
-	_, err = svc.Authenticate(ctx, username, created.Secret)
+	_, err = svc.Authenticate(ctx, email, created.Secret)
 	if !errors.Is(err, ErrInvalidAppPasswordCredentials) {
 		t.Fatalf("expected ErrInvalidAppPasswordCredentials, got %v", err)
 	}
 }
 
 func TestAppPasswordService_Authenticate_RejectsRevokedAppPassword(t *testing.T) {
-	svc, userID, username := newTestAppPasswordServiceWithUsername(t)
+	svc, userID, email := newTestAppPasswordServiceWithEmail(t)
 	ctx := context.Background()
 
 	created, err := svc.Create(ctx, userID, "iPhone")
@@ -212,7 +212,7 @@ func TestAppPasswordService_Authenticate_RejectsRevokedAppPassword(t *testing.T)
 		t.Fatalf("revoke app password: %v", err)
 	}
 
-	_, err = svc.Authenticate(ctx, username, created.Secret)
+	_, err = svc.Authenticate(ctx, email, created.Secret)
 	if !errors.Is(err, ErrInvalidAppPasswordCredentials) {
 		t.Fatalf("expected ErrInvalidAppPasswordCredentials for a revoked app password, got %v", err)
 	}
@@ -232,7 +232,7 @@ func TestAppPasswordService_Authenticate_RejectsTheAccountLoginPassword(t *testi
 	}
 
 	users := repository.NewUserRepository(sqlDB)
-	user, err := users.Create(context.Background(), "user-a", string(hash), false)
+	user, err := users.Create(context.Background(), "user-a", "user-a@example.com", string(hash), false)
 	if err != nil {
 		t.Fatalf("create user: %v", err)
 	}
@@ -244,7 +244,7 @@ func TestAppPasswordService_Authenticate_RejectsTheAccountLoginPassword(t *testi
 
 	// The web login password must never work as a CalDAV app password
 	// credential (ADR-0024) — Authenticate only checks app_passwords hashes.
-	_, err = svc.Authenticate(context.Background(), user.Username, loginPassword)
+	_, err = svc.Authenticate(context.Background(), user.Email, loginPassword)
 	if !errors.Is(err, ErrInvalidAppPasswordCredentials) {
 		t.Fatalf("expected the web login password to be rejected, got %v", err)
 	}

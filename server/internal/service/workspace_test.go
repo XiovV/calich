@@ -27,7 +27,7 @@ func TestWorkspaceService_CreateForOwner_AddsOwnerMembership(t *testing.T) {
 	workspaces, users := newTestWorkspaceService(t)
 	ctx := context.Background()
 
-	user, err := users.Create(ctx, "alice", "hash", false)
+	user, err := users.Create(ctx, "alice", "alice@example.com", "hash", false)
 	if err != nil {
 		t.Fatalf("create user: %v", err)
 	}
@@ -56,7 +56,7 @@ func TestWorkspaceService_ListForUser_EmptyWhenNoMembership(t *testing.T) {
 	workspaces, users := newTestWorkspaceService(t)
 	ctx := context.Background()
 
-	user, err := users.Create(ctx, "alice", "hash", false)
+	user, err := users.Create(ctx, "alice", "alice@example.com", "hash", false)
 	if err != nil {
 		t.Fatalf("create user: %v", err)
 	}
@@ -77,11 +77,11 @@ func workspaceWithMembers(t *testing.T, workspaces *WorkspaceService, users *rep
 	t.Helper()
 	ctx := context.Background()
 
-	owner, err := users.Create(ctx, "owner", "hash", false)
+	owner, err := users.Create(ctx, "owner", "owner@example.com", "hash", false)
 	if err != nil {
 		t.Fatalf("create owner: %v", err)
 	}
-	member, err := users.Create(ctx, "member", "hash", false)
+	member, err := users.Create(ctx, "member", "member@example.com", "hash", false)
 	if err != nil {
 		t.Fatalf("create member: %v", err)
 	}
@@ -133,7 +133,7 @@ func TestWorkspaceService_SetMemberRole_AdminCannotGrantAdmin(t *testing.T) {
 	ctx := context.Background()
 	workspaceID, _, adminID := workspaceWithMembers(t, workspaces, users, repository.WorkspaceRoleAdmin)
 
-	other, err := users.Create(ctx, "other", "hash", false)
+	other, err := users.Create(ctx, "other", "other@example.com", "hash", false)
 	if err != nil {
 		t.Fatalf("create other user: %v", err)
 	}
@@ -176,7 +176,7 @@ func TestWorkspaceService_RemoveMember_AdminCanRemovePlainMember(t *testing.T) {
 	ctx := context.Background()
 	workspaceID, _, adminID := workspaceWithMembers(t, workspaces, users, repository.WorkspaceRoleAdmin)
 
-	target, err := users.Create(ctx, "target", "hash", false)
+	target, err := users.Create(ctx, "target", "target@example.com", "hash", false)
 	if err != nil {
 		t.Fatalf("create target user: %v", err)
 	}
@@ -211,7 +211,7 @@ func TestWorkspaceService_RemoveMember_AdminRefusedAgainstAnotherAdmin(t *testin
 	ctx := context.Background()
 	workspaceID, _, adminID := workspaceWithMembers(t, workspaces, users, repository.WorkspaceRoleAdmin)
 
-	otherAdmin, err := users.Create(ctx, "other-admin", "hash", false)
+	otherAdmin, err := users.Create(ctx, "other-admin", "other-admin@example.com", "hash", false)
 	if err != nil {
 		t.Fatalf("create other admin: %v", err)
 	}
@@ -305,7 +305,7 @@ func TestWorkspaceService_RemoveMemberImpact_ReportsOwnedCalendarsAndTransferCan
 	h.addMember(t, aliceWorkspace.ID, carol.ID, repository.WorkspaceRoleMember)
 
 	bobsCalendar := h.createCalendar(t, bob.ID, aliceWorkspace.ID, "cal-bob-alice-ws", "Bob's shared-workspace calendar")
-	if _, err := h.calendars.Share(ctx, bob.ID, bobsCalendar.ID, "carol", repository.RoleViewer); err != nil {
+	if _, _, err := h.calendars.Share(ctx, bob.ID, bobsCalendar.ID, "carol@example.com", repository.RoleViewer); err != nil {
 		t.Fatalf("share with carol: %v", err)
 	}
 	// Bob also owns a calendar in his own workspace — untouched by removal
@@ -331,14 +331,14 @@ func TestWorkspaceService_RemoveMemberImpact_ReportsOwnedCalendarsAndTransferCan
 		t.Fatalf("expected the calendar's own workspace, got %+v", got)
 	}
 
-	candidateUsernames := map[string]bool{}
+	candidateNames := map[string]bool{}
 	for _, c := range got.TransferCandidates {
-		candidateUsernames[c.Username] = true
+		candidateNames[c.Name] = true
 	}
-	if !candidateUsernames["alice"] || !candidateUsernames["carol"] {
+	if !candidateNames["alice"] || !candidateNames["carol"] {
 		t.Fatalf("expected alice and carol as transfer candidates, got %+v", got.TransferCandidates)
 	}
-	if candidateUsernames["bob"] {
+	if candidateNames["bob"] {
 		t.Fatalf("expected bob not to be his own transfer candidate")
 	}
 }

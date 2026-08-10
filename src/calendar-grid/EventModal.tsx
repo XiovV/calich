@@ -212,9 +212,9 @@ export function EventModal(props: EventModalProps) {
   // tell the caller what they already know. Also absent when the Event
   // carries no creator — a deleted account or an Event predating the
   // column — rather than rendering an empty "Created by" line.
-  const createdByUsername =
+  const createdByName =
     mode === "edit" && calendarHasOtherRecipients(editedCalendar)
-      ? props.occurrence.event.createdByUsername
+      ? props.occurrence.event.createdByName
       : undefined;
   const showAttachmentUploader = mode === "edit" && calendarHasOtherRecipients(editedCalendar);
 
@@ -892,9 +892,9 @@ export function EventModal(props: EventModalProps) {
               />
             )}
 
-            {createdByUsername && (
+            {createdByName && (
               <p className="mt-4 text-label-sm text-ink-muted">
-                Created by {createdByUsername}
+                Created by {createdByName}
               </p>
             )}
 

@@ -37,11 +37,11 @@ func groupWorkspaceWithMembers(t *testing.T, workspaces *WorkspaceService, users
 	t.Helper()
 	ctx := context.Background()
 
-	owner, err := users.Create(ctx, "owner", "hash", false)
+	owner, err := users.Create(ctx, "owner", "owner@example.com", "hash", false)
 	if err != nil {
 		t.Fatalf("create owner: %v", err)
 	}
-	member, err := users.Create(ctx, "member", "hash", false)
+	member, err := users.Create(ctx, "member", "member@example.com", "hash", false)
 	if err != nil {
 		t.Fatalf("create member: %v", err)
 	}
@@ -221,7 +221,7 @@ func TestGroupService_AddMember_RefusesUserOutsideWorkspace(t *testing.T) {
 	ctx := context.Background()
 	workspaceID, ownerID, _ := groupWorkspaceWithMembers(t, workspaces, users, repository.WorkspaceRoleMember)
 
-	outsider, err := users.Create(ctx, "outsider", "hash", false)
+	outsider, err := users.Create(ctx, "outsider", "outsider@example.com", "hash", false)
 	if err != nil {
 		t.Fatalf("create outsider: %v", err)
 	}
@@ -242,7 +242,7 @@ func TestGroupService_AddMember_RefusesUserFromAnotherWorkspace(t *testing.T) {
 	ctx := context.Background()
 	workspaceID, ownerID, _ := groupWorkspaceWithMembers(t, workspaces, users, repository.WorkspaceRoleMember)
 
-	otherWorkspaceOwner, err := users.Create(ctx, "other-owner", "hash", false)
+	otherWorkspaceOwner, err := users.Create(ctx, "other-owner", "other-owner@example.com", "hash", false)
 	if err != nil {
 		t.Fatalf("create other workspace owner: %v", err)
 	}

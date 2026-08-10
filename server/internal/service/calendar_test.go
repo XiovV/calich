@@ -23,7 +23,7 @@ func newTestCalendarService(t *testing.T) (svc *CalendarService, userID, workspa
 	t.Cleanup(func() { sqlDB.Close() })
 
 	users := repository.NewUserRepository(sqlDB)
-	user, err := users.Create(context.Background(), "user-a", "hash", false)
+	user, err := users.Create(context.Background(), "user-a", "user-a@example.com", "hash", false)
 	if err != nil {
 		t.Fatalf("create user: %v", err)
 	}
@@ -70,7 +70,7 @@ func TestCalendarService_Create_RejectsNonMemberWorkspace(t *testing.T) {
 	svc, userID, _ := newTestCalendarService(t)
 	ctx := context.Background()
 
-	otherUser, err := svc.users.Create(ctx, "user-b", "hash", false)
+	otherUser, err := svc.users.Create(ctx, "user-b", "user-b@example.com", "hash", false)
 	if err != nil {
 		t.Fatalf("create other user: %v", err)
 	}

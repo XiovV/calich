@@ -26,7 +26,7 @@ const shared = {
   name: "Family",
   color: "peacock" as const,
   isOwner: false,
-  ownerUsername: "alice",
+  ownerName: "alice",
 };
 const lunch = {
   id: "evt-1",

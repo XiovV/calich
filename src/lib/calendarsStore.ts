@@ -65,7 +65,7 @@ interface CalendarsState {
   // reload — the caller is looking straight at it while granting, so a
   // count that doesn't move reads as a failed grant. Rethrows on failure so
   // CalendarSharingSection can show the specific error inline.
-  shareCalendar: (id: string, username: string, role: Role) => Promise<Share>;
+  shareCalendar: (id: string, email: string, role: Role) => Promise<Share>;
   // revokeCalendarShare removes a Share (#113, ADR-0034), Owner-only — the
   // counterpart to leaveCalendar. Re-fetches Calendars afterward for the
   // same shareCount-freshness reason as shareCalendar. Rethrows on failure.
@@ -251,8 +251,8 @@ export const useCalendarsStore = create<CalendarsState>((set, get) => ({
     await refetchEventsAfter("refresh");
   },
 
-  shareCalendar: async (id, username, role) => {
-    const share = await calendarsApi.share(requireAccessToken(), id, username, role);
+  shareCalendar: async (id, email, role) => {
+    const share = await calendarsApi.share(requireAccessToken(), id, email, role);
     await get().fetchCalendars();
     return share;
   },

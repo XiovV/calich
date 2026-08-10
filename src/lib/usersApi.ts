@@ -5,7 +5,8 @@ import { authedFetch, errorFromResponse } from "./apiClient";
 // unlike the Admin-only account listing).
 export interface UserSummary {
   id: number;
-  username: string;
+  name: string;
+  email: string;
 }
 
 export const usersApi = {

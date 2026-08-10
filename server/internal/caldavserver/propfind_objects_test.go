@@ -56,7 +56,7 @@ func TestPropfind_Depth1OnCalendar_ListsOneObjectPerSeries(t *testing.T) {
 	}
 
 	path := calendarPath(env.userID, env.calendarID)
-	resp := propfind(t, env.srv, path, "admin", env.appPasswordSecret, "1", propfindObjectList)
+	resp := propfind(t, env.srv, path, "admin@example.com", env.appPasswordSecret, "1", propfindObjectList)
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusMultiStatus {
@@ -94,7 +94,7 @@ func TestPropfind_Depth1OnUnknownCalendar_IsNotFound(t *testing.T) {
 	env := newTestCalDAVEnv(t)
 
 	path := calendarPath(env.userID, "does-not-exist")
-	resp := propfind(t, env.srv, path, "admin", env.appPasswordSecret, "1", propfindObjectList)
+	resp := propfind(t, env.srv, path, "admin@example.com", env.appPasswordSecret, "1", propfindObjectList)
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusNotFound {

@@ -33,7 +33,7 @@ func newAuthTestServerWithSMTP(t *testing.T, smtpConfigured bool) *httptest.Serv
 
 	users := repository.NewUserRepository(sqlDB)
 	sessions := repository.NewSessionRepository(sqlDB)
-	auth := service.NewAuthService(users, sessions, service.NewWorkspaceService(sqlDB, repository.NewWorkspaceRepository(sqlDB), repository.NewWorkspaceInviteRepository(sqlDB), repository.NewCalendarRepository(sqlDB), repository.NewCalendarShareRepository(sqlDB)), repository.NewWorkspaceInviteRepository(sqlDB), []byte("test-secret"), "", "", false)
+	auth := service.NewAuthService(users, sessions, service.NewWorkspaceService(sqlDB, repository.NewWorkspaceRepository(sqlDB), repository.NewWorkspaceInviteRepository(sqlDB), repository.NewCalendarRepository(sqlDB), repository.NewCalendarShareRepository(sqlDB)), repository.NewWorkspaceInviteRepository(sqlDB), service.NewCalendarService(repository.NewCalendarRepository(sqlDB), repository.NewCalendarShareRepository(sqlDB), users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), repository.NewWorkspaceRepository(sqlDB), repository.NewCalendarGroupShareRepository(sqlDB), repository.NewGroupRepository(sqlDB)), []byte("test-secret"), "", "", "", false)
 
 	// A User requiring a password change (ADR-0037's must_change_password
 	// gate) is seeded directly rather than via Bootstrap, which no longer
@@ -50,7 +50,7 @@ func newAuthTestServerWithSMTP(t *testing.T, smtpConfigured bool) *httptest.Serv
 	r.With(httpauth.RequireAuth(auth)).Post("/api/auth/change-password", h.ChangePassword)
 	r.With(httpauth.RequireAuth(auth), httpauth.RequireActiveUser(auth), httpauth.RequireEnabledUser(auth)).Get("/api/auth/me", h.Me)
 	r.With(httpauth.RequireAuth(auth), httpauth.RequireActiveUser(auth), httpauth.RequireEnabledUser(auth)).Put("/api/auth/email", h.UpdateEmail)
-	r.With(httpauth.RequireAuth(auth), httpauth.RequireActiveUser(auth), httpauth.RequireEnabledUser(auth)).Put("/api/auth/username", h.UpdateUsername)
+	r.With(httpauth.RequireAuth(auth), httpauth.RequireActiveUser(auth), httpauth.RequireEnabledUser(auth)).Put("/api/auth/name", h.UpdateName)
 	r.With(httpauth.RequireAuth(auth), httpauth.RequireActiveUser(auth), httpauth.RequireEnabledUser(auth)).Put("/api/auth/synced-device-reminders", h.UpdateSyncedDeviceReminders)
 	r.With(httpauth.RequireAuth(auth), httpauth.RequireActiveUser(auth), httpauth.RequireEnabledUser(auth)).Patch("/api/auth/preferences", h.UpdatePreferences)
 
@@ -72,7 +72,7 @@ func mustSeedUserRequiringPasswordChange(t *testing.T, users *repository.UserRep
 		t.Fatalf("hash password: %v", err)
 	}
 
-	user, err := users.Create(context.Background(), username, string(hash), true)
+	user, err := users.Create(context.Background(), username, username+"@example.com", string(hash), true)
 	if err != nil {
 		t.Fatalf("seed user: %v", err)
 	}
@@ -126,10 +126,10 @@ func refreshCookieFrom(t *testing.T, resp *http.Response) *http.Cookie {
 	return nil
 }
 
-func login(t *testing.T, srv *httptest.Server, username, password string) *http.Response {
+func login(t *testing.T, srv *httptest.Server, email, password string) *http.Response {
 	t.Helper()
 
-	body, err := json.Marshal(loginRequest{Username: username, Password: password})
+	body, err := json.Marshal(loginRequest{Email: email, Password: password})
 	if err != nil {
 		t.Fatalf("marshal login request: %v", err)
 	}
@@ -144,7 +144,7 @@ func login(t *testing.T, srv *httptest.Server, username, password string) *http.
 func TestLogin_Success_SetsRefreshCookieAndReturnsAccessToken(t *testing.T) {
 	srv := newAuthTestServer(t)
 
-	resp := login(t, srv, "admin", "admin")
+	resp := login(t, srv, "admin@example.com", "admin")
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
@@ -188,7 +188,7 @@ func TestLogin_Success_SetsRefreshCookieAndReturnsAccessToken(t *testing.T) {
 func TestLogin_InvalidCredentials_Returns401(t *testing.T) {
 	srv := newAuthTestServer(t)
 
-	resp := login(t, srv, "admin", "wrong-password")
+	resp := login(t, srv, "admin@example.com", "wrong-password")
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusUnauthorized {
@@ -223,13 +223,13 @@ func TestLogin_DisabledAccount_SucceedsButMeIsBlocked(t *testing.T) {
 
 	users := repository.NewUserRepository(sqlDB)
 	sessions := repository.NewSessionRepository(sqlDB)
-	auth := service.NewAuthService(users, sessions, service.NewWorkspaceService(sqlDB, repository.NewWorkspaceRepository(sqlDB), repository.NewWorkspaceInviteRepository(sqlDB), repository.NewCalendarRepository(sqlDB), repository.NewCalendarShareRepository(sqlDB)), repository.NewWorkspaceInviteRepository(sqlDB), []byte("test-secret"), "", "", false)
+	auth := service.NewAuthService(users, sessions, service.NewWorkspaceService(sqlDB, repository.NewWorkspaceRepository(sqlDB), repository.NewWorkspaceInviteRepository(sqlDB), repository.NewCalendarRepository(sqlDB), repository.NewCalendarShareRepository(sqlDB)), repository.NewWorkspaceInviteRepository(sqlDB), service.NewCalendarService(repository.NewCalendarRepository(sqlDB), repository.NewCalendarShareRepository(sqlDB), users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), repository.NewWorkspaceRepository(sqlDB), repository.NewCalendarGroupShareRepository(sqlDB), repository.NewGroupRepository(sqlDB)), []byte("test-secret"), "", "", "", false)
 
 	hash, err := bcrypt.GenerateFromPassword([]byte("hunter2"), bcrypt.DefaultCost)
 	if err != nil {
 		t.Fatalf("hash password: %v", err)
 	}
-	user, err := users.Create(context.Background(), "alice", string(hash), false)
+	user, err := users.Create(context.Background(), "alice", "alice@example.com", string(hash), false)
 	if err != nil {
 		t.Fatalf("create user: %v", err)
 	}
@@ -245,7 +245,7 @@ func TestLogin_DisabledAccount_SucceedsButMeIsBlocked(t *testing.T) {
 	srv := httptest.NewServer(r)
 	t.Cleanup(srv.Close)
 
-	loginResp := login(t, srv, "alice", "hunter2")
+	loginResp := login(t, srv, "alice@example.com", "hunter2")
 	defer loginResp.Body.Close()
 	if loginResp.StatusCode != http.StatusOK {
 		t.Fatalf("expected login to still succeed for a disabled account, got %d", loginResp.StatusCode)
@@ -276,7 +276,7 @@ func TestLogin_DisabledAccount_SucceedsButMeIsBlocked(t *testing.T) {
 func TestMe_MustChangePassword_Returns403(t *testing.T) {
 	srv := newAuthTestServer(t)
 
-	loginResp := login(t, srv, "admin", "admin")
+	loginResp := login(t, srv, "admin@example.com", "admin")
 	defer loginResp.Body.Close()
 
 	var loggedIn loginResponse
@@ -304,7 +304,7 @@ func TestMe_MustChangePassword_Returns403(t *testing.T) {
 func TestMe_ValidToken_ReturnsUser_AfterPasswordChange(t *testing.T) {
 	srv := newAuthTestServer(t)
 
-	loginResp := login(t, srv, "admin", "admin")
+	loginResp := login(t, srv, "admin@example.com", "admin")
 	defer loginResp.Body.Close()
 	var loggedIn loginResponse
 	if err := json.NewDecoder(loginResp.Body).Decode(&loggedIn); err != nil {
@@ -337,8 +337,8 @@ func TestMe_ValidToken_ReturnsUser_AfterPasswordChange(t *testing.T) {
 	if err := json.NewDecoder(resp.Body).Decode(&me); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if me.Username != "admin" {
-		t.Fatalf("expected username 'admin', got %q", me.Username)
+	if me.Name != "admin" {
+		t.Fatalf("expected name 'admin', got %q", me.Name)
 	}
 	if me.MustChangePassword {
 		t.Fatalf("expected must_change_password to be false after changing password")
@@ -351,7 +351,7 @@ func TestMe_ValidToken_ReturnsUser_AfterPasswordChange(t *testing.T) {
 func authenticatedAccessToken(t *testing.T, srv *httptest.Server) string {
 	t.Helper()
 
-	loginResp := login(t, srv, "admin", "admin")
+	loginResp := login(t, srv, "admin@example.com", "admin")
 	defer loginResp.Body.Close()
 	var loggedIn loginResponse
 	if err := json.NewDecoder(loginResp.Body).Decode(&loggedIn); err != nil {
@@ -372,7 +372,10 @@ func authenticatedAccessToken(t *testing.T, srv *httptest.Server) string {
 	return changed.AccessToken
 }
 
-func TestMe_EmailReminderChannelAvailable_FalseWithNoEmailOrSMTP(t *testing.T) {
+// TestMe_EmailReminderChannelAvailable_FalseWithoutSMTP covers ADR-0047's
+// side effect on ADR-0021: every account always has an email now, so
+// channel availability collapses to just whether SMTP is configured.
+func TestMe_EmailReminderChannelAvailable_FalseWithoutSMTP(t *testing.T) {
 	srv := newAuthTestServer(t)
 	accessToken := authenticatedAccessToken(t, srv)
 
@@ -388,19 +391,40 @@ func TestMe_EmailReminderChannelAvailable_FalseWithNoEmailOrSMTP(t *testing.T) {
 	if err := json.NewDecoder(resp.Body).Decode(&me); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if me.Email != nil {
-		t.Fatalf("expected no email set yet, got %+v", me.Email)
+	if me.Email != "admin@example.com" {
+		t.Fatalf("expected the bootstrap account's email, got %+v", me.Email)
 	}
 	if me.EmailReminderChannelAvailable {
-		t.Fatalf("expected the Email Channel to be unavailable with neither email nor SMTP configured")
+		t.Fatalf("expected the Email Channel to be unavailable without SMTP configured")
 	}
 }
 
-func TestUpdateEmail_SetsEmailAndReportsChannelAvailableOnceSMTPIsConfigured(t *testing.T) {
+func TestMe_EmailReminderChannelAvailable_TrueWithSMTPConfigured(t *testing.T) {
 	srv := newAuthTestServerWithSMTP(t, true)
 	accessToken := authenticatedAccessToken(t, srv)
 
-	body, _ := json.Marshal(updateEmailRequest{Email: "admin@example.com"})
+	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/api/auth/me", nil)
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET /api/auth/me: %v", err)
+	}
+	defer resp.Body.Close()
+
+	var me meResponse
+	if err := json.NewDecoder(resp.Body).Decode(&me); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if !me.EmailReminderChannelAvailable {
+		t.Fatalf("expected the Email Channel to be available once SMTP is configured")
+	}
+}
+
+func TestUpdateEmail_ChangesTheLoginIdentifier(t *testing.T) {
+	srv := newAuthTestServer(t)
+	accessToken := authenticatedAccessToken(t, srv)
+
+	body, _ := json.Marshal(updateEmailRequest{Email: "new-admin@example.com"})
 	req, _ := http.NewRequest(http.MethodPut, srv.URL+"/api/auth/email", bytes.NewReader(body))
 	req.Header.Set("Authorization", "Bearer "+accessToken)
 	req.Header.Set("Content-Type", "application/json")
@@ -419,11 +443,8 @@ func TestUpdateEmail_SetsEmailAndReportsChannelAvailableOnceSMTPIsConfigured(t *
 	if err := json.NewDecoder(resp.Body).Decode(&me); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if me.Email == nil || *me.Email != "admin@example.com" {
-		t.Fatalf("expected email to be set, got %+v", me.Email)
-	}
-	if !me.EmailReminderChannelAvailable {
-		t.Fatalf("expected the Email Channel to be available once email and SMTP are both configured")
+	if me.Email != "new-admin@example.com" {
+		t.Fatalf("expected email to be updated, got %+v", me.Email)
 	}
 }
 
@@ -447,18 +468,22 @@ func TestUpdateEmail_RejectsAnInvalidAddress(t *testing.T) {
 	}
 }
 
-func TestUpdateUsername_RenamesAndLoginWorksWithTheNewUsername(t *testing.T) {
+// TestUpdateName_RenamesButLoginStillNeedsTheOriginalEmail covers ADR-0047:
+// Name is a display-only rename — it never affects the login identifier, so
+// signing in still requires the account's Email, before and after the
+// rename.
+func TestUpdateName_RenamesButLoginStillNeedsTheOriginalEmail(t *testing.T) {
 	srv := newAuthTestServer(t)
 	accessToken := authenticatedAccessToken(t, srv)
 
-	body, _ := json.Marshal(updateUsernameRequest{Username: "newadmin"})
-	req, _ := http.NewRequest(http.MethodPut, srv.URL+"/api/auth/username", bytes.NewReader(body))
+	body, _ := json.Marshal(updateNameRequest{Name: "New Admin"})
+	req, _ := http.NewRequest(http.MethodPut, srv.URL+"/api/auth/name", bytes.NewReader(body))
 	req.Header.Set("Authorization", "Bearer "+accessToken)
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		t.Fatalf("PUT /api/auth/username: %v", err)
+		t.Fatalf("PUT /api/auth/name: %v", err)
 	}
 	defer resp.Body.Close()
 
@@ -470,35 +495,52 @@ func TestUpdateUsername_RenamesAndLoginWorksWithTheNewUsername(t *testing.T) {
 	if err := json.NewDecoder(resp.Body).Decode(&me); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if me.Username != "newadmin" {
-		t.Fatalf("expected username newadmin, got %q", me.Username)
+	if me.Name != "New Admin" {
+		t.Fatalf("expected name 'New Admin', got %q", me.Name)
 	}
 
-	oldLoginResp := login(t, srv, "admin", "a-new-password")
-	defer oldLoginResp.Body.Close()
-	if oldLoginResp.StatusCode != http.StatusUnauthorized {
-		t.Fatalf("expected the old username to no longer log in, got %d", oldLoginResp.StatusCode)
-	}
-
-	newLoginResp := login(t, srv, "newadmin", "a-new-password")
-	defer newLoginResp.Body.Close()
-	if newLoginResp.StatusCode != http.StatusOK {
-		t.Fatalf("expected the new username to log in, got %d", newLoginResp.StatusCode)
+	loginResp := login(t, srv, "admin@example.com", "a-new-password")
+	defer loginResp.Body.Close()
+	if loginResp.StatusCode != http.StatusOK {
+		t.Fatalf("expected login with the unchanged email to still work, got %d", loginResp.StatusCode)
 	}
 }
 
-func TestUpdateUsername_RejectsAColon(t *testing.T) {
+// TestUpdateName_AcceptsSpaces covers ADR-0047: Name is a display label, not
+// an identifier, so unlike the old username it must accept a space —
+// "Jane Smith" is a valid name.
+func TestUpdateName_AcceptsSpaces(t *testing.T) {
 	srv := newAuthTestServer(t)
 	accessToken := authenticatedAccessToken(t, srv)
 
-	body, _ := json.Marshal(updateUsernameRequest{Username: "ad:min"})
-	req, _ := http.NewRequest(http.MethodPut, srv.URL+"/api/auth/username", bytes.NewReader(body))
+	body, _ := json.Marshal(updateNameRequest{Name: "Jane Smith"})
+	req, _ := http.NewRequest(http.MethodPut, srv.URL+"/api/auth/name", bytes.NewReader(body))
 	req.Header.Set("Authorization", "Bearer "+accessToken)
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		t.Fatalf("PUT /api/auth/username: %v", err)
+		t.Fatalf("PUT /api/auth/name: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+}
+
+func TestUpdateName_RejectsEmptyName(t *testing.T) {
+	srv := newAuthTestServer(t)
+	accessToken := authenticatedAccessToken(t, srv)
+
+	body, _ := json.Marshal(updateNameRequest{Name: "   "})
+	req, _ := http.NewRequest(http.MethodPut, srv.URL+"/api/auth/name", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("PUT /api/auth/name: %v", err)
 	}
 	defer resp.Body.Close()
 
@@ -507,7 +549,9 @@ func TestUpdateUsername_RejectsAColon(t *testing.T) {
 	}
 }
 
-func TestUpdateUsername_DuplicateUsername_Returns409(t *testing.T) {
+// TestUpdateName_DuplicateNameIsAllowed covers ADR-0047: two accounts may
+// share a display Name — only Email is unique.
+func TestUpdateName_DuplicateNameIsAllowed(t *testing.T) {
 	sqlDB, err := db.OpenInMemory()
 	if err != nil {
 		t.Fatalf("open in-memory db: %v", err)
@@ -516,12 +560,12 @@ func TestUpdateUsername_DuplicateUsername_Returns409(t *testing.T) {
 
 	users := repository.NewUserRepository(sqlDB)
 	sessions := repository.NewSessionRepository(sqlDB)
-	auth := service.NewAuthService(users, sessions, service.NewWorkspaceService(sqlDB, repository.NewWorkspaceRepository(sqlDB), repository.NewWorkspaceInviteRepository(sqlDB), repository.NewCalendarRepository(sqlDB), repository.NewCalendarShareRepository(sqlDB)), repository.NewWorkspaceInviteRepository(sqlDB), []byte("test-secret"), "admin", "admin", false)
+	auth := service.NewAuthService(users, sessions, service.NewWorkspaceService(sqlDB, repository.NewWorkspaceRepository(sqlDB), repository.NewWorkspaceInviteRepository(sqlDB), repository.NewCalendarRepository(sqlDB), repository.NewCalendarShareRepository(sqlDB)), repository.NewWorkspaceInviteRepository(sqlDB), service.NewCalendarService(repository.NewCalendarRepository(sqlDB), repository.NewCalendarShareRepository(sqlDB), users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), repository.NewWorkspaceRepository(sqlDB), repository.NewCalendarGroupShareRepository(sqlDB), repository.NewGroupRepository(sqlDB)), []byte("test-secret"), "admin", "admin@example.com", "admin", false)
 	bootstrapUser, _, err := auth.Bootstrap(context.Background())
 	if err != nil {
 		t.Fatalf("bootstrap: %v", err)
 	}
-	if _, err := users.Create(context.Background(), "bob", "hash", false); err != nil {
+	if _, err := users.Create(context.Background(), "bob", "bob@example.com", "hash", false); err != nil {
 		t.Fatalf("create bob: %v", err)
 	}
 	if _, err := auth.ChangePassword(context.Background(), bootstrapUser.ID, "admin", "a-new-password"); err != nil {
@@ -531,27 +575,27 @@ func TestUpdateUsername_DuplicateUsername_Returns409(t *testing.T) {
 	h := NewAuthHandler(auth, false)
 	r := chi.NewRouter()
 	r.Post("/api/auth/login", h.Login)
-	r.With(httpauth.RequireAuth(auth), httpauth.RequireActiveUser(auth)).Put("/api/auth/username", h.UpdateUsername)
+	r.With(httpauth.RequireAuth(auth), httpauth.RequireActiveUser(auth)).Put("/api/auth/name", h.UpdateName)
 	srv := httptest.NewServer(r)
 	t.Cleanup(srv.Close)
 
-	loginResp := login(t, srv, "admin", "a-new-password")
+	loginResp := login(t, srv, "admin@example.com", "a-new-password")
 	defer loginResp.Body.Close()
 	accessToken := mustLoginAccessToken(t, loginResp)
 
-	body, _ := json.Marshal(updateUsernameRequest{Username: "bob"})
-	req, _ := http.NewRequest(http.MethodPut, srv.URL+"/api/auth/username", bytes.NewReader(body))
+	body, _ := json.Marshal(updateNameRequest{Name: "bob"})
+	req, _ := http.NewRequest(http.MethodPut, srv.URL+"/api/auth/name", bytes.NewReader(body))
 	req.Header.Set("Authorization", "Bearer "+accessToken)
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		t.Fatalf("PUT /api/auth/username: %v", err)
+		t.Fatalf("PUT /api/auth/name: %v", err)
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusConflict {
-		t.Fatalf("expected 409, got %d", resp.StatusCode)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 — Name isn't unique, so sharing bob's name is allowed, got %d", resp.StatusCode)
 	}
 }
 
@@ -1156,7 +1200,7 @@ func TestChangePassword_AllowedEvenWhileMustChangePassword(t *testing.T) {
 	// blocked everywhere else — that's the whole point of this ticket.
 	srv := newAuthTestServer(t)
 
-	loginResp := login(t, srv, "admin", "admin")
+	loginResp := login(t, srv, "admin@example.com", "admin")
 	defer loginResp.Body.Close()
 	var loggedIn loginResponse
 	if err := json.NewDecoder(loginResp.Body).Decode(&loggedIn); err != nil {
@@ -1178,7 +1222,7 @@ func TestChangePassword_AllowedEvenWhileMustChangePassword(t *testing.T) {
 func TestChangePassword_ReissuesSessionInsteadOfOnlyClearingIt(t *testing.T) {
 	srv := newAuthTestServer(t)
 
-	loginResp := login(t, srv, "admin", "admin")
+	loginResp := login(t, srv, "admin@example.com", "admin")
 	defer loginResp.Body.Close()
 	oldCookie := refreshCookieFrom(t, loginResp)
 
@@ -1222,7 +1266,7 @@ func TestChangePassword_ReissuesSessionInsteadOfOnlyClearingIt(t *testing.T) {
 func TestChangePassword_SkipsCurrentPasswordCheckWhileMustChangePassword(t *testing.T) {
 	srv := newAuthTestServer(t)
 
-	loginResp := login(t, srv, "admin", "admin")
+	loginResp := login(t, srv, "admin@example.com", "admin")
 	defer loginResp.Body.Close()
 	var loggedIn loginResponse
 	if err := json.NewDecoder(loginResp.Body).Decode(&loggedIn); err != nil {
@@ -1242,7 +1286,7 @@ func TestChangePassword_SkipsCurrentPasswordCheckWhileMustChangePassword(t *test
 func TestChangePassword_RequiresCurrentPasswordOnceAlreadyChanged(t *testing.T) {
 	srv := newAuthTestServer(t)
 
-	loginResp := login(t, srv, "admin", "admin")
+	loginResp := login(t, srv, "admin@example.com", "admin")
 	defer loginResp.Body.Close()
 	var loggedIn loginResponse
 	if err := json.NewDecoder(loginResp.Body).Decode(&loggedIn); err != nil {
@@ -1266,7 +1310,7 @@ func TestChangePassword_RequiresCurrentPasswordOnceAlreadyChanged(t *testing.T) 
 func TestRefresh_ReturnsNewAccessTokenFromCookie(t *testing.T) {
 	srv := newAuthTestServer(t)
 
-	loginResp := login(t, srv, "admin", "admin")
+	loginResp := login(t, srv, "admin@example.com", "admin")
 	defer loginResp.Body.Close()
 	cookie := refreshCookieFrom(t, loginResp)
 
@@ -1312,7 +1356,7 @@ func TestRefresh_NoCookie_Returns401(t *testing.T) {
 func TestLogout_ClearsCookieAndInvalidatesSession(t *testing.T) {
 	srv := newAuthTestServer(t)
 
-	loginResp := login(t, srv, "admin", "admin")
+	loginResp := login(t, srv, "admin@example.com", "admin")
 	defer loginResp.Body.Close()
 	cookie := refreshCookieFrom(t, loginResp)
 

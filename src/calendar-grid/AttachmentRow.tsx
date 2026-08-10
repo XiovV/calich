@@ -65,8 +65,8 @@ export function AttachmentRow({
   onRetry,
   disabled,
 }: AttachmentRowProps) {
-  const uploaderUsername =
-    draft.status === "uploaded" ? draft.attachment.uploadedByUsername : undefined;
+  const uploaderName =
+    draft.status === "uploaded" ? draft.attachment.uploadedByName : undefined;
 
   return (
     <div className="flex items-center gap-2">
@@ -88,7 +88,7 @@ export function AttachmentRow({
         )}
         <p className="text-label-sm text-ink-muted">
           {formatBytes(draftSizeBytes(draft))}
-          {showUploader && uploaderUsername ? ` · Added by ${uploaderUsername}` : null}
+          {showUploader && uploaderName ? ` · Added by ${uploaderName}` : null}
           {draft.status === "uploading" ? ` · Uploading… ${Math.round(draft.progress * 100)}%` : null}
           {draft.status === "error" ? ` · ${draft.message}` : null}
         </p>

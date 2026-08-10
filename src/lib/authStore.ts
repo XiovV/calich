@@ -6,6 +6,7 @@ import { useShellStore, type ActiveView } from "./shellStore";
 
 export type AuthStatus =
   | "loading"
+  | "needs-setup"
   | "unauthenticated"
   | "must-change-password"
   | "account-disabled"
@@ -14,21 +15,21 @@ export type AuthStatus =
 interface AuthState {
   status: AuthStatus;
   user: User | null;
-  // The username typed at login, kept only for display on the forced
+  // The email typed at login, kept only for display on the forced
   // password-change screen — GET /api/auth/me is blocked (403) while a
   // password change is still required, so the full User record isn't
   // available yet. Cleared once authenticated.
-  pendingUsername: string | null;
+  pendingEmail: string | null;
   accessToken: string | null;
   bootstrap: () => Promise<void>;
-  login: (username: string, password: string) => Promise<void>;
+  login: (email: string, password: string) => Promise<void>;
   register: (name: string, email: string, password: string) => Promise<void>;
   acceptWorkspaceInvite: (token: string, name: string, password: string) => Promise<void>;
   joinWorkspaceInvite: (token: string) => Promise<{ id: number; name: string }>;
   logout: () => Promise<void>;
   changePassword: (currentPassword: string, newPassword: string) => Promise<void>;
   updateEmail: (email: string) => Promise<void>;
-  updateUsername: (username: string) => Promise<void>;
+  updateName: (name: string) => Promise<void>;
   updateSyncedDeviceReminders: (enabled: boolean) => Promise<void>;
   updateWeekStart: (weekStart: number) => Promise<void>;
   updateDefaultView: (defaultView: ActiveView) => Promise<void>;
@@ -43,25 +44,31 @@ interface AuthState {
   deleteAccount: (calendars: CalendarDispositionChoice[]) => Promise<void>;
 }
 
-type AuthFields = Pick<AuthState, "status" | "user" | "pendingUsername" | "accessToken">;
+type AuthFields = Pick<AuthState, "status" | "user" | "pendingEmail" | "accessToken">;
 
 function unauthenticated(): AuthFields {
-  return { status: "unauthenticated", user: null, pendingUsername: null, accessToken: null };
+  return { status: "unauthenticated", user: null, pendingEmail: null, accessToken: null };
 }
 
-function mustChangePassword(accessToken: string, pendingUsername: string | null): AuthFields {
-  return { status: "must-change-password", user: null, pendingUsername, accessToken };
+// needsSetup carries no token — it's resolved unauthenticated, before
+// anyone has signed in (#169, ADR-0047).
+function needsSetup(): AuthFields {
+  return { status: "needs-setup", user: null, pendingEmail: null, accessToken: null };
+}
+
+function mustChangePassword(accessToken: string, pendingEmail: string | null): AuthFields {
+  return { status: "must-change-password", user: null, pendingEmail, accessToken };
 }
 
 // accountDisabled carries a live access token (Login/Refresh still issue one
 // for a Disabled account, ADR-0044) with no `user` — GET /api/auth/me is
 // blocked while Disabled, mirroring mustChangePassword's shape.
 function accountDisabled(accessToken: string): AuthFields {
-  return { status: "account-disabled", user: null, pendingUsername: null, accessToken };
+  return { status: "account-disabled", user: null, pendingEmail: null, accessToken };
 }
 
 function authenticated(user: User, accessToken: string): AuthFields {
-  return { status: "authenticated", user, pendingUsername: null, accessToken };
+  return { status: "authenticated", user, pendingEmail: null, accessToken };
 }
 
 export const useAuthStore = create<AuthState>((set, get) => {
@@ -87,7 +94,15 @@ export const useAuthStore = create<AuthState>((set, get) => {
       try {
         ({ accessToken } = await authApi.refresh());
       } catch {
-        set(unauthenticated());
+        // Not logged in — but resolve "no accounts yet at all" before
+        // painting Sign-in, so a first-run visitor never sees it flash
+        // before the redirect to Register (#169, ADR-0047).
+        try {
+          const { hasAccounts } = await authApi.setupStatus();
+          set(hasAccounts ? unauthenticated() : needsSetup());
+        } catch {
+          set(unauthenticated());
+        }
         return;
       }
 
@@ -108,15 +123,15 @@ export const useAuthStore = create<AuthState>((set, get) => {
       }
     },
 
-    login: async (username, password) => {
+    login: async (email, password) => {
       const {
         accessToken,
         mustChangePassword: passwordChangeRequired,
         isDisabled,
-      } = await authApi.login(username, password);
+      } = await authApi.login(email, password);
 
       if (passwordChangeRequired) {
-        set(mustChangePassword(accessToken, username));
+        set(mustChangePassword(accessToken, email));
         return;
       }
       if (isDisabled) {
@@ -192,11 +207,11 @@ export const useAuthStore = create<AuthState>((set, get) => {
       set(authenticated(user, accessToken));
     },
 
-    updateUsername: async (username) => {
+    updateName: async (name) => {
       const { accessToken } = get();
       if (!accessToken) throw new Error("Not authenticated.");
 
-      const user = await authApi.updateUsername(accessToken, username);
+      const user = await authApi.updateName(accessToken, name);
       set(authenticated(user, accessToken));
     },
 

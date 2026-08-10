@@ -80,7 +80,7 @@ func (r *CalendarShareRepository) Delete(ctx context.Context, calendarID string,
 
 // CountByCalendar returns how many Shares calendarID carries — the "would
 // more than one person be notified" question a Calendar response's
-// shareCount field answers (#111), independent of ListByCalendarWithUsername's
+// shareCount field answers (#111), independent of ListByCalendarWithUser's
 // Owner-only listing.
 func (r *CalendarShareRepository) CountByCalendar(ctx context.Context, calendarID string) (int, error) {
 	var count int
@@ -92,21 +92,22 @@ func (r *CalendarShareRepository) CountByCalendar(ctx context.Context, calendarI
 	return count, nil
 }
 
-// CalendarShareWithUsername pairs a Share with the Username of the User it
-// grants Access to — ListByCalendarWithUsername's row, since an Owner
-// reviewing who has Access to their Calendar wants to see a Username, not
-// a bare user id.
-type CalendarShareWithUsername struct {
+// CalendarShareWithUser pairs a Share with the Name and Email of the User it
+// grants Access to — ListByCalendarWithUser's row, since an Owner reviewing
+// who has Access to their Calendar wants to see who that is (display Name)
+// and, per ADR-0047, the Email that identifies them.
+type CalendarShareWithUser struct {
 	CalendarShare
-	Username string
+	Name  string
+	Email string
 }
 
-// ListByCalendarWithUsername returns every Share on calendarID joined
-// against users, ordered by when each was granted — the Owner-facing "who
-// has Access to my Calendar, and with what Role" listing (ADR-0034).
-func (r *CalendarShareRepository) ListByCalendarWithUsername(ctx context.Context, calendarID string) ([]CalendarShareWithUsername, error) {
+// ListByCalendarWithUser returns every Share on calendarID joined against
+// users, ordered by when each was granted — the Owner-facing "who has Access
+// to my Calendar, and with what Role" listing (ADR-0034).
+func (r *CalendarShareRepository) ListByCalendarWithUser(ctx context.Context, calendarID string) ([]CalendarShareWithUser, error) {
 	rows, err := r.db.QueryContext(ctx,
-		`SELECT s.calendar_id, s.user_id, s.role, s.created_at, u.username
+		`SELECT s.calendar_id, s.user_id, s.role, s.created_at, u.name, u.email
 		 FROM calendar_shares s
 		 JOIN users u ON u.id = s.user_id
 		 WHERE s.calendar_id = ?
@@ -114,20 +115,20 @@ func (r *CalendarShareRepository) ListByCalendarWithUsername(ctx context.Context
 		calendarID,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("list calendar shares with username: %w", err)
+		return nil, fmt.Errorf("list calendar shares with user: %w", err)
 	}
 	defer rows.Close()
 
-	shares := []CalendarShareWithUsername{}
+	shares := []CalendarShareWithUser{}
 	for rows.Next() {
-		var s CalendarShareWithUsername
-		if err := rows.Scan(&s.CalendarID, &s.UserID, &s.Role, &s.CreatedAt, &s.Username); err != nil {
-			return nil, fmt.Errorf("scan calendar share with username: %w", err)
+		var s CalendarShareWithUser
+		if err := rows.Scan(&s.CalendarID, &s.UserID, &s.Role, &s.CreatedAt, &s.Name, &s.Email); err != nil {
+			return nil, fmt.Errorf("scan calendar share with user: %w", err)
 		}
 		shares = append(shares, s)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate calendar shares with username: %w", err)
+		return nil, fmt.Errorf("iterate calendar shares with user: %w", err)
 	}
 	return shares, nil
 }

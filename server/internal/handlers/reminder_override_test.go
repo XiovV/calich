@@ -41,7 +41,10 @@ func newReminderOverrideTestServer(t *testing.T) reminderOverrideTestServer {
 	sessions := repository.NewSessionRepository(sqlDB)
 	workspaceRepo := repository.NewWorkspaceRepository(sqlDB)
 	workspaceSvc := service.NewWorkspaceService(sqlDB, workspaceRepo, repository.NewWorkspaceInviteRepository(sqlDB), repository.NewCalendarRepository(sqlDB), repository.NewCalendarShareRepository(sqlDB))
-	auth := service.NewAuthService(users, sessions, workspaceSvc, repository.NewWorkspaceInviteRepository(sqlDB), []byte("test-secret"), "owner", "hunter2", false)
+	calendarRepo := repository.NewCalendarRepository(sqlDB)
+	shareRepo := repository.NewCalendarShareRepository(sqlDB)
+	calendars := service.NewCalendarService(calendarRepo, shareRepo, users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo, repository.NewCalendarGroupShareRepository(sqlDB), repository.NewGroupRepository(sqlDB))
+	auth := service.NewAuthService(users, sessions, workspaceSvc, repository.NewWorkspaceInviteRepository(sqlDB), calendars, []byte("test-secret"), "owner", "owner@example.com", "hunter2", false)
 	ctx := context.Background()
 	ownerUser, _, err := auth.Bootstrap(ctx)
 	if err != nil {
@@ -51,20 +54,16 @@ func newReminderOverrideTestServer(t *testing.T) reminderOverrideTestServer {
 	if err != nil {
 		t.Fatalf("hash other user's password: %v", err)
 	}
-	otherUser, err := users.Create(ctx, "other", string(otherHash), false)
+	otherUser, err := users.Create(ctx, "other", "other@example.com", string(otherHash), false)
 	if err != nil {
 		t.Fatalf("create other user: %v", err)
 	}
 
-	calendarRepo := repository.NewCalendarRepository(sqlDB)
-	shareRepo := repository.NewCalendarShareRepository(sqlDB)
-	calendars := service.NewCalendarService(calendarRepo, shareRepo, users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo, repository.NewCalendarGroupShareRepository(sqlDB), repository.NewGroupRepository(sqlDB))
-
-	ownerLogin, err := auth.Login(ctx, "owner", "hunter2")
+	ownerLogin, err := auth.Login(ctx, "owner@example.com", "hunter2")
 	if err != nil {
 		t.Fatalf("owner login: %v", err)
 	}
-	otherLogin, err := auth.Login(ctx, "other", "temp-password")
+	otherLogin, err := auth.Login(ctx, "other@example.com", "temp-password")
 	if err != nil {
 		t.Fatalf("other login: %v", err)
 	}
@@ -120,7 +119,7 @@ func newReminderOverrideTestServer(t *testing.T) reminderOverrideTestServer {
 	}
 	calResp.Body.Close()
 
-	shareResp := doJSON(t, http.MethodPost, srv.URL+"/api/calendars/"+cal.ID+"/shares", ownerLogin.AccessToken, shareRequest{Username: "other", Role: repository.RoleViewer})
+	shareResp := doJSON(t, http.MethodPost, srv.URL+"/api/calendars/"+cal.ID+"/shares", ownerLogin.AccessToken, shareRequest{Email: "other@example.com", Role: repository.RoleViewer})
 	shareResp.Body.Close()
 	if shareResp.StatusCode != http.StatusOK {
 		t.Fatalf("share: expected 200, got %d", shareResp.StatusCode)

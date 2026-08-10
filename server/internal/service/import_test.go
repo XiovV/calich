@@ -46,7 +46,7 @@ func newTestImportServiceWithAttachmentLimits(t *testing.T, maxAttachmentSize in
 	t.Cleanup(func() { sqlDB.Close() })
 
 	users := repository.NewUserRepository(sqlDB)
-	user, err := users.Create(context.Background(), "user-a", "hash", false)
+	user, err := users.Create(context.Background(), "user-a", "user-a@example.com", "hash", false)
 	if err != nil {
 		t.Fatalf("create user: %v", err)
 	}
@@ -565,7 +565,7 @@ func TestImportService_DryRun_DoesNotSaveAttachmentBytes(t *testing.T) {
 	}
 	t.Cleanup(func() { sqlDB.Close() })
 	users := repository.NewUserRepository(sqlDB)
-	user, err := users.Create(context.Background(), "user-a", "hash", false)
+	user, err := users.Create(context.Background(), "user-a", "user-a@example.com", "hash", false)
 	if err != nil {
 		t.Fatalf("create user: %v", err)
 	}

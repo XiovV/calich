@@ -38,11 +38,11 @@ func newGroupShareFixture(t *testing.T) groupShareFixture {
 	t.Cleanup(func() { sqlDB.Close() })
 
 	users := repository.NewUserRepository(sqlDB)
-	owner, err := users.Create(ctx, "owner", "hash", false)
+	owner, err := users.Create(ctx, "owner", "owner@example.com", "hash", false)
 	if err != nil {
 		t.Fatalf("create owner: %v", err)
 	}
-	member, err := users.Create(ctx, "member", "hash", false)
+	member, err := users.Create(ctx, "member", "member@example.com", "hash", false)
 	if err != nil {
 		t.Fatalf("create member: %v", err)
 	}
@@ -137,7 +137,7 @@ func TestCalendarService_Access_MaxOfDirectAndGroupShare(t *testing.T) {
 	f := newGroupShareFixture(t)
 	ctx := context.Background()
 
-	if _, err := f.calendars.Share(ctx, f.ownerID, f.calendarID, "member", repository.RoleViewer); err != nil {
+	if _, _, err := f.calendars.Share(ctx, f.ownerID, f.calendarID, "member@example.com", repository.RoleViewer); err != nil {
 		t.Fatalf("direct share: %v", err)
 	}
 	if _, err := f.calendars.ShareWithGroup(ctx, f.ownerID, f.calendarID, f.groupID, repository.RoleEditor); err != nil {
@@ -239,7 +239,7 @@ func TestCalendarService_Share_RejectsUserFromAnotherWorkspace(t *testing.T) {
 	f := newGroupShareFixture(t)
 	ctx := context.Background()
 
-	outsider, err := f.calendars.users.Create(ctx, "outsider", "hash", false)
+	outsider, err := f.calendars.users.Create(ctx, "outsider", "outsider@example.com", "hash", false)
 	if err != nil {
 		t.Fatalf("create outsider: %v", err)
 	}
@@ -251,7 +251,7 @@ func TestCalendarService_Share_RejectsUserFromAnotherWorkspace(t *testing.T) {
 		t.Fatalf("add outsider as their own workspace's owner: %v", err)
 	}
 
-	_, err = f.calendars.Share(ctx, f.ownerID, f.calendarID, "outsider", repository.RoleViewer)
+	_, _, err = f.calendars.Share(ctx, f.ownerID, f.calendarID, "outsider@example.com", repository.RoleViewer)
 	if !errors.Is(err, ErrShareTargetNotInWorkspace) {
 		t.Fatalf("err = %v, want ErrShareTargetNotInWorkspace", err)
 	}

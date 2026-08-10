@@ -109,23 +109,23 @@ func (r *AttendeeRepository) SetResponse(ctx context.Context, eventID string, us
 	return r.Get(ctx, eventID, userID)
 }
 
-// AttendeeWithUsername pairs an Attendee with the Username of the User it
+// AttendeeWithName pairs an Attendee with the display Name of the User it
 // belongs to — ListByEventID's row, mirroring GroupMember's plain shape but
-// with the Username a caller displaying an Attendee list actually needs.
-type AttendeeWithUsername struct {
+// with the Name a caller displaying an Attendee list actually needs.
+type AttendeeWithName struct {
 	Attendee
-	Username string
+	Name string
 }
 
-// ListByEventID returns every Attendee of eventID with their Username,
-// ordered by Username.
-func (r *AttendeeRepository) ListByEventID(ctx context.Context, eventID string) ([]AttendeeWithUsername, error) {
+// ListByEventID returns every Attendee of eventID with their Name, ordered
+// by Name.
+func (r *AttendeeRepository) ListByEventID(ctx context.Context, eventID string) ([]AttendeeWithName, error) {
 	rows, err := r.db.QueryContext(ctx,
-		`SELECT a.event_id, a.user_id, a.response, a.created_at, u.username
+		`SELECT a.event_id, a.user_id, a.response, a.created_at, u.name
 		 FROM attendees a
 		 JOIN users u ON u.id = a.user_id
 		 WHERE a.event_id = ?
-		 ORDER BY u.username`,
+		 ORDER BY u.name`,
 		eventID,
 	)
 	if err != nil {
@@ -133,10 +133,10 @@ func (r *AttendeeRepository) ListByEventID(ctx context.Context, eventID string) 
 	}
 	defer rows.Close()
 
-	attendees := []AttendeeWithUsername{}
+	attendees := []AttendeeWithName{}
 	for rows.Next() {
-		var a AttendeeWithUsername
-		if err := rows.Scan(&a.EventID, &a.UserID, &a.Response, &a.CreatedAt, &a.Username); err != nil {
+		var a AttendeeWithName
+		if err := rows.Scan(&a.EventID, &a.UserID, &a.Response, &a.CreatedAt, &a.Name); err != nil {
 			return nil, fmt.Errorf("scan attendee: %w", err)
 		}
 		attendees = append(attendees, a)

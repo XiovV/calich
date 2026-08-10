@@ -11,24 +11,32 @@ export type WorkspaceRole = "owner" | "admin" | "member";
 
 export interface WorkspaceMember {
   userId: number;
-  username: string;
+  name: string;
+  email: string;
   role: WorkspaceRole;
   createdAt: string;
 }
 
 interface WorkspaceMemberWire {
   user_id: number;
-  username: string;
+  name: string;
+  email: string;
   role: WorkspaceRole;
   created_at: string;
 }
 
 function fromWorkspaceMemberWire(wire: WorkspaceMemberWire): WorkspaceMember {
-  return { userId: wire.user_id, username: wire.username, role: wire.role, createdAt: wire.created_at };
+  return {
+    userId: wire.user_id,
+    name: wire.name,
+    email: wire.email,
+    role: wire.role,
+    createdAt: wire.created_at,
+  };
 }
 
 // setRole's response is narrower than WorkspaceMember — the backend doesn't
-// join against Username for this call, since the caller already has it from
+// join against the User for this call, since the caller already has it from
 // their own list() call.
 export interface WorkspaceMemberRole {
   userId: number;
@@ -52,7 +60,7 @@ export interface RemoveMemberImpact {
 
 interface TransferCandidateWire {
   id: number;
-  username: string;
+  name: string;
 }
 
 interface CalendarImpactWire {
@@ -76,7 +84,7 @@ function fromRemoveMemberImpactWire(wire: RemoveMemberImpactWire): RemoveMemberI
       workspaceId: c.workspace_id,
       workspaceName: c.workspace_name,
       shareCount: c.share_count,
-      transferCandidates: c.transfer_candidates.map((t) => ({ id: t.id, username: t.username })),
+      transferCandidates: c.transfer_candidates.map((t) => ({ id: t.id, name: t.name })),
     })),
   };
 }

@@ -26,7 +26,7 @@ describe("workspaceMembersApi.list", () => {
   it("sends the bearer token and maps the response, scoped to the active workspace", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       jsonResponse(200, [
-        { user_id: 1, username: "alice", role: "owner", created_at: "2026-01-01T00:00:00Z" },
+        { user_id: 1, name: "alice", email: "alice@example.com", role: "owner", created_at: "2026-01-01T00:00:00Z" },
       ]),
     );
     vi.stubGlobal("fetch", fetchMock);
@@ -34,7 +34,7 @@ describe("workspaceMembersApi.list", () => {
     const result = await workspaceMembersApi.list("token-123");
 
     expect(result).toEqual([
-      { userId: 1, username: "alice", role: "owner", createdAt: "2026-01-01T00:00:00Z" },
+      { userId: 1, name: "alice", email: "alice@example.com", role: "owner", createdAt: "2026-01-01T00:00:00Z" },
     ]);
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/workspaces/7/members",
@@ -88,7 +88,7 @@ describe("workspaceMembersApi.removeImpact", () => {
             workspace_id: 7,
             workspace_name: "Acme",
             share_count: 2,
-            transfer_candidates: [{ id: 3, username: "carol" }],
+            transfer_candidates: [{ id: 3, name: "carol" }],
           },
         ],
       }),
@@ -105,7 +105,7 @@ describe("workspaceMembersApi.removeImpact", () => {
           workspaceId: 7,
           workspaceName: "Acme",
           shareCount: 2,
-          transferCandidates: [{ id: 3, username: "carol" }],
+          transferCandidates: [{ id: 3, name: "carol" }],
         },
       ],
     });

@@ -17,7 +17,7 @@ func TestCalendarService_SetColorOverride_ResolvesForThatUserOnly(t *testing.T) 
 	svc, _, ownerID, otherID, calendarID := newTestShareService(t)
 	ctx := context.Background()
 
-	if _, err := svc.Share(ctx, ownerID, calendarID, "other", repository.RoleViewer); err != nil {
+	if _, _, err := svc.Share(ctx, ownerID, calendarID, "other@example.com", repository.RoleViewer); err != nil {
 		t.Fatalf("share: %v", err)
 	}
 	if _, err := svc.SetColorOverride(ctx, otherID, calendarID, "#654321"); err != nil {
@@ -45,7 +45,7 @@ func TestCalendarService_ResolveDisplayColor_FallsBackToCalendarColorWithNoOverr
 	svc, _, ownerID, otherID, calendarID := newTestShareService(t)
 	ctx := context.Background()
 
-	if _, err := svc.Share(ctx, ownerID, calendarID, "other", repository.RoleViewer); err != nil {
+	if _, _, err := svc.Share(ctx, ownerID, calendarID, "other@example.com", repository.RoleViewer); err != nil {
 		t.Fatalf("share: %v", err)
 	}
 
@@ -62,7 +62,7 @@ func TestCalendarService_SetColorOverride_RejectsInvalidColor(t *testing.T) {
 	svc, _, ownerID, otherID, calendarID := newTestShareService(t)
 	ctx := context.Background()
 
-	if _, err := svc.Share(ctx, ownerID, calendarID, "other", repository.RoleViewer); err != nil {
+	if _, _, err := svc.Share(ctx, ownerID, calendarID, "other@example.com", repository.RoleViewer); err != nil {
 		t.Fatalf("share: %v", err)
 	}
 
@@ -76,7 +76,7 @@ func TestCalendarService_SetColorOverride_NormalizesColor(t *testing.T) {
 	svc, _, ownerID, otherID, calendarID := newTestShareService(t)
 	ctx := context.Background()
 
-	if _, err := svc.Share(ctx, ownerID, calendarID, "other", repository.RoleViewer); err != nil {
+	if _, _, err := svc.Share(ctx, ownerID, calendarID, "other@example.com", repository.RoleViewer); err != nil {
 		t.Fatalf("share: %v", err)
 	}
 
@@ -105,7 +105,7 @@ func TestCalendarService_ClearColorOverride_FallsBackToCalendarColor(t *testing.
 	svc, _, ownerID, otherID, calendarID := newTestShareService(t)
 	ctx := context.Background()
 
-	if _, err := svc.Share(ctx, ownerID, calendarID, "other", repository.RoleViewer); err != nil {
+	if _, _, err := svc.Share(ctx, ownerID, calendarID, "other@example.com", repository.RoleViewer); err != nil {
 		t.Fatalf("share: %v", err)
 	}
 	if _, err := svc.SetColorOverride(ctx, otherID, calendarID, "#654321"); err != nil {
@@ -131,7 +131,7 @@ func TestCalendarService_ClearColorOverride_NoOverrideSet_IsNoOp(t *testing.T) {
 	svc, _, ownerID, otherID, calendarID := newTestShareService(t)
 	ctx := context.Background()
 
-	if _, err := svc.Share(ctx, ownerID, calendarID, "other", repository.RoleViewer); err != nil {
+	if _, _, err := svc.Share(ctx, ownerID, calendarID, "other@example.com", repository.RoleViewer); err != nil {
 		t.Fatalf("share: %v", err)
 	}
 
@@ -147,7 +147,7 @@ func TestCalendarService_RevokeShare_ClearsColorOverride(t *testing.T) {
 	svc, _, ownerID, otherID, calendarID := newTestShareService(t)
 	ctx := context.Background()
 
-	if _, err := svc.Share(ctx, ownerID, calendarID, "other", repository.RoleViewer); err != nil {
+	if _, _, err := svc.Share(ctx, ownerID, calendarID, "other@example.com", repository.RoleViewer); err != nil {
 		t.Fatalf("share: %v", err)
 	}
 	if _, err := svc.SetColorOverride(ctx, otherID, calendarID, "#654321"); err != nil {
@@ -160,7 +160,7 @@ func TestCalendarService_RevokeShare_ClearsColorOverride(t *testing.T) {
 
 	// Re-granting a Share doesn't resurrect the old override — it must
 	// have actually been deleted, not merely hidden while Access is None.
-	if _, err := svc.Share(ctx, ownerID, calendarID, "other", repository.RoleViewer); err != nil {
+	if _, _, err := svc.Share(ctx, ownerID, calendarID, "other@example.com", repository.RoleViewer); err != nil {
 		t.Fatalf("re-share: %v", err)
 	}
 	view, err := svc.AccessWithColor(ctx, otherID, calendarID)
@@ -178,7 +178,7 @@ func TestCalendarService_LeaveShare_ClearsColorOverride(t *testing.T) {
 	svc, _, ownerID, otherID, calendarID := newTestShareService(t)
 	ctx := context.Background()
 
-	if _, err := svc.Share(ctx, ownerID, calendarID, "other", repository.RoleViewer); err != nil {
+	if _, _, err := svc.Share(ctx, ownerID, calendarID, "other@example.com", repository.RoleViewer); err != nil {
 		t.Fatalf("share: %v", err)
 	}
 	if _, err := svc.SetColorOverride(ctx, otherID, calendarID, "#654321"); err != nil {
@@ -189,7 +189,7 @@ func TestCalendarService_LeaveShare_ClearsColorOverride(t *testing.T) {
 		t.Fatalf("leave share: %v", err)
 	}
 
-	if _, err := svc.Share(ctx, ownerID, calendarID, "other", repository.RoleViewer); err != nil {
+	if _, _, err := svc.Share(ctx, ownerID, calendarID, "other@example.com", repository.RoleViewer); err != nil {
 		t.Fatalf("re-share: %v", err)
 	}
 	view, err := svc.AccessWithColor(ctx, otherID, calendarID)
@@ -208,7 +208,7 @@ func TestCalendarService_ListAccessible_ResolvesColorPerCaller(t *testing.T) {
 	svc, _, ownerID, otherID, calendarID := newTestShareService(t)
 	ctx := context.Background()
 
-	if _, err := svc.Share(ctx, ownerID, calendarID, "other", repository.RoleEditor); err != nil {
+	if _, _, err := svc.Share(ctx, ownerID, calendarID, "other@example.com", repository.RoleEditor); err != nil {
 		t.Fatalf("share: %v", err)
 	}
 	if _, err := svc.SetColorOverride(ctx, otherID, calendarID, "#654321"); err != nil {

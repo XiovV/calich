@@ -52,11 +52,11 @@ export function RegisterPage() {
         </p>
 
         <Input
-          label="Username"
+          label="Name"
           type="text"
           value={name}
           onChange={(domEvent) => setName(domEvent.target.value)}
-          placeholder="jane"
+          placeholder="Jane Smith"
           className="mt-5"
         />
 

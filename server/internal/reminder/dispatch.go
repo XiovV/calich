@@ -114,15 +114,10 @@ func (d EmailDispatcher) Dispatch(ctx context.Context, due DueReminder) error {
 	if user.IsDisabled {
 		return nil
 	}
-	if user.Email == nil {
-		// No destination configured (e.g. the user cleared their account
-		// email after creating this Email Reminder) — nothing to send.
-		return nil
-	}
 
 	subject := fmt.Sprintf("Reminder: %s", due.Title)
 	body := fmt.Sprintf("%s starts at %s.", due.Title, due.OccurrenceStart.Format(emailTimeLayout(user.TimeFormat)))
-	return d.Mailer.Send(*user.Email, subject, body)
+	return d.Mailer.Send(user.Email, subject, body)
 }
 
 // emailTimeLayout is time.RFC1123 with its hour segment swapped for the

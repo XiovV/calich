@@ -10,12 +10,14 @@ export type TimeFormat = "12h" | "24h";
 
 export interface User {
   id: number;
-  username: string;
+  // Name is a display-only label (ADR-0047) — not unique, not used to sign
+  // in. Email is the login identifier.
+  name: string;
   mustChangePassword: boolean;
-  email: string | null;
-  // Whether the Email Channel can actually be used for a new Reminder: the
-  // user has an email set *and* the self-hoster has SMTP configured
-  // (ADR-0021, ADR-0010).
+  email: string;
+  // Whether the Email Channel can actually be used for a new Reminder: every
+  // account always has an email now (ADR-0047), so this collapses to just
+  // whether the self-hoster has SMTP configured (ADR-0021, ADR-0010).
   emailReminderChannelAvailable: boolean;
   // "Let my synced devices show reminder pop-ups (disable in-app reminder
   // notifications)" (ADR-0027). Defaults false.
@@ -47,9 +49,9 @@ export interface LoginResult {
 
 interface MeWire {
   id: number;
-  username: string;
+  name: string;
   must_change_password: boolean;
-  email: string | null;
+  email: string;
   email_reminder_channel_available: boolean;
   synced_device_reminders_enabled: boolean;
   week_start: number;
@@ -62,7 +64,7 @@ interface MeWire {
 function fromMeWire(wire: MeWire): User {
   return {
     id: wire.id,
-    username: wire.username,
+    name: wire.name,
     mustChangePassword: wire.must_change_password,
     email: wire.email,
     emailReminderChannelAvailable: wire.email_reminder_channel_available,
@@ -76,12 +78,23 @@ function fromMeWire(wire: MeWire): User {
 }
 
 export const authApi = {
-  async login(username: string, password: string): Promise<LoginResult> {
+  // Reports whether the instance has any accounts yet (#169, ADR-0047) —
+  // public and unauthenticated, so it's answerable before anyone has signed
+  // in. Drives the first-run redirect to Register instead of Sign-in.
+  async setupStatus(): Promise<{ hasAccounts: boolean }> {
+    const response = await fetch("/api/auth/setup-status", { credentials: "include" });
+    if (!response.ok) throw await errorFromResponse(response);
+
+    const body = (await response.json()) as { has_accounts: boolean };
+    return { hasAccounts: body.has_accounts };
+  },
+
+  async login(email: string, password: string): Promise<LoginResult> {
     const response = await fetch("/api/auth/login", {
       method: "POST",
       credentials: "include",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ username, password }),
+      body: JSON.stringify({ email, password }),
     });
     if (!response.ok) throw await errorFromResponse(response);
 
@@ -224,12 +237,12 @@ export const authApi = {
     return fromMeWire(await response.json());
   },
 
-  async updateUsername(accessToken: string, username: string): Promise<User> {
-    const response = await authedFetch(accessToken, "/api/auth/username", {
+  async updateName(accessToken: string, name: string): Promise<User> {
+    const response = await authedFetch(accessToken, "/api/auth/name", {
       method: "PUT",
       credentials: "include",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ username }),
+      body: JSON.stringify({ name }),
     });
     if (!response.ok) throw await errorFromResponse(response);
 

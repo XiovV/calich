@@ -29,8 +29,8 @@ export function LeaveCalendarConfirmation({
           </AlertDialog.Title>
           <AlertDialog.Description className="mt-2 text-body text-ink-muted">
             You will lose access to this calendar and its events.
-            {calendar.ownerUsername
-              ? ` ${calendar.ownerUsername} keeps the calendar as it is.`
+            {calendar.ownerName
+              ? ` ${calendar.ownerName} keeps the calendar as it is.`
               : ""}
           </AlertDialog.Description>
 

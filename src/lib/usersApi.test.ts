@@ -15,13 +15,13 @@ afterEach(() => {
 describe("usersApi.directory", () => {
   it("sends the bearer token and returns the directory", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
-      jsonResponse(200, [{ id: 2, username: "bob" }]),
+      jsonResponse(200, [{ id: 2, name: "bob", email: "bob@example.com" }]),
     );
     vi.stubGlobal("fetch", fetchMock);
 
     const users = await usersApi.directory("token-123");
 
-    expect(users).toEqual([{ id: 2, username: "bob" }]);
+    expect(users).toEqual([{ id: 2, name: "bob", email: "bob@example.com" }]);
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/users/",
       expect.objectContaining({

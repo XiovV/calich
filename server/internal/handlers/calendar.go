@@ -66,16 +66,16 @@ type calendarResponse struct {
 	// only correct basis for gating Calendar management: rename, recolour,
 	// download, delete, Subscription editing, refresh, and sharing (#111).
 	IsOwner bool `json:"isOwner"`
-	// OwnerUsername is the Calendar's Owner's Username, for display — a
+	// OwnerName is the Calendar's Owner's display Name — a
 	// non-Owner may not list a Calendar's Shares to derive it themselves
 	// (#111).
-	OwnerUsername string `json:"ownerUsername"`
+	OwnerName string `json:"ownerName"`
 	// ShareCount is how many Shares the Calendar carries — whether more
 	// than one person would be notified (#111).
 	ShareCount int `json:"shareCount"`
 }
 
-func toCalendarResponse(c repository.Calendar, isOwner bool, ownerUsername string, shareCount int) calendarResponse {
+func toCalendarResponse(c repository.Calendar, isOwner bool, ownerName string, shareCount int) calendarResponse {
 	// respondWithOwnership's callers (Create, Update, Subscribe) always hand
 	// back the caller's own Calendar, so Access is Owner — except a just-
 	// Subscribed Calendar, whose SourceURL clamps it to Viewer even for its
@@ -84,7 +84,7 @@ func toCalendarResponse(c repository.Calendar, isOwner bool, ownerUsername strin
 	if c.SourceURL != nil {
 		access = service.AccessViewer
 	}
-	response := calendarResponse{ID: c.ID, Name: c.Name, Color: c.Color, LastSyncedAt: c.LastSyncedAt, ErrorClass: c.ErrorClass, ErrorMessage: c.ErrorMessage, KeepAlarms: c.KeepAlarms, Access: access.String(), IsOwner: isOwner, OwnerUsername: ownerUsername, ShareCount: shareCount}
+	response := calendarResponse{ID: c.ID, Name: c.Name, Color: c.Color, LastSyncedAt: c.LastSyncedAt, ErrorClass: c.ErrorClass, ErrorMessage: c.ErrorMessage, KeepAlarms: c.KeepAlarms, Access: access.String(), IsOwner: isOwner, OwnerName: ownerName, ShareCount: shareCount}
 	if c.SourceURL != nil {
 		masked := service.MaskURL(*c.SourceURL)
 		response.SourceURL = &masked
@@ -93,7 +93,7 @@ func toCalendarResponse(c repository.Calendar, isOwner bool, ownerUsername strin
 }
 
 func toCalendarWithAccessResponse(c service.CalendarWithAccess) calendarResponse {
-	response := toCalendarResponse(c.Calendar, c.IsOwner, c.OwnerUsername, c.ShareCount)
+	response := toCalendarResponse(c.Calendar, c.IsOwner, c.OwnerName, c.ShareCount)
 	response.Access = c.Access.String()
 	// c.Color is the caller's resolved display colour (ADR-0038) — their
 	// own override if they've set one, otherwise the Calendar's own,
@@ -110,12 +110,12 @@ func toCalendarWithAccessResponse(c service.CalendarWithAccess) calendarResponse
 // owns. Writes its own internal_error response and returns false if
 // resolving that metadata fails, so callers can just `return` on false.
 func (h *CalendarHandler) respondWithOwnership(w http.ResponseWriter, r *http.Request, status int, userID int64, calendar repository.Calendar, failMsg string) bool {
-	isOwner, ownerUsername, shareCount, err := h.calendars.OwnershipMeta(r.Context(), userID, calendar)
+	isOwner, ownerName, shareCount, err := h.calendars.OwnershipMeta(r.Context(), userID, calendar)
 	if err != nil {
 		httpresponse.Error(w, http.StatusInternalServerError, "internal_error", failMsg)
 		return false
 	}
-	httpresponse.JSON(w, status, toCalendarResponse(calendar, isOwner, ownerUsername, shareCount))
+	httpresponse.JSON(w, status, toCalendarResponse(calendar, isOwner, ownerName, shareCount))
 	return true
 }
 

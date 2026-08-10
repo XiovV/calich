@@ -27,23 +27,23 @@ import (
 // response — the server exclusively writes them. Keeping it here stops
 // handlers/event.go carrying a code path production never executes.
 type decodedEvent struct {
-	ID                string
-	CalendarID        string
-	Title             string
-	Start             time.Time
-	End               time.Time
-	AllDay            bool
-	Rrule             string
-	ParentID          *string
-	RecurrenceID      *time.Time
-	Exdates           []time.Time
-	Tzid              *string
-	Reminders         []reminderWire
-	Description       string
-	Location          string
-	Color             *string
-	CreatedBy         *int64
-	CreatedByUsername string
+	ID            string
+	CalendarID    string
+	Title         string
+	Start         time.Time
+	End           time.Time
+	AllDay        bool
+	Rrule         string
+	ParentID      *string
+	RecurrenceID  *time.Time
+	Exdates       []time.Time
+	Tzid          *string
+	Reminders     []reminderWire
+	Description   string
+	Location      string
+	Color         *string
+	CreatedBy     *int64
+	CreatedByName string
 }
 
 func (d *decodedEvent) UnmarshalJSON(data []byte) error {
@@ -60,23 +60,23 @@ func (d *decodedEvent) UnmarshalJSON(data []byte) error {
 		return fmt.Errorf("invalid end: %w", err)
 	}
 	*d = decodedEvent{
-		ID:                wire.ID,
-		CalendarID:        wire.CalendarID,
-		Title:             wire.Title,
-		Start:             start,
-		End:               end,
-		AllDay:            wire.AllDay,
-		Rrule:             wire.Rrule,
-		ParentID:          wire.ParentID,
-		RecurrenceID:      wire.RecurrenceID,
-		Exdates:           wire.Exdates,
-		Tzid:              wire.Tzid,
-		Reminders:         wire.Reminders,
-		Description:       wire.Description,
-		Location:          wire.Location,
-		Color:             wire.Color,
-		CreatedBy:         wire.CreatedBy,
-		CreatedByUsername: wire.CreatedByUsername,
+		ID:            wire.ID,
+		CalendarID:    wire.CalendarID,
+		Title:         wire.Title,
+		Start:         start,
+		End:           end,
+		AllDay:        wire.AllDay,
+		Rrule:         wire.Rrule,
+		ParentID:      wire.ParentID,
+		RecurrenceID:  wire.RecurrenceID,
+		Exdates:       wire.Exdates,
+		Tzid:          wire.Tzid,
+		Reminders:     wire.Reminders,
+		Description:   wire.Description,
+		Location:      wire.Location,
+		Color:         wire.Color,
+		CreatedBy:     wire.CreatedBy,
+		CreatedByName: wire.CreatedByName,
 	}
 	return nil
 }
@@ -104,7 +104,9 @@ func newEventTestServerWithServices(t *testing.T) (baseURL, accessToken, calenda
 	sessions := repository.NewSessionRepository(sqlDB)
 	workspaceRepo := repository.NewWorkspaceRepository(sqlDB)
 	workspaces := service.NewWorkspaceService(sqlDB, workspaceRepo, repository.NewWorkspaceInviteRepository(sqlDB), repository.NewCalendarRepository(sqlDB), repository.NewCalendarShareRepository(sqlDB))
-	auth := service.NewAuthService(users, sessions, workspaces, repository.NewWorkspaceInviteRepository(sqlDB), []byte("test-secret"), "alice", "hunter2", false)
+	calendarRepo := repository.NewCalendarRepository(sqlDB)
+	calendars = service.NewCalendarService(calendarRepo, repository.NewCalendarShareRepository(sqlDB), users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo, repository.NewCalendarGroupShareRepository(sqlDB), repository.NewGroupRepository(sqlDB))
+	auth := service.NewAuthService(users, sessions, workspaces, repository.NewWorkspaceInviteRepository(sqlDB), calendars, []byte("test-secret"), "alice", "alice@example.com", "hunter2", false)
 	bootstrapUser, _, err := auth.Bootstrap(context.Background())
 	if err != nil {
 		t.Fatalf("bootstrap: %v", err)
@@ -119,7 +121,7 @@ func newEventTestServerWithServices(t *testing.T) (baseURL, accessToken, calenda
 	}
 	workspaceID = aliceWorkspaces[0].ID
 
-	loginResult, err := auth.Login(context.Background(), "alice", "hunter2")
+	loginResult, err := auth.Login(context.Background(), "alice@example.com", "hunter2")
 	if err != nil {
 		t.Fatalf("login: %v", err)
 	}
@@ -129,8 +131,6 @@ func newEventTestServerWithServices(t *testing.T) (baseURL, accessToken, calenda
 		t.Fatalf("authenticate: %v", err)
 	}
 
-	calendarRepo := repository.NewCalendarRepository(sqlDB)
-	calendars = service.NewCalendarService(calendarRepo, repository.NewCalendarShareRepository(sqlDB), users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo, repository.NewCalendarGroupShareRepository(sqlDB), repository.NewGroupRepository(sqlDB))
 	cal, err := calendars.Create(context.Background(), userID, workspaceID, "11111111-1111-1111-1111-111111111111", service.CalendarWrite{Name: "Personal", Color: "#12809CFF"})
 	if err != nil {
 		t.Fatalf("create calendar: %v", err)
@@ -392,7 +392,7 @@ func TestEventHandler_RoundTripsCreatorAttribution(t *testing.T) {
 	})
 	var created decodedEvent
 	json.NewDecoder(createResp.Body).Decode(&created)
-	if created.CreatedBy == nil || *created.CreatedBy != userID || created.CreatedByUsername != "alice" {
+	if created.CreatedBy == nil || *created.CreatedBy != userID || created.CreatedByName != "alice" {
 		t.Fatalf("expected creator attribution to alice (%d), got %+v", userID, created)
 	}
 
@@ -403,7 +403,7 @@ func TestEventHandler_RoundTripsCreatorAttribution(t *testing.T) {
 	defer getResp.Body.Close()
 	var fetched decodedEvent
 	json.NewDecoder(getResp.Body).Decode(&fetched)
-	if fetched.CreatedBy == nil || *fetched.CreatedBy != userID || fetched.CreatedByUsername != "alice" {
+	if fetched.CreatedBy == nil || *fetched.CreatedBy != userID || fetched.CreatedByName != "alice" {
 		t.Fatalf("expected fetched creator attribution to alice (%d), got %+v", userID, fetched)
 	}
 
@@ -414,7 +414,7 @@ func TestEventHandler_RoundTripsCreatorAttribution(t *testing.T) {
 	defer listResp.Body.Close()
 	var list []decodedEvent
 	json.NewDecoder(listResp.Body).Decode(&list)
-	if len(list) != 1 || list[0].CreatedBy == nil || *list[0].CreatedBy != userID || list[0].CreatedByUsername != "alice" {
+	if len(list) != 1 || list[0].CreatedBy == nil || *list[0].CreatedBy != userID || list[0].CreatedByName != "alice" {
 		t.Fatalf("expected listed creator attribution to alice (%d), got %+v", userID, list)
 	}
 }

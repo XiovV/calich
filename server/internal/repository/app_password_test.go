@@ -24,7 +24,7 @@ func TestAppPasswordRepository_Create(t *testing.T) {
 	appPasswords, users := newTestAppPasswordRepository(t)
 	ctx := context.Background()
 
-	user, err := users.Create(ctx, "admin", "hash", true)
+	user, err := users.Create(ctx, "admin", "admin@example.com", "hash", true)
 	if err != nil {
 		t.Fatalf("create user: %v", err)
 	}
@@ -55,11 +55,11 @@ func TestAppPasswordRepository_ListForUser(t *testing.T) {
 	appPasswords, users := newTestAppPasswordRepository(t)
 	ctx := context.Background()
 
-	userA, err := users.Create(ctx, "admin", "hash", true)
+	userA, err := users.Create(ctx, "admin", "admin@example.com", "hash", true)
 	if err != nil {
 		t.Fatalf("create user: %v", err)
 	}
-	userB, err := users.Create(ctx, "someone-else", "hash", true)
+	userB, err := users.Create(ctx, "someone-else", "someone-else@example.com", "hash", true)
 	if err != nil {
 		t.Fatalf("create user: %v", err)
 	}
@@ -92,7 +92,7 @@ func TestAppPasswordRepository_ListForUser_Empty(t *testing.T) {
 	appPasswords, users := newTestAppPasswordRepository(t)
 	ctx := context.Background()
 
-	user, err := users.Create(ctx, "admin", "hash", true)
+	user, err := users.Create(ctx, "admin", "admin@example.com", "hash", true)
 	if err != nil {
 		t.Fatalf("create user: %v", err)
 	}
@@ -110,7 +110,7 @@ func TestAppPasswordRepository_Delete(t *testing.T) {
 	appPasswords, users := newTestAppPasswordRepository(t)
 	ctx := context.Background()
 
-	user, err := users.Create(ctx, "admin", "hash", true)
+	user, err := users.Create(ctx, "admin", "admin@example.com", "hash", true)
 	if err != nil {
 		t.Fatalf("create user: %v", err)
 	}
@@ -137,7 +137,7 @@ func TestAppPasswordRepository_Delete_NotFound(t *testing.T) {
 	appPasswords, users := newTestAppPasswordRepository(t)
 	ctx := context.Background()
 
-	user, err := users.Create(ctx, "admin", "hash", true)
+	user, err := users.Create(ctx, "admin", "admin@example.com", "hash", true)
 	if err != nil {
 		t.Fatalf("create user: %v", err)
 	}
@@ -151,7 +151,7 @@ func TestAppPasswordRepository_UpdateLastUsedAt(t *testing.T) {
 	appPasswords, users := newTestAppPasswordRepository(t)
 	ctx := context.Background()
 
-	user, err := users.Create(ctx, "admin", "hash", true)
+	user, err := users.Create(ctx, "admin", "admin@example.com", "hash", true)
 	if err != nil {
 		t.Fatalf("create user: %v", err)
 	}
@@ -181,11 +181,11 @@ func TestAppPasswordRepository_UpdateLastUsedAt_ScopedToOwner(t *testing.T) {
 	appPasswords, users := newTestAppPasswordRepository(t)
 	ctx := context.Background()
 
-	userA, err := users.Create(ctx, "admin", "hash", true)
+	userA, err := users.Create(ctx, "admin", "admin@example.com", "hash", true)
 	if err != nil {
 		t.Fatalf("create user: %v", err)
 	}
-	userB, err := users.Create(ctx, "someone-else", "hash", true)
+	userB, err := users.Create(ctx, "someone-else", "someone-else@example.com", "hash", true)
 	if err != nil {
 		t.Fatalf("create user: %v", err)
 	}
@@ -213,11 +213,11 @@ func TestAppPasswordRepository_Delete_ScopedToOwner(t *testing.T) {
 	appPasswords, users := newTestAppPasswordRepository(t)
 	ctx := context.Background()
 
-	userA, err := users.Create(ctx, "admin", "hash", true)
+	userA, err := users.Create(ctx, "admin", "admin@example.com", "hash", true)
 	if err != nil {
 		t.Fatalf("create user: %v", err)
 	}
-	userB, err := users.Create(ctx, "someone-else", "hash", true)
+	userB, err := users.Create(ctx, "someone-else", "someone-else@example.com", "hash", true)
 	if err != nil {
 		t.Fatalf("create user: %v", err)
 	}

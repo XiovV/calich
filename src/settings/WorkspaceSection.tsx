@@ -145,7 +145,7 @@ export function WorkspaceSection() {
             >
               <div>
                 <p className="text-body text-ink">
-                  {member.username}
+                  {member.name}
                   {isSelf && " (you)"}
                 </p>
                 <p className="text-label-sm text-ink-muted capitalize">{member.role}</p>
@@ -155,7 +155,7 @@ export function WorkspaceSection() {
                   <IconButton
                     onClick={() => (member.role === "admin" ? handleDemote(member) : handlePromote(member))}
                     disabled={busyUserId === member.userId}
-                    aria-label={member.role === "admin" ? `Revoke admin from ${member.username}` : `Make ${member.username} an admin`}
+                    aria-label={member.role === "admin" ? `Revoke admin from ${member.name}` : `Make ${member.name} an admin`}
                   >
                     {member.role === "admin" ? <ShieldOff className="size-4" /> : <Shield className="size-4" />}
                   </IconButton>
@@ -164,7 +164,7 @@ export function WorkspaceSection() {
                   <IconButton
                     onClick={() => setRemoveTarget(member)}
                     disabled={busyUserId === member.userId}
-                    aria-label={`Remove ${member.username}`}
+                    aria-label={`Remove ${member.name}`}
                   >
                     <UserX className="size-4" />
                   </IconButton>

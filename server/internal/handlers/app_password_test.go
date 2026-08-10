@@ -28,7 +28,7 @@ func newAppPasswordTestServer(t *testing.T) (*httptest.Server, string) {
 
 	users := repository.NewUserRepository(sqlDB)
 	sessions := repository.NewSessionRepository(sqlDB)
-	auth := service.NewAuthService(users, sessions, service.NewWorkspaceService(sqlDB, repository.NewWorkspaceRepository(sqlDB), repository.NewWorkspaceInviteRepository(sqlDB), repository.NewCalendarRepository(sqlDB), repository.NewCalendarShareRepository(sqlDB)), repository.NewWorkspaceInviteRepository(sqlDB), []byte("test-secret"), "admin", "admin", false)
+	auth := service.NewAuthService(users, sessions, service.NewWorkspaceService(sqlDB, repository.NewWorkspaceRepository(sqlDB), repository.NewWorkspaceInviteRepository(sqlDB), repository.NewCalendarRepository(sqlDB), repository.NewCalendarShareRepository(sqlDB)), repository.NewWorkspaceInviteRepository(sqlDB), service.NewCalendarService(repository.NewCalendarRepository(sqlDB), repository.NewCalendarShareRepository(sqlDB), users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), repository.NewWorkspaceRepository(sqlDB), repository.NewCalendarGroupShareRepository(sqlDB), repository.NewGroupRepository(sqlDB)), []byte("test-secret"), "admin", "admin@example.com", "admin", false)
 	if _, _, err := auth.Bootstrap(context.Background()); err != nil {
 		t.Fatalf("bootstrap: %v", err)
 	}
@@ -49,7 +49,7 @@ func newAppPasswordTestServer(t *testing.T) (*httptest.Server, string) {
 	srv := httptest.NewServer(r)
 	t.Cleanup(srv.Close)
 
-	loginResp := login(t, srv, "admin", "admin")
+	loginResp := login(t, srv, "admin@example.com", "admin")
 	defer loginResp.Body.Close()
 	var loggedIn loginResponse
 	if err := json.NewDecoder(loginResp.Body).Decode(&loggedIn); err != nil {
@@ -254,7 +254,7 @@ func TestAppPasswordRevoke_LeavesWebLoginUnaffected(t *testing.T) {
 
 	// The web login is a separate credential (the account password, checked via
 	// AuthService.Login) — revoking an app password must not touch it.
-	loginResp := login(t, srv, "admin", "admin")
+	loginResp := login(t, srv, "admin@example.com", "admin")
 	defer loginResp.Body.Close()
 	if loginResp.StatusCode != http.StatusOK {
 		t.Fatalf("expected the web login to still succeed after revoking an app password, got %d", loginResp.StatusCode)

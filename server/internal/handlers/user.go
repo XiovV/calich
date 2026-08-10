@@ -21,12 +21,13 @@ func NewUserHandler(users *service.UserService) *UserHandler {
 }
 
 type userDirectoryResponse struct {
-	ID       int64  `json:"id"`
-	Username string `json:"username"`
+	ID    int64  `json:"id"`
+	Name  string `json:"name"`
+	Email string `json:"email"`
 }
 
 func toUserDirectoryResponse(u repository.User) userDirectoryResponse {
-	return userDirectoryResponse{ID: u.ID, Username: u.Username}
+	return userDirectoryResponse{ID: u.ID, Name: u.Name, Email: u.Email}
 }
 
 // Directory serves GET /api/users: every enabled User besides the caller.

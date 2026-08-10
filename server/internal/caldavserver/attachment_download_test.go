@@ -32,7 +32,7 @@ func TestAttachmentDownload_AuthenticatesAndCarriesSecurityHeaders(t *testing.T)
 	managedID := addResp.Header.Get("Cal-Managed-ID")
 	addResp.Body.Close()
 
-	resp := downloadAttachment(t, env, managedID, "admin", env.appPasswordSecret)
+	resp := downloadAttachment(t, env, managedID, "admin@example.com", env.appPasswordSecret)
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
@@ -78,7 +78,7 @@ func TestAttachmentDownload_NoAccessToCalendar_NotFound(t *testing.T) {
 	managedID := addResp.Header.Get("Cal-Managed-ID")
 	addResp.Body.Close()
 
-	stranger, err := env.users.Create(context.Background(), "stranger", "hash", false)
+	stranger, err := env.users.Create(context.Background(), "stranger", "stranger@example.com", "hash", false)
 	if err != nil {
 		t.Fatalf("create stranger: %v", err)
 	}
@@ -87,7 +87,7 @@ func TestAttachmentDownload_NoAccessToCalendar_NotFound(t *testing.T) {
 		t.Fatalf("create stranger app password: %v", err)
 	}
 
-	resp := downloadAttachment(t, env, managedID, "stranger", created.Secret)
+	resp := downloadAttachment(t, env, managedID, "stranger@example.com", created.Secret)
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("expected 404 for a User with no Access to the Calendar, got %d", resp.StatusCode)

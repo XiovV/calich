@@ -22,7 +22,7 @@ func TestPropfind_ManagedAttachmentsServerURL_OnCalendarHome_IsPathOnlyHref(t *t
 	env := newTestCalDAVEnv(t)
 
 	homePath := homeSetPath(env.userID)
-	resp := propfind(t, env.srv, homePath, "admin", env.appPasswordSecret, "0", propfindManagedAttachmentsURL)
+	resp := propfind(t, env.srv, homePath, "admin@example.com", env.appPasswordSecret, "0", propfindManagedAttachmentsURL)
 	defer resp.Body.Close()
 
 	body := readBody(t, resp)
@@ -48,7 +48,7 @@ func TestPropfind_ManagedAttachmentsServerURL_NotAdvertisedOnCalendarCollection(
 	env := newTestCalDAVEnv(t)
 
 	path := calendarPath(env.userID, env.calendarID)
-	resp := propfind(t, env.srv, path, "admin", env.appPasswordSecret, "0", propfindManagedAttachmentsURL)
+	resp := propfind(t, env.srv, path, "admin@example.com", env.appPasswordSecret, "0", propfindManagedAttachmentsURL)
 	defer resp.Body.Close()
 
 	body := readBody(t, resp)
@@ -61,7 +61,7 @@ func TestPropfind_AttachmentLimits_OnCalendarCollection_ReflectConfig(t *testing
 	env := newTestCalDAVEnv(t)
 
 	path := calendarPath(env.userID, env.calendarID)
-	resp := propfind(t, env.srv, path, "admin", env.appPasswordSecret, "0", propfindAttachmentLimits)
+	resp := propfind(t, env.srv, path, "admin@example.com", env.appPasswordSecret, "0", propfindAttachmentLimits)
 	defer resp.Body.Close()
 
 	body := readBody(t, resp)
@@ -78,7 +78,7 @@ func TestPropfind_AttachmentLimits_OnCalendarCollection_ReflectConfig(t *testing
 func TestPropfind_AttachmentLimits_StrangerWithNoAccess_NotAdvertised(t *testing.T) {
 	env := newTestCalDAVEnv(t)
 
-	stranger, err := env.users.Create(context.Background(), "stranger", "hash", false)
+	stranger, err := env.users.Create(context.Background(), "stranger", "stranger@example.com", "hash", false)
 	if err != nil {
 		t.Fatalf("create stranger: %v", err)
 	}
@@ -88,7 +88,7 @@ func TestPropfind_AttachmentLimits_StrangerWithNoAccess_NotAdvertised(t *testing
 	}
 
 	path := calendarPath(env.userID, env.calendarID)
-	resp := propfind(t, env.srv, path, "stranger", created.Secret, "0", propfindAttachmentLimits)
+	resp := propfind(t, env.srv, path, "stranger@example.com", created.Secret, "0", propfindAttachmentLimits)
 	defer resp.Body.Close()
 
 	if resp.StatusCode == 207 {

@@ -45,7 +45,11 @@ func newShareTestServer(t *testing.T) shareTestServer {
 	sessions := repository.NewSessionRepository(sqlDB)
 	workspaceRepo := repository.NewWorkspaceRepository(sqlDB)
 	workspaceSvc := service.NewWorkspaceService(sqlDB, workspaceRepo, repository.NewWorkspaceInviteRepository(sqlDB), repository.NewCalendarRepository(sqlDB), repository.NewCalendarShareRepository(sqlDB))
-	auth := service.NewAuthService(users, sessions, workspaceSvc, repository.NewWorkspaceInviteRepository(sqlDB), []byte("test-secret"), "owner", "hunter2", false)
+	calendarRepo := repository.NewCalendarRepository(sqlDB)
+	shareRepo := repository.NewCalendarShareRepository(sqlDB)
+	groupRepo := repository.NewGroupRepository(sqlDB)
+	calendars := service.NewCalendarService(calendarRepo, shareRepo, users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo, repository.NewCalendarGroupShareRepository(sqlDB), groupRepo)
+	auth := service.NewAuthService(users, sessions, workspaceSvc, repository.NewWorkspaceInviteRepository(sqlDB), calendars, []byte("test-secret"), "owner", "owner@example.com", "hunter2", false)
 	ctx := context.Background()
 	ownerUser, _, err := auth.Bootstrap(ctx)
 	if err != nil {
@@ -55,20 +59,15 @@ func newShareTestServer(t *testing.T) shareTestServer {
 	if err != nil {
 		t.Fatalf("hash other user's password: %v", err)
 	}
-	other, err := users.Create(ctx, "other", string(otherHash), false)
+	other, err := users.Create(ctx, "other", "other@example.com", string(otherHash), false)
 	if err != nil {
 		t.Fatalf("create other user: %v", err)
 	}
-	calendarRepo := repository.NewCalendarRepository(sqlDB)
-	shareRepo := repository.NewCalendarShareRepository(sqlDB)
-	groupRepo := repository.NewGroupRepository(sqlDB)
-	calendars := service.NewCalendarService(calendarRepo, shareRepo, users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo, repository.NewCalendarGroupShareRepository(sqlDB), groupRepo)
-
-	ownerLogin, err := auth.Login(ctx, "owner", "hunter2")
+	ownerLogin, err := auth.Login(ctx, "owner@example.com", "hunter2")
 	if err != nil {
 		t.Fatalf("owner login: %v", err)
 	}
-	otherLogin, err := auth.Login(ctx, "other", "temp-password")
+	otherLogin, err := auth.Login(ctx, "other@example.com", "temp-password")
 	if err != nil {
 		t.Fatalf("other login: %v", err)
 	}
@@ -165,7 +164,7 @@ func doJSON(t *testing.T, method, url, accessToken string, body any) *http.Respo
 func TestCalendarHandler_Share(t *testing.T) {
 	s := newShareTestServer(t)
 
-	resp := doJSON(t, http.MethodPost, s.baseURL+"/api/calendars/"+s.calendarID+"/shares", s.ownerToken, shareRequest{Username: "other", Role: repository.RoleEditor})
+	resp := doJSON(t, http.MethodPost, s.baseURL+"/api/calendars/"+s.calendarID+"/shares", s.ownerToken, shareRequest{Email: "other@example.com", Role: repository.RoleEditor})
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("expected 200, got %d", resp.StatusCode)
@@ -175,7 +174,7 @@ func TestCalendarHandler_Share(t *testing.T) {
 	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if got.Username != "other" || got.Role != repository.RoleEditor || got.UserID != s.otherUserID {
+	if got.Name != "other" || got.Role != repository.RoleEditor || got.UserID != s.otherUserID {
 		t.Fatalf("unexpected share: %+v", got)
 	}
 }
@@ -185,7 +184,7 @@ func TestCalendarHandler_Share(t *testing.T) {
 func TestCalendarHandler_List_CarriesAccess(t *testing.T) {
 	s := newShareTestServer(t)
 
-	shareResp := doJSON(t, http.MethodPost, s.baseURL+"/api/calendars/"+s.calendarID+"/shares", s.ownerToken, shareRequest{Username: "other", Role: repository.RoleViewer})
+	shareResp := doJSON(t, http.MethodPost, s.baseURL+"/api/calendars/"+s.calendarID+"/shares", s.ownerToken, shareRequest{Email: "other@example.com", Role: repository.RoleViewer})
 	shareResp.Body.Close()
 	if shareResp.StatusCode != http.StatusOK {
 		t.Fatalf("share: expected 200, got %d", shareResp.StatusCode)
@@ -225,7 +224,7 @@ func TestCalendarHandler_List_CarriesAccess(t *testing.T) {
 func TestCalendarHandler_List_CarriesOwnershipMeta(t *testing.T) {
 	s := newShareTestServer(t)
 
-	shareResp := doJSON(t, http.MethodPost, s.baseURL+"/api/calendars/"+s.calendarID+"/shares", s.ownerToken, shareRequest{Username: "other", Role: repository.RoleViewer})
+	shareResp := doJSON(t, http.MethodPost, s.baseURL+"/api/calendars/"+s.calendarID+"/shares", s.ownerToken, shareRequest{Email: "other@example.com", Role: repository.RoleViewer})
 	shareResp.Body.Close()
 
 	ownerList, err := authenticatedGetWithWorkspace(s.baseURL+"/api/calendars/", s.ownerToken, s.workspaceID)
@@ -237,7 +236,7 @@ func TestCalendarHandler_List_CarriesOwnershipMeta(t *testing.T) {
 	if err := json.NewDecoder(ownerList.Body).Decode(&ownerCalendars); err != nil {
 		t.Fatalf("decode owner list: %v", err)
 	}
-	if len(ownerCalendars) != 1 || !ownerCalendars[0].IsOwner || ownerCalendars[0].OwnerUsername != "owner" || ownerCalendars[0].ShareCount != 1 {
+	if len(ownerCalendars) != 1 || !ownerCalendars[0].IsOwner || ownerCalendars[0].OwnerName != "owner" || ownerCalendars[0].ShareCount != 1 {
 		t.Fatalf("unexpected owner list: %+v", ownerCalendars)
 	}
 
@@ -250,7 +249,7 @@ func TestCalendarHandler_List_CarriesOwnershipMeta(t *testing.T) {
 	if err := json.NewDecoder(otherList.Body).Decode(&otherCalendars); err != nil {
 		t.Fatalf("decode other list: %v", err)
 	}
-	if len(otherCalendars) != 1 || otherCalendars[0].IsOwner || otherCalendars[0].OwnerUsername != "owner" || otherCalendars[0].ShareCount != 1 {
+	if len(otherCalendars) != 1 || otherCalendars[0].IsOwner || otherCalendars[0].OwnerName != "owner" || otherCalendars[0].ShareCount != 1 {
 		t.Fatalf("unexpected shared-with list: %+v", otherCalendars)
 	}
 
@@ -263,7 +262,7 @@ func TestCalendarHandler_List_CarriesOwnershipMeta(t *testing.T) {
 	if err := json.NewDecoder(otherGet.Body).Decode(&otherGetBody); err != nil {
 		t.Fatalf("decode other get: %v", err)
 	}
-	if otherGetBody.IsOwner || otherGetBody.OwnerUsername != "owner" {
+	if otherGetBody.IsOwner || otherGetBody.OwnerName != "owner" {
 		t.Fatalf("unexpected single-calendar response for a Viewer: %+v", otherGetBody)
 	}
 }
@@ -277,7 +276,7 @@ func TestCalendarHandler_List_CarriesOwnershipMeta(t *testing.T) {
 func TestCalendarHandler_List_And_Get_ResolveColorPerCaller(t *testing.T) {
 	s := newShareTestServer(t)
 
-	shareResp := doJSON(t, http.MethodPost, s.baseURL+"/api/calendars/"+s.calendarID+"/shares", s.ownerToken, shareRequest{Username: "other", Role: repository.RoleEditor})
+	shareResp := doJSON(t, http.MethodPost, s.baseURL+"/api/calendars/"+s.calendarID+"/shares", s.ownerToken, shareRequest{Email: "other@example.com", Role: repository.RoleEditor})
 	shareResp.Body.Close()
 
 	if _, err := s.calendars.SetColorOverride(context.Background(), s.otherUserID, s.calendarID, "#654321"); err != nil {
@@ -327,17 +326,17 @@ func TestCalendarHandler_List_And_Get_ResolveColorPerCaller(t *testing.T) {
 func TestCalendarHandler_Share_NonOwnerRefused(t *testing.T) {
 	s := newShareTestServer(t)
 
-	resp := doJSON(t, http.MethodPost, s.baseURL+"/api/calendars/"+s.calendarID+"/shares", s.otherToken, shareRequest{Username: "other", Role: repository.RoleViewer})
+	resp := doJSON(t, http.MethodPost, s.baseURL+"/api/calendars/"+s.calendarID+"/shares", s.otherToken, shareRequest{Email: "other@example.com", Role: repository.RoleViewer})
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("expected 404, got %d", resp.StatusCode)
 	}
 }
 
-func TestCalendarHandler_Share_UnknownUsername(t *testing.T) {
+func TestCalendarHandler_Share_UnknownEmail(t *testing.T) {
 	s := newShareTestServer(t)
 
-	resp := doJSON(t, http.MethodPost, s.baseURL+"/api/calendars/"+s.calendarID+"/shares", s.ownerToken, shareRequest{Username: "ghost", Role: repository.RoleViewer})
+	resp := doJSON(t, http.MethodPost, s.baseURL+"/api/calendars/"+s.calendarID+"/shares", s.ownerToken, shareRequest{Email: "ghost@example.com", Role: repository.RoleViewer})
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d", resp.StatusCode)
@@ -347,7 +346,7 @@ func TestCalendarHandler_Share_UnknownUsername(t *testing.T) {
 func TestCalendarHandler_ListShares(t *testing.T) {
 	s := newShareTestServer(t)
 
-	shareResp := doJSON(t, http.MethodPost, s.baseURL+"/api/calendars/"+s.calendarID+"/shares", s.ownerToken, shareRequest{Username: "other", Role: repository.RoleEditor})
+	shareResp := doJSON(t, http.MethodPost, s.baseURL+"/api/calendars/"+s.calendarID+"/shares", s.ownerToken, shareRequest{Email: "other@example.com", Role: repository.RoleEditor})
 	shareResp.Body.Close()
 
 	resp, err := authenticatedGet(s.baseURL+"/api/calendars/"+s.calendarID+"/shares", s.ownerToken)
@@ -363,7 +362,7 @@ func TestCalendarHandler_ListShares(t *testing.T) {
 	if err := json.NewDecoder(resp.Body).Decode(&shares); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if len(shares) != 1 || shares[0].Username != "other" || shares[0].Role != repository.RoleEditor || shares[0].UserID != s.otherUserID {
+	if len(shares) != 1 || shares[0].Name != "other" || shares[0].Role != repository.RoleEditor || shares[0].UserID != s.otherUserID {
 		t.Fatalf("unexpected shares: %+v", shares)
 	}
 }
@@ -371,7 +370,7 @@ func TestCalendarHandler_ListShares(t *testing.T) {
 func TestCalendarHandler_RevokeShare(t *testing.T) {
 	s := newShareTestServer(t)
 
-	shareResp := doJSON(t, http.MethodPost, s.baseURL+"/api/calendars/"+s.calendarID+"/shares", s.ownerToken, shareRequest{Username: "other", Role: repository.RoleEditor})
+	shareResp := doJSON(t, http.MethodPost, s.baseURL+"/api/calendars/"+s.calendarID+"/shares", s.ownerToken, shareRequest{Email: "other@example.com", Role: repository.RoleEditor})
 	shareResp.Body.Close()
 
 	resp := doJSON(t, http.MethodDelete, s.baseURL+"/api/calendars/"+s.calendarID+"/shares/2", s.ownerToken, nil)
@@ -396,7 +395,7 @@ func TestCalendarHandler_RevokeShare(t *testing.T) {
 func TestCalendarHandler_LeaveShare(t *testing.T) {
 	s := newShareTestServer(t)
 
-	shareResp := doJSON(t, http.MethodPost, s.baseURL+"/api/calendars/"+s.calendarID+"/shares", s.ownerToken, shareRequest{Username: "other", Role: repository.RoleViewer})
+	shareResp := doJSON(t, http.MethodPost, s.baseURL+"/api/calendars/"+s.calendarID+"/shares", s.ownerToken, shareRequest{Email: "other@example.com", Role: repository.RoleViewer})
 	shareResp.Body.Close()
 
 	resp := doJSON(t, http.MethodPost, s.baseURL+"/api/calendars/"+s.calendarID+"/leave", s.otherToken, nil)
@@ -493,7 +492,7 @@ func TestCalendarHandler_ShareTargets(t *testing.T) {
 	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if len(got.Users) != 1 || got.Users[0].Username != "other" {
+	if len(got.Users) != 1 || got.Users[0].Name != "other" {
 		t.Fatalf("unexpected user targets: %+v", got.Users)
 	}
 	if len(got.Groups) != 1 || got.Groups[0].GroupID != s.groupID {

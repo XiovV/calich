@@ -95,13 +95,13 @@ func (s *AppPasswordService) Revoke(ctx context.Context, userID, id int64) error
 	return nil
 }
 
-// Authenticate validates HTTP Basic credentials for CalDAV (ADR-0024): the
-// username is the account's login username, the password must match one of
-// that user's App passwords — never the account's own login password, which
-// this never checks. On success it stamps the matched App password's
+// Authenticate validates HTTP Basic credentials for CalDAV (ADR-0024,
+// ADR-0047): the username is the account's Email, the password must match
+// one of that user's App passwords — never the account's own login password,
+// which this never checks. On success it stamps the matched App password's
 // last_used_at and returns the user id.
-func (s *AppPasswordService) Authenticate(ctx context.Context, username, password string) (int64, error) {
-	user, err := s.users.GetByUsername(ctx, username)
+func (s *AppPasswordService) Authenticate(ctx context.Context, email, password string) (int64, error) {
+	user, err := s.users.GetByEmail(ctx, email)
 	if errors.Is(err, repository.ErrNotFound) {
 		return 0, ErrInvalidAppPasswordCredentials
 	}

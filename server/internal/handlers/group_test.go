@@ -44,7 +44,8 @@ func newGroupHandlerTestServer(t *testing.T) *groupHandlerTestServer {
 	workspaceRepo := repository.NewWorkspaceRepository(sqlDB)
 	inviteRepo := repository.NewWorkspaceInviteRepository(sqlDB)
 	workspaces := service.NewWorkspaceService(sqlDB, workspaceRepo, inviteRepo, calendarRepo, shareRepo)
-	auth := service.NewAuthService(users, sessions, workspaces, inviteRepo, []byte("test-secret"), "", "", true)
+	calendars := service.NewCalendarService(calendarRepo, shareRepo, users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo, repository.NewCalendarGroupShareRepository(sqlDB), repository.NewGroupRepository(sqlDB))
+	auth := service.NewAuthService(users, sessions, workspaces, inviteRepo, calendars, []byte("test-secret"), "", "", "", true)
 	groups := service.NewGroupService(repository.NewGroupRepository(sqlDB), workspaceRepo)
 
 	authHandler := NewAuthHandler(auth, false)
@@ -94,7 +95,7 @@ func (s *groupHandlerTestServer) register(t *testing.T, username string) (access
 	}
 
 	users := repository.NewUserRepository(s.db)
-	user, err := users.GetByUsername(ctx, username)
+	user, err := users.GetByEmail(ctx, username+"@example.com")
 	if err != nil {
 		t.Fatalf("get %s: %v", username, err)
 	}

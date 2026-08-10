@@ -425,7 +425,7 @@ func (s *EventService) Create(ctx context.Context, userID int64, id string, writ
 	}
 	event.Reminders = write.Reminders
 	result := []repository.Event{event}
-	if err := s.attachCreatedByUsernames(ctx, result); err != nil {
+	if err := s.attachCreatedByNames(ctx, result); err != nil {
 		return repository.Event{}, err
 	}
 	if err := s.attachAttachments(ctx, result); err != nil {
@@ -507,7 +507,7 @@ func (s *EventService) List(ctx context.Context, userID int64, from, to *time.Ti
 	if err := s.attachReminders(ctx, events); err != nil {
 		return nil, err
 	}
-	if err := s.attachCreatedByUsernames(ctx, events); err != nil {
+	if err := s.attachCreatedByNames(ctx, events); err != nil {
 		return nil, err
 	}
 	if err := s.attachAttachments(ctx, events); err != nil {
@@ -598,13 +598,13 @@ func (s *EventService) attachExdatesTo(ctx context.Context, events []*repository
 	return nil
 }
 
-// attachCreatedByUsernames fills in CreatedByUsername on events whose
+// attachCreatedByNames fills in CreatedByName on events whose
 // CreatedBy is set (#118), batching one query across every distinct creator
 // rather than one per Event — the same shape as attachReminders and
 // attachExdates. An Event whose creator has since been deleted, or with no
 // recorded creator at all, is simply left with an empty
-// CreatedByUsername.
-func (s *EventService) attachCreatedByUsernames(ctx context.Context, events []repository.Event) error {
+// CreatedByName.
+func (s *EventService) attachCreatedByNames(ctx context.Context, events []repository.Event) error {
 	ids := make([]int64, 0, len(events))
 	seen := make(map[int64]bool)
 	for _, e := range events {
@@ -624,7 +624,7 @@ func (s *EventService) attachCreatedByUsernames(ctx context.Context, events []re
 		if events[i].CreatedBy == nil {
 			continue
 		}
-		events[i].CreatedByUsername = users[*events[i].CreatedBy].Username
+		events[i].CreatedByName = users[*events[i].CreatedBy].Name
 	}
 	return nil
 }
@@ -659,9 +659,9 @@ func (s *EventService) attachRemindersTo(ctx context.Context, events []*reposito
 
 // attachAttachments fills in Attachments on each Master in events (an
 // Override is left with none — it can never carry its own, ADR-0040),
-// plus UploadedByUsername on each of them, batching one Attachment lookup
+// plus UploadedByName on each of them, batching one Attachment lookup
 // and one user lookup across every Event rather than one per Event, the
-// same shape as attachReminders and attachCreatedByUsernames.
+// same shape as attachReminders and attachCreatedByNames.
 func (s *EventService) attachAttachments(ctx context.Context, events []repository.Event) error {
 	masterIDs := make([]string, 0, len(events))
 	for _, e := range events {
@@ -698,7 +698,7 @@ func (s *EventService) attachAttachments(ctx context.Context, events []repositor
 		list := attachmentsByEvent[events[i].ID]
 		for j := range list {
 			if list[j].UploadedBy != nil {
-				list[j].UploadedByUsername = uploaders[*list[j].UploadedBy].Username
+				list[j].UploadedByName = uploaders[*list[j].UploadedBy].Name
 			}
 		}
 		events[i].Attachments = list
@@ -720,7 +720,7 @@ func (s *EventService) Get(ctx context.Context, userID int64, id string) (reposi
 	if err := s.attachReminders(ctx, events); err != nil {
 		return repository.Event{}, err
 	}
-	if err := s.attachCreatedByUsernames(ctx, events); err != nil {
+	if err := s.attachCreatedByNames(ctx, events); err != nil {
 		return repository.Event{}, err
 	}
 	if err := s.attachAttachments(ctx, events); err != nil {
@@ -824,7 +824,7 @@ func (s *EventService) Update(ctx context.Context, userID int64, id string, writ
 	if err := s.attachReminders(ctx, result); err != nil {
 		return repository.Event{}, err
 	}
-	if err := s.attachCreatedByUsernames(ctx, result); err != nil {
+	if err := s.attachCreatedByNames(ctx, result); err != nil {
 		return repository.Event{}, err
 	}
 	if err := s.attachAttachments(ctx, result); err != nil {
@@ -2004,11 +2004,11 @@ func (s *EventService) RemoveAttendee(ctx context.Context, actorUserID int64, ev
 	return s.attendees.Remove(ctx, eventID, targetUserID)
 }
 
-// ListAttendees returns every Attendee of eventID with their Username, for
+// ListAttendees returns every Attendee of eventID with their Name, for
 // display — callable by anyone who can see eventID at all (getVisibleEvent):
 // existing Calendar Access, or being an Attendee themselves (#161,
 // ADR-0046).
-func (s *EventService) ListAttendees(ctx context.Context, userID int64, eventID string) ([]repository.AttendeeWithUsername, error) {
+func (s *EventService) ListAttendees(ctx context.Context, userID int64, eventID string) ([]repository.AttendeeWithName, error) {
 	if _, err := s.getVisibleEvent(ctx, userID, eventID); err != nil {
 		return nil, err
 	}

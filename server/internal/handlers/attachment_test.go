@@ -47,7 +47,10 @@ func newAttachmentTestServer(t *testing.T, maxAttachmentSize int64, maxAttachmen
 	sessions := repository.NewSessionRepository(sqlDB)
 	workspaceRepo := repository.NewWorkspaceRepository(sqlDB)
 	workspaces := service.NewWorkspaceService(sqlDB, workspaceRepo, repository.NewWorkspaceInviteRepository(sqlDB), repository.NewCalendarRepository(sqlDB), repository.NewCalendarShareRepository(sqlDB))
-	auth := service.NewAuthService(users, sessions, workspaces, repository.NewWorkspaceInviteRepository(sqlDB), []byte("test-secret"), "owner", "hunter2", true)
+	calendarRepo := repository.NewCalendarRepository(sqlDB)
+	shareRepo := repository.NewCalendarShareRepository(sqlDB)
+	calendars := service.NewCalendarService(calendarRepo, shareRepo, users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo, repository.NewCalendarGroupShareRepository(sqlDB), repository.NewGroupRepository(sqlDB))
+	auth := service.NewAuthService(users, sessions, workspaces, repository.NewWorkspaceInviteRepository(sqlDB), calendars, []byte("test-secret"), "owner", "owner@example.com", "hunter2", true)
 	bootstrapUser, _, err := auth.Bootstrap(ctx)
 	if err != nil {
 		t.Fatalf("bootstrap: %v", err)
@@ -62,10 +65,6 @@ func newAttachmentTestServer(t *testing.T, maxAttachmentSize int64, maxAttachmen
 	}
 	ownerWorkspaceID := ownerWorkspaces[0].ID
 
-	calendarRepo := repository.NewCalendarRepository(sqlDB)
-	shareRepo := repository.NewCalendarShareRepository(sqlDB)
-	calendars := service.NewCalendarService(calendarRepo, shareRepo, users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo, repository.NewCalendarGroupShareRepository(sqlDB), repository.NewGroupRepository(sqlDB))
-
 	if _, err := auth.Register(ctx, "editor", "editor@example.com", "temp-password"); err != nil {
 		t.Fatalf("register editor: %v", err)
 	}
@@ -76,19 +75,19 @@ func newAttachmentTestServer(t *testing.T, maxAttachmentSize int64, maxAttachmen
 		t.Fatalf("register stranger: %v", err)
 	}
 
-	ownerLogin, err := auth.Login(ctx, "owner", "hunter2")
+	ownerLogin, err := auth.Login(ctx, "owner@example.com", "hunter2")
 	if err != nil {
 		t.Fatalf("owner login: %v", err)
 	}
-	editorLogin, err := auth.Login(ctx, "editor", "temp-password")
+	editorLogin, err := auth.Login(ctx, "editor@example.com", "temp-password")
 	if err != nil {
 		t.Fatalf("editor login: %v", err)
 	}
-	viewerLogin, err := auth.Login(ctx, "viewer", "temp-password")
+	viewerLogin, err := auth.Login(ctx, "viewer@example.com", "temp-password")
 	if err != nil {
 		t.Fatalf("viewer login: %v", err)
 	}
-	strangerLogin, err := auth.Login(ctx, "stranger", "temp-password")
+	strangerLogin, err := auth.Login(ctx, "stranger@example.com", "temp-password")
 	if err != nil {
 		t.Fatalf("stranger login: %v", err)
 	}
@@ -119,10 +118,10 @@ func newAttachmentTestServer(t *testing.T, maxAttachmentSize int64, maxAttachmen
 	if err != nil {
 		t.Fatalf("create calendar: %v", err)
 	}
-	if _, err := calendars.Share(ctx, ownerID, cal.ID, "editor", repository.RoleEditor); err != nil {
+	if _, _, err := calendars.Share(ctx, ownerID, cal.ID, "editor@example.com", repository.RoleEditor); err != nil {
 		t.Fatalf("share editor: %v", err)
 	}
-	if _, err := calendars.Share(ctx, ownerID, cal.ID, "viewer", repository.RoleViewer); err != nil {
+	if _, _, err := calendars.Share(ctx, ownerID, cal.ID, "viewer@example.com", repository.RoleViewer); err != nil {
 		t.Fatalf("share viewer: %v", err)
 	}
 

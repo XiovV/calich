@@ -460,7 +460,8 @@ describe("refreshCalendar", () => {
 describe("shareCalendar", () => {
   const share = {
     userId: 7,
-    username: "bob",
+    name: "bob",
+    email: "bob@example.com",
     role: "viewer" as const,
     createdAt: "2026-08-06T12:00:00Z",
   };

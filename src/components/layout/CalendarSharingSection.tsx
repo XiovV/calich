@@ -109,7 +109,7 @@ export function CalendarSharingSection({ calendar }: CalendarSharingSectionProps
     () => [
       ...pickableUsers.map((user) => ({
         value: userTargetKey(user.userId),
-        label: user.username,
+        label: user.name,
       })),
       ...pickableGroups.map((group) => ({
         value: groupTargetKey(group.groupId),
@@ -132,7 +132,7 @@ export function CalendarSharingSection({ calendar }: CalendarSharingSectionProps
       if (kind === "user") {
         const user = pickableUsers.find((u) => u.userId === Number(idPart));
         if (!user) return;
-        const share = await shareCalendar(calendar.id, user.username, selectedRole);
+        const share = await shareCalendar(calendar.id, user.email, selectedRole);
         setShares((prev) => [...(prev ?? []), share]);
       } else {
         const groupId = Number(idPart);
@@ -155,7 +155,7 @@ export function CalendarSharingSection({ calendar }: CalendarSharingSectionProps
       (prev ?? []).map((s) => (s.userId === share.userId ? { ...s, role } : s)),
     );
     try {
-      await calendarsApi.share(accessToken, calendar.id, share.username, role);
+      await calendarsApi.share(accessToken, calendar.id, share.email, role);
     } catch (err) {
       setShares(previous);
       toast.error(errorMessage(err));
@@ -185,7 +185,7 @@ export function CalendarSharingSection({ calendar }: CalendarSharingSectionProps
       await revokeCalendarShare(calendar.id, share.userId);
     } catch {
       setShares(previous);
-      toast.error(`Failed to remove ${share.username}'s access.`);
+      toast.error(`Failed to remove ${share.name}'s access.`);
     } finally {
       setRevokingKey(null);
     }
@@ -221,20 +221,20 @@ export function CalendarSharingSection({ calendar }: CalendarSharingSectionProps
               {shares.map((share) => (
                 <li key={`user-${share.userId}`} className="flex items-center gap-2">
                   <span className="min-w-0 flex-1 truncate text-body text-ink">
-                    {share.username}
+                    {share.name}
                   </span>
                   <Select
                     value={share.role}
                     onValueChange={(role) => handleUserRoleChange(share, role)}
                     options={ROLE_OPTIONS}
-                    aria-label={`${share.username}'s role`}
+                    aria-label={`${share.name}'s role`}
                     className="shrink-0"
                   />
                   <IconButton
                     size="tiny"
                     onClick={() => handleRevokeUser(share)}
                     disabled={revokingKey === userTargetKey(share.userId)}
-                    aria-label={`Remove ${share.username}'s access`}
+                    aria-label={`Remove ${share.name}'s access`}
                   >
                     <Trash2 className="size-3.5" />
                   </IconButton>

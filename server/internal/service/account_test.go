@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -45,8 +46,8 @@ func newAccountTestHarness(t *testing.T) *accountTestHarness {
 	workspaceRepo := repository.NewWorkspaceRepository(sqlDB)
 	workspaceInviteRepo := repository.NewWorkspaceInviteRepository(sqlDB)
 	workspaces := NewWorkspaceService(sqlDB, workspaceRepo, workspaceInviteRepo, repository.NewCalendarRepository(sqlDB), repository.NewCalendarShareRepository(sqlDB))
-	auth := NewAuthService(users, sessions, workspaces, workspaceInviteRepo, []byte("test-secret"), "", "", true)
 	calendars := NewCalendarService(calendarRepo, shareRepo, users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo, repository.NewCalendarGroupShareRepository(sqlDB), repository.NewGroupRepository(sqlDB))
+	auth := NewAuthService(users, sessions, workspaces, workspaceInviteRepo, calendars, []byte("test-secret"), "", "", "", true)
 	accounts := NewAccountService(sqlDB, users, sessions, calendarRepo, shareRepo, workspaceRepo, workspaces)
 
 	return &accountTestHarness{db: sqlDB, accounts: accounts, auth: auth, calendars: calendars, workspaces: workspaces, users: users}
@@ -63,7 +64,7 @@ func (h *accountTestHarness) register(t *testing.T, username string) (repository
 		t.Fatalf("register %s: %v", username, err)
 	}
 
-	user, err := h.users.GetByUsername(ctx, username)
+	user, err := h.users.GetByEmail(ctx, username+"@example.com")
 	if err != nil {
 		t.Fatalf("get %s: %v", username, err)
 	}
@@ -74,9 +75,10 @@ func (h *accountTestHarness) register(t *testing.T, username string) (repository
 	return user, workspaces[0]
 }
 
-// createCalendar creates a Calendar for userID inside workspaceID — Register
-// (unlike the retired AccountService.Create) doesn't seed default Calendars,
-// so tests that need at least one owned Calendar create it explicitly.
+// createCalendar creates a Calendar for userID inside workspaceID, on top of
+// the three default Calendars register already seeded (#172) — a test that
+// wants a clean slate with exactly the Calendars it names should call
+// deleteAllCalendars first.
 func (h *accountTestHarness) createCalendar(t *testing.T, userID, workspaceID int64, id, name string) repository.Calendar {
 	t.Helper()
 	calendar, err := h.calendars.Create(context.Background(), userID, workspaceID, id, CalendarWrite{Name: name, Color: "#112233FF"})
@@ -84,6 +86,23 @@ func (h *accountTestHarness) createCalendar(t *testing.T, userID, workspaceID in
 		t.Fatalf("create calendar %s: %v", id, err)
 	}
 	return calendar
+}
+
+// deleteAllCalendars removes every Calendar userID currently owns — used to
+// clear register's seeded Personal/Work/Family defaults (#172) before a test
+// sets up its own exact Calendar list, exercising the same "delete every
+// default" path #172's acceptance criteria requires stay at zero.
+func (h *accountTestHarness) deleteAllCalendars(t *testing.T, userID int64) {
+	t.Helper()
+	existing, err := h.calendars.List(context.Background(), userID)
+	if err != nil {
+		t.Fatalf("list calendars for %d: %v", userID, err)
+	}
+	for _, c := range existing {
+		if err := h.calendars.Delete(context.Background(), userID, c.ID); err != nil {
+			t.Fatalf("delete calendar %s: %v", c.ID, err)
+		}
+	}
 }
 
 // addMember inserts a WorkspaceMember row directly — standing in for
@@ -213,7 +232,7 @@ func TestAccountService_DeleteImpact_ReportsPerCalendarWorkspaceAndTransferCandi
 	if err != nil {
 		t.Fatalf("create shared calendar: %v", err)
 	}
-	if _, err := h.calendars.Share(ctx, alice.ID, shared.ID, "bob", repository.RoleEditor); err != nil {
+	if _, _, err := h.calendars.Share(ctx, alice.ID, shared.ID, "bob@example.com", repository.RoleEditor); err != nil {
 		t.Fatalf("share with bob: %v", err)
 	}
 
@@ -238,17 +257,17 @@ func TestAccountService_DeleteImpact_ReportsPerCalendarWorkspaceAndTransferCandi
 		t.Fatalf("expected the calendar's own workspace, got %+v", sharedImpact)
 	}
 
-	candidateUsernames := map[string]bool{}
+	candidateNames := map[string]bool{}
 	for _, c := range sharedImpact.TransferCandidates {
-		candidateUsernames[c.Username] = true
+		candidateNames[c.Name] = true
 	}
-	if !candidateUsernames["bob"] {
+	if !candidateNames["bob"] {
 		t.Fatalf("expected bob (a workspace member) to be a transfer candidate, got %+v", sharedImpact.TransferCandidates)
 	}
-	if candidateUsernames["alice"] {
+	if candidateNames["alice"] {
 		t.Fatalf("expected alice not to be her own transfer candidate")
 	}
-	if candidateUsernames["carol"] {
+	if candidateNames["carol"] {
 		t.Fatalf("expected carol, who isn't a member of alice's workspace, not to be a transfer candidate")
 	}
 	_ = carol
@@ -380,6 +399,7 @@ func TestAccountService_Delete_DispositionDelete_RemovesOwnedCalendarsWorkspaceA
 	ctx := context.Background()
 
 	alice, aliceWorkspace := h.register(t, "alice")
+	h.deleteAllCalendars(t, alice.ID)
 	calendarA := h.createCalendar(t, alice.ID, aliceWorkspace.ID, "cal-1", "Personal")
 	calendarB := h.createCalendar(t, alice.ID, aliceWorkspace.ID, "cal-2", "Work")
 
@@ -419,12 +439,13 @@ func TestAccountService_Delete_DispositionTransfer_KeepsEventsAndShares(t *testi
 	alice, aliceWorkspace := h.register(t, "alice")
 	bob, _ := h.register(t, "bob")
 	h.addMember(t, aliceWorkspace.ID, bob.ID, repository.WorkspaceRoleMember)
+	h.deleteAllCalendars(t, alice.ID)
 
 	calendar, err := h.calendars.Create(ctx, alice.ID, aliceWorkspace.ID, "cal-1", CalendarWrite{Name: "Family", Color: "#112233FF"})
 	if err != nil {
 		t.Fatalf("create calendar: %v", err)
 	}
-	if _, err := h.calendars.Share(ctx, alice.ID, calendar.ID, "bob", repository.RoleEditor); err != nil {
+	if _, _, err := h.calendars.Share(ctx, alice.ID, calendar.ID, "bob@example.com", repository.RoleEditor); err != nil {
 		t.Fatalf("share calendar with bob: %v", err)
 	}
 
@@ -489,35 +510,75 @@ func TestAccountService_Delete_DispositionTransfer_KeepsEventsAndShares(t *testi
 	}
 }
 
-func TestValidateUsername(t *testing.T) {
+// TestValidateName covers ADR-0047's display-name rules (#125): unlike the
+// old username, a Name may contain internal whitespace and colons — "Jane
+// Smith" must be accepted.
+func TestValidateName(t *testing.T) {
 	tests := []struct {
-		name     string
-		username string
-		want     string
-		wantErr  bool
+		name    string
+		input   string
+		want    string
+		wantErr bool
 	}{
-		{name: "trims surrounding whitespace", username: "  alice  ", want: "alice"},
-		{name: "empty is rejected", username: "", wantErr: true},
-		{name: "all whitespace is rejected", username: "   ", wantErr: true},
-		{name: "internal whitespace is rejected", username: "alice bob", wantErr: true},
-		{name: "a tab is rejected", username: "alice\tbob", wantErr: true},
-		{name: "a colon is rejected", username: "ali:ce", wantErr: true},
+		{name: "trims surrounding whitespace", input: "  alice  ", want: "alice"},
+		{name: "empty is rejected", input: "", wantErr: true},
+		{name: "all whitespace is rejected", input: "   ", wantErr: true},
+		{name: "internal whitespace is accepted", input: "Jane Smith", want: "Jane Smith"},
+		{name: "a colon is accepted", input: "ali:ce", want: "ali:ce"},
+		{name: "over the length limit is rejected", input: strings.Repeat("a", maxNameLength+1), wantErr: true},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := validateUsername(tt.username)
+			got, err := validateName(tt.input)
 			if tt.wantErr {
-				if !errors.Is(err, ErrInvalidUsername) {
-					t.Fatalf("expected ErrInvalidUsername, got %v", err)
+				if !errors.Is(err, ErrInvalidDisplayName) {
+					t.Fatalf("expected ErrInvalidDisplayName, got %v", err)
 				}
 				return
 			}
 			if err != nil {
-				t.Fatalf("validateUsername(%q): %v", tt.username, err)
+				t.Fatalf("validateName(%q): %v", tt.input, err)
 			}
 			if got != tt.want {
-				t.Fatalf("validateUsername(%q) = %q, want %q", tt.username, got, tt.want)
+				t.Fatalf("validateName(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestValidateEmail covers ADR-0047's identifier rules: the colon/whitespace
+// rejection that used to live on username moves here, since Email is now
+// what CalDAV Basic auth authenticates against.
+func TestValidateEmail(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		want    string
+		wantErr error
+	}{
+		{name: "trims surrounding whitespace", input: "  alice@example.com  ", want: "alice@example.com"},
+		{name: "empty is rejected", input: "", wantErr: ErrEmailRequired},
+		{name: "all whitespace is rejected", input: "   ", wantErr: ErrEmailRequired},
+		{name: "internal whitespace is rejected", input: "alice bob@example.com", wantErr: ErrInvalidEmail},
+		{name: "a colon is rejected", input: "ali:ce@example.com", wantErr: ErrInvalidEmail},
+		{name: "not a well-formed address is rejected", input: "not-an-email", wantErr: ErrInvalidEmail},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := validateEmail(tt.input)
+			if tt.wantErr != nil {
+				if !errors.Is(err, tt.wantErr) {
+					t.Fatalf("expected %v, got %v", tt.wantErr, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("validateEmail(%q): %v", tt.input, err)
+			}
+			if got != tt.want {
+				t.Fatalf("validateEmail(%q) = %q, want %q", tt.input, got, tt.want)
 			}
 		})
 	}

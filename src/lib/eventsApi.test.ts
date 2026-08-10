@@ -62,10 +62,10 @@ describe("eventsApi.list", () => {
     });
   });
 
-  it("maps createdByUsername when present, and omits it when absent (#118)", async () => {
+  it("maps createdByName when present, and omits it when absent (#118)", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       jsonResponse(200, [
-        { ...wireEvent, createdByUsername: "alice" },
+        { ...wireEvent, createdByName: "alice" },
         { ...wireEvent, id: "evt-2" },
       ]),
     );
@@ -73,8 +73,8 @@ describe("eventsApi.list", () => {
 
     const events = await eventsApi.list("token-123");
 
-    expect(events[0].createdByUsername).toBe("alice");
-    expect(events[1].createdByUsername).toBeUndefined();
+    expect(events[0].createdByName).toBe("alice");
+    expect(events[1].createdByName).toBeUndefined();
   });
 });
 

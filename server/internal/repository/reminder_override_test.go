@@ -20,11 +20,11 @@ func newTestReminderOverrideRepository(t *testing.T) (events *EventRepository, o
 	t.Cleanup(func() { sqlDB.Close() })
 
 	users := NewUserRepository(sqlDB)
-	user, err := users.Create(context.Background(), "user-a", "hash", false)
+	user, err := users.Create(context.Background(), "user-a", "user-a@example.com", "hash", false)
 	if err != nil {
 		t.Fatalf("create user: %v", err)
 	}
-	other, err := users.Create(context.Background(), "user-b", "hash", false)
+	other, err := users.Create(context.Background(), "user-b", "user-b@example.com", "hash", false)
 	if err != nil {
 		t.Fatalf("create other user: %v", err)
 	}

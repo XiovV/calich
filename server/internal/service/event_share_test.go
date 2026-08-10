@@ -33,19 +33,19 @@ func newEventShareFixture(t *testing.T) eventShareFixture {
 	t.Cleanup(func() { sqlDB.Close() })
 
 	users := repository.NewUserRepository(sqlDB)
-	owner, err := users.Create(ctx, "owner", "hash", false)
+	owner, err := users.Create(ctx, "owner", "owner@example.com", "hash", false)
 	if err != nil {
 		t.Fatalf("create owner: %v", err)
 	}
-	editor, err := users.Create(ctx, "editor", "hash", false)
+	editor, err := users.Create(ctx, "editor", "editor@example.com", "hash", false)
 	if err != nil {
 		t.Fatalf("create editor: %v", err)
 	}
-	viewer, err := users.Create(ctx, "viewer", "hash", false)
+	viewer, err := users.Create(ctx, "viewer", "viewer@example.com", "hash", false)
 	if err != nil {
 		t.Fatalf("create viewer: %v", err)
 	}
-	stranger, err := users.Create(ctx, "stranger", "hash", false)
+	stranger, err := users.Create(ctx, "stranger", "stranger@example.com", "hash", false)
 	if err != nil {
 		t.Fatalf("create stranger: %v", err)
 	}
@@ -73,10 +73,10 @@ func newEventShareFixture(t *testing.T) eventShareFixture {
 	if err != nil {
 		t.Fatalf("create calendar: %v", err)
 	}
-	if _, err := calendars.Share(ctx, owner.ID, cal.ID, "editor", repository.RoleEditor); err != nil {
+	if _, _, err := calendars.Share(ctx, owner.ID, cal.ID, "editor@example.com", repository.RoleEditor); err != nil {
 		t.Fatalf("share editor: %v", err)
 	}
-	if _, err := calendars.Share(ctx, owner.ID, cal.ID, "viewer", repository.RoleViewer); err != nil {
+	if _, _, err := calendars.Share(ctx, owner.ID, cal.ID, "viewer@example.com", repository.RoleViewer); err != nil {
 		t.Fatalf("share viewer: %v", err)
 	}
 
@@ -139,7 +139,7 @@ func TestEventService_CreatorAttribution_ShowsWhoeverCreatedIt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("editor create: %v", err)
 	}
-	if created.CreatedBy == nil || *created.CreatedBy != f.editorID || created.CreatedByUsername != "editor" {
+	if created.CreatedBy == nil || *created.CreatedBy != f.editorID || created.CreatedByName != "editor" {
 		t.Fatalf("expected create to attribute to editor (%d), got %+v", f.editorID, created)
 	}
 
@@ -147,7 +147,7 @@ func TestEventService_CreatorAttribution_ShowsWhoeverCreatedIt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("owner get: %v", err)
 	}
-	if fetched.CreatedBy == nil || *fetched.CreatedBy != f.editorID || fetched.CreatedByUsername != "editor" {
+	if fetched.CreatedBy == nil || *fetched.CreatedBy != f.editorID || fetched.CreatedByName != "editor" {
 		t.Fatalf("expected fetched attribution to editor (%d), got %+v", f.editorID, fetched)
 	}
 }
@@ -156,7 +156,7 @@ func TestEventService_CreatorAttribution_ShowsWhoeverCreatedIt(t *testing.T) {
 // #118's "renders without attribution rather than breaking" acceptance
 // criterion at the service layer: created_by is cleared to nil by ON DELETE
 // SET NULL when the creating account is removed (ADR-0034), so
-// CreatedByUsername resolves to empty afterwards instead of erroring on a
+// CreatedByName resolves to empty afterwards instead of erroring on a
 // dangling id.
 func TestEventService_CreatorAttribution_OmittedWhenCreatorAccountDeleted(t *testing.T) {
 	f := newEventShareFixture(t)
@@ -175,7 +175,7 @@ func TestEventService_CreatorAttribution_OmittedWhenCreatorAccountDeleted(t *tes
 	if err != nil {
 		t.Fatalf("expected the event to survive its creator's deletion, got %v", err)
 	}
-	if fetched.CreatedBy != nil || fetched.CreatedByUsername != "" {
+	if fetched.CreatedBy != nil || fetched.CreatedByName != "" {
 		t.Fatalf("expected no creator attribution once the account is deleted, got %+v", fetched)
 	}
 }
@@ -336,7 +336,7 @@ func TestEventService_RoleChange_TakesEffectImmediately(t *testing.T) {
 		t.Fatalf("editor create: %v", err)
 	}
 
-	if _, err := f.calendars.Share(ctx, f.ownerID, f.calendarID, "editor", repository.RoleViewer); err != nil {
+	if _, _, err := f.calendars.Share(ctx, f.ownerID, f.calendarID, "editor@example.com", repository.RoleViewer); err != nil {
 		t.Fatalf("demote to viewer: %v", err)
 	}
 

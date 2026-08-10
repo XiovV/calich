@@ -148,8 +148,8 @@ func (s *AccountService) SetDisabled(ctx context.Context, userID int64, isDisabl
 // transfer target for that Calendar, since a Calendar's Owner must belong to
 // its own Workspace (ADR-0044, ADR-0045).
 type TransferCandidate struct {
-	ID       int64
-	Username string
+	ID   int64
+	Name string
 }
 
 // CalendarImpact is one Calendar the deleting User owns: which Workspace it
@@ -207,12 +207,12 @@ func (s *AccountService) DeleteImpact(ctx context.Context, userID int64) (Delete
 				if err != nil {
 					return DeleteImpact{}, fmt.Errorf("get member %d: %w", m.UserID, err)
 				}
-				candidates = append(candidates, TransferCandidate{ID: member.ID, Username: member.Username})
+				candidates = append(candidates, TransferCandidate{ID: member.ID, Name: member.Name})
 			}
 			candidatesByWorkspace[c.WorkspaceID] = candidates
 		}
 
-		shares, err := s.shareRepo.ListByCalendarWithUsername(ctx, c.ID)
+		shares, err := s.shareRepo.ListByCalendarWithUser(ctx, c.ID)
 		if err != nil {
 			return DeleteImpact{}, fmt.Errorf("list shares for calendar %s: %w", c.ID, err)
 		}

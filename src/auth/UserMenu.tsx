@@ -25,7 +25,7 @@ export function UserMenu() {
         <Menu.Positioner sideOffset={4} align="end" className="z-[60]">
           <Menu.Popup className="rounded-shell-md border border-border bg-surface py-1 shadow-elevation-2">
             <div className="px-3 py-1.5 text-label-sm text-ink-muted">
-              {user.username}
+              {user.name}
             </div>
             <Menu.Item
               onClick={handleLogout}

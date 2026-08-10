@@ -109,7 +109,7 @@ export function RemoveMemberDialog({ member, onClose }: RemoveMemberDialogProps)
         <Dialog.Backdrop className="fixed inset-0 z-40 bg-ink/20" />
         <Dialog.Popup className="fixed top-1/2 left-1/2 z-50 w-[30rem] max-h-[85vh] -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-shell-lg bg-surface p-5 shadow-elevation-3">
           <Dialog.Title className="text-heading font-medium text-ink">
-            Remove {member.username}?
+            Remove {member.name}?
           </Dialog.Title>
           <p className="mt-1 text-body text-ink-muted">
             This ends their membership in this workspace. It cannot be undone.
@@ -168,7 +168,7 @@ export function RemoveMemberDialog({ member, onClose }: RemoveMemberDialogProps)
                             onValueChange={(value) => setTransferTo(c.id, value)}
                             options={c.transferCandidates.map((candidate) => ({
                               value: String(candidate.id),
-                              label: candidate.username,
+                              label: candidate.name,
                             }))}
                             aria-label={`Transfer ${c.name} to`}
                             className="mt-2"

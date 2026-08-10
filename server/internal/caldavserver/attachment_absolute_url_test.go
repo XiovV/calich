@@ -45,7 +45,7 @@ func TestGetCalendarObject_AttachURI_HonorsForwardedHeaders(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build GET request: %v", err)
 	}
-	req.SetBasicAuth("admin", env.appPasswordSecret)
+	req.SetBasicAuth("admin@example.com", env.appPasswordSecret)
 	req.Header.Set("X-Forwarded-Proto", "https")
 	req.Header.Set("X-Forwarded-Host", "calendar.example.com")
 

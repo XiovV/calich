@@ -218,16 +218,16 @@ func (s *WorkspaceService) ListMembers(ctx context.Context, actorUserID, workspa
 	return members, nil
 }
 
-// ListMembersWithUsername returns every enabled Member of workspaceID joined
-// against their Username (#156, #165), callable by any Member — the
+// ListMembersWithUser returns every enabled Member of workspaceID joined
+// against their Name (#156, #165), callable by any Member — the
 // member-management list's data source. actorUserID who isn't a Member gets
 // the same repository.ErrNotFound a non-existent workspaceID would.
-func (s *WorkspaceService) ListMembersWithUsername(ctx context.Context, actorUserID, workspaceID int64) ([]repository.WorkspaceMemberWithUsername, error) {
+func (s *WorkspaceService) ListMembersWithUser(ctx context.Context, actorUserID, workspaceID int64) ([]repository.WorkspaceMemberWithUser, error) {
 	if _, err := s.workspaces.GetMember(ctx, workspaceID, actorUserID); err != nil {
 		return nil, err
 	}
 
-	members, err := s.workspaces.ListMembersWithUsername(ctx, workspaceID)
+	members, err := s.workspaces.ListMembersWithUser(ctx, workspaceID)
 	if err != nil {
 		return nil, fmt.Errorf("list workspace members: %w", err)
 	}
@@ -328,7 +328,7 @@ func (s *WorkspaceService) RemoveMemberImpact(ctx context.Context, actorUserID, 
 
 	impact := RemoveMemberImpact{Calendars: make([]CalendarImpact, 0, len(calendars))}
 	for _, c := range calendars {
-		shares, err := s.shareRepo.ListByCalendarWithUsername(ctx, c.ID)
+		shares, err := s.shareRepo.ListByCalendarWithUser(ctx, c.ID)
 		if err != nil {
 			return RemoveMemberImpact{}, fmt.Errorf("list shares for calendar %s: %w", c.ID, err)
 		}
@@ -350,7 +350,7 @@ func (s *WorkspaceService) RemoveMemberImpact(ctx context.Context, actorUserID, 
 // RemoveMemberImpact's valid transfer targets, since a Calendar's Owner must
 // belong to its own Workspace (ADR-0044, ADR-0045).
 func (s *WorkspaceService) transferCandidates(ctx context.Context, workspaceID, excludeUserID int64) ([]TransferCandidate, error) {
-	members, err := s.workspaces.ListMembersWithUsername(ctx, workspaceID)
+	members, err := s.workspaces.ListMembersWithUser(ctx, workspaceID)
 	if err != nil {
 		return nil, fmt.Errorf("list workspace members: %w", err)
 	}
@@ -360,7 +360,7 @@ func (s *WorkspaceService) transferCandidates(ctx context.Context, workspaceID, 
 		if m.UserID == excludeUserID {
 			continue
 		}
-		candidates = append(candidates, TransferCandidate{ID: m.UserID, Username: m.Username})
+		candidates = append(candidates, TransferCandidate{ID: m.UserID, Name: m.Name})
 	}
 	return candidates, nil
 }

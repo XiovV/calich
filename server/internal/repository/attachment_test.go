@@ -20,7 +20,7 @@ func newTestAttachmentRepository(t *testing.T) (repo *EventRepository, attachmen
 	t.Cleanup(func() { sqlDB.Close() })
 
 	users := NewUserRepository(sqlDB)
-	user, err := users.Create(context.Background(), "user-a", "hash", false)
+	user, err := users.Create(context.Background(), "user-a", "user-a@example.com", "hash", false)
 	if err != nil {
 		t.Fatalf("create user: %v", err)
 	}
@@ -214,11 +214,11 @@ func TestAttachmentRepository_UploaderDeletedSetsNull(t *testing.T) {
 	ctx := context.Background()
 
 	users := NewUserRepository(sqlDB)
-	owner, err := users.Create(ctx, "owner", "hash", false)
+	owner, err := users.Create(ctx, "owner", "owner@example.com", "hash", false)
 	if err != nil {
 		t.Fatalf("create owner: %v", err)
 	}
-	uploader, err := users.Create(ctx, "uploader", "hash", false)
+	uploader, err := users.Create(ctx, "uploader", "uploader@example.com", "hash", false)
 	if err != nil {
 		t.Fatalf("create uploader: %v", err)
 	}

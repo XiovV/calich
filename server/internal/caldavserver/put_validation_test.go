@@ -150,7 +150,7 @@ func TestPutCalendarObject_CalendarWithNoVEventIsRejected(t *testing.T) {
 		t.Fatalf("build PUT request: %v", err)
 	}
 	req.Header.Set("Content-Type", ical.MIMEType)
-	req.SetBasicAuth("admin", env.appPasswordSecret)
+	req.SetBasicAuth("admin@example.com", env.appPasswordSecret)
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {

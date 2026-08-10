@@ -18,7 +18,7 @@ func newTestSyncRepository(t *testing.T) (sync *SyncRepository, events *EventRep
 	t.Cleanup(func() { sqlDB.Close() })
 
 	users := NewUserRepository(sqlDB)
-	user, err := users.Create(context.Background(), "user-a", "hash", false)
+	user, err := users.Create(context.Background(), "user-a", "user-a@example.com", "hash", false)
 	if err != nil {
 		t.Fatalf("create user: %v", err)
 	}

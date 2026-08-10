@@ -24,11 +24,11 @@ func newTestCalendarRepository(t *testing.T) (repo *CalendarRepository, userID, 
 	ctx := context.Background()
 
 	users := NewUserRepository(sqlDB)
-	user, err := users.Create(ctx, "user-a", "hash", false)
+	user, err := users.Create(ctx, "user-a", "user-a@example.com", "hash", false)
 	if err != nil {
 		t.Fatalf("create user: %v", err)
 	}
-	other, err := users.Create(ctx, "user-b", "hash", false)
+	other, err := users.Create(ctx, "user-b", "user-b@example.com", "hash", false)
 	if err != nil {
 		t.Fatalf("create other user: %v", err)
 	}
@@ -509,11 +509,11 @@ func TestCalendarRepository_ListSharedWithUser(t *testing.T) {
 	t.Cleanup(func() { sqlDB.Close() })
 
 	users := NewUserRepository(sqlDB)
-	owner, err := users.Create(ctx, "owner", "hash", false)
+	owner, err := users.Create(ctx, "owner", "owner@example.com", "hash", false)
 	if err != nil {
 		t.Fatalf("create owner: %v", err)
 	}
-	other, err := users.Create(ctx, "other", "hash", false)
+	other, err := users.Create(ctx, "other", "other@example.com", "hash", false)
 	if err != nil {
 		t.Fatalf("create other user: %v", err)
 	}

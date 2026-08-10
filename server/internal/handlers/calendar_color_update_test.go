@@ -16,7 +16,7 @@ import (
 func TestCalendarHandler_Update_NonOwnerSetsPersonalColorOnly(t *testing.T) {
 	s := newShareTestServer(t)
 
-	shareResp := doJSON(t, http.MethodPost, s.baseURL+"/api/calendars/"+s.calendarID+"/shares", s.ownerToken, shareRequest{Username: "other", Role: repository.RoleEditor})
+	shareResp := doJSON(t, http.MethodPost, s.baseURL+"/api/calendars/"+s.calendarID+"/shares", s.ownerToken, shareRequest{Email: "other@example.com", Role: repository.RoleEditor})
 	shareResp.Body.Close()
 
 	resp := doJSON(t, http.MethodPatch, s.baseURL+"/api/calendars/"+s.calendarID, s.otherToken, updateCalendarRequest{Color: "#654321"})
@@ -59,7 +59,7 @@ func TestCalendarHandler_Update_NonOwnerSetsPersonalColorOnly(t *testing.T) {
 func TestCalendarHandler_Update_ViewerSetsPersonalColor(t *testing.T) {
 	s := newShareTestServer(t)
 
-	shareResp := doJSON(t, http.MethodPost, s.baseURL+"/api/calendars/"+s.calendarID+"/shares", s.ownerToken, shareRequest{Username: "other", Role: repository.RoleViewer})
+	shareResp := doJSON(t, http.MethodPost, s.baseURL+"/api/calendars/"+s.calendarID+"/shares", s.ownerToken, shareRequest{Email: "other@example.com", Role: repository.RoleViewer})
 	shareResp.Body.Close()
 
 	resp := doJSON(t, http.MethodPatch, s.baseURL+"/api/calendars/"+s.calendarID, s.otherToken, updateCalendarRequest{Color: "#654321"})
@@ -98,7 +98,7 @@ func TestCalendarHandler_Update_OwnerColorWriteUpdatesTheCalendarItself(t *testi
 func TestCalendarHandler_Update_NonOwnerClearsOverrideFallsBackToOwnerColor(t *testing.T) {
 	s := newShareTestServer(t)
 
-	shareResp := doJSON(t, http.MethodPost, s.baseURL+"/api/calendars/"+s.calendarID+"/shares", s.ownerToken, shareRequest{Username: "other", Role: repository.RoleViewer})
+	shareResp := doJSON(t, http.MethodPost, s.baseURL+"/api/calendars/"+s.calendarID+"/shares", s.ownerToken, shareRequest{Email: "other@example.com", Role: repository.RoleViewer})
 	shareResp.Body.Close()
 
 	setResp := doJSON(t, http.MethodPatch, s.baseURL+"/api/calendars/"+s.calendarID, s.otherToken, updateCalendarRequest{Color: "#654321"})
@@ -125,7 +125,7 @@ func TestCalendarHandler_Update_NonOwnerClearsOverrideFallsBackToOwnerColor(t *t
 func TestCalendarHandler_Update_NonOwnerCannotRenameCalendar(t *testing.T) {
 	s := newShareTestServer(t)
 
-	shareResp := doJSON(t, http.MethodPost, s.baseURL+"/api/calendars/"+s.calendarID+"/shares", s.ownerToken, shareRequest{Username: "other", Role: repository.RoleEditor})
+	shareResp := doJSON(t, http.MethodPost, s.baseURL+"/api/calendars/"+s.calendarID+"/shares", s.ownerToken, shareRequest{Email: "other@example.com", Role: repository.RoleEditor})
 	shareResp.Body.Close()
 
 	resp := doJSON(t, http.MethodPatch, s.baseURL+"/api/calendars/"+s.calendarID, s.otherToken, updateCalendarRequest{Name: "Hijacked", Color: "#654321"})
@@ -151,7 +151,7 @@ func TestCalendarHandler_Update_NonOwnerCannotRenameCalendar(t *testing.T) {
 func TestCalendarHandler_Update_NonOwnerCannotChangeKeepAlarms(t *testing.T) {
 	s := newShareTestServer(t)
 
-	shareResp := doJSON(t, http.MethodPost, s.baseURL+"/api/calendars/"+s.calendarID+"/shares", s.ownerToken, shareRequest{Username: "other", Role: repository.RoleEditor})
+	shareResp := doJSON(t, http.MethodPost, s.baseURL+"/api/calendars/"+s.calendarID+"/shares", s.ownerToken, shareRequest{Email: "other@example.com", Role: repository.RoleEditor})
 	shareResp.Body.Close()
 
 	keepAlarms := true
@@ -165,7 +165,7 @@ func TestCalendarHandler_Update_NonOwnerCannotChangeKeepAlarms(t *testing.T) {
 func TestCalendarHandler_Update_NonOwnerCannotChangeSourceURL(t *testing.T) {
 	s := newShareTestServer(t)
 
-	shareResp := doJSON(t, http.MethodPost, s.baseURL+"/api/calendars/"+s.calendarID+"/shares", s.ownerToken, shareRequest{Username: "other", Role: repository.RoleEditor})
+	shareResp := doJSON(t, http.MethodPost, s.baseURL+"/api/calendars/"+s.calendarID+"/shares", s.ownerToken, shareRequest{Email: "other@example.com", Role: repository.RoleEditor})
 	shareResp.Body.Close()
 
 	url := "https://example.com/calendar.ics"
@@ -189,7 +189,7 @@ func TestCalendarHandler_Update_NoAccessRefused(t *testing.T) {
 func TestCalendarHandler_Update_NonOwnerRejectsInvalidColor(t *testing.T) {
 	s := newShareTestServer(t)
 
-	shareResp := doJSON(t, http.MethodPost, s.baseURL+"/api/calendars/"+s.calendarID+"/shares", s.ownerToken, shareRequest{Username: "other", Role: repository.RoleEditor})
+	shareResp := doJSON(t, http.MethodPost, s.baseURL+"/api/calendars/"+s.calendarID+"/shares", s.ownerToken, shareRequest{Email: "other@example.com", Role: repository.RoleEditor})
 	shareResp.Body.Close()
 
 	resp := doJSON(t, http.MethodPatch, s.baseURL+"/api/calendars/"+s.calendarID, s.otherToken, updateCalendarRequest{Color: "not-a-color"})

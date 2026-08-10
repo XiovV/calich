@@ -150,11 +150,11 @@ export function AcceptWorkspaceInvitePage() {
         <Input label="Email" type="email" value={preview.email} disabled className="mt-5" />
 
         <Input
-          label="Username"
+          label="Name"
           type="text"
           value={name}
           onChange={(domEvent) => setName(domEvent.target.value)}
-          placeholder="jane"
+          placeholder="Jane Smith"
           className="mt-4"
         />
 

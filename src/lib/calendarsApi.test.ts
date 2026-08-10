@@ -396,7 +396,7 @@ describe("calendarsApi.listShares", () => {
   it("returns the calendar's shares", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       jsonResponse(200, [
-        { userId: 2, username: "bob", role: "editor", createdAt: "2026-01-01T00:00:00Z" },
+        { userId: 2, name: "bob", email: "bob@example.com", role: "editor", createdAt: "2026-01-01T00:00:00Z" },
       ]),
     );
     vi.stubGlobal("fetch", fetchMock);
@@ -404,7 +404,7 @@ describe("calendarsApi.listShares", () => {
     const shares = await calendarsApi.listShares("token-123", "cal-1");
 
     expect(shares).toEqual([
-      { userId: 2, username: "bob", role: "editor", createdAt: "2026-01-01T00:00:00Z" },
+      { userId: 2, name: "bob", email: "bob@example.com", role: "editor", createdAt: "2026-01-01T00:00:00Z" },
     ]);
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/calendars/cal-1/shares",
@@ -428,22 +428,22 @@ describe("calendarsApi.listShares", () => {
 });
 
 describe("calendarsApi.share", () => {
-  it("posts the username and role and returns the created share", async () => {
+  it("posts the email and role and returns the created share", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
-      jsonResponse(200, { userId: 2, username: "bob", role: "viewer", createdAt: "2026-01-01T00:00:00Z" }),
+      jsonResponse(200, { userId: 2, name: "bob", email: "bob@example.com", role: "viewer", createdAt: "2026-01-01T00:00:00Z" }),
     );
     vi.stubGlobal("fetch", fetchMock);
 
-    const share = await calendarsApi.share("token-123", "cal-1", "bob", "viewer");
+    const share = await calendarsApi.share("token-123", "cal-1", "bob@example.com", "viewer");
 
-    expect(share).toEqual({ userId: 2, username: "bob", role: "viewer", createdAt: "2026-01-01T00:00:00Z" });
+    expect(share).toEqual({ userId: 2, name: "bob", email: "bob@example.com", role: "viewer", createdAt: "2026-01-01T00:00:00Z" });
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/calendars/cal-1/shares",
       expect.objectContaining({
         method: "POST",
         credentials: "include",
         headers: expect.objectContaining({ Authorization: "Bearer token-123" }),
-        body: JSON.stringify({ username: "bob", role: "viewer" }),
+        body: JSON.stringify({ email: "bob@example.com", role: "viewer" }),
       }),
     );
   });

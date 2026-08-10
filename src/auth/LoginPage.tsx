@@ -10,7 +10,7 @@ export function LoginPage() {
   const login = useAuthStore((state) => state.login);
   const navigate = useNavigate();
 
-  const [username, setUsername] = useState("");
+  const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const { isSubmitting, error, run } = useAsyncAction();
 
@@ -22,14 +22,20 @@ export function LoginPage() {
     return <Navigate to="/" replace />;
   }
 
-  const canSubmit = username.trim() !== "" && password.trim() !== "";
+  // A fresh instance with no accounts has nothing to sign in to (#169,
+  // ADR-0047) — send a direct visit to /login straight to Register instead.
+  if (status === "needs-setup") {
+    return <Navigate to="/register" replace />;
+  }
+
+  const canSubmit = email.trim() !== "" && password.trim() !== "";
 
   async function handleSubmit(domEvent: React.FormEvent) {
     domEvent.preventDefault();
     if (!canSubmit) return;
 
     await run(async () => {
-      await login(username, password);
+      await login(email, password);
       navigate("/", { replace: true });
     });
   }
@@ -46,11 +52,11 @@ export function LoginPage() {
         </p>
 
         <Input
-          label="Username"
-          type="text"
-          value={username}
-          onChange={(domEvent) => setUsername(domEvent.target.value)}
-          placeholder="admin"
+          label="Email"
+          type="email"
+          value={email}
+          onChange={(domEvent) => setEmail(domEvent.target.value)}
+          placeholder="you@example.com"
           className="mt-5"
         />
 

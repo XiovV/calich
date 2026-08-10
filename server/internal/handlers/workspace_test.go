@@ -43,7 +43,8 @@ func newWorkspaceHandlerTestServer(t *testing.T) *workspaceHandlerTestServer {
 	workspaceRepo := repository.NewWorkspaceRepository(sqlDB)
 	inviteRepo := repository.NewWorkspaceInviteRepository(sqlDB)
 	workspaces := service.NewWorkspaceService(sqlDB, workspaceRepo, inviteRepo, calendarRepo, shareRepo)
-	auth := service.NewAuthService(users, sessions, workspaces, inviteRepo, []byte("test-secret"), "", "", true)
+	calendars := service.NewCalendarService(calendarRepo, shareRepo, users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo, repository.NewCalendarGroupShareRepository(sqlDB), repository.NewGroupRepository(sqlDB))
+	auth := service.NewAuthService(users, sessions, workspaces, inviteRepo, calendars, []byte("test-secret"), "", "", "", true)
 
 	authHandler := NewAuthHandler(auth, false)
 	workspaceHandler := NewWorkspaceHandler(workspaces)
@@ -91,7 +92,7 @@ func (s *workspaceHandlerTestServer) register(t *testing.T, username string) (ac
 	}
 
 	users := repository.NewUserRepository(s.db)
-	user, err := users.GetByUsername(ctx, username)
+	user, err := users.GetByEmail(ctx, username+"@example.com")
 	if err != nil {
 		t.Fatalf("get %s: %v", username, err)
 	}
@@ -167,8 +168,8 @@ func TestWorkspaceHandler_ListMembers_ReturnsMembersWithUsernameAndRole(t *testi
 	if byID[ownerID].Role != repository.WorkspaceRoleOwner {
 		t.Fatalf("expected owner role, got %q", byID[ownerID].Role)
 	}
-	if byID[bobID].Username != "bob" {
-		t.Fatalf("expected bob's username, got %q", byID[bobID].Username)
+	if byID[bobID].Name != "bob" {
+		t.Fatalf("expected bob's name, got %q", byID[bobID].Name)
 	}
 }
 

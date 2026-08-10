@@ -36,14 +36,15 @@ func newUserDirectoryTestServer(t *testing.T) userDirectoryTestServer {
 	sessions := repository.NewSessionRepository(sqlDB)
 	workspaceRepo := repository.NewWorkspaceRepository(sqlDB)
 	workspaceSvc := service.NewWorkspaceService(sqlDB, workspaceRepo, repository.NewWorkspaceInviteRepository(sqlDB), repository.NewCalendarRepository(sqlDB), repository.NewCalendarShareRepository(sqlDB))
-	auth := service.NewAuthService(users, sessions, workspaceSvc, repository.NewWorkspaceInviteRepository(sqlDB), []byte("test-secret"), "caller", "hunter2", true)
+	calendarRepo := repository.NewCalendarRepository(sqlDB)
+	shareRepo := repository.NewCalendarShareRepository(sqlDB)
+	calendars := service.NewCalendarService(calendarRepo, shareRepo, users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo, repository.NewCalendarGroupShareRepository(sqlDB), repository.NewGroupRepository(sqlDB))
+	auth := service.NewAuthService(users, sessions, workspaceSvc, repository.NewWorkspaceInviteRepository(sqlDB), calendars, []byte("test-secret"), "caller", "caller@example.com", "hunter2", true)
 	ctx := context.Background()
 	if _, _, err := auth.Bootstrap(ctx); err != nil {
 		t.Fatalf("bootstrap: %v", err)
 	}
 
-	calendarRepo := repository.NewCalendarRepository(sqlDB)
-	shareRepo := repository.NewCalendarShareRepository(sqlDB)
 	accounts := service.NewAccountService(sqlDB, users, sessions, calendarRepo, shareRepo, workspaceRepo, workspaceSvc)
 
 	if _, err := auth.Register(ctx, "bob", "bob@example.com", "temp-password"); err != nil {
@@ -52,7 +53,7 @@ func newUserDirectoryTestServer(t *testing.T) userDirectoryTestServer {
 	if _, err := auth.Register(ctx, "ghost", "ghost@example.com", "temp-password"); err != nil {
 		t.Fatalf("register ghost: %v", err)
 	}
-	ghost, err := users.GetByUsername(ctx, "ghost")
+	ghost, err := users.GetByEmail(ctx, "ghost@example.com")
 	if err != nil {
 		t.Fatalf("get ghost: %v", err)
 	}
@@ -71,7 +72,7 @@ func newUserDirectoryTestServer(t *testing.T) userDirectoryTestServer {
 	srv := httptest.NewServer(r)
 	t.Cleanup(srv.Close)
 
-	callerLogin, err := auth.Login(ctx, "caller", "hunter2")
+	callerLogin, err := auth.Login(ctx, "caller@example.com", "hunter2")
 	if err != nil {
 		t.Fatalf("caller login: %v", err)
 	}
@@ -97,7 +98,7 @@ func TestUserHandler_Directory(t *testing.T) {
 	}
 
 	// Excludes the caller and the disabled user, leaving only "bob".
-	if len(users) != 1 || users[0].Username != "bob" {
+	if len(users) != 1 || users[0].Name != "bob" {
 		t.Fatalf("unexpected directory: %+v", users)
 	}
 }

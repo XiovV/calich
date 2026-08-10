@@ -184,7 +184,7 @@ describe("calendarHasOtherRecipients", () => {
 });
 
 // The Calendar picker's option label (#127): must qualify a Calendar the
-// caller doesn't own with its Owner's username, unconditionally — not only
+// caller doesn't own with its Owner's Name, unconditionally — not only
 // when another visible Calendar happens to share its name — so Bob's own
 // "Family" and Alice's shared "Family" are never indistinguishable.
 describe("calendarPickerLabel", () => {
@@ -193,36 +193,36 @@ describe("calendarPickerLabel", () => {
   const cases: Array<{ name: string; overrides: Partial<Calendar>; expected: string }> = [
     {
       name: "owner of an ordinary calendar",
-      overrides: { access: "owner", isOwner: true, ownerUsername: "damir" },
+      overrides: { access: "owner", isOwner: true, ownerName: "damir" },
       expected: "Personal",
     },
     {
       name: "editor share on an ordinary calendar",
-      overrides: { access: "editor", isOwner: false, ownerUsername: "alice" },
+      overrides: { access: "editor", isOwner: false, ownerName: "alice" },
       expected: "Personal (alice)",
     },
     {
       name: "viewer share on an ordinary calendar",
-      overrides: { access: "viewer", isOwner: false, ownerUsername: "alice" },
+      overrides: { access: "viewer", isOwner: false, ownerName: "alice" },
       expected: "Personal (alice)",
     },
     {
       // The trap canManageCalendar exists to avoid: a Subscription clamps
       // the Owner's Access to "viewer", but the label must still be bare.
       name: "owner of a subscribed calendar",
-      overrides: { access: "viewer", isOwner: true, ownerUsername: "damir", ...subscribed },
+      overrides: { access: "viewer", isOwner: true, ownerName: "damir", ...subscribed },
       expected: "Personal",
     },
     {
       name: "editor share on a subscribed calendar",
-      overrides: { access: "viewer", isOwner: false, ownerUsername: "alice", ...subscribed },
+      overrides: { access: "viewer", isOwner: false, ownerName: "alice", ...subscribed },
       expected: "Personal (alice)",
     },
     {
-      // ownerUsername is optional on Calendar; an unresolved one must not
+      // ownerName is optional on Calendar; an unresolved one must not
       // render as "Personal (undefined)".
-      name: "editor share with no resolved ownerUsername",
-      overrides: { access: "editor", isOwner: false, ownerUsername: undefined },
+      name: "editor share with no resolved ownerName",
+      overrides: { access: "editor", isOwner: false, ownerName: undefined },
       expected: "Personal",
     },
   ];

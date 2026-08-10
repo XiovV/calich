@@ -1,6 +1,6 @@
 # Workspaces replace the instance as the account boundary; instance-wide Admin is retired
 
-Status: accepted — supersedes ADR-0010's single-instance framing, ADR-0037's Admin role, and ADR-0042's Invite mechanism
+Status: accepted — supersedes ADR-0010's single-instance framing, ADR-0037's Admin role, and ADR-0042's Invite mechanism; amended by ADR-0047 (the bootstrapped "name" this document refers to is a display Name — Email is the identifier)
 
 ADR-0010 modelled a self-hosted instance as one shared pool of Users with one Admin (ADR-0037) governing all of them. That stops fitting once an instance can host people who have nothing to do with each other: `ENABLE_SIGNUPS` (default `false`) now lets anyone reach the instance and start their own **Workspace**, so "the instance's accounts" is no longer one list any single Admin could meaningfully own. The first account on an instance always bootstraps (name, email, password — replacing ADR-0010's fixed `admin`/`admin` default) regardless of the flag, and becomes the Owner of its own Workspace.
 

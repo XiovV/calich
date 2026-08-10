@@ -19,8 +19,18 @@ func newTestAuthService(t *testing.T, initialUsername, initialPassword string) *
 	return newTestAuthServiceWithSignups(t, initialUsername, initialPassword, false)
 }
 
+// newTestAuthServiceWithSignups keeps its historical (initialUsername,
+// initialPassword) parameter names so the dozens of call sites below don't
+// need touching for #169/ADR-0047 — initialUsername now seeds both the
+// bootstrap account's Name and, deriving a deterministic address from it,
+// its Email.
 func newTestAuthServiceWithSignups(t *testing.T, initialUsername, initialPassword string, enableSignups bool) *AuthService {
 	t.Helper()
+
+	initialEmail := ""
+	if initialUsername != "" {
+		initialEmail = initialUsername + "@example.com"
+	}
 
 	sqlDB, err := db.OpenInMemory()
 	if err != nil {
@@ -30,9 +40,13 @@ func newTestAuthServiceWithSignups(t *testing.T, initialUsername, initialPasswor
 
 	users := repository.NewUserRepository(sqlDB)
 	sessions := repository.NewSessionRepository(sqlDB)
-	workspaces := NewWorkspaceService(sqlDB, repository.NewWorkspaceRepository(sqlDB), repository.NewWorkspaceInviteRepository(sqlDB), repository.NewCalendarRepository(sqlDB), repository.NewCalendarShareRepository(sqlDB))
+	workspaceRepo := repository.NewWorkspaceRepository(sqlDB)
+	calendarRepo := repository.NewCalendarRepository(sqlDB)
+	shareRepo := repository.NewCalendarShareRepository(sqlDB)
+	workspaces := NewWorkspaceService(sqlDB, workspaceRepo, repository.NewWorkspaceInviteRepository(sqlDB), calendarRepo, shareRepo)
+	calendars := NewCalendarService(calendarRepo, shareRepo, users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo, repository.NewCalendarGroupShareRepository(sqlDB), repository.NewGroupRepository(sqlDB))
 
-	return NewAuthService(users, sessions, workspaces, repository.NewWorkspaceInviteRepository(sqlDB), []byte("test-secret"), initialUsername, initialPassword, enableSignups)
+	return NewAuthService(users, sessions, workspaces, repository.NewWorkspaceInviteRepository(sqlDB), calendars, []byte("test-secret"), initialUsername, initialEmail, initialPassword, enableSignups)
 }
 
 // mustSeedUserRequiringPasswordChange inserts a User directly via the
@@ -48,7 +62,7 @@ func mustSeedUserRequiringPasswordChange(t *testing.T, svc *AuthService, ctx con
 		t.Fatalf("hash password: %v", err)
 	}
 
-	user, err := svc.users.Create(ctx, username, string(hash), true)
+	user, err := svc.users.Create(ctx, username, username+"@example.com", string(hash), true)
 	if err != nil {
 		t.Fatalf("seed user: %v", err)
 	}
@@ -123,14 +137,14 @@ func TestBootstrap_UsesEnvCredentialsWhenBothSet(t *testing.T) {
 	if !created {
 		t.Fatalf("expected bootstrap to report created=true for a fresh install")
 	}
-	if user.Username != "alice" {
-		t.Fatalf("expected bootstrapped user to be alice, got %q", user.Username)
+	if user.Name != "alice" {
+		t.Fatalf("expected bootstrapped user to be alice, got %q", user.Name)
 	}
 	if user.MustChangePassword {
 		t.Fatalf("expected env-configured bootstrap user to skip forced password change")
 	}
 
-	result, err := svc.Login(ctx, "alice", "hunter2")
+	result, err := svc.Login(ctx, "alice@example.com", "hunter2")
 	if err != nil {
 		t.Fatalf("expected env credentials to work, got: %v", err)
 	}
@@ -235,7 +249,7 @@ func TestRegister_FirstAccountSucceedsEvenWithSignupsDisabled(t *testing.T) {
 		t.Fatalf("expected a non-empty access token")
 	}
 
-	user, err := svc.users.GetByUsername(ctx, "alice")
+	user, err := svc.users.GetByEmail(ctx, "alice@example.com")
 	if err != nil {
 		t.Fatalf("get user: %v", err)
 	}
@@ -280,11 +294,11 @@ func TestRegister_SignupsEnabled_AlwaysCreatesAFreshWorkspace(t *testing.T) {
 		t.Fatalf("register bob: %v", err)
 	}
 
-	alice, err := svc.users.GetByUsername(ctx, "alice")
+	alice, err := svc.users.GetByEmail(ctx, "alice@example.com")
 	if err != nil {
 		t.Fatalf("get alice: %v", err)
 	}
-	bob, err := svc.users.GetByUsername(ctx, "bob")
+	bob, err := svc.users.GetByEmail(ctx, "bob@example.com")
 	if err != nil {
 		t.Fatalf("get bob: %v", err)
 	}
@@ -305,6 +319,42 @@ func TestRegister_SignupsEnabled_AlwaysCreatesAFreshWorkspace(t *testing.T) {
 	}
 	if bobWorkspaces[0].OwnerUserID != bob.ID {
 		t.Fatalf("expected bob to own his own workspace, owner is %d", bobWorkspaces[0].OwnerUserID)
+	}
+}
+
+// TestRegister_SeedsDefaultCalendars covers #172: self-signup registration
+// must leave the new User with the three default Calendars, seeded into the
+// fresh Workspace Register creates for them.
+func TestRegister_SeedsDefaultCalendars(t *testing.T) {
+	svc := newTestAuthServiceWithSignups(t, "", "", true)
+	ctx := context.Background()
+
+	if _, err := svc.Register(ctx, "alice", "alice@example.com", "hunter2"); err != nil {
+		t.Fatalf("register alice: %v", err)
+	}
+
+	alice, err := svc.users.GetByEmail(ctx, "alice@example.com")
+	if err != nil {
+		t.Fatalf("get alice: %v", err)
+	}
+
+	calendars, err := svc.calendars.List(ctx, alice.ID)
+	if err != nil {
+		t.Fatalf("list alice's calendars: %v", err)
+	}
+
+	want := map[string]bool{"Personal": true, "Work": true, "Family": true}
+	if len(calendars) != len(want) {
+		t.Fatalf("expected %d default calendars, got %d", len(want), len(calendars))
+	}
+	for _, c := range calendars {
+		if !want[c.Name] {
+			t.Fatalf("unexpected default calendar %q", c.Name)
+		}
+		delete(want, c.Name)
+	}
+	if len(want) != 0 {
+		t.Fatalf("missing default calendars: %v", want)
 	}
 }
 
@@ -335,15 +385,30 @@ func TestRegister_RejectsEmptyPassword(t *testing.T) {
 	}
 }
 
-func TestRegister_DuplicateUsername_ReturnsErrUsernameTaken(t *testing.T) {
+func TestRegister_DuplicateEmail_ReturnsErrEmailTaken(t *testing.T) {
 	svc := newTestAuthServiceWithSignups(t, "", "", true)
 	ctx := context.Background()
 
 	if _, err := svc.Register(ctx, "alice", "alice@example.com", "hunter2"); err != nil {
 		t.Fatalf("register alice: %v", err)
 	}
-	if _, err := svc.Register(ctx, "alice", "alice2@example.com", "hunter2"); !errors.Is(err, ErrUsernameTaken) {
-		t.Fatalf("expected ErrUsernameTaken, got %v", err)
+	if _, err := svc.Register(ctx, "alice-two", "alice@example.com", "hunter2"); !errors.Is(err, ErrEmailTaken) {
+		t.Fatalf("expected ErrEmailTaken, got %v", err)
+	}
+}
+
+// TestRegister_DuplicateNameIsAllowed covers ADR-0047: Name is a display
+// label, not an identifier, so two accounts may share one — only Email is
+// unique.
+func TestRegister_DuplicateNameIsAllowed(t *testing.T) {
+	svc := newTestAuthServiceWithSignups(t, "", "", true)
+	ctx := context.Background()
+
+	if _, err := svc.Register(ctx, "alice", "alice@example.com", "hunter2"); err != nil {
+		t.Fatalf("register first alice: %v", err)
+	}
+	if _, err := svc.Register(ctx, "alice", "alice2@example.com", "hunter2"); err != nil {
+		t.Fatalf("expected two accounts to share a name, got: %v", err)
 	}
 }
 
@@ -354,7 +419,7 @@ func TestLogin_Success(t *testing.T) {
 		t.Fatalf("bootstrap: %v", err)
 	}
 
-	result, err := svc.Login(ctx, "admin", "admin")
+	result, err := svc.Login(ctx, "admin@example.com", "admin")
 	if err != nil {
 		t.Fatalf("login: %v", err)
 	}
@@ -377,7 +442,7 @@ func TestLogin_Success(t *testing.T) {
 		t.Fatalf("authenticate issued access token: %v", err)
 	}
 
-	user, err := svc.users.GetByUsername(ctx, "admin")
+	user, err := svc.users.GetByEmail(ctx, "admin@example.com")
 	if err != nil {
 		t.Fatalf("get user: %v", err)
 	}
@@ -393,20 +458,20 @@ func TestLogin_WrongPassword(t *testing.T) {
 		t.Fatalf("bootstrap: %v", err)
 	}
 
-	_, err := svc.Login(ctx, "admin", "wrong-password")
+	_, err := svc.Login(ctx, "admin@example.com", "wrong-password")
 	if !errors.Is(err, ErrInvalidCredentials) {
 		t.Fatalf("expected ErrInvalidCredentials, got %v", err)
 	}
 }
 
-func TestLogin_UnknownUsername(t *testing.T) {
+func TestLogin_UnknownEmail(t *testing.T) {
 	svc := newTestAuthService(t, "admin", "admin")
 	ctx := context.Background()
 	if _, _, err := svc.Bootstrap(ctx); err != nil {
 		t.Fatalf("bootstrap: %v", err)
 	}
 
-	_, err := svc.Login(ctx, "nobody", "whatever")
+	_, err := svc.Login(ctx, "nobody@example.com", "whatever")
 	if !errors.Is(err, ErrInvalidCredentials) {
 		t.Fatalf("expected ErrInvalidCredentials, got %v", err)
 	}
@@ -425,7 +490,7 @@ func TestLogin_DisabledAccount_StillIssuesASessionButFlagsIt(t *testing.T) {
 		t.Fatalf("bootstrap: %v", err)
 	}
 
-	user, err := svc.users.GetByUsername(ctx, "admin")
+	user, err := svc.users.GetByEmail(ctx, "admin@example.com")
 	if err != nil {
 		t.Fatalf("get user: %v", err)
 	}
@@ -433,7 +498,7 @@ func TestLogin_DisabledAccount_StillIssuesASessionButFlagsIt(t *testing.T) {
 		t.Fatalf("disable user: %v", err)
 	}
 
-	result, err := svc.Login(ctx, "admin", "admin")
+	result, err := svc.Login(ctx, "admin@example.com", "admin")
 	if err != nil {
 		t.Fatalf("expected login to succeed for a disabled account, got %v", err)
 	}
@@ -449,12 +514,12 @@ func TestAuthenticate_RejectsWrongSigningSecret(t *testing.T) {
 	svc := newTestAuthService(t, "admin", "admin")
 	ctx := context.Background()
 
-	other := NewAuthService(svc.users, svc.sessions, svc.workspaces, svc.workspaceInvites, []byte("a-different-secret"), "admin", "admin", false)
+	other := NewAuthService(svc.users, svc.sessions, svc.workspaces, svc.workspaceInvites, svc.calendars, []byte("a-different-secret"), "admin", "admin@example.com", "admin", false)
 	if _, _, err := other.Bootstrap(ctx); err != nil {
 		t.Fatalf("bootstrap: %v", err)
 	}
 
-	result, err := other.Login(ctx, "admin", "admin")
+	result, err := other.Login(ctx, "admin@example.com", "admin")
 	if err != nil {
 		t.Fatalf("login: %v", err)
 	}
@@ -471,7 +536,7 @@ func TestAuthenticate_RejectsExpiredToken(t *testing.T) {
 		t.Fatalf("bootstrap: %v", err)
 	}
 
-	user, err := svc.users.GetByUsername(ctx, "admin")
+	user, err := svc.users.GetByEmail(ctx, "admin@example.com")
 	if err != nil {
 		t.Fatalf("get user: %v", err)
 	}
@@ -544,7 +609,7 @@ func TestChangePassword_RequiresCurrentPasswordOnceAlreadyChanged(t *testing.T) 
 		t.Fatalf("bootstrap: %v", err)
 	}
 
-	user, err := svc.users.GetByUsername(ctx, "admin")
+	user, err := svc.users.GetByEmail(ctx, "admin@example.com")
 	if err != nil {
 		t.Fatalf("get user: %v", err)
 	}
@@ -566,7 +631,7 @@ func TestChangePassword_RejectsEmptyNewPassword(t *testing.T) {
 		t.Fatalf("bootstrap: %v", err)
 	}
 
-	user, err := svc.users.GetByUsername(ctx, "admin")
+	user, err := svc.users.GetByEmail(ctx, "admin@example.com")
 	if err != nil {
 		t.Fatalf("get user: %v", err)
 	}
@@ -585,11 +650,11 @@ func TestUpdateEmail_SetsAValidEmail(t *testing.T) {
 		t.Fatalf("bootstrap: %v", err)
 	}
 
-	updated, err := svc.UpdateEmail(ctx, user.ID, "admin@example.com")
+	updated, err := svc.UpdateEmail(ctx, user.ID, "new-admin@example.com")
 	if err != nil {
 		t.Fatalf("update email: %v", err)
 	}
-	if updated.Email == nil || *updated.Email != "admin@example.com" {
+	if updated.Email != "new-admin@example.com" {
 		t.Fatalf("expected email to be set, got %+v", updated.Email)
 	}
 }
@@ -608,23 +673,34 @@ func TestUpdateEmail_RejectsAnInvalidAddress(t *testing.T) {
 	}
 }
 
-func TestUpdateEmail_EmptyStringClearsIt(t *testing.T) {
+// TestUpdateEmail_RejectsEmptyString covers ADR-0047: email is mandatory
+// now, so — unlike before #169 — an empty string no longer clears it.
+func TestUpdateEmail_RejectsEmptyString(t *testing.T) {
 	svc := newTestAuthService(t, "admin", "admin")
 	ctx := context.Background()
 	user, _, err := svc.Bootstrap(ctx)
 	if err != nil {
 		t.Fatalf("bootstrap: %v", err)
 	}
-	if _, err := svc.UpdateEmail(ctx, user.ID, "admin@example.com"); err != nil {
-		t.Fatalf("update email: %v", err)
+
+	if _, err := svc.UpdateEmail(ctx, user.ID, ""); !errors.Is(err, ErrEmailRequired) {
+		t.Fatalf("expected ErrEmailRequired, got %v", err)
+	}
+}
+
+func TestUpdateEmail_DuplicateReturnsErrEmailTaken(t *testing.T) {
+	svc := newTestAuthService(t, "admin", "admin")
+	ctx := context.Background()
+	user, _, err := svc.Bootstrap(ctx)
+	if err != nil {
+		t.Fatalf("bootstrap: %v", err)
+	}
+	if _, err := svc.users.Create(ctx, "bob", "bob@example.com", "hash", false); err != nil {
+		t.Fatalf("create bob: %v", err)
 	}
 
-	cleared, err := svc.UpdateEmail(ctx, user.ID, "")
-	if err != nil {
-		t.Fatalf("clear email: %v", err)
-	}
-	if cleared.Email != nil {
-		t.Fatalf("expected email to be cleared, got %+v", cleared.Email)
+	if _, err := svc.UpdateEmail(ctx, user.ID, "bob@example.com"); !errors.Is(err, ErrEmailTaken) {
+		t.Fatalf("expected ErrEmailTaken, got %v", err)
 	}
 }
 
@@ -983,7 +1059,7 @@ func TestUpdatePreferences_NilWorkingHoursLeavesItUntouched(t *testing.T) {
 	}
 }
 
-func TestUpdateUsername_RenamesTheCaller(t *testing.T) {
+func TestUpdateName_RenamesTheCaller(t *testing.T) {
 	svc := newTestAuthService(t, "admin", "admin")
 	ctx := context.Background()
 	user, _, err := svc.Bootstrap(ctx)
@@ -991,16 +1067,18 @@ func TestUpdateUsername_RenamesTheCaller(t *testing.T) {
 		t.Fatalf("bootstrap: %v", err)
 	}
 
-	updated, err := svc.UpdateUsername(ctx, user.ID, "  newname  ")
+	updated, err := svc.UpdateName(ctx, user.ID, "  New Name  ")
 	if err != nil {
-		t.Fatalf("update username: %v", err)
+		t.Fatalf("update name: %v", err)
 	}
-	if updated.Username != "newname" {
-		t.Fatalf("expected username newname, got %q", updated.Username)
+	if updated.Name != "New Name" {
+		t.Fatalf("expected name 'New Name', got %q", updated.Name)
 	}
 }
 
-func TestUpdateUsername_RejectsAColon(t *testing.T) {
+// TestUpdateName_AcceptsSpaces covers ADR-0047: unlike the old username
+// rename, a display Name accepts internal whitespace and a colon.
+func TestUpdateName_AcceptsSpaces(t *testing.T) {
 	svc := newTestAuthService(t, "admin", "admin")
 	ctx := context.Background()
 	user, _, err := svc.Bootstrap(ctx)
@@ -1008,24 +1086,26 @@ func TestUpdateUsername_RejectsAColon(t *testing.T) {
 		t.Fatalf("bootstrap: %v", err)
 	}
 
-	if _, err := svc.UpdateUsername(ctx, user.ID, "ad:min"); !errors.Is(err, ErrInvalidUsername) {
-		t.Fatalf("expected ErrInvalidUsername, got %v", err)
+	if _, err := svc.UpdateName(ctx, user.ID, "ad:min smith"); err != nil {
+		t.Fatalf("expected a name with a colon and a space to be accepted, got %v", err)
 	}
 }
 
-func TestUpdateUsername_DuplicateUsername_ReturnsErrUsernameTaken(t *testing.T) {
+// TestUpdateName_DuplicateNameIsAllowed covers ADR-0047: Name isn't unique,
+// unlike the old username rename it replaces.
+func TestUpdateName_DuplicateNameIsAllowed(t *testing.T) {
 	svc := newTestAuthService(t, "admin", "admin")
 	ctx := context.Background()
 	user, _, err := svc.Bootstrap(ctx)
 	if err != nil {
 		t.Fatalf("bootstrap: %v", err)
 	}
-	if _, err := svc.users.Create(ctx, "bob", "hash", false); err != nil {
+	if _, err := svc.users.Create(ctx, "bob", "bob@example.com", "hash", false); err != nil {
 		t.Fatalf("create bob: %v", err)
 	}
 
-	if _, err := svc.UpdateUsername(ctx, user.ID, "bob"); !errors.Is(err, ErrUsernameTaken) {
-		t.Fatalf("expected ErrUsernameTaken, got %v", err)
+	if _, err := svc.UpdateName(ctx, user.ID, "bob"); err != nil {
+		t.Fatalf("expected sharing bob's name to be allowed, got %v", err)
 	}
 }
 
@@ -1036,7 +1116,7 @@ func TestChangePassword_NewPasswordWorksForLogin(t *testing.T) {
 		t.Fatalf("bootstrap: %v", err)
 	}
 
-	user, err := svc.users.GetByUsername(ctx, "admin")
+	user, err := svc.users.GetByEmail(ctx, "admin@example.com")
 	if err != nil {
 		t.Fatalf("get user: %v", err)
 	}
@@ -1045,11 +1125,11 @@ func TestChangePassword_NewPasswordWorksForLogin(t *testing.T) {
 		t.Fatalf("change password: %v", err)
 	}
 
-	if _, err := svc.Login(ctx, "admin", "admin"); !errors.Is(err, ErrInvalidCredentials) {
+	if _, err := svc.Login(ctx, "admin@example.com", "admin"); !errors.Is(err, ErrInvalidCredentials) {
 		t.Fatalf("expected old password to no longer work, got %v", err)
 	}
 
-	if _, err := svc.Login(ctx, "admin", "a-new-password"); err != nil {
+	if _, err := svc.Login(ctx, "admin@example.com", "a-new-password"); err != nil {
 		t.Fatalf("expected new password to work, got %v", err)
 	}
 }
@@ -1061,7 +1141,7 @@ func TestChangePassword_InvalidatesExistingSessions(t *testing.T) {
 		t.Fatalf("bootstrap: %v", err)
 	}
 
-	login, err := svc.Login(ctx, "admin", "admin")
+	login, err := svc.Login(ctx, "admin@example.com", "admin")
 	if err != nil {
 		t.Fatalf("login: %v", err)
 	}
@@ -1087,7 +1167,7 @@ func TestChangePassword_ReissuesExactlyOneNewSession(t *testing.T) {
 	}
 	userID := mustUserID(t, svc, "admin")
 
-	login, err := svc.Login(ctx, "admin", "admin")
+	login, err := svc.Login(ctx, "admin@example.com", "admin")
 	if err != nil {
 		t.Fatalf("login: %v", err)
 	}
@@ -1121,7 +1201,7 @@ func TestChangePassword_ReissuesExactlyOneNewSession(t *testing.T) {
 
 func mustUserID(t *testing.T, svc *AuthService, username string) int64 {
 	t.Helper()
-	user, err := svc.users.GetByUsername(context.Background(), username)
+	user, err := svc.users.GetByEmail(context.Background(), username+"@example.com")
 	if err != nil {
 		t.Fatalf("get user %q: %v", username, err)
 	}
@@ -1135,7 +1215,7 @@ func TestRefresh_ReturnsNewAccessTokenForValidRefreshToken(t *testing.T) {
 		t.Fatalf("bootstrap: %v", err)
 	}
 
-	login, err := svc.Login(ctx, "admin", "admin")
+	login, err := svc.Login(ctx, "admin@example.com", "admin")
 	if err != nil {
 		t.Fatalf("login: %v", err)
 	}
@@ -1153,7 +1233,7 @@ func TestRefresh_ReturnsNewAccessTokenForValidRefreshToken(t *testing.T) {
 		t.Fatalf("authenticate refreshed token: %v", err)
 	}
 
-	user, err := svc.users.GetByUsername(ctx, "admin")
+	user, err := svc.users.GetByEmail(ctx, "admin@example.com")
 	if err != nil {
 		t.Fatalf("get user: %v", err)
 	}
@@ -1178,7 +1258,7 @@ func TestRefresh_RejectsExpiredSession(t *testing.T) {
 		t.Fatalf("bootstrap: %v", err)
 	}
 
-	user, err := svc.users.GetByUsername(ctx, "admin")
+	user, err := svc.users.GetByEmail(ctx, "admin@example.com")
 	if err != nil {
 		t.Fatalf("get user: %v", err)
 	}
@@ -1207,12 +1287,12 @@ func TestRefresh_StillWorksForADisabledAccount(t *testing.T) {
 		t.Fatalf("bootstrap: %v", err)
 	}
 
-	login, err := svc.Login(ctx, "admin", "admin")
+	login, err := svc.Login(ctx, "admin@example.com", "admin")
 	if err != nil {
 		t.Fatalf("login: %v", err)
 	}
 
-	user, err := svc.users.GetByUsername(ctx, "admin")
+	user, err := svc.users.GetByEmail(ctx, "admin@example.com")
 	if err != nil {
 		t.Fatalf("get user: %v", err)
 	}
@@ -1232,7 +1312,7 @@ func TestLogout_DeletesSessionSoRefreshNoLongerWorks(t *testing.T) {
 		t.Fatalf("bootstrap: %v", err)
 	}
 
-	login, err := svc.Login(ctx, "admin", "admin")
+	login, err := svc.Login(ctx, "admin@example.com", "admin")
 	if err != nil {
 		t.Fatalf("login: %v", err)
 	}

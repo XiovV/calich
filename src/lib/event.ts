@@ -16,9 +16,9 @@ export interface Attachment {
   filename: string;
   contentType: string;
   sizeBytes: number;
-  // uploadedByUsername is who uploaded this Attachment, for display on a
+  // uploadedByName is who uploaded this Attachment, for display on a
   // shared Calendar — absent when the uploader's account has been deleted.
-  uploadedByUsername?: string;
+  uploadedByName?: string;
   createdAt: Date;
 }
 
@@ -61,13 +61,13 @@ export interface Event {
   // everyone with Access (not per-viewer, unlike Calendar color's own
   // override). See ADR-0043.
   color?: string;
-  // createdByUsername is who created this Event, for display in the Event
+  // createdByName is who created this Event, for display in the Event
   // dialog on a Calendar where more than one person could have created it
   // (#118) — never consulted to decide what a User may do with an Event,
   // which resolves through its Calendar's Access instead (ADR-0034).
   // Undefined when the creator's account has been deleted, or the Event
   // predates this field.
-  createdByUsername?: string;
+  createdByName?: string;
   // This Event's Attachments (#132, ADR-0040). Undefined/empty on an
   // Override — it never carries its own — or when the Master has none.
   attachments?: Attachment[];

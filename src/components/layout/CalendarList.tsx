@@ -189,9 +189,9 @@ export function CalendarList() {
         )}
         <span className="flex min-w-0 flex-1 flex-col">
           <span className="truncate text-body text-ink">{calendar.name}</span>
-          {!canManage && calendar.ownerUsername && (
+          {!canManage && calendar.ownerName && (
             <span className="truncate text-label-sm text-ink-muted">
-              Shared by {calendar.ownerUsername}
+              Shared by {calendar.ownerName}
             </span>
           )}
           {isSubscribed && calendar.lastSyncedAt && (

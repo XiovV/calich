@@ -54,14 +54,15 @@ func newTestCalDAVEnv(t *testing.T) testCalDAVEnv {
 
 	users := repository.NewUserRepository(sqlDB)
 	sessions := repository.NewSessionRepository(sqlDB)
-	workspaces := service.NewWorkspaceService(sqlDB, repository.NewWorkspaceRepository(sqlDB), repository.NewWorkspaceInviteRepository(sqlDB), repository.NewCalendarRepository(sqlDB), repository.NewCalendarShareRepository(sqlDB))
-	authService := service.NewAuthService(users, sessions, workspaces, repository.NewWorkspaceInviteRepository(sqlDB), []byte("test-secret"), "admin", "admin", false)
+	workspaceRepo := repository.NewWorkspaceRepository(sqlDB)
+	workspaces := service.NewWorkspaceService(sqlDB, workspaceRepo, repository.NewWorkspaceInviteRepository(sqlDB), repository.NewCalendarRepository(sqlDB), repository.NewCalendarShareRepository(sqlDB))
+	calendarService := service.NewCalendarService(repository.NewCalendarRepository(sqlDB), repository.NewCalendarShareRepository(sqlDB), users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo, repository.NewCalendarGroupShareRepository(sqlDB), repository.NewGroupRepository(sqlDB))
+	authService := service.NewAuthService(users, sessions, workspaces, repository.NewWorkspaceInviteRepository(sqlDB), calendarService, []byte("test-secret"), "admin", "admin@example.com", "admin", false)
 	user, _, err := authService.Bootstrap(context.Background())
 	if err != nil {
 		t.Fatalf("bootstrap: %v", err)
 	}
 
-	workspaceRepo := repository.NewWorkspaceRepository(sqlDB)
 	userWorkspaces, err := workspaceRepo.ListForUser(context.Background(), user.ID)
 	if err != nil {
 		t.Fatalf("list workspaces for user: %v", err)
@@ -70,8 +71,6 @@ func newTestCalDAVEnv(t *testing.T) testCalDAVEnv {
 		t.Fatalf("expected bootstrap to create a workspace for the user")
 	}
 	workspaceID := userWorkspaces[0].ID
-
-	calendarService := service.NewCalendarService(repository.NewCalendarRepository(sqlDB), repository.NewCalendarShareRepository(sqlDB), users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo, repository.NewCalendarGroupShareRepository(sqlDB), repository.NewGroupRepository(sqlDB))
 	const calendarID = "cal-1"
 	if _, err := calendarService.Create(context.Background(), user.ID, workspaceID, calendarID, service.CalendarWrite{Name: "Personal", Color: "#12809CFF"}); err != nil {
 		t.Fatalf("create calendar: %v", err)
@@ -123,7 +122,7 @@ func newTestCalDAVEnv(t *testing.T) testCalDAVEnv {
 func (env testCalDAVEnv) addSharedUser(t *testing.T, username, role string) (userID int64, appPasswordSecret string) {
 	t.Helper()
 
-	other, err := env.users.Create(context.Background(), username, "hash", false)
+	other, err := env.users.Create(context.Background(), username, username+"@example.com", "hash", false)
 	if err != nil {
 		t.Fatalf("create user %q: %v", username, err)
 	}
@@ -133,7 +132,7 @@ func (env testCalDAVEnv) addSharedUser(t *testing.T, username, role string) (use
 		t.Fatalf("add %q as workspace member: %v", username, err)
 	}
 
-	if _, err := env.calendarService.Share(context.Background(), env.userID, env.calendarID, username, role); err != nil {
+	if _, _, err := env.calendarService.Share(context.Background(), env.userID, env.calendarID, username+"@example.com", role); err != nil {
 		t.Fatalf("share calendar with %q as %q: %v", username, role, err)
 	}
 
@@ -207,7 +206,7 @@ func TestPropfind_MissingCredentials_Returns401(t *testing.T) {
 func TestPropfind_WrongAppPassword_Returns401(t *testing.T) {
 	srv, _, _ := newTestCalDAVServer(t)
 
-	resp := propfind(t, srv, "/dav/", "admin", "not-the-right-secret", "0", propfindCurrentUserPrincipal)
+	resp := propfind(t, srv, "/dav/", "admin@example.com", "not-the-right-secret", "0", propfindCurrentUserPrincipal)
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusUnauthorized {
@@ -220,7 +219,7 @@ func TestPropfind_WebLoginPassword_Returns401(t *testing.T) {
 
 	// "admin" is the bootstrap default web-login password — it must never be
 	// accepted as a CalDAV credential (ADR-0024).
-	resp := propfind(t, srv, "/dav/", "admin", "admin", "0", propfindCurrentUserPrincipal)
+	resp := propfind(t, srv, "/dav/", "admin@example.com", "admin@example.com", "0", propfindCurrentUserPrincipal)
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusUnauthorized {
@@ -231,7 +230,7 @@ func TestPropfind_WebLoginPassword_Returns401(t *testing.T) {
 func TestPropfind_Root_ResolvesCurrentUserPrincipal(t *testing.T) {
 	srv, userID, secret := newTestCalDAVServer(t)
 
-	resp := propfind(t, srv, "/dav/", "admin", secret, "0", propfindCurrentUserPrincipal)
+	resp := propfind(t, srv, "/dav/", "admin@example.com", secret, "0", propfindCurrentUserPrincipal)
 	defer resp.Body.Close()
 
 	body := readBody(t, resp)
@@ -245,7 +244,7 @@ func TestPropfind_Principal_ResolvesCalendarHomeSet(t *testing.T) {
 	srv, userID, secret := newTestCalDAVServer(t)
 
 	principalPath := fmt.Sprintf("/dav/%d/", userID)
-	resp := propfind(t, srv, principalPath, "admin", secret, "0", propfindHomeSet)
+	resp := propfind(t, srv, principalPath, "admin@example.com", secret, "0", propfindHomeSet)
 	defer resp.Body.Close()
 
 	body := readBody(t, resp)
@@ -259,7 +258,7 @@ func TestPropfind_HomeSet_ListsOneCollectionPerCalendar(t *testing.T) {
 	srv, userID, secret := newTestCalDAVServer(t)
 
 	homeSetPath := fmt.Sprintf("/dav/%d/calendars/", userID)
-	resp := propfind(t, srv, homeSetPath, "admin", secret, "1", propfindDisplayName)
+	resp := propfind(t, srv, homeSetPath, "admin@example.com", secret, "1", propfindDisplayName)
 	defer resp.Body.Close()
 
 	body := readBody(t, resp)
@@ -283,7 +282,7 @@ func TestPropfind_SuccessfulAuth_UpdatesAppPasswordLastUsedAt(t *testing.T) {
 		t.Fatalf("expected last_used_at to be unset before any CalDAV auth, got %v", before[0].LastUsedAt)
 	}
 
-	resp := propfind(t, srv, "/dav/", "admin", secret, "0", propfindCurrentUserPrincipal)
+	resp := propfind(t, srv, "/dav/", "admin@example.com", secret, "0", propfindCurrentUserPrincipal)
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusMultiStatus {
 		t.Fatalf("expected 207, got %d", resp.StatusCode)
@@ -310,7 +309,7 @@ func TestWellKnownCalDAV_RedirectsToPrincipal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build request: %v", err)
 	}
-	req.SetBasicAuth("admin", secret)
+	req.SetBasicAuth("admin@example.com", secret)
 
 	resp, err := client.Do(req)
 	if err != nil {

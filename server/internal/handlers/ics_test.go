@@ -51,7 +51,9 @@ func newICSTestEnv(t *testing.T) icsTestEnv {
 	sessions := repository.NewSessionRepository(sqlDB)
 	workspaceRepo := repository.NewWorkspaceRepository(sqlDB)
 	workspaces := service.NewWorkspaceService(sqlDB, workspaceRepo, repository.NewWorkspaceInviteRepository(sqlDB), repository.NewCalendarRepository(sqlDB), repository.NewCalendarShareRepository(sqlDB))
-	auth := service.NewAuthService(users, sessions, workspaces, repository.NewWorkspaceInviteRepository(sqlDB), []byte("test-secret"), "alice", "hunter2", false)
+	calendarRepo := repository.NewCalendarRepository(sqlDB)
+	calendars := service.NewCalendarService(calendarRepo, repository.NewCalendarShareRepository(sqlDB), users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo, repository.NewCalendarGroupShareRepository(sqlDB), repository.NewGroupRepository(sqlDB))
+	auth := service.NewAuthService(users, sessions, workspaces, repository.NewWorkspaceInviteRepository(sqlDB), calendars, []byte("test-secret"), "alice", "alice@example.com", "hunter2", false)
 	bootstrapUser, _, err := auth.Bootstrap(context.Background())
 	if err != nil {
 		t.Fatalf("bootstrap: %v", err)
@@ -66,7 +68,7 @@ func newICSTestEnv(t *testing.T) icsTestEnv {
 	}
 	workspaceID := aliceWorkspaces[0].ID
 
-	loginResult, err := auth.Login(context.Background(), "alice", "hunter2")
+	loginResult, err := auth.Login(context.Background(), "alice@example.com", "hunter2")
 	if err != nil {
 		t.Fatalf("login: %v", err)
 	}
@@ -75,8 +77,6 @@ func newICSTestEnv(t *testing.T) icsTestEnv {
 		t.Fatalf("authenticate: %v", err)
 	}
 
-	calendarRepo := repository.NewCalendarRepository(sqlDB)
-	calendars := service.NewCalendarService(calendarRepo, repository.NewCalendarShareRepository(sqlDB), users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo, repository.NewCalendarGroupShareRepository(sqlDB), repository.NewGroupRepository(sqlDB))
 	cal, err := calendars.Create(context.Background(), userID, workspaceID, "11111111-1111-1111-1111-111111111111", service.CalendarWrite{Name: "Personal", Color: "#12809CFF"})
 	if err != nil {
 		t.Fatalf("create calendar: %v", err)

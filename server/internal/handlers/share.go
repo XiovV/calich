@@ -22,17 +22,18 @@ import (
 
 type shareResponse struct {
 	UserID    int64     `json:"userId"`
-	Username  string    `json:"username"`
+	Name      string    `json:"name"`
+	Email     string    `json:"email"`
 	Role      string    `json:"role"`
 	CreatedAt time.Time `json:"createdAt"`
 }
 
-func toShareResponse(username string, s repository.CalendarShare) shareResponse {
-	return shareResponse{UserID: s.UserID, Username: username, Role: s.Role, CreatedAt: s.CreatedAt}
+func toShareResponse(name, email string, s repository.CalendarShare) shareResponse {
+	return shareResponse{UserID: s.UserID, Name: name, Email: email, Role: s.Role, CreatedAt: s.CreatedAt}
 }
 
-func toShareWithUsernameResponse(s repository.CalendarShareWithUsername) shareResponse {
-	return toShareResponse(s.Username, s.CalendarShare)
+func toShareWithUserResponse(s repository.CalendarShareWithUser) shareResponse {
+	return toShareResponse(s.Name, s.Email, s.CalendarShare)
 }
 
 var shareErrors = []errorCase{
@@ -70,20 +71,20 @@ func (h *CalendarHandler) ListShares(w http.ResponseWriter, r *http.Request) {
 
 	response := make([]shareResponse, len(shares))
 	for i, s := range shares {
-		response[i] = toShareWithUsernameResponse(s)
+		response[i] = toShareWithUserResponse(s)
 	}
 
 	httpresponse.JSON(w, http.StatusOK, response)
 }
 
 type shareRequest struct {
-	Username string `json:"username"`
-	Role     string `json:"role"`
+	Email string `json:"email"`
+	Role  string `json:"role"`
 }
 
-// Share serves POST /api/calendars/{id}/shares: grants a Share to
-// req.Username with req.Role, or changes an existing Share's Role if
-// req.Username already has one (ADR-0034). Owner-only.
+// Share serves POST /api/calendars/{id}/shares: grants a Share to the User
+// named by req.Email with req.Role, or changes an existing Share's Role if
+// they already have one (ADR-0034, ADR-0047). Owner-only.
 func (h *CalendarHandler) Share(w http.ResponseWriter, r *http.Request) {
 	userID, ok := httpauth.UserIDFromContext(r.Context())
 	if !ok {
@@ -99,12 +100,12 @@ func (h *CalendarHandler) Share(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	share, err := h.calendars.Share(r.Context(), userID, id, req.Username, req.Role)
+	share, targetName, err := h.calendars.Share(r.Context(), userID, id, req.Email, req.Role)
 	if respondError(w, err, shareErrorsWithNotFound, "failed to share calendar") {
 		return
 	}
 
-	httpresponse.JSON(w, http.StatusOK, toShareResponse(req.Username, share))
+	httpresponse.JSON(w, http.StatusOK, toShareResponse(targetName, req.Email, share))
 }
 
 // RevokeShare serves DELETE /api/calendars/{id}/shares/{userId}: removes
@@ -246,8 +247,9 @@ func (h *CalendarHandler) RevokeGroupShare(w http.ResponseWriter, r *http.Reques
 }
 
 type shareTargetUserResponse struct {
-	UserID   int64  `json:"userId"`
-	Username string `json:"username"`
+	UserID int64  `json:"userId"`
+	Name   string `json:"name"`
+	Email  string `json:"email"`
 }
 
 type shareTargetGroupResponse struct {
@@ -282,7 +284,7 @@ func (h *CalendarHandler) ShareTargets(w http.ResponseWriter, r *http.Request) {
 		Groups: make([]shareTargetGroupResponse, len(groups)),
 	}
 	for i, m := range members {
-		response.Users[i] = shareTargetUserResponse{UserID: m.UserID, Username: m.Username}
+		response.Users[i] = shareTargetUserResponse{UserID: m.UserID, Name: m.Name, Email: m.Email}
 	}
 	for i, g := range groups {
 		response.Groups[i] = shareTargetGroupResponse{GroupID: g.ID, Name: g.Name}

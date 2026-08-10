@@ -33,7 +33,7 @@ func newTestSubscribeService(t *testing.T, opts ...SubscribeOption) (svc *Subscr
 	t.Cleanup(func() { sqlDB.Close() })
 
 	users := repository.NewUserRepository(sqlDB)
-	user, err := users.Create(context.Background(), "user-a", "hash", false)
+	user, err := users.Create(context.Background(), "user-a", "user-a@example.com", "hash", false)
 	if err != nil {
 		t.Fatalf("create user: %v", err)
 	}
@@ -100,7 +100,7 @@ func icsServer(t *testing.T, body string) *httptest.Server {
 }
 
 func TestSubscribeService_Preview_ProposesNameColorAndCounts(t *testing.T) {
-	svc, events, calendars, userID, _ :=  newTestSubscribeService(t)
+	svc, events, calendars, userID, _ := newTestSubscribeService(t)
 	srv := icsServer(t, subscribeFeedICS)
 	ctx := context.Background()
 

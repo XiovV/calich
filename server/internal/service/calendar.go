@@ -19,7 +19,7 @@ var (
 	// ErrInvalidRole is returned when a Share is granted with a Role other
 	// than Viewer or Editor (ADR-0034).
 	ErrInvalidRole = errors.New("role must be \"viewer\" or \"editor\"")
-	// ErrUserNotFound is returned when Share names a username that doesn't
+	// ErrUserNotFound is returned when Share names an email that doesn't
 	// exist on the instance — a Share can only be granted to a User who
 	// exists (#100's acceptance criteria).
 	ErrUserNotFound = errors.New("user not found")
@@ -159,9 +159,9 @@ type CalendarWithAccess struct {
 	// editing — so that clamp doesn't cost an Owner control of their own
 	// Calendar.
 	IsOwner bool
-	// OwnerUsername is the Calendar's Owner's Username, for display — a
-	// non-Owner may not call ListShares to derive it themselves (#111).
-	OwnerUsername string
+	// OwnerName is the Calendar's Owner's display Name — a non-Owner may not
+	// call ListShares to derive it themselves (#111).
+	OwnerName string
 	// ShareCount is how many Shares the Calendar carries — what tells a
 	// caller whether more than one person would be notified (#111).
 	ShareCount int
@@ -188,11 +188,11 @@ func (s *CalendarService) ListAccessible(ctx context.Context, userID int64) ([]C
 		if err != nil {
 			return nil, err
 		}
-		isOwner, ownerUsername, shareCount, err := s.OwnershipMeta(ctx, userID, c)
+		isOwner, ownerName, shareCount, err := s.OwnershipMeta(ctx, userID, c)
 		if err != nil {
 			return nil, err
 		}
-		result = append(result, CalendarWithAccess{Calendar: c, Access: ResolveAccess(userID, c, nil), Color: color, IsOwner: isOwner, OwnerUsername: ownerUsername, ShareCount: shareCount})
+		result = append(result, CalendarWithAccess{Calendar: c, Access: ResolveAccess(userID, c, nil), Color: color, IsOwner: isOwner, OwnerName: ownerName, ShareCount: shareCount})
 	}
 	for _, c := range shared {
 		role := c.Role
@@ -200,11 +200,11 @@ func (s *CalendarService) ListAccessible(ctx context.Context, userID int64) ([]C
 		if err != nil {
 			return nil, err
 		}
-		isOwner, ownerUsername, shareCount, err := s.OwnershipMeta(ctx, userID, c.Calendar)
+		isOwner, ownerName, shareCount, err := s.OwnershipMeta(ctx, userID, c.Calendar)
 		if err != nil {
 			return nil, err
 		}
-		result = append(result, CalendarWithAccess{Calendar: c.Calendar, Access: ResolveAccess(userID, c.Calendar, &role), Color: color, IsOwner: isOwner, OwnerUsername: ownerUsername, ShareCount: shareCount})
+		result = append(result, CalendarWithAccess{Calendar: c.Calendar, Access: ResolveAccess(userID, c.Calendar, &role), Color: color, IsOwner: isOwner, OwnerName: ownerName, ShareCount: shareCount})
 	}
 
 	sort.Slice(result, func(i, j int) bool {
@@ -238,11 +238,11 @@ func (s *CalendarService) ListAccessibleInWorkspace(ctx context.Context, userID,
 		if err != nil {
 			return nil, err
 		}
-		isOwner, ownerUsername, shareCount, err := s.OwnershipMeta(ctx, userID, c)
+		isOwner, ownerName, shareCount, err := s.OwnershipMeta(ctx, userID, c)
 		if err != nil {
 			return nil, err
 		}
-		result = append(result, CalendarWithAccess{Calendar: c, Access: ResolveAccess(userID, c, nil), Color: color, IsOwner: isOwner, OwnerUsername: ownerUsername, ShareCount: shareCount})
+		result = append(result, CalendarWithAccess{Calendar: c, Access: ResolveAccess(userID, c, nil), Color: color, IsOwner: isOwner, OwnerName: ownerName, ShareCount: shareCount})
 	}
 	for _, c := range shared {
 		role := c.Role
@@ -250,11 +250,11 @@ func (s *CalendarService) ListAccessibleInWorkspace(ctx context.Context, userID,
 		if err != nil {
 			return nil, err
 		}
-		isOwner, ownerUsername, shareCount, err := s.OwnershipMeta(ctx, userID, c.Calendar)
+		isOwner, ownerName, shareCount, err := s.OwnershipMeta(ctx, userID, c.Calendar)
 		if err != nil {
 			return nil, err
 		}
-		result = append(result, CalendarWithAccess{Calendar: c.Calendar, Access: ResolveAccess(userID, c.Calendar, &role), Color: color, IsOwner: isOwner, OwnerUsername: ownerUsername, ShareCount: shareCount})
+		result = append(result, CalendarWithAccess{Calendar: c.Calendar, Access: ResolveAccess(userID, c.Calendar, &role), Color: color, IsOwner: isOwner, OwnerName: ownerName, ShareCount: shareCount})
 	}
 
 	sort.Slice(result, func(i, j int) bool {
@@ -297,21 +297,21 @@ func (s *CalendarService) AccessWithColor(ctx context.Context, userID int64, id 
 	if err != nil {
 		return CalendarWithAccess{}, err
 	}
-	isOwner, ownerUsername, shareCount, err := s.OwnershipMeta(ctx, userID, calendar)
+	isOwner, ownerName, shareCount, err := s.OwnershipMeta(ctx, userID, calendar)
 	if err != nil {
 		return CalendarWithAccess{}, err
 	}
-	return CalendarWithAccess{Calendar: calendar, Access: access, Color: color, IsOwner: isOwner, OwnerUsername: ownerUsername, ShareCount: shareCount}, nil
+	return CalendarWithAccess{Calendar: calendar, Access: access, Color: color, IsOwner: isOwner, OwnerName: ownerName, ShareCount: shareCount}, nil
 }
 
 // OwnershipMeta resolves calendar's un-clamped ownership answer for userID
 // (calendar.UserID == userID — never Access.IsOwner(), which a Subscription
-// clamps to false, #111), the Calendar's Owner's Username, and its Share
+// clamps to false, #111), the Calendar's Owner's Name, and its Share
 // count — direct and Group Shares summed (ADR-0045), since both count
 // towards "would more than one person be notified" (#111). Every REST
 // Calendar response resolves these here, so a caller never has to re-derive
 // ownership from Access, which is deliberately lossy about it (ADR-0034).
-func (s *CalendarService) OwnershipMeta(ctx context.Context, userID int64, calendar repository.Calendar) (isOwner bool, ownerUsername string, shareCount int, err error) {
+func (s *CalendarService) OwnershipMeta(ctx context.Context, userID int64, calendar repository.Calendar) (isOwner bool, ownerName string, shareCount int, err error) {
 	owner, err := s.users.GetByID(ctx, calendar.UserID)
 	if err != nil {
 		return false, "", 0, fmt.Errorf("get calendar owner: %w", err)
@@ -324,7 +324,7 @@ func (s *CalendarService) OwnershipMeta(ctx context.Context, userID int64, calen
 	if err != nil {
 		return false, "", 0, fmt.Errorf("count calendar group shares: %w", err)
 	}
-	return calendar.UserID == userID, owner.Username, directCount + groupCount, nil
+	return calendar.UserID == userID, owner.Name, directCount + groupCount, nil
 }
 
 // requireRead resolves calendarID and refuses it unless userID has at least
@@ -447,50 +447,52 @@ func isValidRole(role string) bool {
 	return role == repository.RoleViewer || role == repository.RoleEditor
 }
 
-// Share grants calendarID a Share to username with role, or changes an
-// existing Share's role if username already has one (ADR-0034). Only
-// calendarID's Owner may call this.
-func (s *CalendarService) Share(ctx context.Context, ownerID int64, calendarID, username, role string) (repository.CalendarShare, error) {
+// Share grants calendarID a Share to the User named by email, or changes an
+// existing Share's role if they already have one (ADR-0034, ADR-0047). Only
+// calendarID's Owner may call this. Returns the target's display Name
+// alongside the Share, since a caller building a response has only the typed
+// Email to go on otherwise.
+func (s *CalendarService) Share(ctx context.Context, ownerID int64, calendarID, email, role string) (repository.CalendarShare, string, error) {
 	if !isValidRole(role) {
-		return repository.CalendarShare{}, ErrInvalidRole
+		return repository.CalendarShare{}, "", ErrInvalidRole
 	}
 
 	calendar, err := s.requireOwner(ctx, ownerID, calendarID)
 	if err != nil {
-		return repository.CalendarShare{}, err
+		return repository.CalendarShare{}, "", err
 	}
 
-	target, err := s.users.GetByUsername(ctx, username)
+	target, err := s.users.GetByEmail(ctx, email)
 	if err != nil {
 		if errors.Is(err, repository.ErrNotFound) {
-			return repository.CalendarShare{}, ErrUserNotFound
+			return repository.CalendarShare{}, "", ErrUserNotFound
 		}
-		return repository.CalendarShare{}, fmt.Errorf("look up user: %w", err)
+		return repository.CalendarShare{}, "", fmt.Errorf("look up user: %w", err)
 	}
 	// A Disabled User is hidden from the share picker (ADR-0037) — from the
-	// Owner's perspective they don't exist to share with, same as a username
+	// Owner's perspective they don't exist to share with, same as an email
 	// that was never registered.
 	if target.IsDisabled {
-		return repository.CalendarShare{}, ErrUserNotFound
+		return repository.CalendarShare{}, "", ErrUserNotFound
 	}
 	if target.ID == calendar.UserID {
-		return repository.CalendarShare{}, ErrCannotShareWithSelf
+		return repository.CalendarShare{}, "", ErrCannotShareWithSelf
 	}
 
 	// A Share, direct or Group, can only ever reach someone already inside
 	// the Calendar's own Workspace (#159, ADR-0045).
 	if _, err := s.workspaces.GetMember(ctx, calendar.WorkspaceID, target.ID); err != nil {
 		if errors.Is(err, repository.ErrNotFound) {
-			return repository.CalendarShare{}, ErrShareTargetNotInWorkspace
+			return repository.CalendarShare{}, "", ErrShareTargetNotInWorkspace
 		}
-		return repository.CalendarShare{}, fmt.Errorf("get workspace member: %w", err)
+		return repository.CalendarShare{}, "", fmt.Errorf("get workspace member: %w", err)
 	}
 
 	share, err := s.shares.Upsert(ctx, calendarID, target.ID, role)
 	if err != nil {
-		return repository.CalendarShare{}, fmt.Errorf("upsert share: %w", err)
+		return repository.CalendarShare{}, "", fmt.Errorf("upsert share: %w", err)
 	}
-	return share, nil
+	return share, target.Name, nil
 }
 
 // RevokeShare removes targetUserID's Share on calendarID. Only calendarID's
@@ -515,14 +517,14 @@ func (s *CalendarService) RevokeShare(ctx context.Context, ownerID int64, calend
 	return nil
 }
 
-// ListShares returns every Share on calendarID, each carrying the Username
-// it was granted to — an Owner's "who has Access to my Calendar, and with
+// ListShares returns every Share on calendarID, each carrying the Name and
+// Email it was granted to — an Owner's "who has Access to my Calendar, and with
 // what Role" listing (ADR-0034). Only calendarID's Owner may call this.
-func (s *CalendarService) ListShares(ctx context.Context, ownerID int64, calendarID string) ([]repository.CalendarShareWithUsername, error) {
+func (s *CalendarService) ListShares(ctx context.Context, ownerID int64, calendarID string) ([]repository.CalendarShareWithUser, error) {
 	if _, err := s.requireOwner(ctx, ownerID, calendarID); err != nil {
 		return nil, err
 	}
-	return s.shares.ListByCalendarWithUsername(ctx, calendarID)
+	return s.shares.ListByCalendarWithUser(ctx, calendarID)
 }
 
 // ShareWithGroup grants calendarID a Share to groupID with role, or changes
@@ -583,17 +585,17 @@ func (s *CalendarService) ListGroupShares(ctx context.Context, ownerID int64, ca
 // target for calendarID — every Member and every Group of calendarID's own
 // Workspace, excluding the Calendar's own Owner (#159, ADR-0045). Only
 // calendarID's Owner may call this, mirroring ListShares.
-func (s *CalendarService) ShareTargets(ctx context.Context, ownerID int64, calendarID string) ([]repository.WorkspaceMemberWithUsername, []repository.Group, error) {
+func (s *CalendarService) ShareTargets(ctx context.Context, ownerID int64, calendarID string) ([]repository.WorkspaceMemberWithUser, []repository.Group, error) {
 	calendar, err := s.requireOwner(ctx, ownerID, calendarID)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	members, err := s.workspaces.ListMembersWithUsername(ctx, calendar.WorkspaceID)
+	members, err := s.workspaces.ListMembersWithUser(ctx, calendar.WorkspaceID)
 	if err != nil {
 		return nil, nil, fmt.Errorf("list workspace members: %w", err)
 	}
-	users := make([]repository.WorkspaceMemberWithUsername, 0, len(members))
+	users := make([]repository.WorkspaceMemberWithUser, 0, len(members))
 	for _, m := range members {
 		if m.UserID == calendar.UserID {
 			continue

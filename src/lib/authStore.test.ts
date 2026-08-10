@@ -12,7 +12,8 @@ vi.mock("./authApi", async () => {
       me: vi.fn(),
       changePassword: vi.fn(),
       updateEmail: vi.fn(),
-      updateUsername: vi.fn(),
+      updateName: vi.fn(),
+      setupStatus: vi.fn(),
       updateSyncedDeviceReminders: vi.fn(),
       updatePreferences: vi.fn(),
     },
@@ -39,9 +40,9 @@ const { useShellStore } = await import("./shellStore");
 
 const adminUser = {
   id: 1,
-  username: "admin",
+  name: "admin",
   mustChangePassword: false,
-  email: null,
+  email: "admin@example.com",
   emailReminderChannelAvailable: false,
   syncedDeviceRemindersEnabled: false,
   weekStart: 1,
@@ -55,7 +56,7 @@ function resetStore() {
   useAuthStore.setState({
     status: "loading",
     user: null,
-    pendingUsername: null,
+    pendingEmail: null,
     accessToken: null,
   });
 }
@@ -67,13 +68,36 @@ beforeEach(() => {
 });
 
 describe("bootstrap", () => {
-  it("goes to unauthenticated when refresh fails", async () => {
+  it("goes to unauthenticated when refresh fails but the instance has accounts", async () => {
     vi.mocked(authApi.refresh).mockRejectedValue(new ApiError(401, "unauthorized", "no session"));
+    vi.mocked(authApi.setupStatus).mockResolvedValue({ hasAccounts: true });
 
     await useAuthStore.getState().bootstrap();
 
     expect(useAuthStore.getState().status).toBe("unauthenticated");
     expect(useAuthStore.getState().accessToken).toBeNull();
+  });
+
+  // #169, ADR-0047: a fresh instance with zero accounts sends an
+  // unauthenticated visitor to needs-setup instead of unauthenticated, so
+  // ProtectedRoute/LoginPage redirect to Register instead of Sign-in.
+  it("goes to needs-setup when refresh fails and the instance has no accounts", async () => {
+    vi.mocked(authApi.refresh).mockRejectedValue(new ApiError(401, "unauthorized", "no session"));
+    vi.mocked(authApi.setupStatus).mockResolvedValue({ hasAccounts: false });
+
+    await useAuthStore.getState().bootstrap();
+
+    expect(useAuthStore.getState().status).toBe("needs-setup");
+    expect(useAuthStore.getState().accessToken).toBeNull();
+  });
+
+  it("falls back to unauthenticated if setup-status itself fails", async () => {
+    vi.mocked(authApi.refresh).mockRejectedValue(new ApiError(401, "unauthorized", "no session"));
+    vi.mocked(authApi.setupStatus).mockRejectedValue(new Error("network error"));
+
+    await useAuthStore.getState().bootstrap();
+
+    expect(useAuthStore.getState().status).toBe("unauthenticated");
   });
 
   it("goes to authenticated when refresh and me both succeed", async () => {
@@ -112,7 +136,7 @@ describe("login", () => {
 
     const state = useAuthStore.getState();
     expect(state.status).toBe("authenticated");
-    expect(state.user?.username).toBe("admin");
+    expect(state.user?.name).toBe("admin");
   });
 
   it("goes to must-change-password without calling me when required", async () => {
@@ -122,7 +146,7 @@ describe("login", () => {
 
     const state = useAuthStore.getState();
     expect(state.status).toBe("must-change-password");
-    expect(state.pendingUsername).toBe("admin");
+    expect(state.pendingEmail).toBe("admin");
     expect(authApi.me).not.toHaveBeenCalled();
   });
 
@@ -141,7 +165,7 @@ describe("logout", () => {
     useAuthStore.setState({
       status: "authenticated",
       user: adminUser,
-      pendingUsername: null,
+      pendingEmail: null,
       accessToken: "token-123",
     });
     vi.mocked(authApi.logout).mockRejectedValue(new Error("network error"));
@@ -166,7 +190,7 @@ describe("changePassword", () => {
     useAuthStore.setState({
       status: "must-change-password",
       user: null,
-      pendingUsername: "admin",
+      pendingEmail: "admin",
       accessToken: "token-123",
     });
     vi.mocked(authApi.changePassword).mockResolvedValue({ accessToken: "token-456" });
@@ -178,7 +202,7 @@ describe("changePassword", () => {
     const state = useAuthStore.getState();
     expect(state.status).toBe("authenticated");
     expect(state.user?.mustChangePassword).toBe(false);
-    expect(state.pendingUsername).toBeNull();
+    expect(state.pendingEmail).toBeNull();
     expect(state.accessToken).toBe("token-456");
   });
 
@@ -186,7 +210,7 @@ describe("changePassword", () => {
     useAuthStore.setState({
       status: "must-change-password",
       user: null,
-      pendingUsername: "admin",
+      pendingEmail: "admin",
       accessToken: "token-123",
     });
     useShellStore.setState({ activeView: "week" });
@@ -210,7 +234,7 @@ describe("updateEmail", () => {
     useAuthStore.setState({
       status: "authenticated",
       user: adminUser,
-      pendingUsername: null,
+      pendingEmail: null,
       accessToken: "token-123",
     });
     const updatedUser = { ...adminUser, email: "admin@example.com", emailReminderChannelAvailable: true };
@@ -223,9 +247,9 @@ describe("updateEmail", () => {
   });
 });
 
-describe("updateUsername", () => {
+describe("updateName", () => {
   it("throws when there is no access token", async () => {
-    await expect(useAuthStore.getState().updateUsername("newname")).rejects.toThrow(
+    await expect(useAuthStore.getState().updateName("newname")).rejects.toThrow(
       "Not authenticated.",
     );
   });
@@ -234,16 +258,16 @@ describe("updateUsername", () => {
     useAuthStore.setState({
       status: "authenticated",
       user: adminUser,
-      pendingUsername: null,
+      pendingEmail: null,
       accessToken: "token-123",
     });
-    const updatedUser = { ...adminUser, username: "newname" };
-    vi.mocked(authApi.updateUsername).mockResolvedValue(updatedUser);
+    const updatedUser = { ...adminUser, name: "newname" };
+    vi.mocked(authApi.updateName).mockResolvedValue(updatedUser);
 
-    await useAuthStore.getState().updateUsername("newname");
+    await useAuthStore.getState().updateName("newname");
 
     expect(useAuthStore.getState().user).toEqual(updatedUser);
-    expect(authApi.updateUsername).toHaveBeenCalledWith("token-123", "newname");
+    expect(authApi.updateName).toHaveBeenCalledWith("token-123", "newname");
   });
 });
 
@@ -258,7 +282,7 @@ describe("updateSyncedDeviceReminders", () => {
     useAuthStore.setState({
       status: "authenticated",
       user: adminUser,
-      pendingUsername: null,
+      pendingEmail: null,
       accessToken: "token-123",
     });
     const updatedUser = { ...adminUser, syncedDeviceRemindersEnabled: true };
@@ -280,7 +304,7 @@ describe("updateWeekStart", () => {
     useAuthStore.setState({
       status: "authenticated",
       user: adminUser,
-      pendingUsername: null,
+      pendingEmail: null,
       accessToken: "token-123",
     });
     const updatedUser = { ...adminUser, weekStart: 0 };
@@ -304,7 +328,7 @@ describe("updateDefaultView", () => {
     useAuthStore.setState({
       status: "authenticated",
       user: adminUser,
-      pendingUsername: null,
+      pendingEmail: null,
       accessToken: "token-123",
     });
     useShellStore.setState({ activeView: "day" });
@@ -332,7 +356,7 @@ describe("updateTimeFormat", () => {
     useAuthStore.setState({
       status: "authenticated",
       user: adminUser,
-      pendingUsername: null,
+      pendingEmail: null,
       accessToken: "token-123",
     });
     const updatedUser = { ...adminUser, timeFormat: "12h" as const };
@@ -356,7 +380,7 @@ describe("updateWorkingHours", () => {
     useAuthStore.setState({
       status: "authenticated",
       user: adminUser,
-      pendingUsername: null,
+      pendingEmail: null,
       accessToken: "token-123",
     });
     const updatedUser = { ...adminUser, workingHoursStart: 9, workingHoursEnd: 17 };
@@ -374,7 +398,7 @@ describe("updateWorkingHours", () => {
     useAuthStore.setState({
       status: "authenticated",
       user: { ...adminUser, workingHoursStart: 9, workingHoursEnd: 17 },
-      pendingUsername: null,
+      pendingEmail: null,
       accessToken: "token-123",
     });
     const updatedUser = { ...adminUser, workingHoursStart: null, workingHoursEnd: null };
@@ -423,7 +447,7 @@ describe("session refresher", () => {
     useAuthStore.setState({
       status: "authenticated",
       user: adminUser,
-      pendingUsername: null,
+      pendingEmail: null,
       accessToken: "stale-token",
     });
     vi.mocked(authApi.refresh).mockResolvedValue({ accessToken: "fresh-token" });
@@ -441,7 +465,7 @@ describe("session refresher", () => {
     useAuthStore.setState({
       status: "authenticated",
       user: adminUser,
-      pendingUsername: null,
+      pendingEmail: null,
       accessToken: "stale-token",
     });
     vi.mocked(authApi.refresh).mockRejectedValue(new ApiError(401, "unauthorized", "no session"));

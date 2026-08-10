@@ -40,19 +40,19 @@ func newAttachmentTestFixture(t *testing.T, maxPerEvent int) attachmentTestFixtu
 	t.Cleanup(func() { sqlDB.Close() })
 
 	users := repository.NewUserRepository(sqlDB)
-	owner, err := users.Create(ctx, "owner", "hash", false)
+	owner, err := users.Create(ctx, "owner", "owner@example.com", "hash", false)
 	if err != nil {
 		t.Fatalf("create owner: %v", err)
 	}
-	editor, err := users.Create(ctx, "editor", "hash", false)
+	editor, err := users.Create(ctx, "editor", "editor@example.com", "hash", false)
 	if err != nil {
 		t.Fatalf("create editor: %v", err)
 	}
-	viewer, err := users.Create(ctx, "viewer", "hash", false)
+	viewer, err := users.Create(ctx, "viewer", "viewer@example.com", "hash", false)
 	if err != nil {
 		t.Fatalf("create viewer: %v", err)
 	}
-	stranger, err := users.Create(ctx, "stranger", "hash", false)
+	stranger, err := users.Create(ctx, "stranger", "stranger@example.com", "hash", false)
 	if err != nil {
 		t.Fatalf("create stranger: %v", err)
 	}
@@ -79,10 +79,10 @@ func newAttachmentTestFixture(t *testing.T, maxPerEvent int) attachmentTestFixtu
 	if err != nil {
 		t.Fatalf("create calendar: %v", err)
 	}
-	if _, err := calendars.Share(ctx, owner.ID, cal.ID, "editor", repository.RoleEditor); err != nil {
+	if _, _, err := calendars.Share(ctx, owner.ID, cal.ID, "editor@example.com", repository.RoleEditor); err != nil {
 		t.Fatalf("share editor: %v", err)
 	}
-	if _, err := calendars.Share(ctx, owner.ID, cal.ID, "viewer", repository.RoleViewer); err != nil {
+	if _, _, err := calendars.Share(ctx, owner.ID, cal.ID, "viewer@example.com", repository.RoleViewer); err != nil {
 		t.Fatalf("share viewer: %v", err)
 	}
 
@@ -290,7 +290,7 @@ func TestAttachmentService_Upload_SubscribedCalendarRefused(t *testing.T) {
 	t.Cleanup(func() { sqlDB.Close() })
 
 	users := repository.NewUserRepository(sqlDB)
-	owner, err := users.Create(ctx, "owner", "hash", false)
+	owner, err := users.Create(ctx, "owner", "owner@example.com", "hash", false)
 	if err != nil {
 		t.Fatalf("create owner: %v", err)
 	}
@@ -358,8 +358,8 @@ func TestEventService_ListAndGet_AttachmentsShowOnMasterOnly(t *testing.T) {
 	if len(got.Attachments) != 1 || got.Attachments[0].ID != created.ID {
 		t.Fatalf("expected the uploaded attachment on the master, got %+v", got.Attachments)
 	}
-	if got.Attachments[0].UploadedByUsername != "owner" {
-		t.Fatalf("expected UploadedByUsername = owner, got %q", got.Attachments[0].UploadedByUsername)
+	if got.Attachments[0].UploadedByName != "owner" {
+		t.Fatalf("expected UploadedByName = owner, got %q", got.Attachments[0].UploadedByName)
 	}
 
 	list, err := f.events.List(ctx, f.ownerID, nil, nil)

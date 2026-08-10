@@ -21,11 +21,11 @@ func newTestNotificationRepository(t *testing.T) (repo *NotificationRepository, 
 
 	ctx := context.Background()
 	users := NewUserRepository(sqlDB)
-	user, err := users.Create(ctx, "user-a", "hash", false)
+	user, err := users.Create(ctx, "user-a", "user-a@example.com", "hash", false)
 	if err != nil {
 		t.Fatalf("create user: %v", err)
 	}
-	other, err := users.Create(ctx, "user-b", "hash", false)
+	other, err := users.Create(ctx, "user-b", "user-b@example.com", "hash", false)
 	if err != nil {
 		t.Fatalf("create other user: %v", err)
 	}

@@ -27,7 +27,7 @@ func NewAuthHandler(auth *service.AuthService, smtpConfigured bool) *AuthHandler
 }
 
 type loginRequest struct {
-	Username string `json:"username"`
+	Email    string `json:"email"`
 	Password string `json:"password"`
 }
 
@@ -43,15 +43,15 @@ type loginResponse struct {
 }
 
 var loginErrors = []errorCase{
-	{service.ErrInvalidCredentials, unauthorized("invalid_credentials", "invalid username or password")},
+	{service.ErrInvalidCredentials, unauthorized("invalid_credentials", "invalid email or password")},
 }
 
 var registerErrors = []errorCase{
 	{service.ErrSignupsDisabled, forbidden("self-registration is disabled on this instance")},
-	{service.ErrInvalidUsername, badRequest("username must not be empty, must not contain whitespace or a colon, and must be at most 64 characters")},
-	{service.ErrUsernameTaken, conflict("username_taken", "username is already taken")},
+	{service.ErrInvalidDisplayName, badRequest("name must not be empty and must be at most 100 characters")},
 	{service.ErrEmailRequired, badRequest("email is required")},
-	{service.ErrInvalidEmail, badRequest("email is not a valid address")},
+	{service.ErrInvalidEmail, badRequest("email must be a valid address and must not contain whitespace or a colon")},
+	{service.ErrEmailTaken, conflict("email_taken", "email is already taken")},
 	{service.ErrInvalidPassword, badRequest("password must not be empty")},
 }
 
@@ -61,8 +61,8 @@ var previewWorkspaceInviteErrors = []errorCase{
 
 var acceptWorkspaceInviteErrors = []errorCase{
 	{service.ErrWorkspaceInviteInvalid, unauthorized("invite_invalid", "invite is invalid or has expired")},
-	{service.ErrInvalidUsername, badRequest("name must not be empty, must not contain whitespace or a colon, and must be at most 64 characters")},
-	{service.ErrUsernameTaken, conflict("username_taken", "username is already taken")},
+	{service.ErrInvalidDisplayName, badRequest("name must not be empty and must be at most 100 characters")},
+	{service.ErrEmailTaken, conflict("email_taken", "email is already taken")},
 	{service.ErrInvalidPassword, badRequest("password must not be empty")},
 }
 
@@ -73,12 +73,13 @@ var joinWorkspaceInviteErrors = []errorCase{
 }
 
 var updateEmailErrors = []errorCase{
-	{service.ErrInvalidEmail, badRequest("email is not a valid address")},
+	{service.ErrEmailRequired, badRequest("email is required")},
+	{service.ErrInvalidEmail, badRequest("email must be a valid address and must not contain whitespace or a colon")},
+	{service.ErrEmailTaken, conflict("email_taken", "email is already taken")},
 }
 
-var updateUsernameErrors = []errorCase{
-	{service.ErrInvalidUsername, badRequest("username must not be empty, must not contain whitespace or a colon, and must be at most 64 characters")},
-	{service.ErrUsernameTaken, conflict("username_taken", "username is already taken")},
+var updateNameErrors = []errorCase{
+	{service.ErrInvalidDisplayName, badRequest("name must not be empty and must be at most 100 characters")},
 }
 
 var updatePreferencesErrors = []errorCase{
@@ -99,6 +100,25 @@ var changePasswordErrors = []errorCase{
 	{service.ErrInvalidPassword, badRequest("new password must not be empty")},
 }
 
+type setupStatusResponse struct {
+	HasAccounts bool `json:"has_accounts"`
+}
+
+// SetupStatus reports whether the instance has any accounts yet (#169,
+// ADR-0047) — public and unauthenticated, since it must be answerable before
+// anyone has signed in, and it says nothing about who's asking. The frontend
+// uses this to redirect a first-run visitor straight to Register instead of
+// showing a Sign-in screen there are no accounts to sign in to.
+func (h *AuthHandler) SetupStatus(w http.ResponseWriter, r *http.Request) {
+	hasAccounts, err := h.auth.HasAnyAccounts(r.Context())
+	if err != nil {
+		httpresponse.Error(w, http.StatusInternalServerError, "internal_error", "failed to check setup status")
+		return
+	}
+
+	httpresponse.JSON(w, http.StatusOK, setupStatusResponse{HasAccounts: hasAccounts})
+}
+
 func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 	var req loginRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -106,7 +126,7 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result, err := h.auth.Login(r.Context(), req.Username, req.Password)
+	result, err := h.auth.Login(r.Context(), req.Email, req.Password)
 	if respondError(w, err, loginErrors, "failed to log in") {
 		return
 	}
@@ -120,9 +140,8 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// registerRequest's Name doubles as the account's username (validateUsername
-// in the service layer): no whitespace or colon, since the same value is
-// what CalDAV Basic auth authenticates against.
+// registerRequest's Name is a display name only (ADR-0047) — Email is the
+// account's login identifier, validated separately in the service layer.
 type registerRequest struct {
 	Name     string `json:"name"`
 	Email    string `json:"email"`
@@ -242,13 +261,14 @@ func (h *AuthHandler) JoinWorkspaceInvite(w http.ResponseWriter, r *http.Request
 }
 
 type meResponse struct {
-	ID                 int64   `json:"id"`
-	Username           string  `json:"username"`
-	MustChangePassword bool    `json:"must_change_password"`
-	Email              *string `json:"email"`
+	ID                 int64  `json:"id"`
+	Name               string `json:"name"`
+	MustChangePassword bool   `json:"must_change_password"`
+	Email              string `json:"email"`
 	// EmailReminderChannelAvailable is whether the Email Channel can
-	// actually be used for a new Reminder — the user has an email set *and*
-	// the self-hoster has SMTP configured (ADR-0021, ADR-0010).
+	// actually be used for a new Reminder — every account has an email now
+	// (ADR-0047), so this collapses to just whether the self-hoster has SMTP
+	// configured (ADR-0021, ADR-0010).
 	EmailReminderChannelAvailable bool `json:"email_reminder_channel_available"`
 	// SyncedDeviceRemindersEnabled is "let my synced devices show reminder
 	// pop-ups (disable in-app reminder notifications)" (ADR-0027).
@@ -265,10 +285,10 @@ type meResponse struct {
 func (h *AuthHandler) toMeResponse(user repository.User) meResponse {
 	return meResponse{
 		ID:                            user.ID,
-		Username:                      user.Username,
+		Name:                          user.Name,
 		MustChangePassword:            user.MustChangePassword,
 		Email:                         user.Email,
-		EmailReminderChannelAvailable: h.smtpConfigured && user.Email != nil,
+		EmailReminderChannelAvailable: h.smtpConfigured,
 		SyncedDeviceRemindersEnabled:  user.SyncedDeviceRemindersEnabled,
 		WeekStart:                     user.WeekStart,
 		DefaultView:                   user.DefaultView,
@@ -319,28 +339,28 @@ func (h *AuthHandler) UpdateEmail(w http.ResponseWriter, r *http.Request) {
 	httpresponse.JSON(w, http.StatusOK, h.toMeResponse(user))
 }
 
-type updateUsernameRequest struct {
-	Username string `json:"username"`
+type updateNameRequest struct {
+	Name string `json:"name"`
 }
 
-// UpdateUsername renames the caller's own account (#125). No current
-// password is required, matching UpdateEmail — the Access token already
-// proves identity.
-func (h *AuthHandler) UpdateUsername(w http.ResponseWriter, r *http.Request) {
+// UpdateName renames the caller's own display name (#125, ADR-0047). No
+// current password is required, matching UpdateEmail — the Access token
+// already proves identity.
+func (h *AuthHandler) UpdateName(w http.ResponseWriter, r *http.Request) {
 	userID, ok := httpauth.UserIDFromContext(r.Context())
 	if !ok {
 		httpresponse.Error(w, http.StatusUnauthorized, "unauthorized", "authentication required")
 		return
 	}
 
-	var req updateUsernameRequest
+	var req updateNameRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		httpresponse.Error(w, http.StatusBadRequest, "invalid_request", "request body must be valid JSON")
 		return
 	}
 
-	user, err := h.auth.UpdateUsername(r.Context(), userID, req.Username)
-	if respondError(w, err, updateUsernameErrors, "failed to update username") {
+	user, err := h.auth.UpdateName(r.Context(), userID, req.Name)
+	if respondError(w, err, updateNameErrors, "failed to update name") {
 		return
 	}
 

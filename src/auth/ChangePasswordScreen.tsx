@@ -6,7 +6,7 @@ import { Input } from "../components/ui/Input";
 
 export function ChangePasswordScreen() {
   const changePassword = useAuthStore((state) => state.changePassword);
-  const pendingUsername = useAuthStore((state) => state.pendingUsername);
+  const pendingEmail = useAuthStore((state) => state.pendingEmail);
 
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
@@ -35,7 +35,7 @@ export function ChangePasswordScreen() {
           Change your password
         </h1>
         <p className="mt-1 text-body text-ink-muted">
-          {pendingUsername ? `Signed in as ${pendingUsername}. ` : ""}
+          {pendingEmail ? `Signed in as ${pendingEmail}. ` : ""}
           You must set a new password before continuing.
         </p>
 

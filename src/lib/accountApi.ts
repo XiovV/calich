@@ -8,7 +8,7 @@ export type CalendarDisposition = "transfer" | "delete";
 
 export interface TransferCandidate {
   id: number;
-  username: string;
+  name: string;
 }
 
 // One Calendar the caller owns, across every Workspace they belong to —
@@ -29,7 +29,7 @@ export interface DeleteImpact {
 
 interface TransferCandidateWire {
   id: number;
-  username: string;
+  name: string;
 }
 
 interface CalendarImpactWire {
@@ -53,7 +53,7 @@ function fromDeleteImpactWire(wire: DeleteImpactWire): DeleteImpact {
       workspaceId: c.workspace_id,
       workspaceName: c.workspace_name,
       shareCount: c.share_count,
-      transferCandidates: c.transfer_candidates.map((t) => ({ id: t.id, username: t.username })),
+      transferCandidates: c.transfer_candidates.map((t) => ({ id: t.id, name: t.name })),
     })),
   };
 }

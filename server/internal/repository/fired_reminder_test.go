@@ -31,7 +31,7 @@ func newTestFiredReminderRepositoryWithUsers(t *testing.T) (ledger *FiredReminde
 	ctx := context.Background()
 
 	users = NewUserRepository(sqlDB)
-	user, err := users.Create(ctx, "user-a", "hash", false)
+	user, err := users.Create(ctx, "user-a", "user-a@example.com", "hash", false)
 	if err != nil {
 		t.Fatalf("create user: %v", err)
 	}
@@ -133,7 +133,7 @@ func TestFiredReminderRepository_MarkFired_DifferentUserIsIndependent(t *testing
 		t.Fatalf("mark fired: %v", err)
 	}
 
-	otherUser, err := users.Create(ctx, "user-b", "hash", false)
+	otherUser, err := users.Create(ctx, "user-b", "user-b@example.com", "hash", false)
 	if err != nil {
 		t.Fatalf("create other user: %v", err)
 	}

@@ -79,7 +79,7 @@ func TestSyncCollection_InitialSync_ReturnsAllLiveObjects(t *testing.T) {
 	}
 
 	path := calendarPath(env.userID, env.calendarID)
-	resp := report(t, env.srv, path, "admin", env.appPasswordSecret, syncCollectionInitial)
+	resp := report(t, env.srv, path, "admin@example.com", env.appPasswordSecret, syncCollectionInitial)
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusMultiStatus {
@@ -104,12 +104,12 @@ func TestSyncCollection_UnchangedCalendar_ReturnsNothingNew(t *testing.T) {
 	}
 
 	path := calendarPath(env.userID, env.calendarID)
-	initial := report(t, env.srv, path, "admin", env.appPasswordSecret, syncCollectionInitial)
+	initial := report(t, env.srv, path, "admin@example.com", env.appPasswordSecret, syncCollectionInitial)
 	initialBody := readBody(t, initial)
 	initial.Body.Close()
 	token := extractSyncToken(t, initialBody)
 
-	resp := report(t, env.srv, path, "admin", env.appPasswordSecret, syncCollectionWithToken(token))
+	resp := report(t, env.srv, path, "admin@example.com", env.appPasswordSecret, syncCollectionWithToken(token))
 	defer resp.Body.Close()
 	body := readBody(t, resp)
 	if strings.Contains(body, "<href>") {
@@ -129,7 +129,7 @@ func TestSyncCollection_AfterMutation_ReturnsOnlyTheChangedObject(t *testing.T) 
 	}
 
 	path := calendarPath(env.userID, env.calendarID)
-	initial := report(t, env.srv, path, "admin", env.appPasswordSecret, syncCollectionInitial)
+	initial := report(t, env.srv, path, "admin@example.com", env.appPasswordSecret, syncCollectionInitial)
 	initialBody := readBody(t, initial)
 	initial.Body.Close()
 	token := extractSyncToken(t, initialBody)
@@ -139,7 +139,7 @@ func TestSyncCollection_AfterMutation_ReturnsOnlyTheChangedObject(t *testing.T) 
 		t.Fatalf("create second event: %v", err)
 	}
 
-	resp := report(t, env.srv, path, "admin", env.appPasswordSecret, syncCollectionWithToken(token))
+	resp := report(t, env.srv, path, "admin@example.com", env.appPasswordSecret, syncCollectionWithToken(token))
 	defer resp.Body.Close()
 	body := readBody(t, resp)
 
@@ -163,7 +163,7 @@ func TestSyncCollection_AfterDelete_ReportsDeletedHrefAsNotFound(t *testing.T) {
 	}
 
 	path := calendarPath(env.userID, env.calendarID)
-	initial := report(t, env.srv, path, "admin", env.appPasswordSecret, syncCollectionInitial)
+	initial := report(t, env.srv, path, "admin@example.com", env.appPasswordSecret, syncCollectionInitial)
 	initialBody := readBody(t, initial)
 	initial.Body.Close()
 	token := extractSyncToken(t, initialBody)
@@ -172,7 +172,7 @@ func TestSyncCollection_AfterDelete_ReportsDeletedHrefAsNotFound(t *testing.T) {
 		t.Fatalf("delete event: %v", err)
 	}
 
-	resp := report(t, env.srv, path, "admin", env.appPasswordSecret, syncCollectionWithToken(token))
+	resp := report(t, env.srv, path, "admin@example.com", env.appPasswordSecret, syncCollectionWithToken(token))
 	defer resp.Body.Close()
 	body := readBody(t, resp)
 
@@ -201,7 +201,7 @@ func TestSyncCollection_AfterCalDAVDelete_ReportsDeletedHrefAsNotFound(t *testin
 	}
 
 	collectionPath := calendarPath(env.userID, env.calendarID)
-	initial := report(t, env.srv, collectionPath, "admin", env.appPasswordSecret, syncCollectionInitial)
+	initial := report(t, env.srv, collectionPath, "admin@example.com", env.appPasswordSecret, syncCollectionInitial)
 	initialBody := readBody(t, initial)
 	initial.Body.Close()
 	token := extractSyncToken(t, initialBody)
@@ -212,7 +212,7 @@ func TestSyncCollection_AfterCalDAVDelete_ReportsDeletedHrefAsNotFound(t *testin
 		t.Fatalf("RemoveAll: %v", err)
 	}
 
-	resp := report(t, env.srv, collectionPath, "admin", env.appPasswordSecret, syncCollectionWithToken(token))
+	resp := report(t, env.srv, collectionPath, "admin@example.com", env.appPasswordSecret, syncCollectionWithToken(token))
 	defer resp.Body.Close()
 	body := readBody(t, resp)
 

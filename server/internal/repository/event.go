@@ -71,10 +71,10 @@ type Event struct {
 	// deleted (ON DELETE SET NULL), or for rows written before this column
 	// existed.
 	CreatedBy *int64
-	// CreatedByUsername is CreatedBy's Username, for display (#118). Not a
+	// CreatedByName is CreatedBy's display Name (#118). Not a
 	// column — populated by the service layer from users, mirroring how
 	// Exdates and Reminders are attached. Empty whenever CreatedBy is nil.
-	CreatedByUsername string
+	CreatedByName string
 	// Attachments are this Event's Attachments (#132, ADR-0040) — set only
 	// on a Master; an Override never carries its own. Not a column —
 	// populated by the service layer from event_attachments, mirroring

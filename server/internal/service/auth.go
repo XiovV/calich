@@ -27,10 +27,12 @@ const (
 	refreshTokenTTL = 30 * 24 * time.Hour
 )
 
-// maxUsernameLength bounds validateUsername (#125). Chosen as a generous
-// round number — nothing downstream (the users.username column, CalDAV
-// principal paths keyed on id rather than username) imposes a tighter limit.
-const maxUsernameLength = 64
+// maxNameLength bounds validateName (#125, ADR-0047). Bumped from the old
+// single-token username's 64 to a more generous round number now that a
+// display name is expected to hold a full "First Last" — nothing downstream
+// (the users.name column, CalDAV principal paths keyed on id rather than
+// name) imposes a tighter limit.
+const maxNameLength = 100
 
 // inviteTokenTTL is how long a Workspace Invite token is valid for
 // (ADR-0044) — shorter than the 30-day refresh token (ADR-0009) because this
@@ -42,14 +44,17 @@ var (
 	ErrInvalidCredentials = errors.New("invalid credentials")
 	ErrInvalidSession     = errors.New("invalid session")
 	ErrInvalidPassword    = errors.New("password must not be empty")
-	ErrInvalidEmail       = errors.New("email is not a valid address")
-	// ErrInvalidUsername is returned when a username fails validateUsername
-	// — empty (or all whitespace), containing a colon or other whitespace,
-	// or longer than maxUsernameLength.
-	ErrInvalidUsername = errors.New("username must not be empty, must not contain whitespace or a colon, and must be at most 64 characters")
-	// ErrUsernameTaken mirrors repository.ErrUsernameTaken so handlers only
-	// import the service package's sentinels.
-	ErrUsernameTaken = repository.ErrUsernameTaken
+	// ErrInvalidEmail is returned when an email fails validateEmail — not a
+	// well-formed address, or containing a colon or other whitespace (ADR-0047:
+	// this is also the CalDAV Basic auth identifier, and Go's
+	// net/http.Request.BasicAuth splits credentials on the first colon).
+	ErrInvalidEmail = errors.New("email must be a valid address and must not contain whitespace or a colon")
+	// ErrInvalidDisplayName is returned when a display name fails validateName —
+	// empty (or all whitespace) or longer than maxNameLength.
+	ErrInvalidDisplayName = errors.New("name must not be empty and must be at most 100 characters")
+	// ErrEmailTaken mirrors repository.ErrEmailTaken so handlers only import
+	// the service package's sentinels.
+	ErrEmailTaken = repository.ErrEmailTaken
 	// ErrWorkspaceInviteInvalid is returned for a Workspace Invite (ADR-0044)
 	// token that doesn't match any outstanding invite, has expired, or has
 	// already been consumed — deliberately one error for all three, since
@@ -86,7 +91,7 @@ var (
 	// attempt beyond the very first account on the instance while
 	// ENABLE_SIGNUPS is false (ADR-0044) — the first account always
 	// succeeds regardless, since it's how a fresh instance without
-	// INITIAL_USERNAME/INITIAL_PASSWORD set gets bootstrapped.
+	// INITIAL_EMAIL/INITIAL_PASSWORD set gets bootstrapped.
 	ErrSignupsDisabled = errors.New("self-registration is disabled on this instance")
 )
 
@@ -108,22 +113,39 @@ var validTimeFormats = map[string]bool{
 // bound may hold — 23:59, expressed as minutes since midnight (ADR-0039).
 const maxWorkingHoursMinute = 1439
 
-// validateUsername trims username and checks it against the one set of rules
-// shared by every path that picks or renames one — Register, AuthService.
-// UpdateUsername, and AcceptWorkspaceInviteNewAccount — so none of them can
-// drift (#125). A colon is rejected because Go's net/http.Request.BasicAuth
-// splits credentials on the first colon: a username containing one could
+// validateName trims name and checks it against the one set of rules shared
+// by every path that picks or renames one — Register, AuthService.UpdateName,
+// and AcceptWorkspaceInviteNewAccount — so none of them can drift (#125,
+// ADR-0047). Unlike the identifier (see validateEmail), a display name may
+// contain spaces: "Jane Smith" is a valid name.
+func validateName(name string) (string, error) {
+	name = strings.TrimSpace(name)
+	if name == "" || len(name) > maxNameLength {
+		return "", ErrInvalidDisplayName
+	}
+	return name, nil
+}
+
+// validateEmail trims email and checks it against the one set of rules
+// shared by every path that picks or changes the account's login identifier
+// — Register, AuthService.UpdateEmail, and Bootstrap (ADR-0047). A colon or
+// other whitespace is rejected because Go's net/http.Request.BasicAuth
+// splits credentials on the first colon: an email containing one could
 // create an account that can never authenticate over CalDAV
-// (AppPasswordService.Authenticate).
-func validateUsername(username string) (string, error) {
-	username = strings.TrimSpace(username)
-	if username == "" || len(username) > maxUsernameLength {
-		return "", ErrInvalidUsername
+// (AppPasswordService.Authenticate). Ordinary email addresses never contain
+// either, so this isn't a new restriction in practice.
+func validateEmail(email string) (string, error) {
+	email = strings.TrimSpace(email)
+	if email == "" {
+		return "", ErrEmailRequired
 	}
-	if strings.ContainsAny(username, ":") || strings.ContainsFunc(username, unicode.IsSpace) {
-		return "", ErrInvalidUsername
+	if strings.ContainsAny(email, ":") || strings.ContainsFunc(email, unicode.IsSpace) {
+		return "", ErrInvalidEmail
 	}
-	return username, nil
+	if _, err := mail.ParseAddress(email); err != nil {
+		return "", ErrInvalidEmail
+	}
+	return email, nil
 }
 
 type AuthService struct {
@@ -131,34 +153,39 @@ type AuthService struct {
 	sessions         *repository.SessionRepository
 	workspaces       *WorkspaceService
 	workspaceInvites *repository.WorkspaceInviteRepository
+	calendars        *CalendarService
 	jwtSecret        []byte
-	initialUsername  string
+	initialName      string
+	initialEmail     string
 	initialPassword  string
 	enableSignups    bool
 }
 
-func NewAuthService(users *repository.UserRepository, sessions *repository.SessionRepository, workspaces *WorkspaceService, workspaceInvites *repository.WorkspaceInviteRepository, jwtSecret []byte, initialUsername, initialPassword string, enableSignups bool) *AuthService {
+func NewAuthService(users *repository.UserRepository, sessions *repository.SessionRepository, workspaces *WorkspaceService, workspaceInvites *repository.WorkspaceInviteRepository, calendars *CalendarService, jwtSecret []byte, initialName, initialEmail, initialPassword string, enableSignups bool) *AuthService {
 	return &AuthService{
 		users:            users,
 		sessions:         sessions,
 		workspaces:       workspaces,
 		workspaceInvites: workspaceInvites,
+		calendars:        calendars,
 		jwtSecret:        jwtSecret,
-		initialUsername:  initialUsername,
+		initialName:      initialName,
+		initialEmail:     initialEmail,
 		initialPassword:  initialPassword,
 		enableSignups:    enableSignups,
 	}
 }
 
-// Bootstrap creates the first user if none exist yet and INITIAL_USERNAME /
-// INITIAL_PASSWORD are both set, owning a freshly created Workspace of their
-// own (ADR-0044). There is no fixed fallback credential (ADR-0010,
-// superseded): an instance with neither env var set simply has no user until
-// someone completes Register — the first-run bootstrap form that collects a
-// name, email, and password — which is allowed unconditionally for exactly
-// this reason. It returns the resulting sole user either way, along with
-// whether this call is what created them — callers that only want to act on
-// a genuinely fresh install (e.g. seeding default calendars) should gate on
+// Bootstrap creates the first user if none exist yet and INITIAL_EMAIL /
+// INITIAL_PASSWORD are both set (INITIAL_NAME defaults to "Admin" if unset —
+// see config.Load), owning a freshly created Workspace of their own
+// (ADR-0044). There is no fixed fallback credential (ADR-0010, superseded):
+// an instance with neither env var set simply has no user until someone
+// completes Register — the first-run bootstrap form that collects a name,
+// email, and password — which is allowed unconditionally for exactly this
+// reason. It returns the resulting sole user either way, along with whether
+// this call is what created them — callers that only want to act on a
+// genuinely fresh install (e.g. seeding default calendars) should gate on
 // that flag rather than re-derive freshness from the user's current state,
 // which can drift after bootstrap (e.g. the user deletes their own data
 // later).
@@ -175,7 +202,7 @@ func (s *AuthService) Bootstrap(ctx context.Context) (user repository.User, crea
 		return existing, false, nil
 	}
 
-	if s.initialUsername == "" || s.initialPassword == "" {
+	if s.initialEmail == "" || s.initialPassword == "" {
 		return repository.User{}, false, nil
 	}
 
@@ -184,16 +211,28 @@ func (s *AuthService) Bootstrap(ctx context.Context) (user repository.User, crea
 		return repository.User{}, false, fmt.Errorf("hash bootstrap password: %w", err)
 	}
 
-	newUser, err := s.users.Create(ctx, s.initialUsername, string(hash), false)
+	newUser, err := s.users.Create(ctx, s.initialName, s.initialEmail, string(hash), false)
 	if err != nil {
 		return repository.User{}, false, fmt.Errorf("create bootstrap user: %w", err)
 	}
 
-	if _, err := s.workspaces.CreateForOwner(ctx, newUser.ID, workspaceNameFor(newUser.Username)); err != nil {
+	if _, err := s.workspaces.CreateForOwner(ctx, newUser.ID, workspaceNameFor(newUser.Name)); err != nil {
 		return repository.User{}, false, fmt.Errorf("create bootstrap workspace: %w", err)
 	}
 
 	return newUser, true, nil
+}
+
+// HasAnyAccounts reports whether the instance has at least one account yet —
+// unauthenticated-safe, backing the first-run redirect (#169, ADR-0047): a
+// fresh self-hosted instance with zero accounts sends an unauthenticated
+// visitor straight to Register instead of Sign-in.
+func (s *AuthService) HasAnyAccounts(ctx context.Context) (bool, error) {
+	count, err := s.users.Count(ctx)
+	if err != nil {
+		return false, fmt.Errorf("count users: %w", err)
+	}
+	return count > 0, nil
 }
 
 // workspaceNameFor is the default name a Workspace gets when Bootstrap or
@@ -219,17 +258,14 @@ func workspaceNameFor(name string) string {
 // Admin. SQLite allows only one writer at a time, so the second transaction
 // re-reads the count only once the first has committed.
 func (s *AuthService) Register(ctx context.Context, name, email, password string) (LoginResult, error) {
-	name, err := validateUsername(name)
+	name, err := validateName(name)
 	if err != nil {
 		return LoginResult{}, err
 	}
 
-	email = strings.TrimSpace(email)
-	if email == "" {
-		return LoginResult{}, ErrEmailRequired
-	}
-	if _, err := mail.ParseAddress(email); err != nil {
-		return LoginResult{}, ErrInvalidEmail
+	email, err = validateEmail(email)
+	if err != nil {
+		return LoginResult{}, err
 	}
 
 	if password == "" {
@@ -242,6 +278,7 @@ func (s *AuthService) Register(ctx context.Context, name, email, password string
 	}
 
 	var newUser repository.User
+	var newWorkspace repository.Workspace
 	err = s.workspaces.WithTx(ctx, func(tx *sql.Tx) error {
 		txUsers := s.users.WithTx(tx)
 
@@ -253,19 +290,16 @@ func (s *AuthService) Register(ctx context.Context, name, email, password string
 			return ErrSignupsDisabled
 		}
 
-		newUser, err = txUsers.Create(ctx, name, string(hash), false)
+		newUser, err = txUsers.Create(ctx, name, email, string(hash), false)
 		if err != nil {
-			if errors.Is(err, repository.ErrUsernameTaken) {
-				return ErrUsernameTaken
+			if errors.Is(err, repository.ErrEmailTaken) {
+				return ErrEmailTaken
 			}
 			return fmt.Errorf("create user: %w", err)
 		}
 
-		if _, err := txUsers.UpdateEmail(ctx, newUser.ID, email); err != nil {
-			return fmt.Errorf("set email: %w", err)
-		}
-
-		if _, err := s.workspaces.createForOwnerTx(ctx, tx, newUser.ID, workspaceNameFor(name)); err != nil {
+		newWorkspace, err = s.workspaces.createForOwnerTx(ctx, tx, newUser.ID, workspaceNameFor(name))
+		if err != nil {
 			return fmt.Errorf("create workspace: %w", err)
 		}
 
@@ -275,12 +309,47 @@ func (s *AuthService) Register(ctx context.Context, name, email, password string
 		return LoginResult{}, err
 	}
 
+	// Seeds the three default Calendars into the Workspace Register just
+	// created (#172). Run only after the transaction above has committed —
+	// EnsureDefaults resolves Workspace membership through the plain (non-tx)
+	// repos, so it needs newWorkspace's membership row to already be visible
+	// outside the transaction that wrote it. A failure here can't be rolled
+	// back by that already-committed transaction, so it's compensated
+	// explicitly: deleting newWorkspace (cascading its membership row and any
+	// partially-seeded Calendars) and newUser turns "account exists but
+	// wasn't seeded" into "registration failed outright," the one outcome
+	// #172 doesn't rule out.
+	if err := s.calendars.EnsureDefaults(ctx, newUser.ID, newWorkspace.ID); err != nil {
+		if cleanupErr := s.cleanupFailedRegistration(ctx, newUser.ID, newWorkspace.ID); cleanupErr != nil {
+			return LoginResult{}, fmt.Errorf("seed default calendars: %w (cleanup also failed: %v)", err, cleanupErr)
+		}
+		return LoginResult{}, fmt.Errorf("seed default calendars: %w", err)
+	}
+
 	tokens, err := s.issueSession(ctx, newUser.ID)
 	if err != nil {
 		return LoginResult{}, err
 	}
 
 	return LoginResult{sessionTokens: tokens, MustChangePassword: false}, nil
+}
+
+// cleanupFailedRegistration deletes workspaceID and then userID (#172) — the
+// compensating action for a Register that got as far as committing the User
+// and their owning Workspace but then failed to seed default Calendars.
+// Workspace goes first: workspaces.owner_user_id carries no ON DELETE
+// behaviour (a Workspace must never be left pointing at a deleted User), so
+// deleting userID first would violate that foreign key. Deleting workspaceID
+// cascades its membership row and any Calendars EnsureDefaults managed to
+// create before failing.
+func (s *AuthService) cleanupFailedRegistration(ctx context.Context, userID, workspaceID int64) error {
+	if err := s.workspaces.workspaces.Delete(ctx, workspaceID); err != nil {
+		return fmt.Errorf("delete workspace: %w", err)
+	}
+	if err := s.users.Delete(ctx, userID); err != nil {
+		return fmt.Errorf("delete user: %w", err)
+	}
+	return nil
 }
 
 // sessionTokens is the access/refresh token pair issued whenever a Session is
@@ -335,8 +404,8 @@ func (s *AuthService) GetUser(ctx context.Context, userID int64) (repository.Use
 	return s.users.GetByID(ctx, userID)
 }
 
-func (s *AuthService) Login(ctx context.Context, username, password string) (LoginResult, error) {
-	user, err := s.users.GetByUsername(ctx, username)
+func (s *AuthService) Login(ctx context.Context, email, password string) (LoginResult, error) {
+	user, err := s.users.GetByEmail(ctx, email)
 	if errors.Is(err, repository.ErrNotFound) {
 		return LoginResult{}, ErrInvalidCredentials
 	}
@@ -445,7 +514,7 @@ func liveWorkspaceInviteTx(ctx context.Context, txInvites *repository.WorkspaceI
 // a User has already claimed the invite's email — the same kind of race
 // Register's first-account count check closes.
 func (s *AuthService) AcceptWorkspaceInviteNewAccount(ctx context.Context, token, name, password string) (LoginResult, error) {
-	name, err := validateUsername(name)
+	name, err := validateName(name)
 	if err != nil {
 		return LoginResult{}, err
 	}
@@ -464,6 +533,7 @@ func (s *AuthService) AcceptWorkspaceInviteNewAccount(ctx context.Context, token
 	}
 
 	var newUser repository.User
+	var inviteWorkspaceID int64
 	err = s.workspaces.WithTx(ctx, func(tx *sql.Tx) error {
 		txUsers := s.users.WithTx(tx)
 		txInvites := s.workspaceInvites.WithTx(tx)
@@ -472,6 +542,7 @@ func (s *AuthService) AcceptWorkspaceInviteNewAccount(ctx context.Context, token
 		if err != nil {
 			return err
 		}
+		inviteWorkspaceID = liveInvite.WorkspaceID
 
 		if _, err := txUsers.GetByEmail(ctx, liveInvite.Email); err == nil {
 			return ErrWorkspaceInviteInvalid
@@ -479,16 +550,12 @@ func (s *AuthService) AcceptWorkspaceInviteNewAccount(ctx context.Context, token
 			return fmt.Errorf("check existing user: %w", err)
 		}
 
-		newUser, err = txUsers.Create(ctx, name, string(hash), false)
+		newUser, err = txUsers.Create(ctx, name, liveInvite.Email, string(hash), false)
 		if err != nil {
-			if errors.Is(err, repository.ErrUsernameTaken) {
-				return ErrUsernameTaken
+			if errors.Is(err, repository.ErrEmailTaken) {
+				return ErrEmailTaken
 			}
 			return fmt.Errorf("create user: %w", err)
-		}
-
-		if _, err := txUsers.UpdateEmail(ctx, newUser.ID, liveInvite.Email); err != nil {
-			return fmt.Errorf("set email: %w", err)
 		}
 
 		if err := s.workspaces.AddMemberInTx(ctx, tx, liveInvite.WorkspaceID, newUser.ID, repository.WorkspaceRoleMember); err != nil {
@@ -503,6 +570,23 @@ func (s *AuthService) AcceptWorkspaceInviteNewAccount(ctx context.Context, token
 	})
 	if err != nil {
 		return LoginResult{}, err
+	}
+
+	// Seeds the three default Calendars into the Workspace the Invite
+	// admitted newUser to (#172), private to them under ADR-0045 until they
+	// explicitly Share. Run only after the transaction above has committed,
+	// for the same reason Register does: EnsureDefaults resolves Workspace
+	// membership through the plain (non-tx) repos. A failure here is
+	// compensated by deleting newUser outright (cascading their membership
+	// row and any partially-seeded Calendars) rather than the Workspace
+	// itself, which newUser doesn't own — same "don't leave a half-done
+	// account" reasoning as Register, without Register's extra Workspace to
+	// clean up.
+	if err := s.calendars.EnsureDefaults(ctx, newUser.ID, inviteWorkspaceID); err != nil {
+		if cleanupErr := s.users.Delete(ctx, newUser.ID); cleanupErr != nil {
+			return LoginResult{}, fmt.Errorf("seed default calendars: %w (cleanup also failed: %v)", err, cleanupErr)
+		}
+		return LoginResult{}, fmt.Errorf("seed default calendars: %w", err)
 	}
 
 	tokens, err := s.issueSession(ctx, newUser.ID)
@@ -532,7 +616,7 @@ func (s *AuthService) AcceptWorkspaceInviteExisting(ctx context.Context, userID 
 	if err != nil {
 		return repository.Workspace{}, fmt.Errorf("get user: %w", err)
 	}
-	if user.Email == nil || *user.Email != invite.Email {
+	if user.Email != invite.Email {
 		return repository.Workspace{}, ErrWorkspaceInviteEmailMismatch
 	}
 
@@ -694,40 +778,39 @@ func (s *AuthService) ChangePassword(ctx context.Context, userID int64, currentP
 	return s.issueSession(ctx, userID)
 }
 
-// UpdateEmail sets userID's account email — the Email-Channel Reminder
-// recipient (ADR-0021). An empty string clears it back to unset.
+// UpdateEmail changes userID's account email — the login identifier
+// (ADR-0047) and the Email-Channel Reminder recipient (ADR-0021). Unlike
+// before #169, email is mandatory and can no longer be cleared to unset.
 func (s *AuthService) UpdateEmail(ctx context.Context, userID int64, email string) (repository.User, error) {
-	email = strings.TrimSpace(email)
-	if email != "" {
-		if _, err := mail.ParseAddress(email); err != nil {
-			return repository.User{}, ErrInvalidEmail
-		}
+	email, err := validateEmail(email)
+	if err != nil {
+		return repository.User{}, err
 	}
 
 	user, err := s.users.UpdateEmail(ctx, userID, email)
 	if err != nil {
+		if errors.Is(err, repository.ErrEmailTaken) {
+			return repository.User{}, ErrEmailTaken
+		}
 		return repository.User{}, fmt.Errorf("update email: %w", err)
 	}
 	return user, nil
 }
 
-// UpdateUsername renames the caller's own account (#125), validated by the
-// same rule Create and AccountService.SetUsername use, so self-service
-// rename and Admin rename cannot drift. No current password is required —
-// the Access token already proves identity, and a username is not a secret,
-// matching UpdateEmail.
-func (s *AuthService) UpdateUsername(ctx context.Context, userID int64, username string) (repository.User, error) {
-	username, err := validateUsername(username)
+// UpdateName renames the caller's own display name (#125, ADR-0047),
+// validated by the same rule Create and AccountService.SetName use, so
+// self-service rename and Admin rename cannot drift. No current password is
+// required — the Access token already proves identity, and a name is not a
+// secret, matching UpdateEmail.
+func (s *AuthService) UpdateName(ctx context.Context, userID int64, name string) (repository.User, error) {
+	name, err := validateName(name)
 	if err != nil {
 		return repository.User{}, err
 	}
 
-	user, err := s.users.UpdateUsername(ctx, userID, username)
+	user, err := s.users.UpdateName(ctx, userID, name)
 	if err != nil {
-		if errors.Is(err, repository.ErrUsernameTaken) {
-			return repository.User{}, ErrUsernameTaken
-		}
-		return repository.User{}, fmt.Errorf("update username: %w", err)
+		return repository.User{}, fmt.Errorf("update name: %w", err)
 	}
 	return user, nil
 }

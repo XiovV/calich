@@ -26,8 +26,12 @@ func newTestWorkspaceInviteHarness(t *testing.T) (*WorkspaceService, *AuthServic
 	users := repository.NewUserRepository(sqlDB)
 	sessions := repository.NewSessionRepository(sqlDB)
 	inviteRepo := repository.NewWorkspaceInviteRepository(sqlDB)
-	workspaces := NewWorkspaceService(sqlDB, repository.NewWorkspaceRepository(sqlDB), inviteRepo, repository.NewCalendarRepository(sqlDB), repository.NewCalendarShareRepository(sqlDB))
-	auth := NewAuthService(users, sessions, workspaces, inviteRepo, []byte("test-secret"), "", "", false)
+	workspaceRepo := repository.NewWorkspaceRepository(sqlDB)
+	calendarRepo := repository.NewCalendarRepository(sqlDB)
+	shareRepo := repository.NewCalendarShareRepository(sqlDB)
+	workspaces := NewWorkspaceService(sqlDB, workspaceRepo, inviteRepo, calendarRepo, shareRepo)
+	calendars := NewCalendarService(calendarRepo, shareRepo, users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo, repository.NewCalendarGroupShareRepository(sqlDB), repository.NewGroupRepository(sqlDB))
+	auth := NewAuthService(users, sessions, workspaces, inviteRepo, calendars, []byte("test-secret"), "", "", "", false)
 
 	return workspaces, auth, users
 }
@@ -36,7 +40,7 @@ func TestWorkspaceService_CreateInvite_RequiresOwnerOrAdmin(t *testing.T) {
 	workspaces, _, users := newTestWorkspaceInviteHarness(t)
 	ctx := context.Background()
 
-	owner, err := users.Create(ctx, "alice", "hash", false)
+	owner, err := users.Create(ctx, "alice", "alice@example.com", "hash", false)
 	if err != nil {
 		t.Fatalf("create owner: %v", err)
 	}
@@ -45,7 +49,7 @@ func TestWorkspaceService_CreateInvite_RequiresOwnerOrAdmin(t *testing.T) {
 		t.Fatalf("create workspace: %v", err)
 	}
 
-	plainMember, err := users.Create(ctx, "bob", "hash", false)
+	plainMember, err := users.Create(ctx, "bob", "bob@example.com", "hash", false)
 	if err != nil {
 		t.Fatalf("create member: %v", err)
 	}
@@ -59,7 +63,7 @@ func TestWorkspaceService_CreateInvite_RequiresOwnerOrAdmin(t *testing.T) {
 		t.Fatalf("expected ErrNotFound for a plain Member issuing an invite, got %v", err)
 	}
 
-	outsider, err := users.Create(ctx, "carol", "hash", false)
+	outsider, err := users.Create(ctx, "carol", "carol@example.com", "hash", false)
 	if err != nil {
 		t.Fatalf("create outsider: %v", err)
 	}
@@ -76,7 +80,7 @@ func TestWorkspaceService_CreateInvite_ConflictsWithOutstandingInvite(t *testing
 	workspaces, _, users := newTestWorkspaceInviteHarness(t)
 	ctx := context.Background()
 
-	owner, err := users.Create(ctx, "alice", "hash", false)
+	owner, err := users.Create(ctx, "alice", "alice@example.com", "hash", false)
 	if err != nil {
 		t.Fatalf("create owner: %v", err)
 	}
@@ -101,7 +105,7 @@ func TestWorkspaceService_ReissueInvite_InvalidatesPriorToken(t *testing.T) {
 	workspaces, auth, users := newTestWorkspaceInviteHarness(t)
 	ctx := context.Background()
 
-	owner, err := users.Create(ctx, "alice", "hash", false)
+	owner, err := users.Create(ctx, "alice", "alice@example.com", "hash", false)
 	if err != nil {
 		t.Fatalf("create owner: %v", err)
 	}
@@ -136,7 +140,7 @@ func TestWorkspaceService_ReissueInvite_RequiresOwnerOrAdmin(t *testing.T) {
 	workspaces, _, users := newTestWorkspaceInviteHarness(t)
 	ctx := context.Background()
 
-	owner, err := users.Create(ctx, "alice", "hash", false)
+	owner, err := users.Create(ctx, "alice", "alice@example.com", "hash", false)
 	if err != nil {
 		t.Fatalf("create owner: %v", err)
 	}
@@ -150,7 +154,7 @@ func TestWorkspaceService_ReissueInvite_RequiresOwnerOrAdmin(t *testing.T) {
 		t.Fatalf("create invite: %v", err)
 	}
 
-	outsider, err := users.Create(ctx, "carol", "hash", false)
+	outsider, err := users.Create(ctx, "carol", "carol@example.com", "hash", false)
 	if err != nil {
 		t.Fatalf("create outsider: %v", err)
 	}
@@ -164,7 +168,7 @@ func TestWorkspaceService_ListInvites_ReturnsOutstandingInvitesForOwnerOrAdmin(t
 	workspaces, _, users := newTestWorkspaceInviteHarness(t)
 	ctx := context.Background()
 
-	owner, err := users.Create(ctx, "alice", "hash", false)
+	owner, err := users.Create(ctx, "alice", "alice@example.com", "hash", false)
 	if err != nil {
 		t.Fatalf("create owner: %v", err)
 	}
@@ -188,7 +192,7 @@ func TestWorkspaceService_ListInvites_ReturnsOutstandingInvitesForOwnerOrAdmin(t
 		t.Fatalf("expected 2 outstanding invites, got %d", len(invites))
 	}
 
-	plainMember, err := users.Create(ctx, "dave", "hash", false)
+	plainMember, err := users.Create(ctx, "dave", "dave@example.com", "hash", false)
 	if err != nil {
 		t.Fatalf("create plain member: %v", err)
 	}
@@ -206,7 +210,7 @@ func TestWorkspaceService_CancelInvite_RemovesItAndRequiresOwnerOrAdmin(t *testi
 	workspaces, _, users := newTestWorkspaceInviteHarness(t)
 	ctx := context.Background()
 
-	owner, err := users.Create(ctx, "alice", "hash", false)
+	owner, err := users.Create(ctx, "alice", "alice@example.com", "hash", false)
 	if err != nil {
 		t.Fatalf("create owner: %v", err)
 	}
@@ -220,7 +224,7 @@ func TestWorkspaceService_CancelInvite_RemovesItAndRequiresOwnerOrAdmin(t *testi
 		t.Fatalf("create invite: %v", err)
 	}
 
-	outsider, err := users.Create(ctx, "carol", "hash", false)
+	outsider, err := users.Create(ctx, "carol", "carol@example.com", "hash", false)
 	if err != nil {
 		t.Fatalf("create outsider: %v", err)
 	}
@@ -249,7 +253,7 @@ func TestAuthService_AcceptWorkspaceInviteNewAccount_CreatesUserAndMembership(t 
 	workspaces, auth, users := newTestWorkspaceInviteHarness(t)
 	ctx := context.Background()
 
-	owner, err := users.Create(ctx, "alice", "hash", false)
+	owner, err := users.Create(ctx, "alice", "alice@example.com", "hash", false)
 	if err != nil {
 		t.Fatalf("create owner: %v", err)
 	}
@@ -275,8 +279,8 @@ func TestAuthService_AcceptWorkspaceInviteNewAccount_CreatesUserAndMembership(t 
 	if err != nil {
 		t.Fatalf("get new user: %v", err)
 	}
-	if newUser.Username != "bob" {
-		t.Fatalf("expected username %q, got %q", "bob", newUser.Username)
+	if newUser.Name != "bob" {
+		t.Fatalf("expected name %q, got %q", "bob", newUser.Name)
 	}
 
 	list, err := workspaces.ListForUser(ctx, newUser.ID)
@@ -291,6 +295,29 @@ func TestAuthService_AcceptWorkspaceInviteNewAccount_CreatesUserAndMembership(t 
 	if _, err := auth.AcceptWorkspaceInviteNewAccount(ctx, invite.Token, "bob2", "hunter2"); !errors.Is(err, ErrWorkspaceInviteInvalid) {
 		t.Fatalf("expected a consumed invite to be rejected, got %v", err)
 	}
+
+	// #172: the new account gets the three default Calendars, seeded into
+	// the Workspace the Invite admitted them to.
+	newUserCalendars, err := auth.calendars.List(ctx, newUser.ID)
+	if err != nil {
+		t.Fatalf("list new user's calendars: %v", err)
+	}
+	want := map[string]bool{"Personal": true, "Work": true, "Family": true}
+	if len(newUserCalendars) != len(want) {
+		t.Fatalf("expected %d default calendars, got %d", len(want), len(newUserCalendars))
+	}
+	for _, c := range newUserCalendars {
+		if !want[c.Name] {
+			t.Fatalf("unexpected default calendar %q", c.Name)
+		}
+		if c.WorkspaceID != workspace.ID {
+			t.Fatalf("expected default calendar %q to be seeded in the inviting workspace, got %d", c.Name, c.WorkspaceID)
+		}
+		delete(want, c.Name)
+	}
+	if len(want) != 0 {
+		t.Fatalf("missing default calendars: %v", want)
+	}
 }
 
 // TestAuthService_AcceptWorkspaceInviteExisting_KeepsExistingWorkspaces
@@ -301,7 +328,7 @@ func TestAuthService_AcceptWorkspaceInviteExisting_KeepsExistingWorkspaces(t *te
 	workspaces, auth, users := newTestWorkspaceInviteHarness(t)
 	ctx := context.Background()
 
-	owner, err := users.Create(ctx, "alice", "hash", false)
+	owner, err := users.Create(ctx, "alice", "alice@example.com", "hash", false)
 	if err != nil {
 		t.Fatalf("create owner: %v", err)
 	}
@@ -310,7 +337,7 @@ func TestAuthService_AcceptWorkspaceInviteExisting_KeepsExistingWorkspaces(t *te
 		t.Fatalf("create workspace a: %v", err)
 	}
 
-	bob, err := users.Create(ctx, "bob", "hash", false)
+	bob, err := users.Create(ctx, "bob", "bob@example.com", "hash", false)
 	if err != nil {
 		t.Fatalf("create bob: %v", err)
 	}
@@ -360,7 +387,7 @@ func TestAuthService_AcceptWorkspaceInviteExisting_RejectsEmailMismatch(t *testi
 	workspaces, auth, users := newTestWorkspaceInviteHarness(t)
 	ctx := context.Background()
 
-	owner, err := users.Create(ctx, "alice", "hash", false)
+	owner, err := users.Create(ctx, "alice", "alice@example.com", "hash", false)
 	if err != nil {
 		t.Fatalf("create owner: %v", err)
 	}
@@ -369,7 +396,7 @@ func TestAuthService_AcceptWorkspaceInviteExisting_RejectsEmailMismatch(t *testi
 		t.Fatalf("create workspace: %v", err)
 	}
 
-	bob, err := users.Create(ctx, "bob", "hash", false)
+	bob, err := users.Create(ctx, "bob", "bob@example.com", "hash", false)
 	if err != nil {
 		t.Fatalf("create bob: %v", err)
 	}
@@ -391,7 +418,7 @@ func TestAuthService_AcceptWorkspaceInviteExisting_RejectsAlreadyMember(t *testi
 	workspaces, auth, users := newTestWorkspaceInviteHarness(t)
 	ctx := context.Background()
 
-	owner, err := users.Create(ctx, "alice", "hash", false)
+	owner, err := users.Create(ctx, "alice", "alice@example.com", "hash", false)
 	if err != nil {
 		t.Fatalf("create owner: %v", err)
 	}
@@ -400,7 +427,7 @@ func TestAuthService_AcceptWorkspaceInviteExisting_RejectsAlreadyMember(t *testi
 		t.Fatalf("create workspace: %v", err)
 	}
 
-	bob, err := users.Create(ctx, "bob", "hash", false)
+	bob, err := users.Create(ctx, "bob", "bob@example.com", "hash", false)
 	if err != nil {
 		t.Fatalf("create bob: %v", err)
 	}
@@ -429,7 +456,7 @@ func TestAuthService_PreviewWorkspaceInvite_ReportsWhetherUserExists(t *testing.
 	workspaces, auth, users := newTestWorkspaceInviteHarness(t)
 	ctx := context.Background()
 
-	owner, err := users.Create(ctx, "alice", "hash", false)
+	owner, err := users.Create(ctx, "alice", "alice@example.com", "hash", false)
 	if err != nil {
 		t.Fatalf("create owner: %v", err)
 	}
@@ -453,7 +480,7 @@ func TestAuthService_PreviewWorkspaceInvite_ReportsWhetherUserExists(t *testing.
 		t.Fatalf("expected workspace name %q, got %q", "Alice's Workspace", preview.WorkspaceName)
 	}
 
-	bob, err := users.Create(ctx, "bob", "hash", false)
+	bob, err := users.Create(ctx, "bob", "bob@example.com", "hash", false)
 	if err != nil {
 		t.Fatalf("create bob: %v", err)
 	}

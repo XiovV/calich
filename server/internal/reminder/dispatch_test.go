@@ -198,11 +198,9 @@ func (f *fakeMailer) Send(to, subject, body string) error {
 	return nil
 }
 
-func emailPtr(s string) *string { return &s }
-
 func TestEmailDispatcher_EmailChannelSendsToTheUsersAddress(t *testing.T) {
 	users := fakeUserLookup{usersByID: map[int64]repository.User{
-		7: {ID: 7, Email: emailPtr("alice@example.com")},
+		7: {ID: 7, Email: "alice@example.com"},
 	}}
 	mailer := &fakeMailer{}
 	fallback := &fakeDispatcher{}
@@ -256,7 +254,7 @@ func TestEmailDispatcher_NonEmailChannelGoesToFallback(t *testing.T) {
 // receives no Reminders on any Channel".
 func TestEmailDispatcher_SkipsDisabledUsers(t *testing.T) {
 	users := fakeUserLookup{usersByID: map[int64]repository.User{
-		7: {ID: 7, IsDisabled: true, Email: emailPtr("alice@example.com")},
+		7: {ID: 7, IsDisabled: true, Email: "alice@example.com"},
 	}}
 	mailer := &fakeMailer{}
 	fallback := &fakeDispatcher{}
@@ -279,8 +277,8 @@ func TestEmailDispatcher_SkipsDisabledUsers(t *testing.T) {
 // no second, per-Email query for the Preference.
 func TestEmailDispatcher_RendersEachRecipientsTimeFormat(t *testing.T) {
 	users := fakeUserLookup{usersByID: map[int64]repository.User{
-		7: {ID: 7, Email: emailPtr("alice@example.com"), TimeFormat: "12h"},
-		8: {ID: 8, Email: emailPtr("bob@example.com"), TimeFormat: "24h"},
+		7: {ID: 7, Email: "alice@example.com", TimeFormat: "12h"},
+		8: {ID: 8, Email: "bob@example.com", TimeFormat: "24h"},
 	}}
 	mailer := &fakeMailer{}
 	fallback := &fakeDispatcher{}
@@ -309,24 +307,5 @@ func TestEmailDispatcher_RendersEachRecipientsTimeFormat(t *testing.T) {
 	}
 	if !strings.Contains(mailer.sent[1].body, "13:30:00") {
 		t.Fatalf("expected bob's 24h email to contain \"13:30:00\", got %q", mailer.sent[1].body)
-	}
-}
-
-func TestEmailDispatcher_SkipsSendingWhenTheUserHasNoEmailConfigured(t *testing.T) {
-	users := fakeUserLookup{usersByID: map[int64]repository.User{
-		7: {ID: 7, Email: nil},
-	}}
-	mailer := &fakeMailer{}
-	fallback := &fakeDispatcher{}
-	dispatcher := EmailDispatcher{Users: users, Mailer: mailer, Fallback: fallback}
-
-	due := DueReminder{EventID: "evt-1", UserID: 7, ReminderID: 100, Channel: "email"}
-
-	if err := dispatcher.Dispatch(context.Background(), due); err != nil {
-		t.Fatalf("dispatch: %v", err)
-	}
-
-	if len(mailer.sent) != 0 {
-		t.Fatalf("expected no email sent when the user has no email configured, got %+v", mailer.sent)
 	}
 }

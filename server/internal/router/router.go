@@ -24,6 +24,11 @@ func New(logger *slog.Logger, authHandler *handlers.AuthHandler, calendarHandler
 		r.Get("/health", handlers.Health)
 
 		r.Route("/auth", func(r chi.Router) {
+			// SetupStatus (#169, ADR-0047) is public and unauthenticated by
+			// design: a fresh instance with zero accounts can't answer it any
+			// other way, and it says nothing about who's asking, only whether
+			// the instance has been bootstrapped yet.
+			r.Get("/setup-status", authHandler.SetupStatus)
 			r.Post("/login", authHandler.Login)
 			r.Post("/refresh", authHandler.Refresh)
 			r.Post("/logout", authHandler.Logout)
@@ -49,7 +54,7 @@ func New(logger *slog.Logger, authHandler *handlers.AuthHandler, calendarHandler
 				r.Use(httpauth.RequireEnabledUser(enabledChecker))
 				r.Get("/me", authHandler.Me)
 				r.Put("/email", authHandler.UpdateEmail)
-				r.Put("/username", authHandler.UpdateUsername)
+				r.Put("/name", authHandler.UpdateName)
 				r.Put("/synced-device-reminders", authHandler.UpdateSyncedDeviceReminders)
 				r.Patch("/preferences", authHandler.UpdatePreferences)
 			})

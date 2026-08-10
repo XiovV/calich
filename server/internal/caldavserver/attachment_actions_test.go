@@ -43,7 +43,7 @@ func postAction(t *testing.T, env testCalDAVEnv, path, query, contentType, filen
 	if filename != "" {
 		req.Header.Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
 	}
-	req.SetBasicAuth("admin", env.appPasswordSecret)
+	req.SetBasicAuth("admin@example.com", env.appPasswordSecret)
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -204,7 +204,7 @@ func getObject(t *testing.T, env testCalDAVEnv, path string) *http.Response {
 	if err != nil {
 		t.Fatalf("build GET request: %v", err)
 	}
-	req.SetBasicAuth("admin", env.appPasswordSecret)
+	req.SetBasicAuth("admin@example.com", env.appPasswordSecret)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatalf("GET %s: %v", path, err)

@@ -22,11 +22,11 @@ type Attachment struct {
 	// Calendar instead (ADR-0034), mirroring events.created_by. Nil when the
 	// uploading User has since been deleted (ON DELETE SET NULL).
 	UploadedBy *int64
-	// UploadedByUsername is UploadedBy's Username, for display. Not a
+	// UploadedByName is UploadedBy's display Name. Not a
 	// column — populated by the service layer from users, mirroring
-	// Event.CreatedByUsername. Empty whenever UploadedBy is nil.
-	UploadedByUsername string
-	CreatedAt          time.Time
+	// Event.CreatedByName. Empty whenever UploadedBy is nil.
+	UploadedByName string
+	CreatedAt      time.Time
 }
 
 type AttachmentRepository struct {

@@ -10,13 +10,14 @@ import (
 )
 
 type User struct {
-	ID                 int64
-	Username           string
+	ID   int64
+	Name string
+	// Email is the account's unique login identifier (ADR-0047) — required,
+	// unique instance-wide, and also the Email-Channel Reminder's recipient
+	// (ADR-0021).
+	Email              string
 	PasswordHash       string
 	MustChangePassword bool
-	// Email is the Email-Channel Reminder's recipient (ADR-0021, ADR-0010).
-	// Nil until the user sets it on the Settings page.
-	Email *string
 	// SyncedDeviceRemindersEnabled is "let my synced devices show reminder
 	// pop-ups (disable in-app reminder notifications)" (ADR-0027): when true,
 	// the scheduler skips the Notification channel for this user, since a
@@ -53,9 +54,9 @@ type User struct {
 
 // userColumns is the column list every SELECT against users shares, in the
 // exact order scanUserFields expects — kept as one constant so the two never
-// drift apart across GetByID, GetByIDs, GetByUsername, ListEnabledExcluding,
+// drift apart across GetByID, GetByIDs, GetByEmail, ListEnabledExcluding,
 // and First.
-const userColumns = `id, username, password_hash, must_change_password, email, synced_device_reminders_enabled, is_disabled, created_at, week_start, default_view, time_format, working_hours_start, working_hours_end`
+const userColumns = `id, name, password_hash, must_change_password, email, synced_device_reminders_enabled, is_disabled, created_at, week_start, default_view, time_format, working_hours_start, working_hours_end`
 
 type UserRepository struct {
 	db DBTX
@@ -73,18 +74,18 @@ func (r *UserRepository) WithTx(tx *sql.Tx) *UserRepository {
 	return &UserRepository{db: tx}
 }
 
-// ErrUsernameTaken is returned by Create when the username is already in
-// use — usernames are unique instance-wide (ADR-0037).
-var ErrUsernameTaken = errors.New("username already taken")
+// ErrEmailTaken is returned by Create and UpdateEmail when the email is
+// already in use — email is unique instance-wide (ADR-0047).
+var ErrEmailTaken = errors.New("email already taken")
 
-func (r *UserRepository) Create(ctx context.Context, username, passwordHash string, mustChangePassword bool) (User, error) {
+func (r *UserRepository) Create(ctx context.Context, name, email, passwordHash string, mustChangePassword bool) (User, error) {
 	res, err := r.db.ExecContext(ctx,
-		`INSERT INTO users (username, password_hash, must_change_password) VALUES (?, ?, ?)`,
-		username, passwordHash, mustChangePassword,
+		`INSERT INTO users (name, email, password_hash, must_change_password) VALUES (?, ?, ?, ?)`,
+		name, email, passwordHash, mustChangePassword,
 	)
 	if err != nil {
 		if strings.Contains(err.Error(), "UNIQUE constraint failed") {
-			return User{}, ErrUsernameTaken
+			return User{}, ErrEmailTaken
 		}
 		return User{}, fmt.Errorf("insert user: %w", err)
 	}
@@ -139,31 +140,25 @@ func (r *UserRepository) GetByIDs(ctx context.Context, ids []int64) (map[int64]U
 	return result, nil
 }
 
-// GetByEmail returns the first User with the given email — used to decide,
-// when accepting a Workspace Invite (ADR-0044), whether the invited address
-// already belongs to an account. email is never unique-constrained, so this
-// takes the first match; the accept flow only needs "does at least one exist".
+// GetByEmail resolves the User identified by email (ADR-0047) — the
+// identifier resolution used by web sign-in, CalDAV Basic auth, Share-target
+// resolution, and Workspace Invite accept. email is unique instance-wide, so
+// this is an exact-match lookup.
 func (r *UserRepository) GetByEmail(ctx context.Context, email string) (User, error) {
 	return r.scanUser(r.db.QueryRowContext(ctx,
-		`SELECT `+userColumns+` FROM users WHERE email = ? LIMIT 1`, email,
-	))
-}
-
-func (r *UserRepository) GetByUsername(ctx context.Context, username string) (User, error) {
-	return r.scanUser(r.db.QueryRowContext(ctx,
-		`SELECT `+userColumns+` FROM users WHERE username = ?`, username,
+		`SELECT `+userColumns+` FROM users WHERE email = ?`, email,
 	))
 }
 
 // ListEnabledExcluding returns every enabled User except excludeID, ordered
-// by username — the User directory (#113): any authenticated caller may see
+// by name — the User directory (#113): any authenticated caller may see
 // who else has an account, so they can pick a Share recipient, but a
 // Disabled User is hidden the same way Share already hides one (ADR-0037),
 // and the caller never sees themselves in their own picker.
 func (r *UserRepository) ListEnabledExcluding(ctx context.Context, excludeID int64) ([]User, error) {
 	rows, err := r.db.QueryContext(ctx,
 		`SELECT `+userColumns+`
-		 FROM users WHERE is_disabled = 0 AND id != ? ORDER BY username`, excludeID,
+		 FROM users WHERE is_disabled = 0 AND id != ? ORDER BY name`, excludeID,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("query enabled users: %w", err)
@@ -185,29 +180,26 @@ func (r *UserRepository) ListEnabledExcluding(ctx context.Context, excludeID int
 	return users, nil
 }
 
-// UpdateEmail sets userID's account email — the Email-Channel Reminder
-// recipient (ADR-0021). An empty string clears it back to unset.
+// UpdateEmail changes userID's login identifier (ADR-0047) — also the
+// Email-Channel Reminder recipient (ADR-0021). A unique-constraint violation
+// is surfaced as ErrEmailTaken exactly like Create, since both hit the same
+// users.email UNIQUE column. Email is mandatory, so unlike the old username
+// rename this never accepts an empty string to clear it.
 func (r *UserRepository) UpdateEmail(ctx context.Context, userID int64, email string) (User, error) {
-	var value any
-	if email != "" {
-		value = email
-	}
-
-	if _, err := r.db.ExecContext(ctx, `UPDATE users SET email = ? WHERE id = ?`, value, userID); err != nil {
+	if _, err := r.db.ExecContext(ctx, `UPDATE users SET email = ? WHERE id = ?`, email, userID); err != nil {
+		if strings.Contains(err.Error(), "UNIQUE constraint failed") {
+			return User{}, ErrEmailTaken
+		}
 		return User{}, fmt.Errorf("update email: %w", err)
 	}
 	return r.GetByID(ctx, userID)
 }
 
-// UpdateUsername renames userID's account (#125). A unique-constraint
-// violation is surfaced as ErrUsernameTaken exactly like Create, since both
-// hit the same users.username UNIQUE column.
-func (r *UserRepository) UpdateUsername(ctx context.Context, userID int64, username string) (User, error) {
-	if _, err := r.db.ExecContext(ctx, `UPDATE users SET username = ? WHERE id = ?`, username, userID); err != nil {
-		if strings.Contains(err.Error(), "UNIQUE constraint failed") {
-			return User{}, ErrUsernameTaken
-		}
-		return User{}, fmt.Errorf("update username: %w", err)
+// UpdateName renames userID's display name (#125). Name is not unique
+// (ADR-0047), so unlike UpdateEmail this never fails on a conflict.
+func (r *UserRepository) UpdateName(ctx context.Context, userID int64, name string) (User, error) {
+	if _, err := r.db.ExecContext(ctx, `UPDATE users SET name = ? WHERE id = ?`, name, userID); err != nil {
+		return User{}, fmt.Errorf("update name: %w", err)
 	}
 	return r.GetByID(ctx, userID)
 }
@@ -349,19 +341,15 @@ func (r *UserRepository) scanUserRow(rows *sql.Rows) (User, error) {
 // either way, so GetByIDs doesn't have to duplicate GetByID's.
 func scanUserFields(scan func(dest ...any) error) (User, error) {
 	var u User
-	var email sql.NullString
 	var workingHoursStart, workingHoursEnd sql.NullInt64
 	// modernc.org/sqlite converts the TIMESTAMP column straight into time.Time
 	// based on the declared column type — no manual parsing needed here.
 	err := scan(
-		&u.ID, &u.Username, &u.PasswordHash, &u.MustChangePassword, &email, &u.SyncedDeviceRemindersEnabled, &u.IsDisabled, &u.CreatedAt,
+		&u.ID, &u.Name, &u.PasswordHash, &u.MustChangePassword, &u.Email, &u.SyncedDeviceRemindersEnabled, &u.IsDisabled, &u.CreatedAt,
 		&u.WeekStart, &u.DefaultView, &u.TimeFormat, &workingHoursStart, &workingHoursEnd,
 	)
 	if err != nil {
 		return User{}, err
-	}
-	if email.Valid {
-		u.Email = &email.String
 	}
 	if workingHoursStart.Valid {
 		v := int(workingHoursStart.Int64)

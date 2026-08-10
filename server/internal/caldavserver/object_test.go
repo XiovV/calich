@@ -36,7 +36,7 @@ func rawPut(t *testing.T, env testCalDAVEnv, path string, cal *ical.Calendar, if
 	if ifMatch != "" {
 		req.Header.Set("If-Match", ifMatch)
 	}
-	req.SetBasicAuth("admin", env.appPasswordSecret)
+	req.SetBasicAuth("admin@example.com", env.appPasswordSecret)
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -58,7 +58,7 @@ func rawDelete(t *testing.T, env testCalDAVEnv, path, ifMatch string) *http.Resp
 	if ifMatch != "" {
 		req.Header.Set("If-Match", ifMatch)
 	}
-	req.SetBasicAuth("admin", env.appPasswordSecret)
+	req.SetBasicAuth("admin@example.com", env.appPasswordSecret)
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -69,7 +69,7 @@ func rawDelete(t *testing.T, env testCalDAVEnv, path, ifMatch string) *http.Resp
 
 func newTestCalDAVClient(t *testing.T, env testCalDAVEnv) *caldav.Client {
 	t.Helper()
-	httpClient := webdav.HTTPClientWithBasicAuth(env.srv.Client(), "admin", env.appPasswordSecret)
+	httpClient := webdav.HTTPClientWithBasicAuth(env.srv.Client(), "admin@example.com", env.appPasswordSecret)
 	client, err := caldav.NewClient(httpClient, env.srv.URL)
 	if err != nil {
 		t.Fatalf("new caldav client: %v", err)

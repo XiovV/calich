@@ -23,11 +23,11 @@ func newTestShareService(t *testing.T) (svc *CalendarService, users *repository.
 	t.Cleanup(func() { sqlDB.Close() })
 
 	users = repository.NewUserRepository(sqlDB)
-	owner, err := users.Create(context.Background(), "owner", "hash", false)
+	owner, err := users.Create(context.Background(), "owner", "owner@example.com", "hash", false)
 	if err != nil {
 		t.Fatalf("create owner: %v", err)
 	}
-	other, err := users.Create(context.Background(), "other", "hash", false)
+	other, err := users.Create(context.Background(), "other", "other@example.com", "hash", false)
 	if err != nil {
 		t.Fatalf("create other user: %v", err)
 	}
@@ -60,7 +60,7 @@ func TestCalendarService_Share(t *testing.T) {
 	svc, _, ownerID, _, calendarID := newTestShareService(t)
 	ctx := context.Background()
 
-	share, err := svc.Share(ctx, ownerID, calendarID, "other", repository.RoleEditor)
+	share, _, err := svc.Share(ctx, ownerID, calendarID, "other@example.com", repository.RoleEditor)
 	if err != nil {
 		t.Fatalf("share: %v", err)
 	}
@@ -77,10 +77,10 @@ func TestCalendarService_Share_ChangesRole(t *testing.T) {
 	svc, _, ownerID, _, calendarID := newTestShareService(t)
 	ctx := context.Background()
 
-	if _, err := svc.Share(ctx, ownerID, calendarID, "other", repository.RoleViewer); err != nil {
+	if _, _, err := svc.Share(ctx, ownerID, calendarID, "other@example.com", repository.RoleViewer); err != nil {
 		t.Fatalf("initial share: %v", err)
 	}
-	updated, err := svc.Share(ctx, ownerID, calendarID, "other", repository.RoleEditor)
+	updated, _, err := svc.Share(ctx, ownerID, calendarID, "other@example.com", repository.RoleEditor)
 	if err != nil {
 		t.Fatalf("re-share with new role: %v", err)
 	}
@@ -100,7 +100,7 @@ func TestCalendarService_Share_ChangesRole(t *testing.T) {
 func TestCalendarService_Share_InvalidRole(t *testing.T) {
 	svc, _, ownerID, _, calendarID := newTestShareService(t)
 
-	_, err := svc.Share(context.Background(), ownerID, calendarID, "other", "admin")
+	_, _, err := svc.Share(context.Background(), ownerID, calendarID, "other@example.com", "admin")
 	if !errors.Is(err, ErrInvalidRole) {
 		t.Fatalf("err = %v, want ErrInvalidRole", err)
 	}
@@ -109,7 +109,7 @@ func TestCalendarService_Share_InvalidRole(t *testing.T) {
 func TestCalendarService_Share_UnknownUsername(t *testing.T) {
 	svc, _, ownerID, _, calendarID := newTestShareService(t)
 
-	_, err := svc.Share(context.Background(), ownerID, calendarID, "ghost", repository.RoleViewer)
+	_, _, err := svc.Share(context.Background(), ownerID, calendarID, "ghost@example.com", repository.RoleViewer)
 	if !errors.Is(err, ErrUserNotFound) {
 		t.Fatalf("err = %v, want ErrUserNotFound", err)
 	}
@@ -126,7 +126,7 @@ func TestCalendarService_Share_HidesDisabledUsers(t *testing.T) {
 		t.Fatalf("disable other user: %v", err)
 	}
 
-	_, err := svc.Share(ctx, ownerID, calendarID, "other", repository.RoleViewer)
+	_, _, err := svc.Share(ctx, ownerID, calendarID, "other@example.com", repository.RoleViewer)
 	if !errors.Is(err, ErrUserNotFound) {
 		t.Fatalf("err = %v, want ErrUserNotFound", err)
 	}
@@ -139,7 +139,7 @@ func TestCalendarService_Share_ExistingSharesSurviveDisabling(t *testing.T) {
 	svc, users, ownerID, otherID, calendarID := newTestShareService(t)
 	ctx := context.Background()
 
-	if _, err := svc.Share(ctx, ownerID, calendarID, "other", repository.RoleEditor); err != nil {
+	if _, _, err := svc.Share(ctx, ownerID, calendarID, "other@example.com", repository.RoleEditor); err != nil {
 		t.Fatalf("share: %v", err)
 	}
 	if _, err := users.SetDisabled(ctx, otherID, true); err != nil {
@@ -158,7 +158,7 @@ func TestCalendarService_Share_ExistingSharesSurviveDisabling(t *testing.T) {
 func TestCalendarService_Share_WithSelf(t *testing.T) {
 	svc, _, ownerID, _, calendarID := newTestShareService(t)
 
-	_, err := svc.Share(context.Background(), ownerID, calendarID, "owner", repository.RoleViewer)
+	_, _, err := svc.Share(context.Background(), ownerID, calendarID, "owner@example.com", repository.RoleViewer)
 	if !errors.Is(err, ErrCannotShareWithSelf) {
 		t.Fatalf("err = %v, want ErrCannotShareWithSelf", err)
 	}
@@ -171,7 +171,7 @@ func TestCalendarService_Share_WithSelf(t *testing.T) {
 func TestCalendarService_Share_NonOwnerRefused(t *testing.T) {
 	svc, _, _, otherID, calendarID := newTestShareService(t)
 
-	_, err := svc.Share(context.Background(), otherID, calendarID, "other", repository.RoleViewer)
+	_, _, err := svc.Share(context.Background(), otherID, calendarID, "other@example.com", repository.RoleViewer)
 	if !errors.Is(err, repository.ErrNotFound) {
 		t.Fatalf("err = %v, want ErrNotFound", err)
 	}
@@ -184,15 +184,15 @@ func TestCalendarService_Share_EditorCannotReshare(t *testing.T) {
 	svc, users, ownerID, editorID, calendarID := newTestShareService(t)
 	ctx := context.Background()
 
-	if _, err := svc.Share(ctx, ownerID, calendarID, "other", repository.RoleEditor); err != nil {
+	if _, _, err := svc.Share(ctx, ownerID, calendarID, "other@example.com", repository.RoleEditor); err != nil {
 		t.Fatalf("share: %v", err)
 	}
 
-	if _, err := users.Create(ctx, "third", "hash", false); err != nil {
+	if _, err := users.Create(ctx, "third", "third@example.com", "hash", false); err != nil {
 		t.Fatalf("create third user: %v", err)
 	}
 
-	_, err := svc.Share(ctx, editorID, calendarID, "third", repository.RoleViewer)
+	_, _, err := svc.Share(ctx, editorID, calendarID, "third@example.com", repository.RoleViewer)
 	if !errors.Is(err, repository.ErrNotFound) {
 		t.Fatalf("err = %v, want ErrNotFound", err)
 	}
@@ -202,7 +202,7 @@ func TestCalendarService_RevokeShare(t *testing.T) {
 	svc, _, ownerID, otherID, calendarID := newTestShareService(t)
 	ctx := context.Background()
 
-	if _, err := svc.Share(ctx, ownerID, calendarID, "other", repository.RoleViewer); err != nil {
+	if _, _, err := svc.Share(ctx, ownerID, calendarID, "other@example.com", repository.RoleViewer); err != nil {
 		t.Fatalf("share: %v", err)
 	}
 
@@ -219,7 +219,7 @@ func TestCalendarService_RevokeShare_NonOwnerRefused(t *testing.T) {
 	svc, _, ownerID, otherID, calendarID := newTestShareService(t)
 	ctx := context.Background()
 
-	if _, err := svc.Share(ctx, ownerID, calendarID, "other", repository.RoleViewer); err != nil {
+	if _, _, err := svc.Share(ctx, ownerID, calendarID, "other@example.com", repository.RoleViewer); err != nil {
 		t.Fatalf("share: %v", err)
 	}
 
@@ -233,7 +233,7 @@ func TestCalendarService_ListShares(t *testing.T) {
 	svc, _, ownerID, _, calendarID := newTestShareService(t)
 	ctx := context.Background()
 
-	if _, err := svc.Share(ctx, ownerID, calendarID, "other", repository.RoleEditor); err != nil {
+	if _, _, err := svc.Share(ctx, ownerID, calendarID, "other@example.com", repository.RoleEditor); err != nil {
 		t.Fatalf("share: %v", err)
 	}
 
@@ -241,7 +241,7 @@ func TestCalendarService_ListShares(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list shares: %v", err)
 	}
-	if len(shares) != 1 || shares[0].Username != "other" || shares[0].Role != repository.RoleEditor {
+	if len(shares) != 1 || shares[0].Name != "other" || shares[0].Role != repository.RoleEditor {
 		t.Fatalf("unexpected shares: %+v", shares)
 	}
 }
@@ -261,7 +261,7 @@ func TestCalendarService_LeaveShare(t *testing.T) {
 	svc, _, ownerID, otherID, calendarID := newTestShareService(t)
 	ctx := context.Background()
 
-	if _, err := svc.Share(ctx, ownerID, calendarID, "other", repository.RoleViewer); err != nil {
+	if _, _, err := svc.Share(ctx, ownerID, calendarID, "other@example.com", repository.RoleViewer); err != nil {
 		t.Fatalf("share: %v", err)
 	}
 
@@ -290,7 +290,7 @@ func TestCalendarService_ListAccessible(t *testing.T) {
 	svc, _, ownerID, otherID, calendarID := newTestShareService(t)
 	ctx := context.Background()
 
-	if _, err := svc.Share(ctx, ownerID, calendarID, "other", repository.RoleEditor); err != nil {
+	if _, _, err := svc.Share(ctx, ownerID, calendarID, "other@example.com", repository.RoleEditor); err != nil {
 		t.Fatalf("share: %v", err)
 	}
 

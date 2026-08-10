@@ -1,6 +1,6 @@
 # CalDAV authenticates with per-User app passwords over HTTP Basic
 
-Status: accepted
+Status: accepted — amended by ADR-0047 (the Basic-auth identifier is Email, not username)
 
 Native calendar clients speak HTTP Basic (or Digest), not the web app's JWT-access-token + refresh-cookie flow. CalDAV requests authenticate with **HTTP Basic over TLS**, validated against per-User **app passwords** (app-specific passwords) stored as hashes in a new `app_passwords` table — never the account's real login password. A CalDAV Basic-auth middleware sits in front of the `/dav/` routes (ADR-0023), parallel to the web app's `RequireAuth`, and resolves Basic credentials to a `userID` that feeds the same downstream services.
 
