@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   calendarHasOtherRecipients,
+  calendarPickerEmptyReason,
   calendarPickerLabel,
   calendarReadOnlyReason,
   canManageCalendar,
@@ -266,5 +267,38 @@ describe("defaultCalendarId", () => {
 
   it("returns an empty string for an empty list", () => {
     expect(defaultCalendarId([])).toBe("");
+  });
+});
+
+// The New-event modal's Calendar picker empty state (#174): the remedy
+// differs by cause, so "no calendars at all" and "everything's hidden" and
+// "everything's read-only" must stay distinguishable rather than collapsing
+// into one generic message.
+describe("calendarPickerEmptyReason", () => {
+  it("is 'none' when the caller has no calendars at all", () => {
+    expect(calendarPickerEmptyReason([], new Set())).toBe("none");
+  });
+
+  it("is 'hidden' when calendars exist but none is checked", () => {
+    const calendars = [makeCalendar({ id: "cal-1", access: "owner", isOwner: true })];
+    expect(calendarPickerEmptyReason(calendars, new Set())).toBe("hidden");
+  });
+
+  it("is 'hidden' even when the unchecked calendars are all unwritable", () => {
+    const calendars = [makeCalendar({ id: "cal-1", access: "viewer", isOwner: false })];
+    expect(calendarPickerEmptyReason(calendars, new Set())).toBe("hidden");
+  });
+
+  it("is 'unwritable' when checked calendars exist but none is writable", () => {
+    const calendars = [
+      makeCalendar({ id: "cal-1", access: "viewer", isOwner: false }),
+      makeCalendar({
+        id: "cal-2",
+        access: "viewer",
+        isOwner: true,
+        sourceUrl: "https://example.com/feed.ics",
+      }),
+    ];
+    expect(calendarPickerEmptyReason(calendars, new Set(["cal-1", "cal-2"]))).toBe("unwritable");
   });
 });

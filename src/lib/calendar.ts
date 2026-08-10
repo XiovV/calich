@@ -139,6 +139,28 @@ export function shareCountTooltip(shareCount: number): string {
   return `Shared with ${shareCount} ${shareCount === 1 ? "person" : "people"}`;
 }
 
+// CalendarPickerEmptyReason explains why the Event modal's Calendar picker
+// has no options to offer (#174) — the remedy differs by cause, so the
+// empty state must distinguish them rather than showing one generic
+// message: "none" means create one; "hidden" means show one already owned,
+// which must never suggest creating a Calendar the caller already has;
+// "unwritable" means every checked Calendar is Subscribed or Viewer-only.
+// "hidden" wins over "unwritable" — a Calendar that's both unchecked and
+// unwritable is still reachable by checking it. Meaningful only when the
+// picker's own options (checked Calendars filtered through
+// canWriteCalendarEvents, same as here) are already empty — the caller
+// establishes that before asking why; this just distinguishes the causes.
+export type CalendarPickerEmptyReason = "none" | "hidden" | "unwritable";
+
+export function calendarPickerEmptyReason(
+  calendars: Calendar[],
+  checkedCalendarIds: Set<string>,
+): CalendarPickerEmptyReason {
+  if (calendars.length === 0) return "none";
+  if (getCheckedCalendars(calendars, checkedCalendarIds).length === 0) return "hidden";
+  return "unwritable";
+}
+
 // defaultCalendarId picks the Calendar a new Event should default to, from
 // the caller's writable, checked Calendars — preferring one they own, since
 // an Editor Share on someone else's Calendar may otherwise sort first and

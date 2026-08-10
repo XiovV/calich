@@ -29,15 +29,18 @@ import {
 } from "../lib/customRecurrence";
 import {
   calendarHasOtherRecipients,
+  calendarPickerEmptyReason,
   calendarPickerLabel,
   calendarReadOnlyReason,
   canWriteCalendarEvents,
   defaultCalendarId,
   getCalendarById,
   getCheckedCalendars,
+  type CalendarPickerEmptyReason,
 } from "../lib/calendar";
 import { resolveCalendarFill } from "../lib/calendarColors";
 import { ColorSwatchPicker } from "../components/layout/ColorSwatchPicker";
+import { CalendarModal } from "../components/layout/CalendarModal";
 import { useShellStore } from "../lib/shellStore";
 import { useEventsStore } from "../lib/eventsStore";
 import { useCalendarsStore } from "../lib/calendarsStore";
@@ -68,6 +71,15 @@ type ReminderDraft = Reminder & { draftId: string };
 // The Repeat dropdown offers the fixed presets plus a "Custom…" entry that opens
 // the Custom recurrence dialog (issue #35).
 type RepeatChoice = RecurrencePreset | "custom";
+
+// Copy for the Calendar picker's empty state (#174), keyed the same as
+// CalendarPickerEmptyReason — one map instead of a branch per render site.
+const CALENDAR_EMPTY_STATE_COPY: Record<CalendarPickerEmptyReason, string> = {
+  none: "You don't have any calendars yet.",
+  hidden: "Your calendars are all hidden. Show one in the sidebar to add events to it.",
+  unwritable:
+    "You don't have a calendar you can add events to — everything you can see is shared with view-only access.",
+};
 
 type EventModalProps =
   | { mode: "create"; day: Date; draft: DraftBlock; onClose: () => void }
@@ -218,6 +230,15 @@ export function EventModal(props: EventModalProps) {
       : undefined;
   const showAttachmentUploader = mode === "edit" && calendarHasOtherRecipients(editedCalendar);
 
+  // #174: when no Calendar is a valid write target, the picker's empty
+  // state names why instead of rendering an empty dropdown next to a
+  // silently disabled Save — the remedy differs per reason (create one,
+  // show one, or neither applies).
+  const calendarEmptyReason =
+    calendarOptions.length === 0
+      ? calendarPickerEmptyReason(calendars, checkedCalendarIds)
+      : undefined;
+
   const [initial] = useState(() =>
     deriveInitialFormState(props, master, defaultCalendarId(checkedCalendars)),
   );
@@ -257,6 +278,7 @@ export function EventModal(props: EventModalProps) {
   const [location, setLocation] = useState(initial.location);
   const [color, setColor] = useState<string | undefined>(initial.color);
   const [isCustomDialogOpen, setIsCustomDialogOpen] = useState(false);
+  const [isCreateCalendarOpen, setIsCreateCalendarOpen] = useState(false);
   const [isDeleteConfirmOpen, setIsDeleteConfirmOpen] = useState(false);
   const [pendingEditChanges, setPendingEditChanges] = useState<
     (EventFieldChanges & { rrule?: string }) | null
@@ -808,6 +830,21 @@ export function EventModal(props: EventModalProps) {
                     ? `Calendar: ${editedCalendar.name} (subscribed) — read-only; only Refresh can update it.`
                     : `Calendar: ${editedCalendar.name} — read-only; you have Viewer access.`}
                 </p>
+              ) : calendarEmptyReason ? (
+                <div>
+                  <p className="text-label-sm text-ink-muted">
+                    {CALENDAR_EMPTY_STATE_COPY[calendarEmptyReason]}
+                  </p>
+                  {calendarEmptyReason !== "hidden" && (
+                    <button
+                      type="button"
+                      onClick={() => setIsCreateCalendarOpen(true)}
+                      className="mt-1.5 text-label-sm text-accent hover:underline"
+                    >
+                      Create a calendar
+                    </button>
+                  )}
+                </div>
               ) : (
                 <Select
                   label="Calendar"
@@ -994,6 +1031,9 @@ export function EventModal(props: EventModalProps) {
           </Dialog.Popup>
         </Dialog.Portal>
       </Dialog.Root>
+      {isCreateCalendarOpen && (
+        <CalendarModal mode="create" onClose={() => setIsCreateCalendarOpen(false)} />
+      )}
       {isCustomDialogOpen && (
         <CustomRecurrenceDialog
           start={startForRule}
