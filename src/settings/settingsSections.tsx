@@ -1,3 +1,4 @@
+import type { ReactElement } from "react";
 import { AccountSection } from "./AccountSection";
 import { AppPasswordsSection } from "./AppPasswordsSection";
 import { PreferencesSection } from "./PreferencesSection";
@@ -6,17 +7,36 @@ import { ImportExportSection } from "./ImportExportSection";
 import { WorkspaceSection } from "./WorkspaceSection";
 import { GroupsSection } from "./GroupsSection";
 
-// The single source of truth for Settings' left-hand nav (#112): both the
-// route table in App.tsx and the nav list in SettingsPage read this.
-// Preferences (#128, ADR-0039) leads the list.
-export function getSettingsSections() {
+export type SettingsGroup = "personal" | "workspace";
+
+// Display order and label for each SettingsGroup, kept beside the type so a
+// third group never needs updating in two places.
+export const SETTINGS_GROUP_ORDER: SettingsGroup[] = ["personal", "workspace"];
+export const SETTINGS_GROUP_LABELS: Record<SettingsGroup, string> = {
+  personal: "Personal",
+  workspace: "Workspace",
+};
+
+export interface SettingsSection {
+  path: string;
+  label: string;
+  group: SettingsGroup;
+  element: ReactElement;
+}
+
+// The single source of truth for Settings' left-hand nav (#112, #176): both
+// the route table in App.tsx and the rail in SettingsModal read this. Group
+// follows how the code is already scoped (ADR-0049) — Workspace and Groups
+// are per-Workspace (ADR-0045), the rest are per-User. Preferences (#128,
+// ADR-0039) leads the Personal group.
+export function getSettingsSections(): SettingsSection[] {
   return [
-    { path: "preferences", label: "Preferences", element: <PreferencesSection /> },
-    { path: "account", label: "Account", element: <AccountSection /> },
-    { path: "workspace", label: "Workspace", element: <WorkspaceSection /> },
-    { path: "groups", label: "Groups", element: <GroupsSection /> },
-    { path: "app-passwords", label: "App passwords", element: <AppPasswordsSection /> },
-    { path: "reminders", label: "Reminder delivery", element: <ReminderDeliverySection /> },
-    { path: "import-export", label: "Import & export", element: <ImportExportSection /> },
+    { path: "preferences", label: "Preferences", group: "personal", element: <PreferencesSection /> },
+    { path: "account", label: "Account", group: "personal", element: <AccountSection /> },
+    { path: "workspace", label: "Workspace", group: "workspace", element: <WorkspaceSection /> },
+    { path: "groups", label: "Groups", group: "workspace", element: <GroupsSection /> },
+    { path: "app-passwords", label: "App passwords", group: "personal", element: <AppPasswordsSection /> },
+    { path: "reminders", label: "Reminder delivery", group: "personal", element: <ReminderDeliverySection /> },
+    { path: "import-export", label: "Import & export", group: "personal", element: <ImportExportSection /> },
   ];
 }

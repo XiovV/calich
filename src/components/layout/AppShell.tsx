@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { startOfDay } from "date-fns";
+import { Outlet } from "react-router";
 import { TopBar } from "./TopBar";
 import { Sidebar } from "./Sidebar";
 import { CalendarView } from "../../calendar-grid/CalendarView";
@@ -102,6 +103,7 @@ export function AppShell() {
           onClose={() => setEventModalState(null)}
         />
       )}
+      <Outlet />
     </div>
   );
 }

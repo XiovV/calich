@@ -119,11 +119,19 @@ _Avoid_: local event, zoneless event, naive event
 The user's chosen appearance — Light, Dark, or System — persisted locally and applied by toggling a `.dark` class on the document root. System defers to the OS setting; Light and Dark pin the appearance regardless of the OS. Despite the name, deliberately **not** one of the Preferences: it is stored per-device rather than on the User, so it does not follow them to another browser. See ADR-0014, ADR-0039.
 _Avoid_: color scheme, mode, dark-mode toggle
 
+**Settings**:
+The overlay where a User adjusts everything that isn't a Calendar or an Event — their Preferences, their Account, their Reminder delivery, their app passwords, import and export, and (for the Workspaces they administer) the Workspace itself and its Groups. Opens *over* the calendar rather than replacing it: the grid stays where it was, and closing returns the User to exactly the view they left. Divided into a **Personal** group, whose Sections concern the one User, and a **Workspace** group, whose Sections concern the active Workspace and everyone in it. Each Section is individually addressable, so one can be linked to and survives a reload. See ADR-0049.
+_Avoid_: settings page, preferences (that's the narrower concept below), config screen
+
+**Section**:
+One named part of Settings, reached from its rail and shown one at a time — never a flat scroll of all of them. The unit that carries a Settings group membership and its own address.
+_Avoid_: tab, panel, settings page
+
 ## Preferences
 
 **Preferences**:
 The per-User settings that shape how the calendar is displayed to one User — Week start, Default view, Time format, and Working hours. Stored on the User and served to every browser they log in from, so a Preference follows the User rather than the device. None of them changes what an Event *is*: two Users with Access to one Calendar see the same Occurrences at the same instants, formatted differently. Theme preference is deliberately not one. See ADR-0039.
-_Avoid_: settings (Settings is the page these live on, not the concept), config, options, profile
+_Avoid_: settings (Settings is the modal these live in, not the concept), config, options, profile
 
 **Week start**:
 The weekday a displayed week begins on — the first column of the Month grid, the first day of the Week view, and the leftmost column of the mini calendars. Stored as a day index 0–6 (Sunday–Saturday). A viewer's Preference and nothing more: it never reaches an Event's Recurrence rule, whose `WKST` stays at the iCalendar default, so one Event yields the same Occurrences for every viewer and for every CalDAV client. See ADR-0039.

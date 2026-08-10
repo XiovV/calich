@@ -5,7 +5,7 @@ import { AcceptWorkspaceInvitePage } from "./auth/AcceptWorkspaceInvitePage";
 import { LoginPage } from "./auth/LoginPage";
 import { RegisterPage } from "./auth/RegisterPage";
 import { ProtectedRoute } from "./auth/ProtectedRoute";
-import { SettingsPage } from "./settings/SettingsPage";
+import { SettingsModal } from "./settings/SettingsModal";
 import { getSettingsSections } from "./settings/settingsSections";
 import { Toaster } from "./components/ui/Toaster";
 import { useAuthStore } from "./lib/authStore";
@@ -31,19 +31,13 @@ function App() {
               <AppShell />
             </ProtectedRoute>
           }
-        />
-        <Route
-          path="/settings"
-          element={
-            <ProtectedRoute>
-              <SettingsPage />
-            </ProtectedRoute>
-          }
         >
-          <Route index element={<Navigate to={settingsSections[0].path} replace />} />
-          {settingsSections.map((section) => (
-            <Route key={section.path} path={section.path} element={section.element} />
-          ))}
+          <Route path="settings" element={<SettingsModal />}>
+            <Route index element={<Navigate to={settingsSections[0].path} replace />} />
+            {settingsSections.map((section) => (
+              <Route key={section.path} path={section.path} element={section.element} />
+            ))}
+          </Route>
         </Route>
       </Routes>
       <Toaster />
