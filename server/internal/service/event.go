@@ -61,6 +61,14 @@ var (
 	// guard lives here rather than at the REST/CalDAV edges so every entry
 	// point is covered by construction.
 	ErrCalendarReadOnly = errors.New("calendar is read-only")
+	// ErrAttendeeTargetNotInWorkspace is returned by AddAttendee when
+	// targetUserID doesn't belong to the Event's Calendar's own Workspace
+	// (#161, ADR-0046) — an Attendee invite, like a Share, can only ever
+	// reach someone already inside that Workspace.
+	ErrAttendeeTargetNotInWorkspace = errors.New("attendee target does not belong to this workspace")
+	// ErrInvalidResponse is returned by SetResponse when response isn't one
+	// of the iCalendar PARTSTAT values ADR-0046 defines.
+	ErrInvalidResponse = errors.New("response must be \"needs-action\", \"accepted\", \"declined\", or \"tentative\"")
 )
 
 // isValidReminderChannel reports whether channel is one of the Channels
@@ -104,10 +112,12 @@ type EventService struct {
 	calendars         *CalendarService
 	users             *repository.UserRepository
 	attachments       *repository.AttachmentRepository
+	attendees         *repository.AttendeeRepository
+	workspaces        *repository.WorkspaceRepository
 }
 
-func NewEventService(db *sql.DB, events *repository.EventRepository, exceptions *repository.EventExceptionRepository, reminders *repository.EventReminderRepository, reminderOverrides *repository.ReminderOverrideRepository, sync *repository.SyncRepository, calendars *CalendarService, users *repository.UserRepository, attachments *repository.AttachmentRepository) *EventService {
-	return &EventService{db: db, events: events, exceptions: exceptions, reminders: reminders, reminderOverrides: reminderOverrides, sync: sync, calendars: calendars, users: users, attachments: attachments}
+func NewEventService(db *sql.DB, events *repository.EventRepository, exceptions *repository.EventExceptionRepository, reminders *repository.EventReminderRepository, reminderOverrides *repository.ReminderOverrideRepository, sync *repository.SyncRepository, calendars *CalendarService, users *repository.UserRepository, attachments *repository.AttachmentRepository, attendees *repository.AttendeeRepository, workspaces *repository.WorkspaceRepository) *EventService {
+	return &EventService{db: db, events: events, exceptions: exceptions, reminders: reminders, reminderOverrides: reminderOverrides, sync: sync, calendars: calendars, users: users, attachments: attachments, attendees: attendees, workspaces: workspaces}
 }
 
 // calendarByID resolves calendarID via s.calendars.Get, translating
@@ -177,6 +187,31 @@ func (s *EventService) getOwnedEvent(ctx context.Context, userID int64, id strin
 		return repository.Event{}, err
 	}
 	return event, nil
+}
+
+// getVisibleEvent resolves id and confirms userID may see it — either via
+// Calendar Access (getOwnedEvent) or, failing that, by being one of its
+// Attendees (ADR-0046, #161): an Attendee invite grants visibility to that
+// one Event with no Calendar Access of its own. Read-only: every write path
+// keeps calling getOwnedEvent/requireWritableCalendar directly, since an
+// Attendee with no Calendar Access can never write.
+func (s *EventService) getVisibleEvent(ctx context.Context, userID int64, id string) (repository.Event, error) {
+	event, err := s.getOwnedEvent(ctx, userID, id)
+	if err == nil {
+		return event, nil
+	}
+	if !errors.Is(err, repository.ErrNotFound) {
+		return repository.Event{}, err
+	}
+
+	if _, attErr := s.attendees.Get(ctx, id, userID); attErr != nil {
+		if errors.Is(attErr, repository.ErrNotFound) {
+			return repository.Event{}, repository.ErrNotFound
+		}
+		return repository.Event{}, attErr
+	}
+
+	return s.events.GetByID(ctx, id)
 }
 
 // ReminderOverrideWrite is a Reminder override's writable fields (ADR-0036):
@@ -440,7 +475,9 @@ func stripEndCondition(rrule string) string {
 	return strings.Join(kept, ";")
 }
 
-// List returns a user's events with each Master's Exdates populated from its
+// List returns a user's events — every Event on a Calendar they have Access
+// to, unioned with every Event they're an Attendee of regardless of Calendar
+// Access (ADR-0046, #161) — with each Master's Exdates populated from its
 // Exceptions (ADR-0016), and each event's Reminders populated from
 // event_reminders (ADR-0020). Overrides always have an empty Exdates.
 func (s *EventService) List(ctx context.Context, userID int64, from, to *time.Time) ([]repository.Event, error) {
@@ -457,6 +494,13 @@ func (s *EventService) List(ctx context.Context, userID int64, from, to *time.Ti
 	if err != nil {
 		return nil, fmt.Errorf("list events: %w", err)
 	}
+
+	attendeeEvents, err := s.events.ListByAttendeeUserID(ctx, userID, from, to)
+	if err != nil {
+		return nil, fmt.Errorf("list attendee events: %w", err)
+	}
+	events = mergeEventsByID(events, attendeeEvents)
+
 	if err := s.attachExdates(ctx, events); err != nil {
 		return nil, err
 	}
@@ -494,6 +538,27 @@ func (s *EventService) ListAllWithReminders(ctx context.Context) ([]repository.E
 		return nil, err
 	}
 	return events, nil
+}
+
+// mergeEventsByID appends b's Events not already present in a (by id) —
+// List's Calendar-Access and Attendee halves can overlap when a caller has
+// both to the same Event (ADR-0046), and the merged result must carry each
+// Event exactly once.
+func mergeEventsByID(a, b []repository.Event) []repository.Event {
+	seen := make(map[string]bool, len(a))
+	for _, e := range a {
+		seen[e.ID] = true
+	}
+
+	merged := a
+	for _, e := range b {
+		if seen[e.ID] {
+			continue
+		}
+		seen[e.ID] = true
+		merged = append(merged, e)
+	}
+	return merged
 }
 
 // eventIDs collects the ids to hand a batched lookup, so a read of any size
@@ -641,8 +706,10 @@ func (s *EventService) attachAttachments(ctx context.Context, events []repositor
 	return nil
 }
 
+// Get returns id if userID can see it — via Calendar Access or, failing
+// that, as one of its Attendees (ADR-0046, #161).
 func (s *EventService) Get(ctx context.Context, userID int64, id string) (repository.Event, error) {
-	event, err := s.getOwnedEvent(ctx, userID, id)
+	event, err := s.getVisibleEvent(ctx, userID, id)
 	if err != nil {
 		return repository.Event{}, err
 	}
@@ -1858,4 +1925,116 @@ func (s *EventService) PutSeries(ctx context.Context, userID int64, calendarID, 
 	}
 
 	return s.GetSeries(ctx, userID, masterID)
+}
+
+// attendeeManagementCalendar resolves eventID and confirms actorUserID holds
+// Editor Access (or is the Owner) of its Calendar — AddAttendee and
+// RemoveAttendee's shared guard, since Attendee management is a Calendar
+// write like any other Event edit (#161), not something an Attendee with no
+// Calendar Access could ever do to their own invite. Also returns the
+// Calendar, so callers can resolve its WorkspaceID without a second lookup.
+func (s *EventService) attendeeManagementCalendar(ctx context.Context, actorUserID int64, eventID string) (repository.Event, repository.Calendar, error) {
+	event, err := s.events.GetByID(ctx, eventID)
+	if err != nil {
+		return repository.Event{}, repository.Calendar{}, err
+	}
+	if err := s.requireWritableCalendar(ctx, actorUserID, event.CalendarID); err != nil {
+		if errors.Is(err, ErrCalendarNotFound) {
+			return repository.Event{}, repository.Calendar{}, repository.ErrNotFound
+		}
+		return repository.Event{}, repository.Calendar{}, err
+	}
+	calendar, err := s.calendarByID(ctx, actorUserID, event.CalendarID)
+	if err != nil {
+		return repository.Event{}, repository.Calendar{}, err
+	}
+	return event, calendar, nil
+}
+
+// AddAttendee invites targetUserID as an Attendee of eventID, callable by
+// any caller with Editor Access to (or ownership of) eventID's Calendar
+// (#161, ADR-0046). Being an Attendee grants targetUserID visibility to
+// eventID alone, with no Calendar Access of their own required — the invite
+// itself is the grant. targetUserID must already be a Member of eventID's
+// Calendar's own Workspace and not Disabled, mirroring CalendarService.
+// Share's target checks (ADR-0037, ADR-0045).
+func (s *EventService) AddAttendee(ctx context.Context, actorUserID int64, eventID string, targetUserID int64) (repository.Attendee, error) {
+	_, calendar, err := s.attendeeManagementCalendar(ctx, actorUserID, eventID)
+	if err != nil {
+		return repository.Attendee{}, err
+	}
+
+	// A Disabled User is hidden from the invite picker (ADR-0037) — from the
+	// inviter's perspective they don't exist to invite, same as
+	// CalendarService.Share.
+	target, err := s.users.GetByID(ctx, targetUserID)
+	if err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			return repository.Attendee{}, ErrUserNotFound
+		}
+		return repository.Attendee{}, fmt.Errorf("look up user: %w", err)
+	}
+	if target.IsDisabled {
+		return repository.Attendee{}, ErrUserNotFound
+	}
+
+	if _, err := s.workspaces.GetMember(ctx, calendar.WorkspaceID, targetUserID); err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			return repository.Attendee{}, ErrAttendeeTargetNotInWorkspace
+		}
+		return repository.Attendee{}, fmt.Errorf("get workspace member: %w", err)
+	}
+
+	attendee, err := s.attendees.Add(ctx, eventID, targetUserID)
+	if err != nil {
+		return repository.Attendee{}, err
+	}
+	return attendee, nil
+}
+
+// RemoveAttendee revokes targetUserID's invite to eventID, callable by any
+// caller with Editor Access to (or ownership of) eventID's Calendar (#161,
+// ADR-0046). Removing their row revokes their visibility to eventID; what
+// happens to their historical response is left undecided by ADR-0046, and
+// this simply deletes the row.
+func (s *EventService) RemoveAttendee(ctx context.Context, actorUserID int64, eventID string, targetUserID int64) error {
+	if _, _, err := s.attendeeManagementCalendar(ctx, actorUserID, eventID); err != nil {
+		return err
+	}
+	return s.attendees.Remove(ctx, eventID, targetUserID)
+}
+
+// ListAttendees returns every Attendee of eventID with their Username, for
+// display — callable by anyone who can see eventID at all (getVisibleEvent):
+// existing Calendar Access, or being an Attendee themselves (#161,
+// ADR-0046).
+func (s *EventService) ListAttendees(ctx context.Context, userID int64, eventID string) ([]repository.AttendeeWithUsername, error) {
+	if _, err := s.getVisibleEvent(ctx, userID, eventID); err != nil {
+		return nil, err
+	}
+	return s.attendees.ListByEventID(ctx, eventID)
+}
+
+func isValidResponse(response string) bool {
+	switch response {
+	case repository.ResponseNeedsAction, repository.ResponseAccepted, repository.ResponseDeclined, repository.ResponseTentative:
+		return true
+	default:
+		return false
+	}
+}
+
+// SetResponse sets userID's own response to eventID, the only response a
+// caller may ever change here — there is no argument naming a different
+// target user, so an organizer or Editor managing Attendees can add or
+// remove them but can never set their response for them (#161, ADR-0046).
+// Returns repository.ErrNotFound if userID isn't an Attendee of eventID.
+func (s *EventService) SetResponse(ctx context.Context, userID int64, eventID, response string) (repository.Attendee, error) {
+	if !isValidResponse(response) {
+		return repository.Attendee{}, ErrInvalidResponse
+	}
+	if _, err := s.attendees.Get(ctx, eventID, userID); err != nil {
+		return repository.Attendee{}, err
+	}
+	return s.attendees.SetResponse(ctx, eventID, userID, response)
 }

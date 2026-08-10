@@ -127,6 +127,14 @@ func New(logger *slog.Logger, authHandler *handlers.AuthHandler, calendarHandler
 			r.Post("/{id}/attachments", attachmentHandler.Upload)
 			r.Get("/{id}/attachments/{attachmentId}", attachmentHandler.Download)
 			r.Delete("/{id}/attachments/{attachmentId}", attachmentHandler.Delete)
+
+			// Attendees (#161, ADR-0046): invite/remove are Editor-gated by
+			// EventService itself, mirroring Calendar Shares; response is
+			// always the caller's own, so it needs no such gate.
+			r.Get("/{id}/attendees", eventHandler.ListAttendees)
+			r.Post("/{id}/attendees", eventHandler.AddAttendee)
+			r.Delete("/{id}/attendees/{userId}", eventHandler.RemoveAttendee)
+			r.Put("/{id}/attendees/response", eventHandler.SetAttendeeResponse)
 		})
 
 		r.Route("/notifications", func(r chi.Router) {
@@ -170,7 +178,16 @@ func New(logger *slog.Logger, authHandler *handlers.AuthHandler, calendarHandler
 			// refuses a caller who isn't the target Workspace's Owner or
 			// Admin, so no extra middleware gate is needed here.
 			r.Post("/{id}/invites", workspaceHandler.CreateInvite)
+			r.Get("/{id}/invites", workspaceHandler.ListInvites)
 			r.Post("/invites/{id}/reissue", workspaceHandler.ReissueInvite)
+			r.Delete("/invites/{id}", workspaceHandler.CancelInvite)
+			// Member management (#156, #160, #165): WorkspaceService itself
+			// refuses a caller without the required Role, so no extra
+			// middleware gate is needed here either.
+			r.Get("/{id}/members", workspaceHandler.ListMembers)
+			r.Put("/{id}/members/{userId}/role", workspaceHandler.SetMemberRole)
+			r.Get("/{id}/members/{userId}/remove-impact", workspaceHandler.RemoveMemberImpact)
+			r.Delete("/{id}/members/{userId}", workspaceHandler.RemoveMember)
 		})
 
 		// Groups (#159, ADR-0045): currently just the listing the Calendar

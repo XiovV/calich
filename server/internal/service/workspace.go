@@ -217,6 +217,22 @@ func (s *WorkspaceService) ListMembers(ctx context.Context, actorUserID, workspa
 	return members, nil
 }
 
+// ListMembersWithUsername returns every enabled Member of workspaceID joined
+// against their Username (#156, #165), callable by any Member — the
+// member-management list's data source. actorUserID who isn't a Member gets
+// the same repository.ErrNotFound a non-existent workspaceID would.
+func (s *WorkspaceService) ListMembersWithUsername(ctx context.Context, actorUserID, workspaceID int64) ([]repository.WorkspaceMemberWithUsername, error) {
+	if _, err := s.workspaces.GetMember(ctx, workspaceID, actorUserID); err != nil {
+		return nil, err
+	}
+
+	members, err := s.workspaces.ListMembersWithUsername(ctx, workspaceID)
+	if err != nil {
+		return nil, fmt.Errorf("list workspace members: %w", err)
+	}
+	return members, nil
+}
+
 // SetMemberRole grants or revokes the Admin Role on targetUserID within
 // workspaceID (#156, ADR-0044) — Owner-only; an Admin actor gets the same
 // repository.ErrNotFound a non-Member would, mirroring
@@ -554,4 +570,39 @@ func (s *WorkspaceService) ReissueInvite(ctx context.Context, actorUserID, invit
 	}
 
 	return WorkspaceInviteResult{Invite: invite, Token: token}, nil
+}
+
+// ListInvites returns every outstanding Workspace Invite for workspaceID
+// (#165), callable only by its Owner or Admin — the member-management
+// screen's outstanding-invites list, shown alongside active Members.
+func (s *WorkspaceService) ListInvites(ctx context.Context, actorUserID, workspaceID int64) ([]repository.WorkspaceInvite, error) {
+	if err := s.requireOwnerOrAdmin(ctx, actorUserID, workspaceID); err != nil {
+		return nil, err
+	}
+
+	invites, err := s.invites.ListByWorkspace(ctx, workspaceID)
+	if err != nil {
+		return nil, fmt.Errorf("list workspace invites: %w", err)
+	}
+	return invites, nil
+}
+
+// CancelInvite withdraws inviteID outright (#165), callable only by the
+// invite's Workspace's Owner or Admin — the invited address's link stops
+// working immediately, mirroring how a reissued invite already invalidates
+// whichever token came before it.
+func (s *WorkspaceService) CancelInvite(ctx context.Context, actorUserID, inviteID int64) error {
+	invite, err := s.invites.GetByID(ctx, inviteID)
+	if err != nil {
+		return err
+	}
+
+	if err := s.requireOwnerOrAdmin(ctx, actorUserID, invite.WorkspaceID); err != nil {
+		return err
+	}
+
+	if err := s.invites.Delete(ctx, inviteID); err != nil {
+		return fmt.Errorf("cancel workspace invite: %w", err)
+	}
+	return nil
 }

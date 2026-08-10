@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -511,4 +512,150 @@ func (h *EventHandler) Reparent(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// attendeeWire is an Attendee's wire shape (#161, ADR-0046), shared by the
+// list, invite, and response endpoints — an Attendee has no other
+// representation.
+type attendeeWire struct {
+	UserID   int64  `json:"userId"`
+	Username string `json:"username,omitempty"`
+	Response string `json:"response"`
+}
+
+func toAttendeeResponse(a repository.AttendeeWithUsername) attendeeWire {
+	return attendeeWire{UserID: a.UserID, Username: a.Username, Response: a.Response}
+}
+
+// attendeeVisibilityErrors renders EventService.ListAttendees' not-visible
+// answer as a 404 — the caller has neither Calendar Access nor an Attendee
+// invite of their own to eventID.
+var attendeeVisibilityErrors = []errorCase{
+	{repository.ErrNotFound, notFound("event not found")},
+}
+
+// addAttendeeErrors is eventNotFoundErrors (a caller with no Editor Access
+// sees the same "event not found"/"read-only" answers writing an Event
+// already does) plus the Attendee-specific failure modes (#161, ADR-0046).
+var addAttendeeErrors = alsoHandling(eventNotFoundErrors,
+	errorCase{service.ErrUserNotFound, badRequest("user not found")},
+	errorCase{service.ErrAttendeeTargetNotInWorkspace, badRequest("attendee target does not belong to this workspace")},
+	errorCase{repository.ErrAlreadyAttendee, conflict("already_attendee", "user is already an attendee of this event")},
+)
+
+var setResponseErrors = []errorCase{
+	{service.ErrInvalidResponse, badRequest("response must be \"needs-action\", \"accepted\", \"declined\", or \"tentative\"")},
+	{repository.ErrNotFound, notFound("you are not an attendee of this event")},
+}
+
+// ListAttendees serves GET /api/events/{id}/attendees: every Attendee of
+// id, open to anyone who can see id at all — existing Calendar Access, or
+// being an Attendee themselves (#161, ADR-0046).
+func (h *EventHandler) ListAttendees(w http.ResponseWriter, r *http.Request) {
+	userID, ok := httpauth.UserIDFromContext(r.Context())
+	if !ok {
+		httpresponse.Error(w, http.StatusUnauthorized, "unauthorized", "authentication required")
+		return
+	}
+
+	id := chi.URLParam(r, "id")
+
+	attendees, err := h.events.ListAttendees(r.Context(), userID, id)
+	if respondError(w, err, attendeeVisibilityErrors, "failed to list attendees") {
+		return
+	}
+
+	response := make([]attendeeWire, len(attendees))
+	for i, a := range attendees {
+		response[i] = toAttendeeResponse(a)
+	}
+
+	httpresponse.JSON(w, http.StatusOK, response)
+}
+
+type addAttendeeRequest struct {
+	UserID int64 `json:"userId"`
+}
+
+// AddAttendee serves POST /api/events/{id}/attendees: invites userId as an
+// Attendee of id, callable only by an Editor of id's Calendar (#161,
+// ADR-0046).
+func (h *EventHandler) AddAttendee(w http.ResponseWriter, r *http.Request) {
+	userID, ok := httpauth.UserIDFromContext(r.Context())
+	if !ok {
+		httpresponse.Error(w, http.StatusUnauthorized, "unauthorized", "authentication required")
+		return
+	}
+
+	id := chi.URLParam(r, "id")
+
+	var req addAttendeeRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httpresponse.Error(w, http.StatusBadRequest, "invalid_request", "request body must be valid JSON")
+		return
+	}
+
+	attendee, err := h.events.AddAttendee(r.Context(), userID, id, req.UserID)
+	if respondError(w, err, addAttendeeErrors, "failed to add attendee") {
+		return
+	}
+
+	httpresponse.JSON(w, http.StatusCreated, attendeeWire{UserID: attendee.UserID, Response: attendee.Response})
+}
+
+// RemoveAttendee serves DELETE /api/events/{id}/attendees/{userId}: revokes
+// userId's Attendee invite to id, callable only by an Editor of id's
+// Calendar (#161, ADR-0046).
+func (h *EventHandler) RemoveAttendee(w http.ResponseWriter, r *http.Request) {
+	userID, ok := httpauth.UserIDFromContext(r.Context())
+	if !ok {
+		httpresponse.Error(w, http.StatusUnauthorized, "unauthorized", "authentication required")
+		return
+	}
+
+	id := chi.URLParam(r, "id")
+
+	targetUserID, err := strconv.ParseInt(chi.URLParam(r, "userId"), 10, 64)
+	if err != nil {
+		httpresponse.Error(w, http.StatusBadRequest, "invalid_request", "userId must be a valid integer")
+		return
+	}
+
+	if err := h.events.RemoveAttendee(r.Context(), userID, id, targetUserID); respondError(w, err, eventNotFoundErrors, "failed to remove attendee") {
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+type setAttendeeResponseRequest struct {
+	Response string `json:"response"`
+}
+
+// SetAttendeeResponse serves PUT /api/events/{id}/attendees/response: sets
+// the caller's own response to id, the only response this endpoint can ever
+// change — there is no way to name a different target user, so an
+// organizer or Editor can never set someone else's response through it
+// (#161, ADR-0046).
+func (h *EventHandler) SetAttendeeResponse(w http.ResponseWriter, r *http.Request) {
+	userID, ok := httpauth.UserIDFromContext(r.Context())
+	if !ok {
+		httpresponse.Error(w, http.StatusUnauthorized, "unauthorized", "authentication required")
+		return
+	}
+
+	id := chi.URLParam(r, "id")
+
+	var req setAttendeeResponseRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httpresponse.Error(w, http.StatusBadRequest, "invalid_request", "request body must be valid JSON")
+		return
+	}
+
+	attendee, err := h.events.SetResponse(r.Context(), userID, id, req.Response)
+	if respondError(w, err, setResponseErrors, "failed to set response") {
+		return
+	}
+
+	httpresponse.JSON(w, http.StatusOK, attendeeWire{UserID: attendee.UserID, Response: attendee.Response})
 }

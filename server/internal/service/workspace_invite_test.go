@@ -160,6 +160,87 @@ func TestWorkspaceService_ReissueInvite_RequiresOwnerOrAdmin(t *testing.T) {
 	}
 }
 
+func TestWorkspaceService_ListInvites_ReturnsOutstandingInvitesForOwnerOrAdmin(t *testing.T) {
+	workspaces, _, users := newTestWorkspaceInviteHarness(t)
+	ctx := context.Background()
+
+	owner, err := users.Create(ctx, "alice", "hash", false)
+	if err != nil {
+		t.Fatalf("create owner: %v", err)
+	}
+	workspace, err := workspaces.CreateForOwner(ctx, owner.ID, "Alice's Workspace")
+	if err != nil {
+		t.Fatalf("create workspace: %v", err)
+	}
+
+	if _, err := workspaces.CreateInvite(ctx, owner.ID, workspace.ID, "bob@example.com"); err != nil {
+		t.Fatalf("create invite: %v", err)
+	}
+	if _, err := workspaces.CreateInvite(ctx, owner.ID, workspace.ID, "carol@example.com"); err != nil {
+		t.Fatalf("create invite: %v", err)
+	}
+
+	invites, err := workspaces.ListInvites(ctx, owner.ID, workspace.ID)
+	if err != nil {
+		t.Fatalf("list invites: %v", err)
+	}
+	if len(invites) != 2 {
+		t.Fatalf("expected 2 outstanding invites, got %d", len(invites))
+	}
+
+	plainMember, err := users.Create(ctx, "dave", "hash", false)
+	if err != nil {
+		t.Fatalf("create plain member: %v", err)
+	}
+	if err := workspaces.WithTx(ctx, func(tx *sql.Tx) error {
+		return workspaces.AddMemberInTx(ctx, tx, workspace.ID, plainMember.ID, repository.WorkspaceRoleMember)
+	}); err != nil {
+		t.Fatalf("add plain member: %v", err)
+	}
+	if _, err := workspaces.ListInvites(ctx, plainMember.ID, workspace.ID); !errors.Is(err, repository.ErrNotFound) {
+		t.Fatalf("expected ErrNotFound for a plain Member listing invites, got %v", err)
+	}
+}
+
+func TestWorkspaceService_CancelInvite_RemovesItAndRequiresOwnerOrAdmin(t *testing.T) {
+	workspaces, _, users := newTestWorkspaceInviteHarness(t)
+	ctx := context.Background()
+
+	owner, err := users.Create(ctx, "alice", "hash", false)
+	if err != nil {
+		t.Fatalf("create owner: %v", err)
+	}
+	workspace, err := workspaces.CreateForOwner(ctx, owner.ID, "Alice's Workspace")
+	if err != nil {
+		t.Fatalf("create workspace: %v", err)
+	}
+
+	invite, err := workspaces.CreateInvite(ctx, owner.ID, workspace.ID, "bob@example.com")
+	if err != nil {
+		t.Fatalf("create invite: %v", err)
+	}
+
+	outsider, err := users.Create(ctx, "carol", "hash", false)
+	if err != nil {
+		t.Fatalf("create outsider: %v", err)
+	}
+	if err := workspaces.CancelInvite(ctx, outsider.ID, invite.Invite.ID); !errors.Is(err, repository.ErrNotFound) {
+		t.Fatalf("expected ErrNotFound for a non-member canceling an invite, got %v", err)
+	}
+
+	if err := workspaces.CancelInvite(ctx, owner.ID, invite.Invite.ID); err != nil {
+		t.Fatalf("cancel invite: %v", err)
+	}
+
+	invites, err := workspaces.ListInvites(ctx, owner.ID, workspace.ID)
+	if err != nil {
+		t.Fatalf("list invites: %v", err)
+	}
+	if len(invites) != 0 {
+		t.Fatalf("expected the canceled invite to be gone, got %d", len(invites))
+	}
+}
+
 // TestAuthService_AcceptWorkspaceInviteNewAccount_CreatesUserAndMembership
 // covers #154's first accept path: an invite for an email with no existing
 // User creates the User and a Member-role WorkspaceMember atomically, and

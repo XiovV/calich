@@ -75,6 +75,33 @@ func (r *WorkspaceInviteRepository) GetByID(ctx context.Context, id int64) (Work
 	))
 }
 
+// ListByWorkspace returns every outstanding WorkspaceInvite for workspaceID,
+// ordered by when it was issued — the member-management screen's outstanding-
+// invites list (#165), shown alongside active Members.
+func (r *WorkspaceInviteRepository) ListByWorkspace(ctx context.Context, workspaceID int64) ([]WorkspaceInvite, error) {
+	rows, err := r.db.QueryContext(ctx,
+		`SELECT `+workspaceInviteColumns+` FROM workspace_invites WHERE workspace_id = ? ORDER BY created_at, id`,
+		workspaceID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list workspace invites: %w", err)
+	}
+	defer rows.Close()
+
+	invites := []WorkspaceInvite{}
+	for rows.Next() {
+		i, err := scanWorkspaceInviteRow(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan workspace invite: %w", err)
+		}
+		invites = append(invites, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate workspace invites: %w", err)
+	}
+	return invites, nil
+}
+
 // GetByTokenHash looks up the WorkspaceInvite a token hashes to — used by
 // AuthService, which only ever has the hash, never an id.
 func (r *WorkspaceInviteRepository) GetByTokenHash(ctx context.Context, inviteTokenHash string) (WorkspaceInvite, error) {

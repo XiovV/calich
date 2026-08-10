@@ -164,10 +164,30 @@ func (r *EventRepository) ListByCalendarIDs(ctx context.Context, calendarIDs []s
 	}
 
 	query := `SELECT id, calendar_id, title, "start", "end", all_day, rrule, parent_id, recurrence_id, tzid, description, location, color, external_uid, created_by, created_at, change_seq FROM events WHERE calendar_id IN (` + placeholders(len(calendarIDs)) + `)`
-	args := make([]any, 0, len(calendarIDs)+2)
-	for _, id := range calendarIDs {
-		args = append(args, id)
+	args := make([]any, len(calendarIDs))
+	for i, id := range calendarIDs {
+		args[i] = id
 	}
+
+	return r.listWindowed(ctx, query, args, from, to)
+}
+
+// ListByAttendeeUserID returns every Event userID is an Attendee of, with
+// the same from/to windowing ListByCalendarIDs applies — the Attendee half
+// of a User's visible Events (ADR-0046), which EventService.List unions
+// with ListByCalendarIDs' Calendar-Access half.
+func (r *EventRepository) ListByAttendeeUserID(ctx context.Context, userID int64, from, to *time.Time) ([]Event, error) {
+	query := `SELECT id, calendar_id, title, "start", "end", all_day, rrule, parent_id, recurrence_id, tzid, description, location, color, external_uid, created_by, created_at, change_seq FROM events WHERE id IN (SELECT event_id FROM attendees WHERE user_id = ?)`
+	return r.listWindowed(ctx, query, []any{userID}, from, to)
+}
+
+// listWindowed runs baseQuery (already scoped to the caller's visible set by
+// its WHERE clause) plus this package's shared from/to windowing —
+// ListByCalendarIDs and ListByAttendeeUserID's common tail, including the
+// recurrence-aware Go-side filter neither SQL alone can express (#80).
+func (r *EventRepository) listWindowed(ctx context.Context, baseQuery string, baseArgs []any, from, to *time.Time) ([]Event, error) {
+	query := baseQuery
+	args := append([]any{}, baseArgs...)
 
 	switch {
 	case from != nil && to != nil:
