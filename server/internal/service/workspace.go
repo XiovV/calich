@@ -124,32 +124,33 @@ func (s *WorkspaceService) ListForUser(ctx context.Context, userID int64) ([]rep
 	return workspaces, nil
 }
 
-// OwnsNonEmptyWorkspace reports whether userID is the sole Owner of any
-// Workspace that still has other Members in it — the guard blocking
-// self-Disable and self-Delete (ADR-0044, AccountService): a Workspace is
-// never left without anyone able to manage it. A Workspace where userID is
-// Owner but the only Member (a solo Workspace) never blocks — there's nobody
-// else depending on them there.
-func (s *WorkspaceService) OwnsNonEmptyWorkspace(ctx context.Context, userID int64) (bool, error) {
+// NonEmptyOwnedWorkspaces returns every Workspace userID is the sole Owner of
+// that still has other Members in it — the guard blocking self-Disable and
+// self-Delete (ADR-0044, AccountService): a Workspace is never left without
+// anyone able to manage it. A Workspace where userID is Owner but the only
+// Member (a solo Workspace) is never included — there's nobody else
+// depending on them there. An empty result means the guard doesn't block.
+func (s *WorkspaceService) NonEmptyOwnedWorkspaces(ctx context.Context, userID int64) ([]repository.Workspace, error) {
 	workspaces, err := s.workspaces.ListForUser(ctx, userID)
 	if err != nil {
-		return false, fmt.Errorf("list workspaces: %w", err)
+		return nil, fmt.Errorf("list workspaces: %w", err)
 	}
 
+	var blocking []repository.Workspace
 	for _, w := range workspaces {
 		if w.OwnerUserID != userID {
 			continue
 		}
 		count, err := s.workspaces.CountMembers(ctx, w.ID)
 		if err != nil {
-			return false, fmt.Errorf("count members of workspace %d: %w", w.ID, err)
+			return nil, fmt.Errorf("count members of workspace %d: %w", w.ID, err)
 		}
 		if count > 1 {
-			return true, nil
+			blocking = append(blocking, w)
 		}
 	}
 
-	return false, nil
+	return blocking, nil
 }
 
 var (

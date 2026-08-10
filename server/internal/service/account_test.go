@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"slices"
 	"testing"
 	"time"
 
@@ -146,8 +147,16 @@ func TestAccountService_SetDisabled_RefusesTheSoleOwnerOfANonEmptyWorkspace(t *t
 	bob, _ := h.register(t, "bob")
 	h.addMember(t, aliceWorkspace.ID, bob.ID, repository.WorkspaceRoleMember)
 
-	if _, err := h.accounts.SetDisabled(ctx, alice.ID, true); !errors.Is(err, ErrSoleWorkspaceOwner) {
+	_, err := h.accounts.SetDisabled(ctx, alice.ID, true)
+	if !errors.Is(err, ErrSoleWorkspaceOwner) {
 		t.Fatalf("expected ErrSoleWorkspaceOwner, got %v", err)
+	}
+	var soleOwnerErr *SoleWorkspaceOwnerError
+	if !errors.As(err, &soleOwnerErr) {
+		t.Fatalf("expected *SoleWorkspaceOwnerError, got %T", err)
+	}
+	if !slices.Contains(soleOwnerErr.WorkspaceNames, aliceWorkspace.Name) {
+		t.Fatalf("expected blocking workspace names to include %q, got %v", aliceWorkspace.Name, soleOwnerErr.WorkspaceNames)
 	}
 }
 
@@ -349,8 +358,16 @@ func TestAccountService_Delete_RefusesTheSoleOwnerOfANonEmptyWorkspace(t *testin
 	bob, _ := h.register(t, "bob")
 	h.addMember(t, aliceWorkspace.ID, bob.ID, repository.WorkspaceRoleMember)
 
-	if err := h.accounts.Delete(ctx, alice.ID, nil); !errors.Is(err, ErrSoleWorkspaceOwner) {
+	err := h.accounts.Delete(ctx, alice.ID, nil)
+	if !errors.Is(err, ErrSoleWorkspaceOwner) {
 		t.Fatalf("expected ErrSoleWorkspaceOwner, got %v", err)
+	}
+	var soleOwnerErr *SoleWorkspaceOwnerError
+	if !errors.As(err, &soleOwnerErr) {
+		t.Fatalf("expected *SoleWorkspaceOwnerError, got %T", err)
+	}
+	if !slices.Contains(soleOwnerErr.WorkspaceNames, aliceWorkspace.Name) {
+		t.Fatalf("expected blocking workspace names to include %q, got %v", aliceWorkspace.Name, soleOwnerErr.WorkspaceNames)
 	}
 }
 

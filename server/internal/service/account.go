@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/XiovV/calendar/server/internal/repository"
 )
@@ -51,9 +52,46 @@ var (
 	// Delete when the User is the sole Owner of a Workspace that still has
 	// other Members in it (ADR-0044) — a Workspace must never be left
 	// without anyone able to manage it. Resolved by transferring Ownership
-	// or removing the other Members first.
+	// or removing the other Members first. Callers checking for this case
+	// should use errors.Is, since SetDisabled and Delete actually return it
+	// wrapped in a *SoleWorkspaceOwnerError naming which Workspace(s) block.
 	ErrSoleWorkspaceOwner = errors.New("cannot proceed while you are the sole owner of a workspace with other members")
 )
+
+// SoleWorkspaceOwnerError wraps ErrSoleWorkspaceOwner with the names of the
+// Workspace(s) blocking the request — a User is the sole Owner of each one
+// while it still has other Members in it, so an actionable message can name
+// exactly which Workspace(s) need Ownership transferred, or their other
+// Members removed, before the request can go through.
+type SoleWorkspaceOwnerError struct {
+	WorkspaceNames []string
+}
+
+func (e *SoleWorkspaceOwnerError) Error() string {
+	return fmt.Sprintf(
+		"you are the sole owner of %s with other members: %s. Transfer ownership or remove the other members first.",
+		pluralizeWorkspace(len(e.WorkspaceNames)), strings.Join(e.WorkspaceNames, ", "),
+	)
+}
+
+func pluralizeWorkspace(count int) string {
+	if count == 1 {
+		return "a workspace"
+	}
+	return fmt.Sprintf("%d workspaces", count)
+}
+
+func (e *SoleWorkspaceOwnerError) Unwrap() error {
+	return ErrSoleWorkspaceOwner
+}
+
+func workspaceNames(workspaces []repository.Workspace) []string {
+	names := make([]string, len(workspaces))
+	for i, w := range workspaces {
+		names[i] = w.Name
+	}
+	return names
+}
 
 // AccountService is self-service account lifecycle (ADR-0044): a User
 // disabling or deleting their own account, and nobody else's — the instance-
@@ -83,12 +121,12 @@ func NewAccountService(db *sql.DB, users *repository.UserRepository, sessions *r
 // the data.
 func (s *AccountService) SetDisabled(ctx context.Context, userID int64, isDisabled bool) (repository.User, error) {
 	if isDisabled {
-		blocked, err := s.workspaces.OwnsNonEmptyWorkspace(ctx, userID)
+		blocking, err := s.workspaces.NonEmptyOwnedWorkspaces(ctx, userID)
 		if err != nil {
 			return repository.User{}, err
 		}
-		if blocked {
-			return repository.User{}, ErrSoleWorkspaceOwner
+		if len(blocking) > 0 {
+			return repository.User{}, &SoleWorkspaceOwnerError{WorkspaceNames: workspaceNames(blocking)}
 		}
 	}
 
@@ -225,12 +263,12 @@ type CalendarDisposition struct {
 // Shares granted *to* the caller are removed as a side effect of deleting
 // their account (cascade on calendar_shares.user_id).
 func (s *AccountService) Delete(ctx context.Context, userID int64, dispositions []CalendarDisposition) error {
-	blocked, err := s.workspaces.OwnsNonEmptyWorkspace(ctx, userID)
+	blocking, err := s.workspaces.NonEmptyOwnedWorkspaces(ctx, userID)
 	if err != nil {
 		return err
 	}
-	if blocked {
-		return ErrSoleWorkspaceOwner
+	if len(blocking) > 0 {
+		return &SoleWorkspaceOwnerError{WorkspaceNames: workspaceNames(blocking)}
 	}
 
 	calendars, err := s.calendarRepo.ListByUser(ctx, userID)

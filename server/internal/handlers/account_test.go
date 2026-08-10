@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/go-chi/chi/v5"
@@ -192,6 +193,22 @@ func TestAccountSetDisabled_RefusesTheSoleOwnerOfANonEmptyWorkspace(t *testing.T
 	if resp.StatusCode != http.StatusConflict {
 		t.Fatalf("expected 409, got %d", resp.StatusCode)
 	}
+
+	aliceWorkspace, err := s.workspaces.GetByID(context.Background(), aliceWorkspaceID)
+	if err != nil {
+		t.Fatalf("get alice's workspace: %v", err)
+	}
+	var body struct {
+		Error struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode error response: %v", err)
+	}
+	if !strings.Contains(body.Error.Message, aliceWorkspace.Name) {
+		t.Fatalf("expected error message to name blocking workspace %q, got %q", aliceWorkspace.Name, body.Error.Message)
+	}
 }
 
 func TestAccountDeleteImpact_ReportsOwnedCalendars(t *testing.T) {
@@ -345,6 +362,22 @@ func TestAccountDelete_RefusesTheSoleOwnerOfANonEmptyWorkspace(t *testing.T) {
 
 	if resp.StatusCode != http.StatusConflict {
 		t.Fatalf("expected 409, got %d", resp.StatusCode)
+	}
+
+	aliceWorkspace, err := s.workspaces.GetByID(context.Background(), aliceWorkspaceID)
+	if err != nil {
+		t.Fatalf("get alice's workspace: %v", err)
+	}
+	var body struct {
+		Error struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode error response: %v", err)
+	}
+	if !strings.Contains(body.Error.Message, aliceWorkspace.Name) {
+		t.Fatalf("expected error message to name blocking workspace %q, got %q", aliceWorkspace.Name, body.Error.Message)
 	}
 }
 

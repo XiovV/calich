@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 
 	"github.com/XiovV/calendar/server/internal/httpauth"
@@ -21,8 +22,19 @@ func NewAccountHandler(accounts *service.AccountService) *AccountHandler {
 	return &AccountHandler{accounts: accounts}
 }
 
-var soleWorkspaceOwnerErrors = []errorCase{
-	{service.ErrSoleWorkspaceOwner, conflict("sole_workspace_owner", service.ErrSoleWorkspaceOwner.Error())},
+// respondSoleWorkspaceOwnerError renders a *service.SoleWorkspaceOwnerError
+// as a 409 naming the blocking Workspace(s) — err.Error() already includes
+// them (service/account.go), so unlike the rest of this package's error
+// cases, this one can't use a fixed table of precomputed response bodies. It
+// reports whether it wrote a response, matching respondError's calling
+// convention.
+func respondSoleWorkspaceOwnerError(w http.ResponseWriter, err error) bool {
+	var soleOwnerErr *service.SoleWorkspaceOwnerError
+	if !errors.As(err, &soleOwnerErr) {
+		return false
+	}
+	httpresponse.Error(w, http.StatusConflict, "sole_workspace_owner", soleOwnerErr.Error())
+	return true
 }
 
 type setDisabledRequest struct {
@@ -51,7 +63,10 @@ func (h *AccountHandler) SetDisabled(w http.ResponseWriter, r *http.Request) {
 	}
 
 	user, err := h.accounts.SetDisabled(r.Context(), userID, req.IsDisabled)
-	if respondError(w, err, soleWorkspaceOwnerErrors, "failed to update account status") {
+	if err != nil {
+		if !respondSoleWorkspaceOwnerError(w, err) {
+			respondError(w, err, nil, "failed to update account status")
+		}
 		return
 	}
 
@@ -113,15 +128,15 @@ func (h *AccountHandler) DeleteImpact(w http.ResponseWriter, r *http.Request) {
 	httpresponse.JSON(w, http.StatusOK, deleteImpactResponse{Calendars: calendars})
 }
 
-var deleteAccountErrors = alsoHandling(soleWorkspaceOwnerErrors,
-	errorCase{service.ErrInvalidDisposition, badRequest(service.ErrInvalidDisposition.Error())},
-	errorCase{service.ErrTransferTargetRequired, badRequest(service.ErrTransferTargetRequired.Error())},
-	errorCase{service.ErrCannotTransferToSelf, badRequest(service.ErrCannotTransferToSelf.Error())},
-	errorCase{service.ErrTransferTargetNotWorkspaceMember, badRequest(service.ErrTransferTargetNotWorkspaceMember.Error())},
-	errorCase{service.ErrCalendarNotOwned, badRequest(service.ErrCalendarNotOwned.Error())},
-	errorCase{service.ErrDuplicateDisposition, badRequest(service.ErrDuplicateDisposition.Error())},
-	errorCase{service.ErrMissingDisposition, badRequest(service.ErrMissingDisposition.Error())},
-)
+var deleteAccountErrors = []errorCase{
+	{service.ErrInvalidDisposition, badRequest(service.ErrInvalidDisposition.Error())},
+	{service.ErrTransferTargetRequired, badRequest(service.ErrTransferTargetRequired.Error())},
+	{service.ErrCannotTransferToSelf, badRequest(service.ErrCannotTransferToSelf.Error())},
+	{service.ErrTransferTargetNotWorkspaceMember, badRequest(service.ErrTransferTargetNotWorkspaceMember.Error())},
+	{service.ErrCalendarNotOwned, badRequest(service.ErrCalendarNotOwned.Error())},
+	{service.ErrDuplicateDisposition, badRequest(service.ErrDuplicateDisposition.Error())},
+	{service.ErrMissingDisposition, badRequest(service.ErrMissingDisposition.Error())},
+}
 
 type calendarDispositionRequest struct {
 	CalendarID string `json:"calendar_id"`
@@ -162,7 +177,11 @@ func (h *AccountHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if err := h.accounts.Delete(r.Context(), userID, dispositions); respondError(w, err, deleteAccountErrors, "failed to delete account") {
+	if err := h.accounts.Delete(r.Context(), userID, dispositions); err != nil {
+		if respondSoleWorkspaceOwnerError(w, err) {
+			return
+		}
+		respondError(w, err, deleteAccountErrors, "failed to delete account")
 		return
 	}
 
