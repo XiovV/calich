@@ -27,6 +27,12 @@ interface ShellState {
   reconcileCheckedCalendarIds: (ids: Iterable<string>) => void;
   toggleCalendarChecked: (id: string) => void;
   removeCheckedCalendarId: (id: string) => void;
+  // addCheckedCalendarId force-checks id and, unlike toggleCalendarChecked,
+  // also marks it known — for a Calendar the caller just created or
+  // Subscribed to, which must count as "already seen" so a later reconcile
+  // doesn't treat it as unseen and re-check it after a deliberate uncheck
+  // (#175).
+  addCheckedCalendarId: (id: string) => void;
 }
 
 export const useShellStore = create<ShellState>((set) => ({
@@ -68,4 +74,9 @@ export const useShellStore = create<ShellState>((set) => ({
       next.delete(id);
       return { checkedCalendarIds: next };
     }),
+  addCheckedCalendarId: (id) =>
+    set((state) => ({
+      checkedCalendarIds: new Set(state.checkedCalendarIds).add(id),
+      knownCalendarIds: new Set(state.knownCalendarIds).add(id),
+    })),
 }));

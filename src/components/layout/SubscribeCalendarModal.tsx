@@ -37,8 +37,8 @@ export function SubscribeCalendarModal({ onClose }: SubscribeCalendarModalProps)
   const accessToken = useAuthStore((state) => state.accessToken);
   const calendars = useCalendarsStore((state) => state.calendars);
   const subscribeCalendar = useCalendarsStore((state) => state.subscribeCalendar);
-  const toggleCalendarChecked = useShellStore(
-    (state) => state.toggleCalendarChecked,
+  const addCheckedCalendarId = useShellStore(
+    (state) => state.addCheckedCalendarId,
   );
 
   const [url, setUrl] = useState("");
@@ -87,7 +87,7 @@ export function SubscribeCalendarModal({ onClose }: SubscribeCalendarModalProps)
         color,
         keepAlarms,
       );
-      toggleCalendarChecked(calendar.id);
+      addCheckedCalendarId(calendar.id);
       onClose();
     } catch (err) {
       setError(errorMessage(err));

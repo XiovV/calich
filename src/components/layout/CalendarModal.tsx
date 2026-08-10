@@ -3,7 +3,7 @@ import { Dialog } from "@base-ui/react/dialog";
 import { canManageCalendar, isSubscribedCalendar, type Calendar } from "../../lib/calendar";
 import { getNextUnusedColor } from "../../lib/calendarColors";
 import { useCalendarsStore } from "../../lib/calendarsStore";
-import { useShellStore } from "../../lib/shellStore";
+import { createCalendarCascade } from "../../lib/createCalendarCascade";
 import { CalendarSharingSection } from "./CalendarSharingSection";
 import { ColorSwatchPicker } from "./ColorSwatchPicker";
 import { Button } from "../ui/Button";
@@ -29,13 +29,9 @@ export function CalendarModal(props: CalendarModalProps) {
   const { mode, onClose } = props;
 
   const calendars = useCalendarsStore((state) => state.calendars);
-  const addCalendar = useCalendarsStore((state) => state.addCalendar);
   const updateCalendar = useCalendarsStore((state) => state.updateCalendar);
   const setCalendarColor = useCalendarsStore((state) => state.setCalendarColor);
   const clearCalendarColor = useCalendarsStore((state) => state.clearCalendarColor);
-  const toggleCalendarChecked = useShellStore(
-    (state) => state.toggleCalendarChecked,
-  );
 
   const [name, setName] = useState(mode === "edit" ? props.calendar.name : "");
   const [color, setColor] = useState(() =>
@@ -109,8 +105,10 @@ export function CalendarModal(props: CalendarModalProps) {
       // canManageCalendar (#111) treats an unset isOwner as false, which
       // would optimistically misclassify it into "Shared with me" (#114)
       // for the brief window before the server's response overwrites it.
-      addCalendar({ id, name: name.trim(), color, isOwner: true });
-      toggleCalendarChecked(id);
+      // access: "owner" — canWriteCalendarEvents (#175) reads access, not
+      // isOwner, so without it the New-event modal's Calendar picker treats
+      // the brand-new Calendar as unwritable and hides it until reload.
+      createCalendarCascade({ id, name: name.trim(), color, isOwner: true, access: "owner" });
     }
     onClose();
   }

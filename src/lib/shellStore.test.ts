@@ -62,3 +62,30 @@ describe("reconcileCheckedCalendarIds", () => {
     expect(useShellStore.getState().checkedCalendarIds).toEqual(new Set(["cal-1"]));
   });
 });
+
+describe("addCheckedCalendarId", () => {
+  it("checks the id and marks it known", () => {
+    useShellStore.setState({
+      checkedCalendarIds: new Set(),
+      knownCalendarIds: new Set(),
+    });
+
+    useShellStore.getState().addCheckedCalendarId("cal-1");
+
+    expect(useShellStore.getState().checkedCalendarIds).toEqual(new Set(["cal-1"]));
+    expect(useShellStore.getState().knownCalendarIds).toEqual(new Set(["cal-1"]));
+  });
+
+  it("marking it known keeps a later deliberate uncheck from being undone by a reconcile", () => {
+    useShellStore.setState({
+      checkedCalendarIds: new Set(),
+      knownCalendarIds: new Set(),
+    });
+
+    useShellStore.getState().addCheckedCalendarId("cal-1");
+    useShellStore.getState().removeCheckedCalendarId("cal-1");
+    useShellStore.getState().reconcileCheckedCalendarIds(["cal-1"]);
+
+    expect(useShellStore.getState().checkedCalendarIds).toEqual(new Set());
+  });
+});

@@ -84,6 +84,14 @@ describe("addCalendar", () => {
     expect(useCalendarsStore.getState().calendars).toEqual([]);
     expect(toast.error).toHaveBeenCalledWith('Failed to create calendar "Personal".');
   });
+
+  it("resolves true on success and false on failure", async () => {
+    vi.mocked(calendarsApi.create).mockResolvedValueOnce(personal);
+    await expect(useCalendarsStore.getState().addCalendar(personal)).resolves.toBe(true);
+
+    vi.mocked(calendarsApi.create).mockRejectedValueOnce(new Error("network error"));
+    await expect(useCalendarsStore.getState().addCalendar(personal)).resolves.toBe(false);
+  });
 });
 
 describe("updateCalendar", () => {

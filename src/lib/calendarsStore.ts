@@ -8,7 +8,10 @@ import { toast } from "./toast";
 interface CalendarsState {
   calendars: Calendar[];
   fetchCalendars: () => Promise<void>;
-  addCalendar: (calendar: Calendar) => Promise<void>;
+  // Resolves to whether the create actually succeeded, so
+  // createCalendarCascade knows whether to roll back the checked/known id
+  // it optimistically added alongside the Calendar (#175).
+  addCalendar: (calendar: Calendar) => Promise<boolean>;
   updateCalendar: (
     id: string,
     changes: {
@@ -130,11 +133,13 @@ export const useCalendarsStore = create<CalendarsState>((set, get) => ({
 
     try {
       await calendarsApi.create(requireAccessToken(), calendar);
+      return true;
     } catch {
       set((state) => ({
         calendars: state.calendars.filter((c) => c.id !== calendar.id),
       }));
       toast.error(`Failed to create calendar "${calendar.name}".`);
+      return false;
     }
   },
 
