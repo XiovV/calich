@@ -71,3 +71,49 @@ func TestPropfind_GetCTag_StableUntilCalendarMutates(t *testing.T) {
 		t.Fatalf("expected the ctag to change after a mutation, still %q", ctag3)
 	}
 }
+
+// TestPropfind_GetCTag_ChangesWhenAttendeeOnlySetChanges covers the
+// synthetic Invitations collection's own getctag (AttendeeOnlyCTag, #163):
+// no repository.Calendar row backs it, so it needs its own change-detection
+// path distinct from CalendarCTag's per-Calendar change_seq/tombstone
+// stream, and it must still move when an Attendee is added even though that
+// doesn't bump the underlying Event's own change_seq.
+func TestPropfind_GetCTag_ChangesWhenAttendeeOnlySetChanges(t *testing.T) {
+	env := newTestCalDAVEnv(t)
+	ctx := context.Background()
+
+	attendeeID, attendeeSecret := env.addWorkspaceMember(t, "attendee")
+
+	start := time.Date(2026, 6, 1, 9, 0, 0, 0, time.UTC)
+	event, err := env.eventService.Create(ctx, env.userID, "evt-1", service.EventWrite{
+		CalendarID: env.calendarID, Title: "Discuss tech stack",
+		Start: start, End: start.Add(30 * time.Minute),
+	})
+	if err != nil {
+		t.Fatalf("create event: %v", err)
+	}
+
+	path := attendeeCollectionPath(attendeeID)
+
+	// Before the invite, the Invitations collection doesn't exist yet
+	// (ListCalendars omits it — backend_test.go), so getctag has nothing to
+	// resolve against.
+	before := propfind(t, env.srv, path, "attendee@example.com", attendeeSecret, "0", propfindGetCTag)
+	beforeBody := readBody(t, before)
+	before.Body.Close()
+	if !strings.Contains(beforeBody, "404") {
+		t.Fatalf("expected 404 for the not-yet-existing Invitations collection, got:\n%s", beforeBody)
+	}
+
+	if _, err := env.eventService.AddAttendee(ctx, env.userID, event.ID, attendeeID); err != nil {
+		t.Fatalf("add attendee: %v", err)
+	}
+
+	after := propfind(t, env.srv, path, "attendee@example.com", attendeeSecret, "0", propfindGetCTag)
+	defer after.Body.Close()
+	afterBody := readBody(t, after)
+	if strings.Contains(afterBody, "404") {
+		t.Fatalf("expected getctag to be served with a 200 status once invited, got:\n%s", afterBody)
+	}
+	extractGetCTag(t, afterBody) // fails the test itself if absent
+}

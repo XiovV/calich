@@ -63,6 +63,13 @@ func collectionValueFunc(userID int64, lookup func(ctx context.Context, calendar
 
 func applyGetCTagPatch(ctx context.Context, h *dispatchHandler, userID int64, body []byte) []byte {
 	return injectGetCTag(ctx, body, collectionValueFunc(userID, func(ctx context.Context, calendarID string) (string, bool) {
+		if calendarID == attendeeCollectionID {
+			ctag, err := h.backend.events.AttendeeOnlyCTag(ctx, userID)
+			if err != nil {
+				return "", false
+			}
+			return strconv.FormatInt(ctag, 10), true
+		}
 		ctag, err := h.backend.events.CalendarCTag(ctx, userID, calendarID)
 		if err != nil {
 			return "", false
@@ -102,6 +109,13 @@ const subscribedReadOnlyPrivilegeSet = `<privilege><read/></privilege>`
 // library's default untouched.
 func applyPrivilegeSetPatch(ctx context.Context, h *dispatchHandler, userID int64, body []byte) []byte {
 	return injectPropertyRaw(ctx, body, "current-user-privilege-set", davNamespace, collectionValueFunc(userID, func(ctx context.Context, calendarID string) (string, bool) {
+		// The synthetic Invitations collection (#163) has no
+		// repository.Calendar row to resolve Access against — it is
+		// always read-only, the same clamp a Subscribed Calendar or a
+		// Viewer Share gets below.
+		if calendarID == attendeeCollectionID {
+			return subscribedReadOnlyPrivilegeSet, true
+		}
 		access, _, err := h.backend.calendars.Access(ctx, userID, calendarID)
 		if err != nil || access.CanWrite() {
 			return "", false

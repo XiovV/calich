@@ -105,6 +105,30 @@ func calendarPath(userID int64, calendarID string) string {
 	return fmt.Sprintf("%s/%d/calendars/%s/", pathPrefix, userID, calendarID)
 }
 
+// attendeeCollectionID is the reserved, non-UUID collection id backing the
+// synthetic "Invitations" collection a principal's calendar home-set
+// carries whenever they're an Attendee (ADR-0046) of at least one Event
+// whose Calendar they have no Access to. Unlike every other entry
+// ListCalendars returns, no real repository.Calendar row backs this
+// collection for this principal — it exists purely to address those
+// Attendee-only Events over CalDAV (#163). Real Calendar ids are
+// uuid.New().String() values, which never collide with this fixed word.
+const attendeeCollectionID = "attendee"
+
+// attendeeCollectionName is the Invitations collection's displayname.
+const attendeeCollectionName = "Invitations"
+
+func attendeeCollectionPath(userID int64) string {
+	return calendarPath(userID, attendeeCollectionID)
+}
+
+// errInvitationsReadOnly is PutCalendarObject and DeleteCalendarObject's
+// shared refusal for the synthetic Invitations collection (#163): there is
+// no ATTENDEE/PARTSTAT round-trip in the icalendar codec yet, and ADR-0046
+// excludes the full iTIP/iMIP wire protocol outright, so this collection
+// never accepts a write.
+var errInvitationsReadOnly = webdav.NewHTTPError(http.StatusForbidden, fmt.Errorf("the Invitations collection is read-only"))
+
 // calendarIDFromPath extracts {calendarId} from a collection path under
 // userID's calendar-home-set, e.g. "/dav/1/calendars/abc-uuid/" -> "abc-uuid".
 func calendarIDFromPath(userID int64, path string) (string, error) {
@@ -195,6 +219,18 @@ func (b *Backend) ListCalendars(ctx context.Context) ([]caldav.Calendar, error) 
 	for i, c := range calendars {
 		result[i] = toCalDAVCalendar(userID, c.Calendar)
 	}
+
+	// The Invitations collection only appears once userID actually has an
+	// Attendee-only Event to show — an absent one keeps the home-set
+	// unchanged for every principal with no such invite (ADR-0046, #163).
+	attendeeMasters, _, err := b.events.ListAttendeeOnlySeries(ctx, userID)
+	if err != nil {
+		return nil, fmt.Errorf("list attendee-only events: %w", err)
+	}
+	if len(attendeeMasters) > 0 {
+		result = append(result, caldav.Calendar{Path: attendeeCollectionPath(userID), Name: attendeeCollectionName})
+	}
+
 	return result, nil
 }
 
@@ -207,6 +243,21 @@ func (b *Backend) GetCalendar(ctx context.Context, path string) (*caldav.Calenda
 	calendarID, err := calendarIDFromPath(userID, path)
 	if err != nil {
 		return nil, webdav.NewHTTPError(http.StatusNotFound, err)
+	}
+
+	if calendarID == attendeeCollectionID {
+		// Mirrors ListCalendars' own condition — the Invitations collection
+		// resolves only while userID actually has an Attendee-only Event to
+		// show, so a stale or guessed URL to it 404s once it has none, the
+		// same as it never appeared in their home-set to begin with.
+		attendeeMasters, _, err := b.events.ListAttendeeOnlySeries(ctx, userID)
+		if err != nil {
+			return nil, fmt.Errorf("list attendee-only events: %w", err)
+		}
+		if len(attendeeMasters) == 0 {
+			return nil, webdav.NewHTTPError(http.StatusNotFound, fmt.Errorf("no attendee-only events"))
+		}
+		return &caldav.Calendar{Path: attendeeCollectionPath(userID), Name: attendeeCollectionName}, nil
 	}
 
 	c, err := b.calendars.Get(ctx, userID, calendarID)
@@ -243,7 +294,13 @@ func (b *Backend) listSeriesObjects(ctx context.Context, path string, include fu
 		return nil, webdav.NewHTTPError(http.StatusNotFound, err)
 	}
 
-	masters, overridesByParent, err := b.events.ListSeriesByCalendar(ctx, userID, calendarID)
+	var masters []repository.Event
+	var overridesByParent map[string][]repository.Event
+	if calendarID == attendeeCollectionID {
+		masters, overridesByParent, err = b.events.ListAttendeeOnlySeries(ctx, userID)
+	} else {
+		masters, overridesByParent, err = b.events.ListSeriesByCalendar(ctx, userID, calendarID)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("list series: %w", err)
 	}
@@ -262,7 +319,7 @@ func (b *Backend) listSeriesObjects(ctx context.Context, path string, include fu
 			continue
 		}
 
-		object, err := buildCalendarObject(ctx, userID, master, overridesByParent[master.ID])
+		object, err := buildCalendarObject(ctx, userID, calendarID, master, overridesByParent[master.ID])
 		if err != nil {
 			return nil, err
 		}
@@ -348,8 +405,13 @@ func seriesHasOccurrenceInRange(master repository.Event, from, to time.Time) (bo
 
 // buildCalendarObject recomposes master and its overrides into the
 // CalendarObject GetCalendarObject/ListCalendarObjects/QueryCalendarObjects
-// all serve (ADR-0025).
-func buildCalendarObject(ctx context.Context, userID int64, master repository.Event, overrides []repository.Event) (*caldav.CalendarObject, error) {
+// all serve (ADR-0025). collectionID names the collection the resulting
+// object's Path is addressed under — master.CalendarID for every real
+// Calendar collection, or attendeeCollectionID for the synthetic
+// Invitations collection (#163), which never shares master.CalendarID
+// since no per-principal collection backs a Calendar the caller lacks
+// Access to.
+func buildCalendarObject(ctx context.Context, userID int64, collectionID string, master repository.Event, overrides []repository.Event) (*caldav.CalendarObject, error) {
 	cal, err := icalendar.SeriesToICal(master, overrides, icalendar.CalDAVTarget(attachmentsURIPrefix(ctx)))
 	if err != nil {
 		return nil, fmt.Errorf("serialize series %q: %w", master.ID, err)
@@ -361,7 +423,7 @@ func buildCalendarObject(ctx context.Context, userID int64, master repository.Ev
 	}
 
 	return &caldav.CalendarObject{
-		Path:    calendarObjectPath(userID, master.CalendarID, master.ID),
+		Path:    calendarObjectPath(userID, collectionID, master.ID),
 		ModTime: master.CreatedAt,
 		ETag:    etag,
 		Data:    cal,
@@ -383,6 +445,17 @@ func (b *Backend) GetCalendarObject(ctx context.Context, path string, req *calda
 		return nil, webdav.NewHTTPError(http.StatusNotFound, err)
 	}
 
+	if calendarID == attendeeCollectionID {
+		master, overrides, err := b.events.GetAttendeeOnlySeries(ctx, userID, masterID)
+		if errors.Is(err, repository.ErrNotFound) {
+			return nil, webdav.NewHTTPError(http.StatusNotFound, fmt.Errorf("calendar object not found"))
+		}
+		if err != nil {
+			return nil, fmt.Errorf("get attendee-only series: %w", err)
+		}
+		return buildCalendarObject(ctx, userID, calendarID, master, overrides)
+	}
+
 	master, overrides, err := b.events.GetSeries(ctx, userID, masterID)
 	if errors.Is(err, repository.ErrNotFound) || errors.Is(err, service.ErrParentIsOverride) {
 		return nil, webdav.NewHTTPError(http.StatusNotFound, fmt.Errorf("calendar object not found"))
@@ -394,7 +467,7 @@ func (b *Backend) GetCalendarObject(ctx context.Context, path string, req *calda
 		return nil, webdav.NewHTTPError(http.StatusNotFound, fmt.Errorf("calendar object not found"))
 	}
 
-	return buildCalendarObject(ctx, userID, master, overrides)
+	return buildCalendarObject(ctx, userID, calendarID, master, overrides)
 }
 
 // PutCalendarObject decomposes calendar into masterID's Master, Overrides,
@@ -412,6 +485,9 @@ func (b *Backend) PutCalendarObject(ctx context.Context, path string, calendar *
 	calendarID, masterID, err := calendarObjectIDFromPath(userID, path)
 	if err != nil {
 		return nil, webdav.NewHTTPError(http.StatusNotFound, err)
+	}
+	if calendarID == attendeeCollectionID {
+		return nil, errInvitationsReadOnly
 	}
 
 	parsed, err := icalendar.ParseCalendarObject(calendar)
@@ -437,7 +513,7 @@ func (b *Backend) PutCalendarObject(ctx context.Context, path string, calendar *
 		return nil, mapPutSeriesError(err)
 	}
 
-	return buildCalendarObject(ctx, userID, master, overrides)
+	return buildCalendarObject(ctx, userID, calendarID, master, overrides)
 }
 
 // checkPutPreconditions enforces opts' RFC 2068 conditional headers against
@@ -573,6 +649,9 @@ func (b *Backend) DeleteCalendarObject(ctx context.Context, path string) error {
 	calendarID, masterID, err := calendarObjectIDFromPath(userID, path)
 	if err != nil {
 		return webdav.NewHTTPError(http.StatusNotFound, err)
+	}
+	if calendarID == attendeeCollectionID {
+		return errInvitationsReadOnly
 	}
 
 	exists, currentETag, err := b.currentObjectETag(ctx, userID, calendarID, masterID)

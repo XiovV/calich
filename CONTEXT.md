@@ -120,7 +120,7 @@ The user's chosen appearance — Light, Dark, or System — persisted locally an
 _Avoid_: color scheme, mode, dark-mode toggle
 
 **Settings**:
-The overlay where a User adjusts everything that isn't a Calendar or an Event — their Preferences, their Account, their Reminder delivery, their app passwords, import and export, and (for the Workspaces they administer) the Workspace itself and its Groups. Opens *over* the calendar rather than replacing it: the grid stays where it was, and closing returns the User to exactly the view they left. Divided into a **Personal** group, whose Sections concern the one User, and a **Workspace** group, whose Sections concern the active Workspace and everyone in it. Each Section is individually addressable, so one can be linked to and survives a reload. See ADR-0049.
+The overlay where a User adjusts everything that isn't a Calendar or an Event — their Preferences, their Account, their Reminder delivery, their app passwords, their Connections, import and export, and (for the Workspaces they administer) the Workspace itself and its Groups. Opens *over* the calendar rather than replacing it: the grid stays where it was, and closing returns the User to exactly the view they left. Divided into a **Personal** group, whose Sections concern the one User, and a **Workspace** group, whose Sections concern the active Workspace and everyone in it. Each Section is individually addressable, so one can be linked to and survives a reload. See ADR-0049.
 _Avoid_: settings page, preferences (that's the narrower concept below), config screen
 
 **Section**:
@@ -200,7 +200,7 @@ _Avoid_: invite token (in prose — the credential and the act are one term here
 ## Sharing
 
 **Owner**:
-The single User a Calendar belongs to — the only one who may rename, recolour, delete, or share it, or bind it to a Subscription. Implicit rather than granted: an Owner has no Share. Every Calendar has exactly one, and it does not change except by an explicit transfer when the Owner's account is removed from the Calendar's Workspace or deleted. Unchanged by Workspace Role — a Workspace Admin who creates a Calendar owns it personally, the same as anyone else. See ADR-0034, ADR-0044, ADR-0045.
+The single User a Calendar belongs to — the only one who may rename, recolour, delete, or share it, or give it a Source. Implicit rather than granted: an Owner has no Share. Every Calendar has exactly one, and it does not change except by an explicit transfer when the Owner's account is removed from the Calendar's Workspace or deleted. Unchanged by Workspace Role — a Workspace Admin who creates a Calendar owns it personally, the same as anyone else. See ADR-0034, ADR-0044, ADR-0045.
 _Avoid_: creator, admin (that's a Workspace Role), author
 
 **Share**:
@@ -212,17 +212,17 @@ A named set of a Workspace's Members (e.g. "Tech team"), created and membership-
 _Avoid_: team (reserved loosely for describing groups in prose; Group is the modelled term), role (a Group is a set of people, not a permission level)
 
 **Role**:
-What a Share permits: **Viewer** (read the Calendar's Events and download their Attachments) or **Editor** (create, edit, and delete them, set their Reminders, and add or remove their Attachments). Neither permits managing the Calendar itself — rename, delete, re-share, revoke, and binding a Subscription are Owner-only. See ADR-0034, ADR-0040.
+What a Share permits: **Viewer** (read the Calendar's Events and download their Attachments) or **Editor** (create, edit, and delete them, set their Reminders, and add or remove their Attachments). Neither permits managing the Calendar itself — rename, delete, re-share, revoke, and giving it a Source are Owner-only. See ADR-0034, ADR-0040.
 _Avoid_: permission, level, access level (Access is the resolved value, not this), Workspace Role (a different axis — see Workspaces)
 
 **Access**:
-The resolved answer to "what may this User do with this Calendar" — Owner, Editor, Viewer, or None. Computed on demand, never stored: ownership first, then the highest Role from any direct Share or a Share on a Group the User currently belongs to, then None, and finally clamped to read-only if the Calendar carries a Subscription. The single question every permission check asks, replacing the single-user era's "does this row's user match". See ADR-0034, ADR-0045.
+The resolved answer to "what may this User do with this Calendar" — Owner, Editor, Viewer, or None. Computed on demand, never stored: ownership first, then the highest Role from any direct Share or a Share on a Group the User currently belongs to, then None, and finally clamped to read-only if the Calendar carries a Source. The single question every permission check asks, replacing the single-user era's "does this row's user match". See ADR-0034, ADR-0045.
 _Avoid_: permission, privilege (that's the CalDAV property), rights
 
 There is deliberately **no term for a Calendar someone shared with you.** "Shared Calendar" points both ways — the Owner shares it out, the recipient sees it shared in — and would sit confusingly beside Subscribed Calendar, which is also a Calendar you see and may not write. Say "a Calendar you have Editor Access to" instead. UI copy may still read "Shared with me"; that is a label, not a term.
 
 **Attendee**:
-A User invited to one specific Event, independent of any Calendar Access — the invite itself is the visibility grant, scoped to that Event alone. May be invited individually or via a Group (expanded to its current members at invite time into individual Attendee rows, since a response has to survive later Group membership changes rather than tracking membership dynamically the way a Group Share does). Its target must belong to the Event's own Workspace. See ADR-0046.
+A User invited to one specific Event, independent of any Calendar Access — the invite itself is the visibility grant, scoped to that Event alone. May be invited individually or via a Group (expanded to its current members at invite time into individual Attendee rows, since a response has to survive later Group membership changes rather than tracking membership dynamically the way a Group Share does). Its target must belong to the Event's own Workspace, which is why Attendees are not mirrored onto a Linked Calendar: a Provider's attendees are arbitrary email addresses, and an address with no account behind it is unrepresentable here. See ADR-0046, ADR-0052.
 _Avoid_: invitee, guest, participant
 
 **Response**:
@@ -232,7 +232,7 @@ _Avoid_: RSVP (the act, not the stored value), status (ambiguous with account st
 ## Attachments
 
 **Attachment**:
-A file uploaded to this instance and held against one Master, shown on every Occurrence of that series. Always bytes this instance stores — a link to a file elsewhere is not an Attachment and is not modelled. Belongs to the series rather than to any one Occurrence, so an Override cannot carry one of its own: "this week's slides" is deliberately unrepresentable. Downloadable by anyone with Access, added and removed by an Owner or Editor, and never present on a Subscribed Calendar. See ADR-0040.
+A file uploaded to this instance and held against one Master, shown on every Occurrence of that series. Always bytes this instance stores — a link to a file elsewhere is not an Attachment and is not modelled. Belongs to the series rather than to any one Occurrence, so an Override cannot carry one of its own: "this week's slides" is deliberately unrepresentable. Downloadable by anyone with Access, added and removed by an Owner or Editor, and never present on a Calendar with a Source. See ADR-0040.
 _Avoid_: file, upload, document, enclosure, asset
 
 **Managed ID**:
@@ -259,22 +259,46 @@ _Avoid_: import report, import log, import result
 The Import summary's mirror: the counted account of what leaving this instance will cost a Calendar file's contents — currently the Attachments too large to inline. Shown *before* the file is produced and only when there is something to say, so an export that loses nothing stays a single click. Exists for the same reason the Import summary does, and only that reason: a human is watching a one-time act, so the loss is disclosed while they can still act on it rather than being silently normalized. See ADR-0041.
 _Avoid_: export report, export warning, export preview (there is nothing to preview when nothing is lost)
 
-## Subscriptions
+## External sources
+
+**Source**:
+The mark on a Calendar meaning "these Events come from somewhere else, and this is not where they are written". Exactly two kinds: a Subscription and a Connection-derived link. The single thing every read-only guard, the poller and the CalDAV privilege set ask about, so a Calendar has zero or one. Read-only is a property of a Source's *mode* rather than of a Source existing, because both kinds are read-only today and neither is required to stay that way. See ADR-0052.
+_Avoid_: external source (redundant), origin, upstream, sync config
 
 **Subscription**:
-The binding of a Calendar to an external `.ics` URL, together with the state a Refresh needs and leaves behind — poll cadence, last success, last error, and whether the feed's alarms are kept. The thing a User adds and removes; the Calendar it binds is what they see. See ADR-0032.
-_Avoid_: feed (see Subscribed Calendar), subscribed URL, external source
+The kind of Source that binds a Calendar to an external `.ics` URL, together with the state a Refresh needs and leaves behind — poll cadence, last success, last error, and whether the feed's alarms are kept. One Calendar, one URL. The thing a User adds and removes; the Calendar it binds is what they see. See ADR-0032, ADR-0052.
+_Avoid_: feed (see Subscribed Calendar), subscribed URL
 
 **Subscribed Calendar**:
-A Calendar carrying a Subscription. An ordinary Calendar in every respect a User can see — named, coloured, toggleable, rendered on the grid, exposed over CalDAV — except that it is read-only: its Events are written only by Refresh, never by the web app, the API, or a native client. Read-only for its Owner and for every Editor alike, since a Subscription clamps Access to read-only for everyone. Distinct from a Calendar whose Events merely arrived by import, which is an ordinary Calendar the User owns outright. See ADR-0032, ADR-0034.
+A Calendar whose Source is a Subscription. An ordinary Calendar in every respect a User can see — named, coloured, toggleable, rendered on the grid, exposed over CalDAV — except that it is read-only: its Events are written only by Refresh, never by the web app, the API, or a native client. Read-only for its Owner and for every Editor alike, since a Source clamps Access to read-only for everyone. Distinct from a Calendar whose Events merely arrived by import, which is an ordinary Calendar the User owns outright. See ADR-0032, ADR-0034.
 _Avoid_: external calendar, remote calendar, read-only calendar, feed — "Calendar feed" meant the opposite direction (a feed this instance publishes) in the superseded ADR-0012, so the word points both ways in this repo and is best avoided entirely.
 
+**Provider**:
+An external calendar system this instance can be authorized against — Google today, Microsoft next. Reached through its own API rather than through CalDAV, since Microsoft has never supported CalDAV and a per-Provider seam is therefore forced regardless. Absent from the UI on any instance whose self-hoster has not supplied OAuth credentials for it. See ADR-0050, ADR-0051.
+_Avoid_: integration, service, backend, platform
+
+**Connection**:
+One User's authorized link to one account at one Provider, carrying the tokens, that account's email, the granted scopes, and whether it is live, expired or revoked. The kind of Source that yields *many* Calendars from a single grant — which is what distinguishes it from a Subscription, and why it is an entity above Calendar rather than more columns on one. Belongs to the User, not to a Workspace: one grant serves every Workspace they are in. See ADR-0052.
+_Avoid_: account link, integration, OAuth grant (that is the mechanism, not the thing), provider account
+
+**Linked Calendar**:
+A Calendar mirrored from one calendar of a Connection. Ordinary and read-only in exactly the way a Subscribed Calendar is, and Shareable to Workspace Members like any other Calendar, but distinguished by what stands behind it: a Connection the connecting User authorized, not a URL anyone can paste. Owned by that User even when the underlying calendar was merely shared to them at the Provider. Left out of its Owner's CalDAV home-set by default, since they almost certainly sync that calendar natively already. See ADR-0052, ADR-0054.
+_Avoid_: mirrored calendar, connected calendar (too close to Connection), Google calendar, external calendar
+
 **Refresh**:
-One fetch-and-reconcile cycle against a Subscription's URL: a conditional GET that usually ends in "unchanged", and otherwise a per-series reconciliation of the fetched Calendar file against the Events already stored. Deliberately not called sync — Sync in this repo means CalDAV's two-way, change-tracked exchange, and a Refresh is one-way, whole-document, and driven by a poller. See ADR-0033.
+One fetch-and-reconcile cycle against a Source: for a Subscription a conditional GET that usually ends in "unchanged", for a Connection a cursored request that usually returns nothing changed. Either way, a per-series reconciliation against the Events already stored. Deliberately not called sync — Sync in this repo means CalDAV's two-way, change-tracked exchange, and a Refresh is one-way and driven by a poller. Runs in one of two modes, and which one it is decides whether an absent series may be tombstoned. See ADR-0033, ADR-0053.
 _Avoid_: sync, poll, update, pull
 
+**Full Refresh**:
+The Refresh mode that reconciles a complete listing: everything the Source still carries is present, so a series absent from it has genuinely been deleted and is tombstoned. Used for a Source's first Refresh and to recover from an expired cursor — never by wiping and re-inserting, which would re-mint every row id and make every CalDAV client re-download the collection. See ADR-0053.
+_Avoid_: full sync, initial sync, resync
+
+**Delta Refresh**:
+The Refresh mode that reconciles only what a Provider reports as changed since a cursor. Absence means *unchanged*, so deletions are applied only where the Provider states one explicitly, and tombstone-by-absence is structurally unreachable rather than merely switched off. The distinction is not a nicety: applying Full Refresh's rules to delta input deletes an entire Calendar. See ADR-0053.
+_Avoid_: incremental sync, partial refresh
+
 **External UID**:
-The foreign iCalendar `UID` a Refresh matches a series on, stored alongside the Event rather than as its id — the id stays a minted UUID, so a Subscribed Calendar's Calendar objects keep the `{masterId}.ics` shape ADR-0025 requires. The narrow reopening of ADR-0030's discard-the-foreign-UID rule, and the reason a Refresh can leave an unchanged series untouched instead of rewriting the whole Calendar. See ADR-0033.
+The foreign identifier a Refresh matches a series on — a feed's iCalendar `UID`, or a Provider's own event id — stored alongside the Event rather than as its id. The id stays a minted UUID, so a Calendar with a Source keeps the `{masterId}.ics` shape ADR-0025 requires and a 200-character foreign id never reaches a URL. The narrow reopening of ADR-0030's discard-the-foreign-UID rule, and the reason a Refresh can leave an unchanged series untouched instead of rewriting the whole Calendar. See ADR-0033.
 _Avoid_: source UID, foreign ID, original UID
 
 ## Deployment

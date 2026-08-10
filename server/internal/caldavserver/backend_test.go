@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -268,6 +269,166 @@ func TestPropfind_HomeSet_ListsOneCollectionPerCalendar(t *testing.T) {
 	}
 	if !strings.Contains(body, "Personal") {
 		t.Fatalf("expected response to include the calendar's display name %q, got:\n%s", "Personal", body)
+	}
+}
+
+// addWorkspaceMember mints a second User who belongs to env's Workspace
+// (an Attendee target, like a Share target, must already be a Member —
+// ADR-0045) but is granted no Calendar Access of any kind, unlike
+// addSharedUser. The fixture for exercising an Attendee-only principal's
+// CalDAV home-set (#163, ADR-0046).
+func (env testCalDAVEnv) addWorkspaceMember(t *testing.T, username string) (userID int64, appPasswordSecret string) {
+	t.Helper()
+
+	other, err := env.users.Create(context.Background(), username, username+"@example.com", "hash", false)
+	if err != nil {
+		t.Fatalf("create user %q: %v", username, err)
+	}
+	if err := env.workspaces.AddMember(context.Background(), env.workspaceID, other.ID, repository.WorkspaceRoleMember); err != nil {
+		t.Fatalf("add %q as workspace member: %v", username, err)
+	}
+
+	created, err := env.appPasswordService.Create(context.Background(), other.ID, "Test device")
+	if err != nil {
+		t.Fatalf("create app password for %q: %v", username, err)
+	}
+
+	return other.ID, created.Secret
+}
+
+// TestPropfind_HomeSet_IncludesAttendeeOnlyEvent is #163's core acceptance
+// criterion: a principal invited as an Attendee to an Event on a Calendar
+// they have no Access to still sees it in their own calendar-home-set, via
+// the synthetic Invitations collection — no repository.Calendar row backs
+// it for them, unlike every other collection ListCalendars returns
+// (ADR-0035, ADR-0046).
+func TestPropfind_HomeSet_IncludesAttendeeOnlyEvent(t *testing.T) {
+	env := newTestCalDAVEnv(t)
+	ctx := context.Background()
+
+	attendeeID, attendeeSecret := env.addWorkspaceMember(t, "attendee")
+
+	start := time.Date(2026, 6, 1, 9, 0, 0, 0, time.UTC)
+	event, err := env.eventService.Create(ctx, env.userID, "evt-1", service.EventWrite{
+		CalendarID: env.calendarID, Title: "Discuss tech stack",
+		Start: start, End: start.Add(30 * time.Minute),
+	})
+	if err != nil {
+		t.Fatalf("create event: %v", err)
+	}
+	if _, err := env.eventService.AddAttendee(ctx, env.userID, event.ID, attendeeID); err != nil {
+		t.Fatalf("add attendee: %v", err)
+	}
+
+	homeSetPath := fmt.Sprintf("/dav/%d/calendars/", attendeeID)
+	resp := propfind(t, env.srv, homeSetPath, "attendee@example.com", attendeeSecret, "1", propfindDisplayName)
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusMultiStatus {
+		t.Fatalf("expected 207, got %d", resp.StatusCode)
+	}
+	body := readBody(t, resp)
+
+	wantCollection := attendeeCollectionPath(attendeeID)
+	if !strings.Contains(body, wantCollection) {
+		t.Fatalf("expected response to list the Invitations collection %q, got:\n%s", wantCollection, body)
+	}
+	if !strings.Contains(body, attendeeCollectionName) {
+		t.Fatalf("expected response to include the Invitations collection's display name %q, got:\n%s", attendeeCollectionName, body)
+	}
+
+	// The attendee has no Access to env.calendarID, so its own collection
+	// must not appear under their principal.
+	noAccessCollection := calendarPath(attendeeID, env.calendarID)
+	if strings.Contains(body, noAccessCollection) {
+		t.Fatalf("expected no collection for the inaccessible Calendar %q, got:\n%s", noAccessCollection, body)
+	}
+
+	objResp := propfind(t, env.srv, wantCollection, "attendee@example.com", attendeeSecret, "1", propfindObjectList)
+	defer objResp.Body.Close()
+	objBody := readBody(t, objResp)
+	wantObject := calendarObjectPath(attendeeID, attendeeCollectionID, event.ID)
+	if !strings.Contains(objBody, wantObject) {
+		t.Fatalf("expected the Invitations collection to list the Attendee-only Event %q, got:\n%s", wantObject, objBody)
+	}
+}
+
+// TestPropfind_HomeSet_ListsAccessAndAttendeeOnlyEventsTogether is #163's
+// second acceptance criterion: a principal with both an Access-based
+// Calendar and an Attendee-only Event elsewhere sees both, each correctly
+// attributed to its own collection — the Access-based Event only under its
+// Calendar's own collection, the Attendee-only Event only under the
+// synthetic Invitations collection.
+func TestPropfind_HomeSet_ListsAccessAndAttendeeOnlyEventsTogether(t *testing.T) {
+	env := newTestCalDAVEnv(t)
+	ctx := context.Background()
+
+	otherID, otherSecret := env.addSharedUser(t, "editor", repository.RoleEditor)
+
+	accessStart := time.Date(2026, 6, 1, 9, 0, 0, 0, time.UTC)
+	accessEvent, err := env.eventService.Create(ctx, env.userID, "evt-access", service.EventWrite{
+		CalendarID: env.calendarID, Title: "Team sync",
+		Start: accessStart, End: accessStart.Add(30 * time.Minute),
+	})
+	if err != nil {
+		t.Fatalf("create access-based event: %v", err)
+	}
+
+	otherCalendarID := "cal-2"
+	if _, err := env.calendarService.Create(ctx, env.userID, env.workspaceID, otherCalendarID, service.CalendarWrite{Name: "Unshared", Color: "#FF0000FF"}); err != nil {
+		t.Fatalf("create unshared calendar: %v", err)
+	}
+	attendeeStart := time.Date(2026, 6, 2, 9, 0, 0, 0, time.UTC)
+	attendeeEvent, err := env.eventService.Create(ctx, env.userID, "evt-attendee-only", service.EventWrite{
+		CalendarID: otherCalendarID, Title: "Discuss tech stack",
+		Start: attendeeStart, End: attendeeStart.Add(30 * time.Minute),
+	})
+	if err != nil {
+		t.Fatalf("create attendee-only event: %v", err)
+	}
+	if _, err := env.eventService.AddAttendee(ctx, env.userID, attendeeEvent.ID, otherID); err != nil {
+		t.Fatalf("add attendee: %v", err)
+	}
+
+	homeSetPath := fmt.Sprintf("/dav/%d/calendars/", otherID)
+	resp := propfind(t, env.srv, homeSetPath, "editor@example.com", otherSecret, "1", propfindDisplayName)
+	defer resp.Body.Close()
+
+	body := readBody(t, resp)
+	wantAccessCollection := calendarPath(otherID, env.calendarID)
+	wantInvitationsCollection := attendeeCollectionPath(otherID)
+	if !strings.Contains(body, wantAccessCollection) {
+		t.Fatalf("expected response to list the Access-based collection %q, got:\n%s", wantAccessCollection, body)
+	}
+	if !strings.Contains(body, wantInvitationsCollection) {
+		t.Fatalf("expected response to list the Invitations collection %q, got:\n%s", wantInvitationsCollection, body)
+	}
+	// The Unshared Calendar itself must never appear under otherID's own
+	// principal — only the synthetic Invitations collection may address
+	// attendeeEvent for them.
+	wantNoUnsharedCollection := calendarPath(otherID, otherCalendarID)
+	if strings.Contains(body, wantNoUnsharedCollection) {
+		t.Fatalf("expected no collection for the unshared Calendar %q, got:\n%s", wantNoUnsharedCollection, body)
+	}
+
+	accessObjResp := propfind(t, env.srv, wantAccessCollection, "editor@example.com", otherSecret, "1", propfindObjectList)
+	defer accessObjResp.Body.Close()
+	accessObjBody := readBody(t, accessObjResp)
+	if !strings.Contains(accessObjBody, calendarObjectPath(otherID, env.calendarID, accessEvent.ID)) {
+		t.Fatalf("expected the Access-based collection to list %q, got:\n%s", accessEvent.ID, accessObjBody)
+	}
+	if strings.Contains(accessObjBody, attendeeEvent.ID) {
+		t.Fatalf("expected the Access-based collection not to list the Attendee-only Event %q, got:\n%s", attendeeEvent.ID, accessObjBody)
+	}
+
+	invitationsObjResp := propfind(t, env.srv, wantInvitationsCollection, "editor@example.com", otherSecret, "1", propfindObjectList)
+	defer invitationsObjResp.Body.Close()
+	invitationsObjBody := readBody(t, invitationsObjResp)
+	if !strings.Contains(invitationsObjBody, calendarObjectPath(otherID, attendeeCollectionID, attendeeEvent.ID)) {
+		t.Fatalf("expected the Invitations collection to list %q, got:\n%s", attendeeEvent.ID, invitationsObjBody)
+	}
+	if strings.Contains(invitationsObjBody, accessEvent.ID) {
+		t.Fatalf("expected the Invitations collection not to list the Access-based Event %q, got:\n%s", accessEvent.ID, invitationsObjBody)
 	}
 }
 

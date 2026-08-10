@@ -1288,18 +1288,27 @@ func (s *EventService) GetSeries(ctx context.Context, userID int64, masterID str
 		return repository.Event{}, nil, ErrParentIsOverride
 	}
 
-	masters := []repository.Event{master}
-	if err := s.attachExdates(ctx, masters); err != nil {
-		return repository.Event{}, nil, err
-	}
-
 	overridesByParent, err := s.events.ListChildrenByParentIDs(ctx, []string{masterID})
 	if err != nil {
 		return repository.Event{}, nil, fmt.Errorf("list overrides: %w", err)
 	}
-	overrides := overridesByParent[masterID]
 
-	all := append(masters, overrides...)
+	return s.hydrateSeries(ctx, master, overridesByParent[masterID])
+}
+
+// hydrateSeries attaches Exdates to master, then Reminders and Attachments
+// to master and overrides together, returning master then overrides — the
+// tail GetSeries and GetAttendeeOnlySeries share once each has resolved
+// masterID and confirmed the caller's own visibility to it (Calendar
+// Access, or Attendee — ADR-0046).
+func (s *EventService) hydrateSeries(ctx context.Context, master repository.Event, overrides []repository.Event) (repository.Event, []repository.Event, error) {
+	masters := []repository.Event{master}
+	if err := s.attachExdates(ctx, masters); err != nil {
+		return repository.Event{}, nil, err
+	}
+	master = masters[0]
+
+	all := append([]repository.Event{master}, overrides...)
 	if err := s.attachReminders(ctx, all); err != nil {
 		return repository.Event{}, nil, err
 	}
@@ -1428,6 +1437,128 @@ func (s *EventService) ListSeriesByCalendar(ctx context.Context, userID int64, c
 	return masters, overridesByParent, nil
 }
 
+// ListAttendeeOnlySeries returns, shaped like ListSeriesByCalendar, every
+// series userID is an Attendee of (on its Master or any of its Overrides)
+// whose Calendar userID has no Access to (ADR-0046, #163) — the content of
+// the CalDAV backend's synthetic Attendee-only collection, which no real
+// per-principal Calendar collection backs for userID. A series userID both
+// has Calendar Access to and is an Attendee of is excluded here: it already
+// appears once, correctly attributed, under that Calendar's own collection
+// (ListSeriesByCalendar), and must not be listed twice.
+func (s *EventService) ListAttendeeOnlySeries(ctx context.Context, userID int64) ([]repository.Event, map[string][]repository.Event, error) {
+	accessible, err := s.calendars.ListAccessible(ctx, userID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("list calendars: %w", err)
+	}
+	accessibleIDs := make(map[string]bool, len(accessible))
+	for _, c := range accessible {
+		accessibleIDs[c.ID] = true
+	}
+
+	attendeeEvents, err := s.events.ListByAttendeeUserID(ctx, userID, nil, nil)
+	if err != nil {
+		return nil, nil, fmt.Errorf("list attendee events: %w", err)
+	}
+
+	masterIDs := []string{}
+	seenMasterID := map[string]bool{}
+	for _, e := range attendeeEvents {
+		if accessibleIDs[e.CalendarID] {
+			continue
+		}
+		masterID := e.ID
+		if e.ParentID != nil {
+			masterID = *e.ParentID
+		}
+		if seenMasterID[masterID] {
+			continue
+		}
+		seenMasterID[masterID] = true
+		masterIDs = append(masterIDs, masterID)
+	}
+
+	masters := make([]repository.Event, 0, len(masterIDs))
+	for _, id := range masterIDs {
+		master, err := s.events.GetByID(ctx, id)
+		if err != nil {
+			if errors.Is(err, repository.ErrNotFound) {
+				continue
+			}
+			return nil, nil, fmt.Errorf("get master event: %w", err)
+		}
+		masters = append(masters, master)
+	}
+
+	if err := s.attachExdates(ctx, masters); err != nil {
+		return nil, nil, err
+	}
+	overridesByParent, err := s.attachOverridesAndReminders(ctx, masters)
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := s.attachAttachments(ctx, masters); err != nil {
+		return nil, nil, err
+	}
+	return masters, overridesByParent, nil
+}
+
+// isAttendeeOfEventIDs reports whether userID is an Attendee of any of ids —
+// GetAttendeeOnlySeries' visibility check, run across a Master and its
+// Overrides since an Attendee invite can name either (#161).
+func (s *EventService) isAttendeeOfEventIDs(ctx context.Context, userID int64, ids []string) (bool, error) {
+	for _, id := range ids {
+		if _, err := s.attendees.Get(ctx, id, userID); err == nil {
+			return true, nil
+		} else if !errors.Is(err, repository.ErrNotFound) {
+			return false, err
+		}
+	}
+	return false, nil
+}
+
+// GetAttendeeOnlySeries returns masterID's series (Master plus Overrides)
+// for the CalDAV backend's synthetic Attendee-only collection (ADR-0046,
+// #163): it resolves masterID whenever userID is an Attendee of it or of
+// any of its Overrides and has no Calendar Access to it — the counterpart
+// to GetSeries, which resolves purely through Calendar Access. A series
+// userID both has Calendar Access to and is an Attendee of is excluded
+// here, mirroring ListAttendeeOnlySeries: it resolves only through
+// GetSeries, under its Calendar's own collection, never through this one.
+// Returns repository.ErrNotFound if masterID doesn't exist, names an
+// Override rather than a Master, userID is not an Attendee of it, or
+// userID already has Calendar Access to it.
+func (s *EventService) GetAttendeeOnlySeries(ctx context.Context, userID int64, masterID string) (repository.Event, []repository.Event, error) {
+	master, err := s.events.GetByID(ctx, masterID)
+	if err != nil {
+		return repository.Event{}, nil, err
+	}
+	if master.ParentID != nil {
+		return repository.Event{}, nil, repository.ErrNotFound
+	}
+
+	if _, err := s.calendarByID(ctx, userID, master.CalendarID); err == nil {
+		return repository.Event{}, nil, repository.ErrNotFound
+	} else if !errors.Is(err, ErrCalendarNotFound) {
+		return repository.Event{}, nil, err
+	}
+
+	overridesByParent, err := s.events.ListChildrenByParentIDs(ctx, []string{masterID})
+	if err != nil {
+		return repository.Event{}, nil, fmt.Errorf("list overrides: %w", err)
+	}
+	overrides := overridesByParent[masterID]
+
+	isAttendee, err := s.isAttendeeOfEventIDs(ctx, userID, append([]string{masterID}, eventIDs(overrides)...))
+	if err != nil {
+		return repository.Event{}, nil, err
+	}
+	if !isAttendee {
+		return repository.Event{}, nil, repository.ErrNotFound
+	}
+
+	return s.hydrateSeries(ctx, master, overrides)
+}
+
 // attachOverridesAndReminders loads each of masters' Overrides and attaches
 // Reminders to both masters and their Overrides in place, returning a
 // parentID-keyed map of the Overrides. Shared by every read path that
@@ -1547,6 +1678,27 @@ func (s *EventService) CalendarCTag(ctx context.Context, userID int64, calendarI
 		return 0, err
 	}
 	return s.sync.CTag(ctx, calendarID)
+}
+
+// AttendeeOnlyCTag is CalendarCTag's counterpart for the CalDAV backend's
+// synthetic Attendee-only collection (#163): no single repository.Calendar
+// row (and so no single change_seq/tombstone stream, unlike sync.CTag)
+// backs a view spanning every Calendar userID isn't otherwise Accessing, so
+// this folds every current member series' own ChangeSeq together with how
+// many series currently qualify — an edit to an existing series changes the
+// former, an Attendee invite being added, revoked, or newly excluded by
+// gaining Calendar Access changes the latter, and either changes the CTag.
+func (s *EventService) AttendeeOnlyCTag(ctx context.Context, userID int64) (int64, error) {
+	masters, _, err := s.ListAttendeeOnlySeries(ctx, userID)
+	if err != nil {
+		return 0, err
+	}
+
+	ctag := int64(len(masters))
+	for _, master := range masters {
+		ctag += master.ChangeSeq
+	}
+	return ctag, nil
 }
 
 // Delete removes id's row. Deleting a Master removes a whole series, which

@@ -132,7 +132,7 @@ func (h *dispatchHandler) handleSyncCollection(w http.ResponseWriter, r *http.Re
 
 	ms := syncMultistatus{SyncToken: formatSyncToken(result.NewToken)}
 	for _, master := range result.Masters {
-		object, err := buildCalendarObject(r.Context(), userID, master, result.OverridesByParent[master.ID])
+		object, err := buildCalendarObject(r.Context(), userID, calendarID, master, result.OverridesByParent[master.ID])
 		if err != nil {
 			http.Error(w, "failed to build calendar object", http.StatusInternalServerError)
 			return
