@@ -155,6 +155,7 @@ export function ReminderOverrideControl({
             min={0}
             value={amount}
             onChange={(event) => setAmount(Number(event.target.value))}
+            size="small"
             className="w-16 shrink-0"
           />
           <Select

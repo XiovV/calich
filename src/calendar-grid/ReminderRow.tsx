@@ -71,6 +71,7 @@ export function ReminderRow({
         value={amount}
         onChange={(event) => handleAmountChange(Number(event.target.value))}
         disabled={disabled}
+        size="small"
         className="w-16 shrink-0"
       />
       <Select

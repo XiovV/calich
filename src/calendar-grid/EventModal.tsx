@@ -1146,7 +1146,7 @@ export function EventModal(props: EventModalProps) {
                   </button>
                 )}
 
-                <IconFieldRow icon={<Bell className="size-4" />}>
+                <IconFieldRow icon={<Bell className="size-4" />} align="start" startOffset="mt-1.5">
                   {reminders.length > 0 && (
                     <div className="flex flex-col gap-2">
                       {reminders.map((reminder) => (
@@ -1173,8 +1173,7 @@ export function EventModal(props: EventModalProps) {
                 </IconFieldRow>
                 {/* A distinct sub-section (its own "Your reminder" heading
                     and divider), not one more line of the Reminders row —
-                    kept full-width and outside the icon-aligned row so it
-                    doesn't skew that row's centering (#193). */}
+                    kept full-width and outside the icon-aligned row (#193). */}
                 {showReminderOverride && (
                   <ReminderOverrideControl
                     eventId={props.occurrence.event.id}
@@ -1182,7 +1181,7 @@ export function EventModal(props: EventModalProps) {
                   />
                 )}
 
-                <IconFieldRow icon={<Paperclip className="size-4" />}>
+                <IconFieldRow icon={<Paperclip className="size-4" />} align="start" startOffset="mt-1.5">
                   {attachmentDrafts.length > 0 && (
                     <div className="flex flex-col gap-2">
                       {attachmentDrafts.map((draft) => (

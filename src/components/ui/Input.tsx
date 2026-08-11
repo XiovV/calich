@@ -14,6 +14,10 @@ export interface InputProps extends InputHTMLAttributes<HTMLInputElement> {
   invalid?: boolean;
   /** Extra classes for the outer wrapper (e.g. spacing / flex sizing). */
   className?: string;
+  /** "small" matches Select's/Button's pill height (py-1.5), for rows that
+   * pair an Input with a Select (e.g. ReminderRow's offset amount). Defaults
+   * to "medium" (py-2.5), the standalone-field height used everywhere else. */
+  size?: "small" | "medium";
 }
 
 export const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
@@ -26,6 +30,7 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
     disabled,
     id,
     className,
+    size = "medium",
     ...rest
   },
   ref,
@@ -59,7 +64,8 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
           aria-invalid={invalid || undefined}
           aria-describedby={descriptionId}
           className={[
-            "w-full flex-1 bg-transparent py-2.5 text-body text-ink outline-none placeholder:text-ink-muted disabled:cursor-not-allowed",
+            "w-full flex-1 bg-transparent text-body text-ink outline-none placeholder:text-ink-muted disabled:cursor-not-allowed",
+            size === "small" ? "py-1.5" : "py-2.5",
             leadingIcon ? "pl-2" : "pl-4",
             trailingIcon ? "pr-2" : "pr-4",
           ].join(" ")}
