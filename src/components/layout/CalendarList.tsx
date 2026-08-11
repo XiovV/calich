@@ -1,7 +1,9 @@
 import { useState } from "react";
 import { formatDistanceToNow } from "date-fns";
-import { Download, LogOut, Pencil, Plus, RefreshCw, Trash2, TriangleAlert, Users } from "lucide-react";
+import { Menu } from "@base-ui/react/menu";
+import { MoreVertical, Plus, TriangleAlert, Users } from "lucide-react";
 import { IconButton } from "../ui/IconButton";
+import { iconButtonClasses } from "../ui/iconButtonClasses";
 import { canManageCalendar, shareCountTooltip, type Calendar } from "../../lib/calendar";
 import { resolveCalendarFill } from "../../lib/calendarColors";
 import { useAuthStore } from "../../lib/authStore";
@@ -19,6 +21,14 @@ import { CalendarToggle } from "./CalendarToggle";
 import { SubscribeCalendarModal } from "./SubscribeCalendarModal";
 import { DeleteCalendarConfirmation } from "./DeleteCalendarConfirmation";
 import { LeaveCalendarConfirmation } from "./LeaveCalendarConfirmation";
+
+// The row's action menu items share this shape so every row type — a click
+// away from Edit-only, Edit+Export+Delete, or Edit+Refresh+Unsubscribe — is
+// one list instead of three near-duplicate menus (#189).
+const menuItemClasses =
+  "flex cursor-default items-center px-3 py-1.5 text-body text-ink data-[highlighted]:bg-surface-hover data-[disabled]:pointer-events-none data-[disabled]:opacity-50";
+const destructiveMenuItemClasses =
+  "flex cursor-default items-center px-3 py-1.5 text-body text-danger data-[highlighted]:bg-danger-50";
 
 // subscriptionErrorReason renders a broken Subscription's sidebar tooltip,
 // undefined for a healthy Calendar. The two error classes need different
@@ -44,7 +54,7 @@ export function CalendarList() {
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [isSubscribeOpen, setIsSubscribeOpen] = useState(false);
   // focus: the share-count badge (#126) opens the same edit dialog as the
-  // Pencil button, but scrolled to its sharing section — the badge exists
+  // Edit menu item, but scrolled to its sharing section — the badge exists
   // to answer "who can see my stuff" at a glance, and clicking through to
   // anywhere else in the dialog wouldn't answer it. Bundled with calendar
   // in one state, rather than a parallel boolean, so the two can't drift
@@ -198,8 +208,9 @@ export function CalendarList() {
           )}
           {isSubscribed && calendar.lastSyncedAt && (
             <span className="truncate text-label-sm text-ink-muted">
-              Synced{" "}
-              {formatDistanceToNow(calendar.lastSyncedAt, { addSuffix: true })}
+              {isRefreshing
+                ? "Refreshing…"
+                : `Refreshed ${formatDistanceToNow(calendar.lastSyncedAt, { addSuffix: true })}`}
             </span>
           )}
         </span>
@@ -220,65 +231,80 @@ export function CalendarList() {
             {calendar.shareCount}
           </button>
         )}
-        {isSubscribed && canManage && (
-          <IconButton
-            size="tiny"
-            onClick={() => handleRefresh(calendar)}
-            disabled={isRefreshing}
-            aria-label={`Refresh ${calendar.name}`}
-            className="opacity-0 focus-visible:opacity-100 group-hover:opacity-100"
+        {/* Edit, then whichever of Refresh/Export the row qualifies for
+            (mutually exclusive per ADR-0032), then a divider, then the
+            destructive action last — Edit stays first because it's the
+            only item every row type has, keeping the menu's first and last
+            items in fixed positions no matter which row this is (#189). */}
+        <Menu.Root>
+          <Menu.Trigger
+            aria-label={`${calendar.name} actions`}
+            className={iconButtonClasses({
+              size: "tiny",
+              className:
+                "opacity-0 focus-visible:opacity-100 group-hover:opacity-100 data-[popup-open]:opacity-100",
+            })}
           >
-            <RefreshCw className={`size-3.5 ${isRefreshing ? "animate-spin" : ""}`} />
-          </IconButton>
-        )}
-        {/* A Subscribed Calendar offers no per-Calendar download (#90,
-            ADR-0032): its source URL is what actually carries it elsewhere,
-            not a frozen snapshot a Refresh will overwrite anyway. */}
-        {!isSubscribed && canManage && (
-          <IconButton
-            size="tiny"
-            onClick={() => handleDownload(calendar)}
-            aria-label={`Download ${calendar.name}`}
-            className="opacity-0 focus-visible:opacity-100 group-hover:opacity-100"
-          >
-            <Download className="size-3.5" />
-          </IconButton>
-        )}
-        {/* Edit opens the same dialog for everyone (#122): an Owner manages
-            the Calendar itself, while anyone else with Access sees only
-            their own colour, since a personal colour is theirs to set on
-            any Calendar they can see, not just the ones they own. */}
-        <IconButton
-          size="tiny"
-          onClick={() => setEditModalTarget({ calendar })}
-          aria-label={`Edit ${calendar.name}`}
-          className="opacity-0 focus-visible:opacity-100 group-hover:opacity-100"
-        >
-          <Pencil className="size-3.5" />
-        </IconButton>
-        {canManage && (
-          <IconButton
-            size="tiny"
-            onClick={() => setDeletingCalendarId(calendar.id)}
-            aria-label={isSubscribed ? `Unsubscribe from ${calendar.name}` : `Delete ${calendar.name}`}
-            className="opacity-0 focus-visible:opacity-100 group-hover:opacity-100"
-          >
-            <Trash2 className="size-3.5" />
-          </IconButton>
-        )}
-        {/* A shared-in Calendar isn't the viewer's to delete — Leave
-            renounces their own Share instead, without touching the
-            Calendar itself or its Owner (#114). */}
-        {!canManage && (
-          <IconButton
-            size="tiny"
-            onClick={() => setLeavingCalendarId(calendar.id)}
-            aria-label={`Leave ${calendar.name}`}
-            className="opacity-0 focus-visible:opacity-100 group-hover:opacity-100"
-          >
-            <LogOut className="size-3.5" />
-          </IconButton>
-        )}
+            <MoreVertical className="size-3.5" />
+          </Menu.Trigger>
+          <Menu.Portal>
+            <Menu.Positioner sideOffset={4} align="end" className="z-[60]">
+              <Menu.Popup className="rounded-shell-md border border-border bg-surface py-1 shadow-elevation-2">
+                {/* Edit opens the same dialog for everyone (#122): an Owner
+                    manages the Calendar itself, while anyone else with
+                    Access sees only their own colour, since a personal
+                    colour is theirs to set on any Calendar they can see,
+                    not just the ones they own. */}
+                <Menu.Item
+                  onClick={() => setEditModalTarget({ calendar })}
+                  className={menuItemClasses}
+                >
+                  Edit
+                </Menu.Item>
+                {isSubscribed && canManage && (
+                  <Menu.Item
+                    onClick={() => handleRefresh(calendar)}
+                    disabled={isRefreshing}
+                    className={menuItemClasses}
+                  >
+                    Refresh
+                  </Menu.Item>
+                )}
+                {/* A Subscribed Calendar offers no per-Calendar download
+                    (#90, ADR-0032): its source URL is what actually carries
+                    it elsewhere, not a frozen snapshot a Refresh will
+                    overwrite anyway. */}
+                {!isSubscribed && canManage && (
+                  <Menu.Item
+                    onClick={() => handleDownload(calendar)}
+                    className={menuItemClasses}
+                  >
+                    Export
+                  </Menu.Item>
+                )}
+                <div role="separator" className="my-1 border-t border-border" />
+                {canManage ? (
+                  <Menu.Item
+                    onClick={() => setDeletingCalendarId(calendar.id)}
+                    className={destructiveMenuItemClasses}
+                  >
+                    {isSubscribed ? "Unsubscribe" : "Delete"}
+                  </Menu.Item>
+                ) : (
+                  // A shared-in Calendar isn't the viewer's to delete —
+                  // Leave renounces their own Share instead, without
+                  // touching the Calendar itself or its Owner (#114).
+                  <Menu.Item
+                    onClick={() => setLeavingCalendarId(calendar.id)}
+                    className={destructiveMenuItemClasses}
+                  >
+                    Leave
+                  </Menu.Item>
+                )}
+              </Menu.Popup>
+            </Menu.Positioner>
+          </Menu.Portal>
+        </Menu.Root>
       </li>
     );
   }
