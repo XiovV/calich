@@ -49,8 +49,8 @@ export function SettingsModal() {
                 if (groupSections.length === 0) return null;
 
                 return (
-                  <div key={group} className="mb-4 last:mb-0">
-                    <p className="px-5 pb-1 text-label-sm font-medium tracking-wide text-ink-muted uppercase">
+                  <div key={group} className="mb-8 last:mb-0">
+                    <p className="px-5 pb-2 text-label-sm font-medium tracking-wide text-ink-muted uppercase">
                       {SETTINGS_GROUP_LABELS[group]}
                     </p>
                     <ul>
@@ -60,13 +60,14 @@ export function SettingsModal() {
                             to={section.path}
                             replace
                             className={({ isActive }) =>
-                              `block rounded-e-full py-2 ps-5 pe-4 text-body transition-colors ${
+                              `flex items-center gap-2 rounded-e-full py-2 ps-5 pe-4 text-body transition-colors ${
                                 isActive
                                   ? "bg-surface-hover font-medium text-ink"
                                   : "text-ink-muted hover:bg-surface-hover"
                               }`
                             }
                           >
+                            <section.icon aria-hidden className="size-4" />
                             {section.label}
                           </NavLink>
                         </li>

@@ -128,7 +128,7 @@ The user's chosen appearance — Light, Dark, or System — persisted locally an
 _Avoid_: color scheme, mode, dark-mode toggle
 
 **Settings**:
-The overlay where a User adjusts everything that isn't a Calendar or an Event — their Preferences, their Account, their Reminder delivery, their app passwords, their Connections, import and export, and (for the Workspaces they administer) the Workspace itself and its Groups. Opens *over* the calendar rather than replacing it: the grid stays where it was, and closing returns the User to exactly the view they left. Divided into a **Personal** group, whose Sections concern the one User, and a **Workspace** group, whose Sections concern the active Workspace and everyone in it. Each Section is individually addressable, so one can be linked to and survives a reload. See ADR-0049.
+The overlay where a User adjusts everything that isn't a Calendar or an Event — their Preferences, their Account, their Reminder delivery, their app passwords, their Connections, import and export, and (for the Workspaces they administer) its Members and Groups. Opens *over* the calendar rather than replacing it: the grid stays where it was, and closing returns the User to exactly the view they left. Divided into a **Personal** group, whose Sections concern the one User, and a **Workspace** group, whose Sections concern the active Workspace and everyone in it. Each Section is individually addressable, so one can be linked to and survives a reload. See ADR-0049.
 _Avoid_: settings page, preferences (that's the narrower concept below), config screen
 
 **Section**:

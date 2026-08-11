@@ -1,10 +1,20 @@
 import type { ReactElement } from "react";
+import {
+  ArrowDownUp,
+  Bell,
+  Boxes,
+  KeyRound,
+  SlidersHorizontal,
+  UserRound,
+  UsersRound,
+  type LucideIcon,
+} from "lucide-react";
 import { AccountSection } from "./AccountSection";
 import { AppPasswordsSection } from "./AppPasswordsSection";
 import { PreferencesSection } from "./PreferencesSection";
 import { ReminderDeliverySection } from "./ReminderDeliverySection";
 import { ImportExportSection } from "./ImportExportSection";
-import { WorkspaceSection } from "./WorkspaceSection";
+import { MembersSection } from "./MembersSection";
 import { GroupsSection } from "./GroupsSection";
 
 export type SettingsGroup = "personal" | "workspace";
@@ -21,22 +31,26 @@ export interface SettingsSection {
   path: string;
   label: string;
   group: SettingsGroup;
+  icon: LucideIcon;
   element: ReactElement;
 }
 
 // The single source of truth for Settings' left-hand nav (#112, #176): both
 // the route table in App.tsx and the rail in SettingsModal read this. Group
-// follows how the code is already scoped (ADR-0049) — Workspace and Groups
+// follows how the code is already scoped (ADR-0049) — Members and Groups
 // are per-Workspace (ADR-0045), the rest are per-User. Preferences (#128,
-// ADR-0039) leads the Personal group.
+// ADR-0039) leads the Personal group. icon lives here rather than a parallel
+// lookup map (#190) — none is a gear (that's Settings itself), and Groups
+// deliberately drops the person glyph so Account and Members (the rail's
+// only two people-shaped concepts) never sit adjacent to a third.
 export function getSettingsSections(): SettingsSection[] {
   return [
-    { path: "preferences", label: "Preferences", group: "personal", element: <PreferencesSection /> },
-    { path: "account", label: "Account", group: "personal", element: <AccountSection /> },
-    { path: "workspace", label: "Workspace", group: "workspace", element: <WorkspaceSection /> },
-    { path: "groups", label: "Groups", group: "workspace", element: <GroupsSection /> },
-    { path: "app-passwords", label: "App passwords", group: "personal", element: <AppPasswordsSection /> },
-    { path: "reminders", label: "Reminder delivery", group: "personal", element: <ReminderDeliverySection /> },
-    { path: "import-export", label: "Import & export", group: "personal", element: <ImportExportSection /> },
+    { path: "preferences", label: "Preferences", group: "personal", icon: SlidersHorizontal, element: <PreferencesSection /> },
+    { path: "account", label: "Account", group: "personal", icon: UserRound, element: <AccountSection /> },
+    { path: "members", label: "Members", group: "workspace", icon: UsersRound, element: <MembersSection /> },
+    { path: "groups", label: "Groups", group: "workspace", icon: Boxes, element: <GroupsSection /> },
+    { path: "app-passwords", label: "App passwords", group: "personal", icon: KeyRound, element: <AppPasswordsSection /> },
+    { path: "reminders", label: "Reminder delivery", group: "personal", icon: Bell, element: <ReminderDeliverySection /> },
+    { path: "import-export", label: "Import & export", group: "personal", icon: ArrowDownUp, element: <ImportExportSection /> },
   ];
 }

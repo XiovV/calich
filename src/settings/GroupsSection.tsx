@@ -17,7 +17,7 @@ import { GroupMembersDialog } from "./GroupMembersDialog";
 // renames, and deletes Groups, and manages which Workspace Members belong to
 // each — scoped to whichever Workspace the switcher (#153) currently has
 // active. Reads the active Workspace's membership from
-// workspaceMembersStore, the same source WorkspaceSection uses, so the
+// workspaceMembersStore, the same source MembersSection uses, so the
 // membership dialog's picker always reflects that same Workspace.
 export function GroupsSection() {
   const user = useAuthStore((state) => state.user);

@@ -20,14 +20,14 @@ function isExpired(invite: OutstandingWorkspaceInvite): boolean {
   return new Date(invite.inviteExpiresAt).getTime() < Date.now();
 }
 
-// The Workspace settings screen (#165): the Owner or Admin manages
+// The Members settings screen (#165, #190): the Owner or Admin manages
 // membership — sending an invite, seeing outstanding invites alongside
 // active Members, promoting/demoting Admin, and removing a Member, with the
 // transfer-or-delete Calendar disposition flow (#160) surfaced before a
 // removal completes. Mirrors the shape of the retired instance-wide Admin
 // account list (#145), scoped to the currently active Workspace (#153)
 // instead of the whole instance.
-export function WorkspaceSection() {
+export function MembersSection() {
   const user = useAuthStore((state) => state.user);
   const activeWorkspaceId = useWorkspacesStore((state) => state.activeWorkspaceId);
 
@@ -101,7 +101,7 @@ export function WorkspaceSection() {
 
   return (
     <section>
-      <h2 className="text-heading font-medium text-ink">Workspace</h2>
+      <h2 className="text-heading font-medium text-ink">Members</h2>
       <p className="mt-1 text-body text-ink-muted">
         Manage who belongs to this workspace, their role, and outstanding invites.
       </p>
