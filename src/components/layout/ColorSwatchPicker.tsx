@@ -51,7 +51,7 @@ export function ColorSwatchPicker({ value, onValueChange, disabled }: ColorSwatc
           onClick={() => onValueChange(swatch)}
           disabled={disabled}
           style={{ backgroundColor: toOpaqueHex(swatch) }}
-          className={`size-7 rounded-shell-pill disabled:opacity-50 ${
+          className={`size-7 cursor-pointer rounded-shell-pill disabled:cursor-not-allowed disabled:opacity-50 ${
             swatch === value
               ? "ring-2 ring-accent ring-offset-2 ring-offset-surface"
               : ""
@@ -66,7 +66,7 @@ export function ColorSwatchPicker({ value, onValueChange, disabled }: ColorSwatc
         onClick={() => nativeInputRef.current?.click()}
         disabled={disabled}
         style={matchesSwatch ? { backgroundImage: CUSTOM_TILE_GRADIENT } : { backgroundColor: toOpaqueHex(value) }}
-        className={`relative size-7 overflow-hidden rounded-shell-pill disabled:opacity-50 ${
+        className={`relative size-7 cursor-pointer overflow-hidden rounded-shell-pill disabled:cursor-not-allowed disabled:opacity-50 ${
           !matchesSwatch ? "ring-2 ring-accent ring-offset-2 ring-offset-surface" : ""
         }`}
       >

@@ -170,6 +170,10 @@ type eventResponse struct {
 	// for its Calendar.
 	CalendarName  string `json:"calendarName,omitempty"`
 	CalendarColor string `json:"calendarColor,omitempty"`
+	// AttendeeCount is this Event's number of Attendees (ADR-0046, #193) —
+	// present so a caller deciding whether to render an Event expanded knows
+	// synchronously, without a separate round-trip to the Attendees endpoint.
+	AttendeeCount int `json:"attendeeCount,omitempty"`
 }
 
 func toEventResponse(e repository.Event) eventResponse {
@@ -194,6 +198,7 @@ func toEventResponse(e repository.Event) eventResponse {
 		Attachments:   toAttachmentResponses(e.Attachments),
 		CalendarName:  e.CalendarName,
 		CalendarColor: e.CalendarColor,
+		AttendeeCount: e.AttendeeCount,
 	}
 }
 

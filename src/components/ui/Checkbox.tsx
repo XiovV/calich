@@ -20,7 +20,7 @@ export function Checkbox({
       onCheckedChange={onCheckedChange}
       aria-label={ariaLabel}
       disabled={disabled}
-      className="flex size-4 items-center justify-center rounded-shell-sm border border-border bg-surface data-[checked]:border-accent data-[checked]:bg-accent data-[disabled]:cursor-not-allowed data-[disabled]:opacity-60"
+      className="flex size-4 cursor-pointer items-center justify-center rounded-shell-sm border border-border bg-surface data-[checked]:border-accent data-[checked]:bg-accent data-[disabled]:cursor-not-allowed data-[disabled]:opacity-60"
     >
       <BaseCheckbox.Indicator className="text-ink-inverse">
         <Check className="size-3" />

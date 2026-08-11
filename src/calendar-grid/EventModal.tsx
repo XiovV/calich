@@ -1,9 +1,21 @@
-import { useRef, useState, type DragEvent, type KeyboardEvent } from "react";
+import { useRef, useState, type DragEvent, type KeyboardEvent, type ReactNode } from "react";
 import { addDays, format, setHours, setMinutes, startOfDay } from "date-fns";
 import { Dialog } from "@base-ui/react/dialog";
-import { Download } from "lucide-react";
+import { Popover } from "@base-ui/react/popover";
+import {
+  AlignLeft,
+  Bell,
+  Calendar as CalendarIcon,
+  Download,
+  MapPin,
+  Paperclip,
+  Repeat as RepeatIcon,
+  UsersRound,
+  X,
+} from "lucide-react";
 import type { DraftBlock } from "../lib/gridTime";
 import type { Attachment, Event, Reminder } from "../lib/event";
+import { hasSecondaryEventFields } from "../lib/eventDisclosure";
 import { attachmentsApi } from "../lib/attachmentsApi";
 import { downloadBlob } from "../lib/downloadBlob";
 import { errorMessage } from "../lib/errorMessage";
@@ -38,7 +50,7 @@ import {
   getCheckedCalendars,
   type CalendarPickerEmptyReason,
 } from "../lib/calendar";
-import { resolveCalendarFill } from "../lib/calendarColors";
+import { resolveOccurrenceColor, toOpaqueHex } from "../lib/calendarColors";
 import { ColorSwatchPicker } from "../components/layout/ColorSwatchPicker";
 import { CalendarModal } from "../components/layout/CalendarModal";
 import { useShellStore } from "../lib/shellStore";
@@ -55,6 +67,7 @@ import { Checkbox } from "../components/ui/Checkbox";
 import { Button } from "../components/ui/Button";
 import { IconButton } from "../components/ui/IconButton";
 import { buttonClasses } from "../components/ui/buttonClasses";
+import { iconButtonClasses } from "../components/ui/iconButtonClasses";
 import { DeleteEventConfirmation } from "./DeleteEventConfirmation";
 import { CustomRecurrenceDialog } from "./CustomRecurrenceDialog";
 import { ScopePicker } from "./ScopePicker";
@@ -155,6 +168,55 @@ function deriveInitialFormState(
   };
 }
 
+// The left-edge column every icon in the icon gutter sits on, and the
+// indent secondary content (a link, a divider-bearing sub-section) lines up
+// with underneath a row — both derived from the same icon width + gap so
+// they can never drift apart (#193, ADR-0056).
+const ICON_COLUMN_WIDTH = "size-5";
+const ICON_GUTTER_INDENT = "pl-[calc(1.25rem+0.625rem)]"; // icon width (size-5) + gap (gap-2.5)
+
+// The icon gutter for a field: once its label text is gone, the icon
+// carries its identity instead. Used for the six secondary fields
+// (Location through Attendees) and, with an icon replacing the word
+// "Calendar", the Calendar row too — one consistent left-edge column
+// regardless of which mode the field is in. "center" (the default) is for
+// a field whose own control is a single, height-stable control (Location's
+// Input, Repeat's/Calendar's Select). "start" is for content whose height
+// varies with what's in it — Description's Textarea reserves multi-line
+// height even for one short line, and EventAttendeesSection can run from
+// one Organizer row to a whole invite picker plus RSVP buttons — so
+// centering the icon against the whole block would put it somewhere in the
+// middle of a tall render instead of level with its first line. startOffset
+// tunes exactly where "the first line" is: Description needs to clear the
+// Textarea's own top padding (py-2.5); EventAttendeesSection's first line
+// sits below its own mt-2.
+function IconFieldRow({
+  icon,
+  align = "center",
+  startOffset = "mt-2.5",
+  spacing = "mt-3",
+  children,
+}: {
+  icon: ReactNode;
+  align?: "center" | "start";
+  startOffset?: string;
+  spacing?: string;
+  children: ReactNode;
+}) {
+  return (
+    <div className={`${spacing} flex gap-2.5 ${align === "start" ? "items-start" : "items-center"}`}>
+      <span
+        className={`flex ${ICON_COLUMN_WIDTH} shrink-0 items-center justify-center text-ink-muted ${
+          align === "start" ? startOffset : ""
+        }`}
+      >
+        {icon}
+      </span>
+      <div className="min-w-0 flex-1">{children}</div>
+    </div>
+  );
+}
+
 export function EventModal(props: EventModalProps) {
   const { mode, onClose } = props;
 
@@ -216,7 +278,8 @@ export function EventModal(props: EventModalProps) {
   // canWriteCalendarEvents' undefined-is-unwritable default apply here too.
   const isReadOnlyEvent = mode === "edit" && !canWriteCalendarEvents(editedCalendar);
   const readOnlyReason = calendarReadOnlyReason(editedCalendar);
-  // resolveCalendarFill's fallback for an Attendee-only Event (ADR-0046):
+  // resolveOccurrenceColor's Calendar fallback for an Attendee-only Event
+  // (ADR-0046):
   // editedCalendar is undefined (no calendarsStore entry, no Calendar
   // Access), so the Color swatch would otherwise default to the generic
   // unresolved gray even when the wire already told us the real color.
@@ -249,11 +312,40 @@ export function EventModal(props: EventModalProps) {
     calendarOptions.length === 0
       ? calendarPickerEmptyReason(calendars, checkedCalendarIds)
       : undefined;
+  // Whether the Calendar row is actually rendering its empty-state branch
+  // (#193) — calendarEmptyReason alone is a bad proxy for this: it's
+  // computed from writableCalendars only, so a read-only or Attendee-only
+  // Event with zero *writable* Calendars would wrongly look "empty" by that
+  // measure even while rendering its own read-only text branch instead.
+  // Only this specific branch has nothing to put a Color swatch next to.
+  const isCalendarEmptyStateBranch =
+    !(isReadOnlyEvent && editedCalendar) &&
+    !(mode === "edit" && !editedCalendar) &&
+    calendarEmptyReason !== undefined;
 
   const [initial] = useState(() =>
     deriveInitialFormState(props, master, defaultCalendarId(checkedCalendars)),
   );
   const { day } = initial;
+
+  // Progressive disclosure (#193, ADR-0056): "auto-expand if populated",
+  // recomputed once per open via useState's lazy initializer — never
+  // remembered in shellStore/localStorage/a Preference, so reopening the
+  // same Event always re-derives the same layout. Create's initial always
+  // carries every signal empty/zero, so this is trivially false for it.
+  // "More options" (below) is the only way this flips true; there is no
+  // "Fewer options" to flip it back for this modal session.
+  const [isExpanded, setIsExpanded] = useState(() =>
+    mode === "edit" &&
+    hasSecondaryEventFields({
+      location: initial.location,
+      description: initial.description,
+      hasRrule: initial.repeat !== "none",
+      reminderCount: initial.reminders.length,
+      attachmentCount: master?.attachments?.length ?? 0,
+      attendeeCount: master?.attendeeCount ?? 0,
+    }),
+  );
 
   // Attachments (#132, ADR-0040) belong to the Master, never an Override —
   // master (not props.occurrence.event) is deliberately what every
@@ -270,7 +362,7 @@ export function EventModal(props: EventModalProps) {
       attachment,
     })),
   );
-  const [isDraggingOverAttachments, setIsDraggingOverAttachments] = useState(false);
+  const [isDraggingOverModal, setIsDraggingOverModal] = useState(false);
   const attachmentInputRef = useRef<HTMLInputElement>(null);
 
   // Attendees staged at creation (#187, ADR-0055) — create mode only; an
@@ -310,6 +402,13 @@ export function EventModal(props: EventModalProps) {
   const [isDownloadScopePickerOpen, setIsDownloadScopePickerOpen] = useState(false);
   const [pendingExportSummary, setPendingExportSummary] = useState<ExportSummary | null>(null);
   const [isConfirmingExport, setIsConfirmingExport] = useState(false);
+
+  // The Calendar row's swatch (#193): this Event's own color if it has one,
+  // else its Calendar's — the same ADR-0043 resolution the grid itself uses.
+  const resolvedEventColor = resolveOccurrenceColor(
+    { color },
+    getCalendarById(calendars, calendarId) ?? attendeeOnlyCalendarColor,
+  );
 
   // Preset labels are derived from the event's start date, so e.g. "Weekly on
   // Tuesday" tracks the day the event lives on.
@@ -486,20 +585,24 @@ export function EventModal(props: EventModalProps) {
   // browser's default take over wherever it landed — including a text
   // field, which would otherwise paste a path (#132, ADR-0040). Handlers
   // live on the Popup itself so every child's drop bubbles here unless the
-  // child claims its own (none in this file do).
+  // child claims its own (none in this file do). The highlight lives on the
+  // Popup's own edge, not the Attachments row, so it still shows on a
+  // collapsed modal (#193) — dropping a file is an unambiguous intent to
+  // attach one, so a drop expands the modal too.
   function handleModalDragOver(event: DragEvent<HTMLDivElement>) {
     if (isReadOnlyEvent) return;
     event.preventDefault();
-    setIsDraggingOverAttachments(true);
+    setIsDraggingOverModal(true);
   }
 
   function handleModalDragLeave() {
-    setIsDraggingOverAttachments(false);
+    setIsDraggingOverModal(false);
   }
 
   function handleModalDrop(event: DragEvent<HTMLDivElement>) {
     event.preventDefault();
-    setIsDraggingOverAttachments(false);
+    setIsDraggingOverModal(false);
+    setIsExpanded(true);
     handleAddAttachmentFiles(event.dataTransfer.files);
   }
 
@@ -801,21 +904,35 @@ export function EventModal(props: EventModalProps) {
             onDragOver={handleModalDragOver}
             onDragLeave={handleModalDragLeave}
             onDrop={handleModalDrop}
-            className="fixed top-1/2 left-1/2 z-50 max-h-[85vh] w-[28rem] -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-shell-lg bg-surface p-5 shadow-elevation-3"
+            className={`fixed top-1/2 left-1/2 z-50 max-h-[85vh] w-[28rem] -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-shell-lg bg-surface p-5 shadow-elevation-3 transition-colors ${
+              isDraggingOverModal && !isReadOnlyEvent
+                ? "outline-2 outline-dashed outline-accent outline-offset-[-8px] bg-surface-hover"
+                : ""
+            }`}
           >
             <div className="flex items-center justify-between gap-2">
               <Dialog.Title className="text-heading font-medium text-ink">
                 {mode === "edit" ? "Edit event" : "New event"}
               </Dialog.Title>
-              {mode === "edit" && (
-                <IconButton
-                  size="tiny"
-                  onClick={handleDownloadClick}
-                  aria-label="Download event"
-                >
-                  <Download className="size-3.5" />
-                </IconButton>
-              )}
+              <div className="flex items-center gap-1">
+                {/* Download's own trigger is hidden rather than deleted — its
+                    scope picker, oversized-attachment pre-flight, and export
+                    dialog below are all still wired up and kept working,
+                    just not reachable from the header for now. */}
+                {mode === "edit" && (
+                  <IconButton
+                    size="tiny"
+                    onClick={handleDownloadClick}
+                    aria-label="Download event"
+                    className="hidden"
+                  >
+                    <Download className="size-3.5" />
+                  </IconButton>
+                )}
+                <Dialog.Close className={iconButtonClasses({ size: "tiny" })} aria-label="Close">
+                  <X className="size-3.5" />
+                </Dialog.Close>
+              </div>
             </div>
 
             <form
@@ -833,25 +950,7 @@ export function EventModal(props: EventModalProps) {
               className="mt-4"
             />
 
-            <Input
-              label="Location"
-              value={location}
-              onChange={(event) => setLocation(event.target.value)}
-              placeholder="Add location"
-              disabled={isReadOnlyEvent}
-              className="mt-4"
-            />
-
-            <Textarea
-              label="Description"
-              value={description}
-              onChange={(event) => setDescription(event.target.value)}
-              placeholder="Add description"
-              disabled={isReadOnlyEvent}
-              className="mt-4"
-            />
-
-            <label className="mt-4 flex items-center gap-2 text-label-sm text-ink">
+            <label className="mt-4 inline-flex cursor-pointer items-center gap-2 text-label-sm text-ink">
               <Checkbox
                 checked={allDay}
                 onCheckedChange={setAllDay}
@@ -891,188 +990,258 @@ export function EventModal(props: EventModalProps) {
               </>
             )}
 
-            <div className="mt-4">
-              {isReadOnlyEvent && editedCalendar ? (
-                <p className="text-label-sm text-ink-muted">
-                  {readOnlyReason === "subscription"
-                    ? `Calendar: ${editedCalendar.name} (subscribed) — read-only; only Refresh can update it.`
-                    : `Calendar: ${editedCalendar.name} — read-only; you have Viewer access.`}
-                </p>
-              ) : mode === "edit" && !editedCalendar ? (
-                // editedCalendar is undefined: this Event's Calendar carries
-                // no Access row for the caller at all — an Attendee-only
-                // Event (ADR-0046), never reachable in create mode, where
-                // the picker only ever offers writableCalendars. calendarName
-                // is the wire's own fallback for exactly this case.
-                <p className="text-label-sm text-ink-muted">
-                  {`Calendar: ${props.occurrence.event.calendarName ?? "Unknown"} — you can see this event because you're invited as an Attendee.`}
-                </p>
-              ) : calendarEmptyReason ? (
-                <div>
-                  <p className="text-label-sm text-ink-muted">
-                    {CALENDAR_EMPTY_STATE_COPY[calendarEmptyReason]}
+            {/* An icon replaces the word "Calendar" (#193) — same gutter the
+                secondary fields below use, so the Select and its swatch line
+                up on the same left edge as everything under "More options".
+                Both sit inside one items-center row so the swatch centers
+                against the Select trigger's own height, not a label above
+                it (there no longer is one) or the row's full width. */}
+            <IconFieldRow icon={<CalendarIcon className="size-4" />} spacing="mt-4">
+              <div className="flex items-center gap-2">
+                {isReadOnlyEvent && editedCalendar ? (
+                  <p className="min-w-0 flex-1 text-label-sm text-ink-muted">
+                    {readOnlyReason === "subscription"
+                      ? `Calendar: ${editedCalendar.name} (subscribed) — read-only; only Refresh can update it.`
+                      : `Calendar: ${editedCalendar.name} — read-only; you have Viewer access.`}
                   </p>
-                  {calendarEmptyReason !== "hidden" && (
-                    <button
-                      type="button"
-                      onClick={() => setIsCreateCalendarOpen(true)}
-                      className="mt-1.5 text-label-sm text-accent hover:underline"
-                    >
-                      Create a calendar
-                    </button>
-                  )}
-                </div>
-              ) : (
-                <Select
-                  label="Calendar"
-                  value={calendarId}
-                  onValueChange={setCalendarId}
-                  options={calendarOptions.map((calendar) => ({
-                    value: calendar.id,
-                    label: calendarPickerLabel(calendar),
-                  }))}
-                />
-              )}
-            </div>
-
-            <div className="mt-4">
-              <p className="mb-1.5 text-label-sm text-ink-muted">Color</p>
-              <ColorSwatchPicker
-                value={
-                  color ??
-                  resolveCalendarFill(
-                    getCalendarById(calendars, calendarId) ?? attendeeOnlyCalendarColor,
-                  )
-                }
-                onValueChange={setColor}
-                disabled={isReadOnlyEvent}
-              />
-              {color !== undefined && !isReadOnlyEvent && (
-                <button
-                  type="button"
-                  onClick={() => setColor(undefined)}
-                  className="mt-1.5 text-label-sm text-accent hover:underline"
-                >
-                  Reset to Calendar color
-                </button>
-              )}
-            </div>
-
-            <div className="mt-4">
-              <Select
-                label="Repeat"
-                value={repeat}
-                onValueChange={handleRepeatChange}
-                options={repeatOptions}
-                disabled={isReadOnlyEvent}
-              />
-              {repeat === "custom" && !isReadOnlyEvent && (
-                <button
-                  type="button"
-                  onClick={() => setIsCustomDialogOpen(true)}
-                  className="mt-1.5 text-label-sm text-accent hover:underline"
-                >
-                  Edit custom recurrence
-                </button>
-              )}
-            </div>
-
-            <div className="mt-4">
-              <p className="mb-1.5 text-label-sm text-ink-muted">
-                {showReminderOverride ? "Event reminders (for everyone)" : "Reminders"}
-              </p>
-              <div className="flex flex-col gap-2">
-                {reminders.map((reminder) => (
-                  <ReminderRow
-                    key={reminder.draftId}
-                    reminder={reminder}
-                    emailAvailable={emailAvailable}
-                    onChange={(next) => handleReminderChange(reminder.draftId, next)}
-                    onRemove={() => handleRemoveReminder(reminder.draftId)}
-                    disabled={isReadOnlyEvent}
+                ) : mode === "edit" && !editedCalendar ? (
+                  // editedCalendar is undefined: this Event's Calendar carries
+                  // no Access row for the caller at all — an Attendee-only
+                  // Event (ADR-0046), never reachable in create mode, where
+                  // the picker only ever offers writableCalendars. calendarName
+                  // is the wire's own fallback for exactly this case.
+                  <p className="min-w-0 flex-1 text-label-sm text-ink-muted">
+                    {`Calendar: ${props.occurrence.event.calendarName ?? "Unknown"} — you can see this event because you're invited as an Attendee.`}
+                  </p>
+                ) : calendarEmptyReason ? (
+                  <div className="min-w-0 flex-1">
+                    <p className="text-label-sm text-ink-muted">
+                      {CALENDAR_EMPTY_STATE_COPY[calendarEmptyReason]}
+                    </p>
+                    {calendarEmptyReason !== "hidden" && (
+                      <button
+                        type="button"
+                        onClick={() => setIsCreateCalendarOpen(true)}
+                        className="mt-1.5 cursor-pointer text-label-sm text-accent hover:underline"
+                      >
+                        Create a calendar
+                      </button>
+                    )}
+                  </div>
+                ) : (
+                  <Select
+                    aria-label="Calendar"
+                    value={calendarId}
+                    onValueChange={setCalendarId}
+                    options={calendarOptions.map((calendar) => ({
+                      value: calendar.id,
+                      label: calendarPickerLabel(calendar),
+                    }))}
                   />
-                ))}
-              </div>
-              {!isReadOnlyEvent && (
-                <button
-                  type="button"
-                  onClick={handleAddReminder}
-                  className="mt-1.5 text-label-sm text-accent hover:underline"
-                >
-                  Add reminder
-                </button>
-              )}
-            </div>
+                )}
 
-            {showReminderOverride && (
-              <ReminderOverrideControl
-                eventId={props.occurrence.event.id}
-                emailAvailable={emailAvailable}
-              />
+                {/* The Color swatch (ADR-0043) lives in the Calendar row
+                    rather than its own block. A ring on the closed swatch is
+                    the only signal — now that the picker sits behind a click
+                    — that this Event overrides its Calendar's color at all
+                    (#193). */}
+                {!isCalendarEmptyStateBranch &&
+                  (isReadOnlyEvent ? (
+                    // Read-only branches (subscribed, Viewer, Attendee-only)
+                    // still show their color, just as a static dot — never a
+                    // button, since there is nothing to open (#193).
+                    <span
+                      aria-hidden
+                      className={`size-5 shrink-0 rounded-shell-pill ${
+                        color !== undefined
+                          ? "ring-2 ring-accent ring-offset-2 ring-offset-surface"
+                          : ""
+                      }`}
+                      style={{ backgroundColor: toOpaqueHex(resolvedEventColor) }}
+                    />
+                  ) : (
+                    <Popover.Root>
+                      <Popover.Trigger
+                        aria-label="Event colour"
+                        className={`size-5 shrink-0 cursor-pointer rounded-shell-pill transition-shadow ${
+                          color !== undefined
+                            ? "ring-2 ring-accent ring-offset-2 ring-offset-surface"
+                            : "ring-1 ring-border"
+                        }`}
+                        style={{ backgroundColor: toOpaqueHex(resolvedEventColor) }}
+                      />
+                      <Popover.Portal>
+                        <Popover.Positioner sideOffset={4} align="end" className="z-[60]">
+                          <Popover.Popup className="rounded-shell-md border border-border bg-surface p-3 shadow-elevation-2">
+                            <ColorSwatchPicker value={resolvedEventColor} onValueChange={setColor} />
+                            {color !== undefined && (
+                              <button
+                                type="button"
+                                onClick={() => setColor(undefined)}
+                                className="mt-2 cursor-pointer text-label-sm text-accent hover:underline"
+                              >
+                                Use Calendar colour
+                              </button>
+                            )}
+                          </Popover.Popup>
+                        </Popover.Positioner>
+                      </Popover.Portal>
+                    </Popover.Root>
+                  ))}
+              </div>
+            </IconFieldRow>
+
+            {!isExpanded && (
+              <button
+                type="button"
+                onClick={() => setIsExpanded(true)}
+                className="mt-4 cursor-pointer text-label-sm text-accent hover:underline"
+              >
+                More options
+              </button>
             )}
 
-            <div
-              className={`rounded-shell-md p-1.5 transition-colors ${
-                isDraggingOverAttachments && !isReadOnlyEvent
-                  ? "mt-4 bg-surface-hover outline-2 outline-dashed outline-accent"
-                  : "mt-2.5 -mx-1.5 -mb-1.5"
-              }`}
-            >
-              <p className="mb-1.5 text-label-sm text-ink-muted">Attachments</p>
-              {attachmentDrafts.length > 0 && (
-                <div className="flex flex-col gap-2">
-                  {attachmentDrafts.map((draft) => (
-                    <AttachmentRow
-                      key={draft.draftId}
-                      draft={draft}
-                      showUploader={showAttachmentUploader}
-                      onDownload={() =>
-                        draft.status === "uploaded" && handleDownloadAttachment(draft.attachment)
-                      }
-                      onRemove={() => handleRemoveAttachment(draft)}
-                      onRetry={() => handleRetryAttachment(draft)}
-                      disabled={isReadOnlyEvent}
-                    />
-                  ))}
-                </div>
-              )}
-              {!isReadOnlyEvent && (
-                <>
-                  <input
-                    ref={attachmentInputRef}
-                    type="file"
-                    multiple
-                    className="hidden"
-                    onChange={(event) => {
-                      if (event.target.files) handleAddAttachmentFiles(event.target.files);
-                      event.target.value = "";
-                    }}
+            {isExpanded && (
+              <>
+                <IconFieldRow icon={<MapPin className="size-4" />}>
+                  <Input
+                    aria-label="Location"
+                    value={location}
+                    onChange={(event) => setLocation(event.target.value)}
+                    placeholder="Add location"
+                    disabled={isReadOnlyEvent}
                   />
+                </IconFieldRow>
+
+                <IconFieldRow icon={<AlignLeft className="size-4" />} align="start">
+                  <Textarea
+                    aria-label="Description"
+                    value={description}
+                    onChange={(event) => setDescription(event.target.value)}
+                    placeholder="Add description"
+                    disabled={isReadOnlyEvent}
+                  />
+                </IconFieldRow>
+
+                <IconFieldRow icon={<RepeatIcon className="size-4" />}>
+                  <Select
+                    aria-label="Repeat"
+                    value={repeat}
+                    onValueChange={handleRepeatChange}
+                    options={repeatOptions}
+                    disabled={isReadOnlyEvent}
+                  />
+                </IconFieldRow>
+                {/* Indented under the icon gutter rather than inside the row
+                    above — keeping it out of that row's content is what lets
+                    the row's own items-center align the icon against the
+                    Select alone, not against Select-plus-link (#193). */}
+                {repeat === "custom" && !isReadOnlyEvent && (
                   <button
                     type="button"
-                    onClick={() => attachmentInputRef.current?.click()}
-                    className="mt-1.5 text-label-sm text-accent hover:underline"
+                    onClick={() => setIsCustomDialogOpen(true)}
+                    className={`mt-1.5 ${ICON_GUTTER_INDENT} cursor-pointer text-label-sm text-accent hover:underline`}
                   >
-                    Add attachment
+                    Edit custom recurrence
                   </button>
-                </>
-              )}
-            </div>
+                )}
 
-            <EventAttendeesSection
-              eventId={attendeeEventId}
-              canManage={mode === "edit" ? !isReadOnlyEvent : calendarId !== ""}
-              organizerName={organizerName}
-              staging={
-                mode === "edit" || attendeeEventId
-                  ? undefined
-                  : {
-                      targets: stagedAttendees,
-                      onChange: setStagedAttendees,
-                      error: attendeeCreateError,
+                <IconFieldRow icon={<Bell className="size-4" />}>
+                  {reminders.length > 0 && (
+                    <div className="flex flex-col gap-2">
+                      {reminders.map((reminder) => (
+                        <ReminderRow
+                          key={reminder.draftId}
+                          reminder={reminder}
+                          emailAvailable={emailAvailable}
+                          onChange={(next) => handleReminderChange(reminder.draftId, next)}
+                          onRemove={() => handleRemoveReminder(reminder.draftId)}
+                          disabled={isReadOnlyEvent}
+                        />
+                      ))}
+                    </div>
+                  )}
+                  {!isReadOnlyEvent && (
+                    <button
+                      type="button"
+                      onClick={handleAddReminder}
+                      className="mt-1.5 cursor-pointer text-label-sm text-accent hover:underline"
+                    >
+                      Add reminder
+                    </button>
+                  )}
+                </IconFieldRow>
+                {/* A distinct sub-section (its own "Your reminder" heading
+                    and divider), not one more line of the Reminders row —
+                    kept full-width and outside the icon-aligned row so it
+                    doesn't skew that row's centering (#193). */}
+                {showReminderOverride && (
+                  <ReminderOverrideControl
+                    eventId={props.occurrence.event.id}
+                    emailAvailable={emailAvailable}
+                  />
+                )}
+
+                <IconFieldRow icon={<Paperclip className="size-4" />}>
+                  {attachmentDrafts.length > 0 && (
+                    <div className="flex flex-col gap-2">
+                      {attachmentDrafts.map((draft) => (
+                        <AttachmentRow
+                          key={draft.draftId}
+                          draft={draft}
+                          showUploader={showAttachmentUploader}
+                          onDownload={() =>
+                            draft.status === "uploaded" &&
+                            handleDownloadAttachment(draft.attachment)
+                          }
+                          onRemove={() => handleRemoveAttachment(draft)}
+                          onRetry={() => handleRetryAttachment(draft)}
+                          disabled={isReadOnlyEvent}
+                        />
+                      ))}
+                    </div>
+                  )}
+                  {!isReadOnlyEvent && (
+                    <>
+                      <input
+                        ref={attachmentInputRef}
+                        type="file"
+                        multiple
+                        className="hidden"
+                        onChange={(event) => {
+                          if (event.target.files) handleAddAttachmentFiles(event.target.files);
+                          event.target.value = "";
+                        }}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => attachmentInputRef.current?.click()}
+                        className="mt-1.5 cursor-pointer text-label-sm text-accent hover:underline"
+                      >
+                        Add attachment
+                      </button>
+                    </>
+                  )}
+                </IconFieldRow>
+
+                <IconFieldRow icon={<UsersRound className="size-4" />} align="start" startOffset="mt-2">
+                  <EventAttendeesSection
+                    eventId={attendeeEventId}
+                    canManage={mode === "edit" ? !isReadOnlyEvent : calendarId !== ""}
+                    organizerName={organizerName}
+                    staging={
+                      mode === "edit" || attendeeEventId
+                        ? undefined
+                        : {
+                            targets: stagedAttendees,
+                            onChange: setStagedAttendees,
+                            error: attendeeCreateError,
+                          }
                     }
-              }
-            />
+                  />
+                </IconFieldRow>
+              </>
+            )}
 
             <div className="mt-5 flex items-center justify-between gap-2">
               {mode === "edit" && !isReadOnlyEvent ? (

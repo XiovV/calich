@@ -30,7 +30,7 @@ export function iconButtonClasses({
   className,
 }: IconButtonClassOptions = {}): string {
   return [
-    "inline-flex shrink-0 items-center justify-center rounded-shell-pill outline-offset-2 transition-colors focus-visible:outline-2 disabled:cursor-not-allowed disabled:opacity-50",
+    "inline-flex shrink-0 items-center justify-center rounded-shell-pill outline-offset-2 transition-colors focus-visible:outline-2 cursor-pointer disabled:cursor-not-allowed disabled:opacity-50",
     SIZE[size],
     COLOR[color],
     className,

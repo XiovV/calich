@@ -47,7 +47,7 @@ export function Select<T extends string>({
       <BaseSelect.Trigger
         aria-label={ariaLabel}
         aria-labelledby={label ? labelId : undefined}
-        className={`flex items-center gap-1.5 rounded-shell-pill bg-surface-sunken px-4 py-1.5 text-body text-ink ring-1 ring-border transition-colors outline-none hover:bg-surface-hover data-[popup-open]:ring-2 data-[popup-open]:ring-accent data-[disabled]:cursor-not-allowed data-[disabled]:opacity-60 data-[disabled]:hover:bg-surface-sunken ${className ?? ""}`}
+        className={`flex cursor-pointer items-center gap-1.5 rounded-shell-pill bg-surface-sunken px-4 py-1.5 text-body text-ink ring-1 ring-border transition-colors outline-none hover:bg-surface-hover data-[popup-open]:ring-2 data-[popup-open]:ring-accent data-[disabled]:cursor-not-allowed data-[disabled]:opacity-60 data-[disabled]:hover:bg-surface-sunken ${className ?? ""}`}
       >
         <BaseSelect.Value className="min-w-0 truncate">
           {(selected: T) => options.find((option) => option.value === selected)?.label}
@@ -63,7 +63,7 @@ export function Select<T extends string>({
               <BaseSelect.Item
                 key={option.value}
                 value={option.value}
-                className="mx-1.5 flex cursor-default items-center gap-3 rounded-shell-sm px-3 py-1.5 text-body text-ink data-[highlighted]:bg-surface-hover dark:data-[highlighted]:bg-primary-200"
+                className="mx-1.5 flex cursor-pointer items-center gap-3 rounded-shell-sm px-3 py-1.5 text-body text-ink data-[highlighted]:bg-surface-hover dark:data-[highlighted]:bg-primary-200"
               >
                 <BaseSelect.ItemText>{option.label}</BaseSelect.ItemText>
                 <BaseSelect.ItemIndicator className="ms-auto flex">

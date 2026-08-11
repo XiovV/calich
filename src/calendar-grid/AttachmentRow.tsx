@@ -1,4 +1,4 @@
-import { Paperclip, RotateCw, X } from "lucide-react";
+import { RotateCw, X } from "lucide-react";
 import type { Attachment } from "../lib/event";
 import { formatBytes } from "../lib/formatBytes";
 import { IconButton } from "../components/ui/IconButton";
@@ -70,13 +70,12 @@ export function AttachmentRow({
 
   return (
     <div className="flex items-center gap-2">
-      <Paperclip className="size-4 shrink-0 text-ink-muted" />
       <div className="min-w-0 flex-1">
         {draft.status === "uploaded" ? (
           <button
             type="button"
             onClick={onDownload}
-            className="block truncate text-left text-label-sm text-ink hover:underline"
+            className="block cursor-pointer truncate text-left text-label-sm text-ink hover:underline"
             title={draftFilename(draft)}
           >
             {draftFilename(draft)}

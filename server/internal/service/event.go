@@ -477,6 +477,9 @@ func (s *EventService) Create(ctx context.Context, userID int64, id string, writ
 	if err := s.attachAttachments(ctx, result); err != nil {
 		return repository.Event{}, err
 	}
+	if err := s.attachAttendeeCounts(ctx, result); err != nil {
+		return repository.Event{}, err
+	}
 	return result[0], nil
 }
 
@@ -608,6 +611,9 @@ func (s *EventService) List(ctx context.Context, userID int64, from, to *time.Ti
 		return nil, err
 	}
 	if err := s.attachAttachments(ctx, events); err != nil {
+		return nil, err
+	}
+	if err := s.attachAttendeeCounts(ctx, events); err != nil {
 		return nil, err
 	}
 	return events, nil
@@ -768,6 +774,26 @@ func (s *EventService) attachCreatedByNames(ctx context.Context, events []reposi
 	return nil
 }
 
+// attachAttendeeCounts fills in AttendeeCount on every Event, batching one
+// query across all of them rather than one per Event — the same shape as
+// attachCreatedByNames. Unlike attachAttachments, this is not restricted to
+// Masters: an Override can carry its own Attendees, and #193's
+// progressive-disclosure rule needs an accurate count on whichever Event it
+// was handed.
+func (s *EventService) attachAttendeeCounts(ctx context.Context, events []repository.Event) error {
+	ids := eventIDs(events)
+
+	userIDsByEvent, err := s.attendees.ListUserIDsByEventIDs(ctx, ids)
+	if err != nil {
+		return fmt.Errorf("list attendee counts: %w", err)
+	}
+
+	for i := range events {
+		events[i].AttendeeCount = len(userIDsByEvent[events[i].ID])
+	}
+	return nil
+}
+
 func (s *EventService) attachReminders(ctx context.Context, events []repository.Event) error {
 	pointers := make([]*repository.Event, len(events))
 	for i := range events {
@@ -866,6 +892,9 @@ func (s *EventService) Get(ctx context.Context, userID int64, id string) (reposi
 		return repository.Event{}, err
 	}
 	if err := s.attachAttachments(ctx, events); err != nil {
+		return repository.Event{}, err
+	}
+	if err := s.attachAttendeeCounts(ctx, events); err != nil {
 		return repository.Event{}, err
 	}
 	return events[0], nil
@@ -970,6 +999,9 @@ func (s *EventService) Update(ctx context.Context, userID int64, id string, writ
 		return repository.Event{}, err
 	}
 	if err := s.attachAttachments(ctx, result); err != nil {
+		return repository.Event{}, err
+	}
+	if err := s.attachAttendeeCounts(ctx, result); err != nil {
 		return repository.Event{}, err
 	}
 	return result[0], nil

@@ -76,6 +76,21 @@ describe("eventsApi.list", () => {
     expect(events[0].createdByName).toBe("alice");
     expect(events[1].createdByName).toBeUndefined();
   });
+
+  it("maps attendeeCount when present, and omits it when absent (#193)", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(200, [
+        { ...wireEvent, attendeeCount: 3 },
+        { ...wireEvent, id: "evt-2" },
+      ]),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const events = await eventsApi.list("token-123");
+
+    expect(events[0].attendeeCount).toBe(3);
+    expect(events[1].attendeeCount).toBeUndefined();
+  });
 });
 
 describe("eventsApi.create", () => {

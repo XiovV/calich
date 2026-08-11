@@ -9,7 +9,6 @@ import { toast } from "../lib/toast";
 import { Button } from "../components/ui/Button";
 import { IconButton } from "../components/ui/IconButton";
 import { Select } from "../components/ui/Select";
-import { fieldLabelClass } from "../components/ui/fieldStyles";
 
 const RESPONSE_LABEL: Record<AttendeeResponse, string> = {
   "needs-action": "Needs action",
@@ -280,9 +279,7 @@ export function EventAttendeesSection({
   const bannerError = isStaging ? staging.error : inviteError;
 
   return (
-    <div className="mt-4 border-t border-border pt-4">
-      <p className={fieldLabelClass}>Attendees</p>
-
+    <div role="group" aria-label="Attendees">
       {loading ? (
         <p className="mt-1.5 text-label-sm text-ink-muted">Loading…</p>
       ) : (

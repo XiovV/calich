@@ -34,6 +34,7 @@ interface EventWire {
   // something to render for it.
   calendarName?: string;
   calendarColor?: string;
+  attendeeCount?: number;
 }
 
 interface AttachmentWire {
@@ -103,6 +104,7 @@ function fromWire(wire: EventWire): Event {
     attachments: wire.attachments?.map(attachmentFromWire),
     calendarName: wire.calendarName || undefined,
     calendarColor: wire.calendarColor || undefined,
+    attendeeCount: wire.attendeeCount || undefined,
   };
 }
 

@@ -134,12 +134,12 @@ export function ReminderOverrideControl({
         Retune this event's reminders for yourself, without changing them for anyone else.
       </p>
 
-      <label className="mt-2.5 flex items-center gap-2">
+      <label className="mt-2.5 inline-flex cursor-pointer items-center gap-2">
         <Checkbox checked={muted} onCheckedChange={setMuted} aria-label="Mute reminders for me" />
         <span className="text-body text-ink">Mute for me</span>
       </label>
 
-      <label className="mt-2 flex items-center gap-2">
+      <label className="mt-2 inline-flex cursor-pointer items-center gap-2">
         <Checkbox
           checked={offsetEnabled}
           onCheckedChange={setOffsetEnabled}
@@ -167,7 +167,7 @@ export function ReminderOverrideControl({
         </div>
       )}
 
-      <label className="mt-2 flex items-center gap-2">
+      <label className="mt-2 inline-flex cursor-pointer items-center gap-2">
         <Checkbox
           checked={channelEnabled}
           onCheckedChange={setChannelEnabled}

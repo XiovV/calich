@@ -14,7 +14,7 @@ export type ButtonSize = "small" | "medium";
 export type ButtonShape = "round" | "semi-round" | "rectangle";
 
 const BASE =
-  "inline-flex items-center justify-center gap-1.5 font-medium transition-colors outline-offset-2 focus-visible:outline-2 disabled:cursor-not-allowed disabled:opacity-50 aria-disabled:opacity-50";
+  "inline-flex items-center justify-center gap-1.5 font-medium transition-colors outline-offset-2 focus-visible:outline-2 cursor-pointer disabled:cursor-not-allowed disabled:opacity-50 aria-disabled:opacity-50 aria-disabled:cursor-not-allowed";
 
 const SHAPE: Record<ButtonShape, string> = {
   round: "rounded-shell-pill",

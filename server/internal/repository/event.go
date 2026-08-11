@@ -90,6 +90,13 @@ type Event struct {
 	// from otherwise.
 	CalendarName  string
 	CalendarColor string
+	// AttendeeCount is this Event's number of Attendees (ADR-0046). Not a
+	// column — populated by the service layer from the attendees table,
+	// mirroring CreatedByName. Exists so a caller deciding whether an Event
+	// "has Attendees" (#193's progressive-disclosure rule) has a synchronous
+	// answer at List/Get time, rather than needing a separate round-trip to
+	// the Attendees endpoint.
+	AttendeeCount int
 }
 
 type EventRepository struct {

@@ -79,4 +79,10 @@ export interface Event {
   // for it in calendarsStore — still has a Calendar name/color to render.
   calendarName?: string;
   calendarColor?: string;
+  // This Event's number of Attendees (ADR-0046), attached by the service
+  // layer alongside createdByName/calendarColor (#193, ADR-0056) — so the
+  // Event modal can decide collapsed-or-expanded synchronously at open,
+  // without waiting on EventAttendeesSection's own fetch. Undefined/0 both
+  // mean no Attendees.
+  attendeeCount?: number;
 }
