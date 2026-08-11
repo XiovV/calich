@@ -1,10 +1,9 @@
 import { useState } from "react";
 import { formatDistanceToNow } from "date-fns";
 import { Download, LogOut, Pencil, Plus, RefreshCw, Trash2, TriangleAlert, Users } from "lucide-react";
-import { Checkbox } from "../ui/Checkbox";
 import { IconButton } from "../ui/IconButton";
 import { canManageCalendar, shareCountTooltip, type Calendar } from "../../lib/calendar";
-import { resolveCalendarFill, toOpaqueHex } from "../../lib/calendarColors";
+import { resolveCalendarFill } from "../../lib/calendarColors";
 import { useAuthStore } from "../../lib/authStore";
 import { useCalendarsStore } from "../../lib/calendarsStore";
 import { useEventsStore } from "../../lib/eventsStore";
@@ -16,6 +15,7 @@ import { ApiError } from "../../lib/apiClient";
 import { toast } from "../../lib/toast";
 import { ExportSummaryDialog } from "../ExportSummaryDialog";
 import { CalendarModal } from "./CalendarModal";
+import { CalendarToggle } from "./CalendarToggle";
 import { SubscribeCalendarModal } from "./SubscribeCalendarModal";
 import { DeleteCalendarConfirmation } from "./DeleteCalendarConfirmation";
 import { LeaveCalendarConfirmation } from "./LeaveCalendarConfirmation";
@@ -171,24 +171,26 @@ export function CalendarList() {
         key={calendar.id}
         className="group flex items-center gap-2 rounded-e-full py-2 ps-5 pe-2 transition-colors hover:bg-surface-hover"
       >
-        {errorReason ? (
-          <span title={errorReason} className="shrink-0">
-            <TriangleAlert
-              aria-label={errorReason}
-              className={`size-3 ${
-                calendar.errorClass === "needs_attention" ? "text-danger" : "text-warning"
-              }`}
-            />
-          </span>
-        ) : (
-          <span
-            aria-hidden="true"
-            style={{ backgroundColor: toOpaqueHex(resolveCalendarFill(calendar)) }}
-            className="size-2.5 shrink-0 rounded-shell-pill"
-          />
-        )}
+        <CalendarToggle
+          checked={checkedCalendarIds.has(calendar.id)}
+          onCheckedChange={() => toggleCalendarChecked(calendar.id)}
+          color={resolveCalendarFill(calendar)}
+          aria-label={calendar.name}
+        />
         <span className="flex min-w-0 flex-1 flex-col">
-          <span className="truncate text-body text-ink">{calendar.name}</span>
+          <span className="flex min-w-0 items-center gap-1">
+            <span className="min-w-0 truncate text-body text-ink">{calendar.name}</span>
+            {errorReason && (
+              <span title={errorReason} className="shrink-0">
+                <TriangleAlert
+                  aria-label={errorReason}
+                  className={`size-3 ${
+                    calendar.errorClass === "needs_attention" ? "text-danger" : "text-warning"
+                  }`}
+                />
+              </span>
+            )}
+          </span>
           {!canManage && calendar.ownerName && (
             <span className="truncate text-label-sm text-ink-muted">
               Shared by {calendar.ownerName}
@@ -277,11 +279,6 @@ export function CalendarList() {
             <LogOut className="size-3.5" />
           </IconButton>
         )}
-        <Checkbox
-          checked={checkedCalendarIds.has(calendar.id)}
-          onCheckedChange={() => toggleCalendarChecked(calendar.id)}
-          aria-label={calendar.name}
-        />
       </li>
     );
   }

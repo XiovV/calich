@@ -24,6 +24,10 @@ _Avoid_: calendar colour (in prose), color enum
 One of the eight curated colors the web app offers as one-click quick picks when choosing a Calendar color or an Event color. A convenience for the person picking, never a constraint on what either color may be — a Calendar or Event whose color matches no Swatch is ordinary, not invalid, and is what a native client setting its own color normally produces.
 _Avoid_: palette color, preset, theme color
 
+**Calendar toggle**:
+The sidebar control that shows or hides a Calendar's Occurrences on the grid, rendered in that Calendar's own resolved color rather than a theme accent: filled with a contrasting check when showing, an unfilled ring in the same color when hidden, so color identity survives hiding a Calendar. A sidebar-specific control, not a mode of the app's generic checkbox — its color is data, not a theme constant, and a Calendar whose color matches no Swatch still needs it to render that color.
+_Avoid_: swatch, checkbox (in prose, for this control specifically), dot (the coloured dot it replaced)
+
 **Event color**:
 An optional color on a Master or Override, in the same arbitrary-hex value space as Calendar color, that wins outright over the Calendar's color for that Occurrence when set. Absent by default, in which case the Occurrence renders in whatever Calendar color would otherwise resolve for the viewer — an Event does not have to have a color, and most don't. A Calendar's color is shared, resolved-per-viewer state (Owner's value, or that viewer's personal override, ADR-0038); an Event color has no such per-viewer layer — it is one value, set by an Editor, seen identically by everyone with Access. See ADR-0029, ADR-0043.
 _Avoid_: event colour (in prose), custom color, color override (ambiguous with Calendar color's per-User override, which is a different mechanism)
@@ -66,6 +70,10 @@ _Avoid_: all-day row, header row
 **Draft block**:
 A proposed time window for a not-yet-saved Event, before it is confirmed via the creation modal — whether it originated from dragging on the grid or from a default (e.g. the sidebar's Create button). Discarded, not saved, if the modal is cancelled.
 _Avoid_: pending event, temp event
+
+**Drag readout**:
+The label shown beside a block while it is being dragged on the hourly grid, giving the start, end and total duration the gesture would commit. Live — it reflects the snapped times at every moment of the drag, not the times the Occurrence had when it started. Appears only once the gesture passes the click-vs-drag threshold, so clicking a block to open it shows nothing. Absent from the all-day lane and Month view, where a drag changes neither the time of day nor the duration and there is nothing to report.
+_Avoid_: drag tooltip, time label, drag hint
 
 **Reminder**:
 A single cue attached to an Event that fires a fixed offset before an Occurrence's start, on one Channel. An Event carries zero or more, each with its own offset and Channel. Maps to one iCalendar `VALARM` (`TRIGGER` for the offset, `ACTION` for the Channel) so it round-trips through CalDAV unchanged. See ADR-0020.
