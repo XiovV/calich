@@ -95,6 +95,57 @@ describe("addEvent", () => {
     expect(useEventsStore.getState().events[0].reminders).toEqual(reminders);
     expect(eventsApi.create).toHaveBeenCalledWith("token-123", remindedStandup);
   });
+
+  // Attendees staged at creation (#187, ADR-0055): the create is awaited
+  // before the Event is painted on the grid, unlike the fire-and-forget
+  // optimistic path above.
+  describe("with Attendees staged", () => {
+    it("does not insert the event until the create resolves", () => {
+      let resolveCreate: () => void = () => {};
+      vi.mocked(eventsApi.create).mockReturnValue(
+        new Promise((resolve) => {
+          resolveCreate = () => resolve(standup);
+        }),
+      );
+
+      const promise = useEventsStore
+        .getState()
+        .addEvent(standup, { attendeeUserIds: [7] });
+
+      expect(useEventsStore.getState().events).toEqual([]);
+      expect(eventsApi.create).toHaveBeenCalledWith("token-123", {
+        ...standup,
+        attendeeUserIds: [7],
+      });
+
+      resolveCreate();
+      return promise.then(() => {
+        expect(useEventsStore.getState().events).toEqual([standup]);
+      });
+    });
+
+    it("rethrows the error instead of toasting, and inserts nothing", async () => {
+      const error = new Error("user not found");
+      vi.mocked(eventsApi.create).mockRejectedValue(error);
+
+      await expect(
+        useEventsStore.getState().addEvent(standup, { attendeeUserIds: [999] }),
+      ).rejects.toBe(error);
+
+      expect(useEventsStore.getState().events).toEqual([]);
+      expect(toast.error).not.toHaveBeenCalled();
+    });
+
+    it("ignores an attendees object with only empty arrays, using the optimistic path instead", () => {
+      vi.mocked(eventsApi.create).mockResolvedValue(standup);
+
+      void useEventsStore
+        .getState()
+        .addEvent(standup, { attendeeUserIds: [], attendeeGroupIds: [] });
+
+      expect(useEventsStore.getState().events).toEqual([standup]);
+    });
+  });
 });
 
 describe("updateEvent", () => {

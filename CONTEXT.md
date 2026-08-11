@@ -221,6 +221,10 @@ _Avoid_: permission, privilege (that's the CalDAV property), rights
 
 There is deliberately **no term for a Calendar someone shared with you.** "Shared Calendar" points both ways — the Owner shares it out, the recipient sees it shared in — and would sit confusingly beside Subscribed Calendar, which is also a Calendar you see and may not write. Say "a Calendar you have Editor Access to" instead. UI copy may still read "Shared with me"; that is a label, not a term.
 
+**Organizer**:
+The User who created an Event — its iCalendar `ORGANIZER` counterpart to `ATTENDEE`, and deliberately never one of its own Attendees. Held on the Event itself rather than as an Attendee row, so an Organizer carries no Response, cannot be invited, removed, or decline their own Event, and an Event whose Organizer's account was deleted simply has none. Distinct from a Calendar's Owner, which is an Access concept on a different object. See ADR-0055.
+_Avoid_: creator, owner (that's the Calendar's), host, chair
+
 **Attendee**:
 A User invited to one specific Event, independent of any Calendar Access — the invite itself is the visibility grant, scoped to that Event alone. May be invited individually or via a Group (expanded to its current members at invite time into individual Attendee rows, since a response has to survive later Group membership changes rather than tracking membership dynamically the way a Group Share does). Its target must belong to the Event's own Workspace, which is why Attendees are not mirrored onto a Linked Calendar: a Provider's attendees are arbitrary email addresses, and an address with no account behind it is unrepresentable here. See ADR-0046, ADR-0052.
 _Avoid_: invitee, guest, participant

@@ -155,6 +155,27 @@ describe("eventsApi.create", () => {
       }),
     ).rejects.toBeInstanceOf(ApiError);
   });
+
+  // Attendees named as part of the create request itself (#187, ADR-0055),
+  // rather than only reachable through attendeesApi once the Event exists.
+  it("sends attendeeUserIds and attendeeGroupIds when staged", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(201, wireEvent));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await eventsApi.create("token-123", {
+      id: "evt-1",
+      calendarId: "cal-1",
+      title: "Standup",
+      start: new Date("2026-01-01T09:00:00Z"),
+      end: new Date("2026-01-01T10:00:00Z"),
+      attendeeUserIds: [7, 8],
+      attendeeGroupIds: [3],
+    });
+
+    const body = JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string);
+    expect(body.attendeeUserIds).toEqual([7, 8]);
+    expect(body.attendeeGroupIds).toEqual([3]);
+  });
 });
 
 describe("eventsApi all-day serialization", () => {

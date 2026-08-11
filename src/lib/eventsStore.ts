@@ -17,10 +17,28 @@ import { toast } from "./toast";
 
 type EventChanges = Partial<Omit<Event, "id">>;
 
+// StagedCreateAttendees is Create's optional Attendee payload (#187,
+// ADR-0055): a Group id expands to its current members server-side, inside
+// the same transaction as the Event row itself.
+export interface StagedCreateAttendees {
+  attendeeUserIds?: number[];
+  attendeeGroupIds?: number[];
+}
+
+function hasStagedAttendees(attendees: StagedCreateAttendees | undefined): boolean {
+  return Boolean(attendees?.attendeeUserIds?.length || attendees?.attendeeGroupIds?.length);
+}
+
 interface EventsState {
   events: Event[];
   fetchEvents: () => Promise<void>;
-  addEvent: (event: Event) => Promise<void>;
+  /** Creates event. With no Attendees staged, this is the existing
+   * fire-and-forget optimistic path: insert first, roll back and toast on
+   * failure. With Attendees staged, the create is awaited before anything
+   * is painted on the grid, and a failure is rethrown (never toasted) so
+   * the caller — EventModal, which needs to show its own banner and keep
+   * the dialog open — can react to it directly (#187, ADR-0055). */
+  addEvent: (event: Event, attendees?: StagedCreateAttendees) => Promise<void>;
   updateEvent: (id: string, changes: EventChanges) => Promise<void>;
   removeEvent: (id: string) => Promise<void>;
   removeEventsByCalendarId: (calendarId: string) => void;
@@ -93,17 +111,29 @@ export const useEventsStore = create<EventsState>((set, get) => ({
     set({ events });
   },
 
-  addEvent: async (event) => {
-    set((state) => ({ events: [...state.events, event] }));
+  addEvent: async (event, attendees) => {
+    if (!hasStagedAttendees(attendees)) {
+      set((state) => ({ events: [...state.events, event] }));
 
-    try {
-      await eventsApi.create(requireAccessToken(), event);
-    } catch (error) {
-      set((state) => ({
-        events: state.events.filter((e) => e.id !== event.id),
-      }));
-      await handleWriteFailure(error, event.calendarId, `Failed to create event "${event.title}".`);
+      try {
+        await eventsApi.create(requireAccessToken(), event);
+      } catch (error) {
+        set((state) => ({
+          events: state.events.filter((e) => e.id !== event.id),
+        }));
+        await handleWriteFailure(error, event.calendarId, `Failed to create event "${event.title}".`);
+      }
+      return;
     }
+
+    // Attendees staged: await the create before painting anything on the
+    // grid, so a rejected explicit target never shows an Event whose
+    // invites silently didn't go out, and never discards what the user
+    // typed by rolling back an optimistic insert (#187, ADR-0055). A
+    // rejection is rethrown rather than toasted — EventModal shows its own
+    // banner and keeps the dialog open.
+    await eventsApi.create(requireAccessToken(), { ...event, ...attendees });
+    set((state) => ({ events: [...state.events, event] }));
   },
 
   updateEvent: async (id, changes) => {

@@ -134,6 +134,11 @@ export const eventsApi = {
       description?: string;
       location?: string;
       color?: string;
+      // Attendees to invite as part of this create (#187, ADR-0055) — a
+      // Group id expands to its current members server-side, inside the
+      // same transaction as the Event row itself.
+      attendeeUserIds?: number[];
+      attendeeGroupIds?: number[];
     },
   ): Promise<Event> {
     const response = await authedFetch(accessToken, "/api/events/", {
@@ -155,6 +160,8 @@ export const eventsApi = {
         description: event.description,
         location: event.location,
         color: event.color,
+        attendeeUserIds: event.attendeeUserIds,
+        attendeeGroupIds: event.attendeeGroupIds,
       }),
     });
     if (!response.ok) throw await errorFromResponse(response);

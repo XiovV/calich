@@ -212,10 +212,18 @@ var eventWriteErrors = []errorCase{
 // On create, a missing parent is named as such — parentId is a body field the
 // client chose. On the exception and reparent paths it is the URL's event, so
 // those render it as a plain "event not found" 404 instead.
+// The three Attendee-at-create cases (#187, ADR-0055) mirror
+// addAttendeeErrors/addGroupAttendeeErrors exactly — a create carrying
+// Attendees can fail for the same reasons AddAttendee/AddGroupAttendee do,
+// just rendered from the same endpoint as the rest of Create's validation.
 var createEventErrors = alsoHandling(eventWriteErrors,
 	errorCase{service.ErrInvalidOverride, badRequest("an override must not have its own recurrence rule, and requires a recurrence id")},
 	errorCase{service.ErrParentIsOverride, badRequest("parent event must be a master, not an override")},
 	errorCase{service.ErrParentNotFound, badRequest("parent event not found")},
+	errorCase{service.ErrUserNotFound, badRequest("user not found")},
+	errorCase{service.ErrAttendeeTargetNotInWorkspace, badRequest("attendee target does not belong to this workspace")},
+	errorCase{service.ErrGroupNotFound, badRequest("group not found")},
+	errorCase{repository.ErrAlreadyAttendee, conflict("already_attendee", "user is already an attendee of this event")},
 )
 
 var updateEventErrors = alsoHandling(eventWriteErrors,
@@ -304,6 +312,12 @@ type createEventRequest struct {
 	// Color is this Event's own color override — absent/null means "inherit
 	// the Calendar's color" (ADR-0043).
 	Color *string `json:"color,omitempty"`
+	// AttendeeUserIds and AttendeeGroupIds name Attendees to invite as part
+	// of this create (#187, ADR-0055) — createEventRequest's alone; update
+	// carries no Attendee fields of its own, since an existing Event's
+	// invites go through AddAttendee/AddGroupAttendee instead.
+	AttendeeUserIds  []int64 `json:"attendeeUserIds,omitempty"`
+	AttendeeGroupIds []int64 `json:"attendeeGroupIds,omitempty"`
 }
 
 // parseEventTimes converts a decoded body's start/end strings into instants,
@@ -348,19 +362,21 @@ func (h *EventHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 
 	event, err := h.events.Create(r.Context(), userID, req.ID, service.EventWrite{
-		CalendarID:   req.CalendarID,
-		Title:        req.Title,
-		Start:        start,
-		End:          end,
-		AllDay:       req.AllDay,
-		Rrule:        req.Rrule,
-		ParentID:     req.ParentID,
-		RecurrenceID: req.RecurrenceID,
-		Tzid:         req.Tzid,
-		Reminders:    fromReminderWire(req.Reminders),
-		Description:  req.Description,
-		Location:     req.Location,
-		Color:        req.Color,
+		CalendarID:       req.CalendarID,
+		Title:            req.Title,
+		Start:            start,
+		End:              end,
+		AllDay:           req.AllDay,
+		Rrule:            req.Rrule,
+		ParentID:         req.ParentID,
+		RecurrenceID:     req.RecurrenceID,
+		Tzid:             req.Tzid,
+		Reminders:        fromReminderWire(req.Reminders),
+		Description:      req.Description,
+		Location:         req.Location,
+		Color:            req.Color,
+		AttendeeUserIDs:  req.AttendeeUserIds,
+		AttendeeGroupIDs: req.AttendeeGroupIds,
 	})
 	if respondError(w, err, createEventErrors, "failed to create event") {
 		return

@@ -285,20 +285,21 @@ func (s *EventService) ClearReminderOverride(ctx context.Context, userID int64, 
 
 // txRepos is the set of transaction-bound repositories a withTx body writes
 // through. Grouped into one struct so a body names only what it needs — most
-// use two or three of the seven. attachments is writeSeries' alone — it rows
+// use two or three of the eight. attachments is writeSeries' alone — it rows
 // a SeriesWrite's already-on-disk Attachments (ADR-0040) inside the same
 // transaction as their Master, so a failed write leaves no attachment row
 // even though the bytes were saved beforehand (#135). attendees, groups,
-// and users are AddGroupAttendee's alone — reading membership, checking
-// each member's Disabled flag, and inserting one attendees row per member
-// all inside the same transaction keeps the snapshot honest against a
+// users, and workspaces are AddGroupAttendee's and Create's staged-Attendee
+// write's alone — reading membership, checking each member's Disabled flag
+// and Workspace membership, and inserting one attendees row per target all
+// inside the same transaction keeps the snapshot honest against a
 // concurrent membership change, and means a failure partway through never
-// leaves a partial expansion (#162, ADR-0046). Every repo call inside a
-// withTx body must go through this tx-bound set, never the EventService's
-// own pooled repos directly — the test DB caps the pool at one connection
-// (db.OpenInMemory), so a pooled call made while the transaction holds that
-// connection deadlocks waiting for a connection the transaction itself is
-// holding.
+// leaves a partial expansion (#162, #187, ADR-0046, ADR-0055). Every repo
+// call inside a withTx body must go through this tx-bound set, never the
+// EventService's own pooled repos directly — the test DB caps the pool at
+// one connection (db.OpenInMemory), so a pooled call made while the
+// transaction holds that connection deadlocks waiting for a connection the
+// transaction itself is holding.
 type txRepos struct {
 	events      *repository.EventRepository
 	exceptions  *repository.EventExceptionRepository
@@ -308,13 +309,14 @@ type txRepos struct {
 	attendees   *repository.AttendeeRepository
 	groups      *repository.GroupRepository
 	users       *repository.UserRepository
+	workspaces  *repository.WorkspaceRepository
 }
 
 // withTx runs fn inside a transaction, passing it transaction-bound clones
 // of the Event, EventException, EventReminder, Sync, Attachment, Attendee,
-// Group, and User repositories so a multi-table write — including its
-// change_seq bump — commits or rolls back atomically. Reads and validation
-// belong outside fn, before withTx is called (ADR-0018).
+// Group, User, and Workspace repositories so a multi-table write —
+// including its change_seq bump — commits or rolls back atomically. Reads
+// and validation belong outside fn, before withTx is called (ADR-0018).
 func (s *EventService) withTx(ctx context.Context, fn func(repos txRepos) error) error {
 	return repository.WithTx(ctx, s.db, func(tx *sql.Tx) error {
 		return fn(txRepos{
@@ -326,6 +328,7 @@ func (s *EventService) withTx(ctx context.Context, fn func(repos txRepos) error)
 			attendees:   s.attendees.WithTx(tx),
 			groups:      s.groups.WithTx(tx),
 			users:       s.users.WithTx(tx),
+			workspaces:  s.workspaces.WithTx(tx),
 		})
 	})
 }
@@ -354,6 +357,16 @@ type EventWrite struct {
 	// nil, never the Calendar's current hex — see ResolveColor's contract in
 	// docs/adr/0043-per-event-color-override.md.
 	Color *string
+	// AttendeeUserIDs and AttendeeGroupIDs are Attendees to invite as part
+	// of this create, written inside the same transaction as the Event
+	// itself (#187, ADR-0055). Explicit targets are strict — an unknown
+	// User, a target outside the Calendar's Workspace, or a bad Group id
+	// fails the whole create — while each named Group's member expansion
+	// stays lenient, exactly like AddGroupAttendee (ADR-0046). Both are nil
+	// on every write path other than Create; Update carries no Attendee
+	// fields of its own.
+	AttendeeUserIDs  []int64
+	AttendeeGroupIDs []int64
 }
 
 // fields projects the write onto the columns the repository stores, dropping
@@ -414,6 +427,18 @@ func (s *EventService) Create(ctx context.Context, userID int64, id string, writ
 		return repository.Event{}, err
 	}
 
+	// Resolved once, outside the transaction, only when there's an Attendee
+	// to check against it — every other Create stays exactly as cheap as it
+	// was before #187.
+	var workspaceID int64
+	if len(write.AttendeeUserIDs) > 0 || len(write.AttendeeGroupIDs) > 0 {
+		calendar, err := s.calendarByID(ctx, userID, write.CalendarID)
+		if err != nil {
+			return repository.Event{}, err
+		}
+		workspaceID = calendar.WorkspaceID
+	}
+
 	var event repository.Event
 	err = s.withTx(ctx, func(repos txRepos) error {
 		seq, err := repos.sync.NextChangeSeq(ctx)
@@ -426,6 +451,9 @@ func (s *EventService) Create(ctx context.Context, userID int64, id string, writ
 		}
 		if err := repos.reminders.ReplaceByEventID(ctx, e.ID, write.Reminders); err != nil {
 			return fmt.Errorf("persist reminders: %w", err)
+		}
+		if err := s.addCreateAttendees(ctx, repos, e.ID, workspaceID, write.AttendeeUserIDs, write.AttendeeGroupIDs); err != nil {
+			return err
 		}
 		// Creating an Override changes its Master's calendar object (a new
 		// VEVENT joins the series), so the Master's own change_seq must bump
@@ -450,6 +478,50 @@ func (s *EventService) Create(ctx context.Context, userID int64, id string, writ
 		return repository.Event{}, err
 	}
 	return result[0], nil
+}
+
+// addCreateAttendees writes eventID's initial Attendees inside Create's own
+// transaction (#187, ADR-0055), reusing inviteUser and expandGroupMembers —
+// the same checks and the same Group-expansion loop AddAttendee and
+// AddGroupAttendee run, just against repos, the transaction-bound
+// repositories, never the EventService's own pooled ones — a pooled call
+// here would deadlock against the single-connection test database while the
+// transaction holds its one connection (txRepos' doc comment).
+//
+// userIDs are explicit targets and strict, matching inviteUser's own
+// checks: an unknown or Disabled User, or one outside workspaceID, fails
+// eventID's entire create — the first invalid target found, not collected.
+// groupIDs are explicit too and just as strict about the Group id itself —
+// unknown, or belonging to another Workspace, fails the create — but each
+// valid Group's member expansion stays lenient (expandGroupMembers' own
+// policy), since the caller named the Group, not its individual members. A
+// User named both individually and via a Group is silently deduplicated,
+// same as AddGroupAttendee already tolerates re-inviting someone.
+func (s *EventService) addCreateAttendees(ctx context.Context, repos txRepos, eventID string, workspaceID int64, userIDs, groupIDs []int64) error {
+	for _, targetUserID := range userIDs {
+		if _, err := inviteUser(ctx, repos.users, repos.workspaces, repos.attendees, eventID, workspaceID, targetUserID); err != nil {
+			return err
+		}
+	}
+
+	for _, groupID := range groupIDs {
+		group, err := repos.groups.GetByID(ctx, groupID)
+		if err != nil {
+			if errors.Is(err, repository.ErrNotFound) {
+				return ErrGroupNotFound
+			}
+			return fmt.Errorf("look up attendee group: %w", err)
+		}
+		if group.WorkspaceID != workspaceID {
+			return ErrAttendeeTargetNotInWorkspace
+		}
+
+		if _, err := expandGroupMembers(ctx, repos.groups, repos.users, repos.attendees, eventID, group.ID); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 // overrideCarriesOwnRrule reports whether a write to parentID names an
@@ -2173,23 +2245,18 @@ func (s *EventService) attendeeManagementCalendar(ctx context.Context, actorUser
 	return event, calendar, nil
 }
 
-// AddAttendee invites targetUserID as an Attendee of eventID, callable by
-// any caller with Editor Access to (or ownership of) eventID's Calendar
-// (#161, ADR-0046). Being an Attendee grants targetUserID visibility to
-// eventID alone, with no Calendar Access of their own required — the invite
-// itself is the grant. targetUserID must already be a Member of eventID's
-// Calendar's own Workspace and not Disabled, mirroring CalendarService.
-// Share's target checks (ADR-0037, ADR-0045).
-func (s *EventService) AddAttendee(ctx context.Context, actorUserID int64, eventID string, targetUserID int64) (repository.Attendee, error) {
-	_, calendar, err := s.attendeeManagementCalendar(ctx, actorUserID, eventID)
-	if err != nil {
-		return repository.Attendee{}, err
-	}
-
-	// A Disabled User is hidden from the invite picker (ADR-0037) — from the
-	// inviter's perspective they don't exist to invite, same as
-	// CalendarService.Share.
-	target, err := s.users.GetByID(ctx, targetUserID)
+// inviteUser is AddAttendee's and Create's shared explicit-target check
+// (#187, ADR-0055): targetUserID must exist, not be Disabled (hidden from
+// the invite picker, ADR-0037 — from the inviter's perspective they don't
+// exist to invite, same as CalendarService.Share), and already be a Member
+// of workspaceID, before their attendees row is inserted. Takes the User,
+// Workspace, and Attendee repositories directly rather than through
+// EventService or txRepos, so the identical check can run against either
+// the pooled repos (AddAttendee, outside any transaction) or the
+// transaction-bound ones (Create, inside its own) without duplicating the
+// checks themselves.
+func inviteUser(ctx context.Context, users *repository.UserRepository, workspaces *repository.WorkspaceRepository, attendees *repository.AttendeeRepository, eventID string, workspaceID, targetUserID int64) (repository.Attendee, error) {
+	target, err := users.GetByID(ctx, targetUserID)
 	if err != nil {
 		if errors.Is(err, repository.ErrNotFound) {
 			return repository.Attendee{}, ErrUserNotFound
@@ -2200,34 +2267,80 @@ func (s *EventService) AddAttendee(ctx context.Context, actorUserID int64, event
 		return repository.Attendee{}, ErrUserNotFound
 	}
 
-	if _, err := s.workspaces.GetMember(ctx, calendar.WorkspaceID, targetUserID); err != nil {
+	if _, err := workspaces.GetMember(ctx, workspaceID, targetUserID); err != nil {
 		if errors.Is(err, repository.ErrNotFound) {
 			return repository.Attendee{}, ErrAttendeeTargetNotInWorkspace
 		}
 		return repository.Attendee{}, fmt.Errorf("get workspace member: %w", err)
 	}
 
-	attendee, err := s.attendees.Add(ctx, eventID, targetUserID)
+	return attendees.Add(ctx, eventID, targetUserID)
+}
+
+// expandGroupMembers is AddGroupAttendee's and Create's shared Group
+// expansion (#162, #187, ADR-0046, ADR-0055): one attendees row per current,
+// enabled member of groupID. A Disabled member is silently skipped, same as
+// inviteUser refuses to invite one directly (ADR-0037) — so a Group invite
+// can never produce an Attendee an individual invite would have refused. A
+// member who is already an Attendee of eventID (invited individually, or via
+// another Group) is left untouched rather than failing the whole expansion.
+// Takes the Group, User, and Attendee repositories directly, same reason as
+// inviteUser above — AddGroupAttendee always calls this with transaction-
+// bound repos (reading membership and writing Attendees in the same
+// transaction keeps the snapshot honest against a concurrent membership
+// change); Create's own call is already inside its own transaction.
+func expandGroupMembers(ctx context.Context, groups *repository.GroupRepository, users *repository.UserRepository, attendees *repository.AttendeeRepository, eventID string, groupID int64) ([]repository.Attendee, error) {
+	members, err := groups.ListMembers(ctx, groupID)
+	if err != nil {
+		return nil, fmt.Errorf("list group members: %w", err)
+	}
+
+	added := []repository.Attendee{}
+	for _, member := range members {
+		target, err := users.GetByID(ctx, member.UserID)
+		if err != nil {
+			return nil, fmt.Errorf("look up group member: %w", err)
+		}
+		if target.IsDisabled {
+			continue
+		}
+
+		attendee, err := attendees.Add(ctx, eventID, member.UserID)
+		if err != nil {
+			if errors.Is(err, repository.ErrAlreadyAttendee) {
+				continue
+			}
+			return nil, err
+		}
+		added = append(added, attendee)
+	}
+	return added, nil
+}
+
+// AddAttendee invites targetUserID as an Attendee of eventID, callable by
+// any caller with Editor Access to (or ownership of) eventID's Calendar
+// (#161, ADR-0046). Being an Attendee grants targetUserID visibility to
+// eventID alone, with no Calendar Access of their own required — the invite
+// itself is the grant. targetUserID must already be a Member of eventID's
+// Calendar's own Workspace and not Disabled — inviteUser's shared check.
+func (s *EventService) AddAttendee(ctx context.Context, actorUserID int64, eventID string, targetUserID int64) (repository.Attendee, error) {
+	_, calendar, err := s.attendeeManagementCalendar(ctx, actorUserID, eventID)
 	if err != nil {
 		return repository.Attendee{}, err
 	}
-	return attendee, nil
+	return inviteUser(ctx, s.users, s.workspaces, s.attendees, eventID, calendar.WorkspaceID, targetUserID)
 }
 
 // AddGroupAttendee invites every current member of groupID as an Attendee
 // of eventID, callable by any caller with Editor Access to (or ownership
 // of) eventID's Calendar (#162, ADR-0046). This is a one-time snapshot
 // expansion, not a dynamic Group Share (ADR-0045): it inserts one attendees
-// row per member of groupID as it stands right now, and a later change to
-// groupID's membership does not retroactively add or remove Attendees this
-// call created, since attendees rows carry no link back to the Group they
-// were invited through. groupID must belong to eventID's Calendar's own
-// Workspace, mirroring AddAttendee's target check. A member who is already
-// an Attendee of eventID (invited individually, or via another Group) is
-// left untouched rather than failing the whole invite. A Disabled member is
-// silently skipped, same as AddAttendee refuses to invite one directly
-// (ADR-0037) — so a Group invite can never produce an Attendee an
-// individual invite would have refused.
+// row per member of groupID as it stands right now (expandGroupMembers'
+// shared expansion), and a later change to groupID's membership does not
+// retroactively add or remove Attendees this call created, since attendees
+// rows carry no link back to the Group they were invited through. groupID
+// must belong to eventID's Calendar's own Workspace, mirroring AddAttendee's
+// target check.
 func (s *EventService) AddGroupAttendee(ctx context.Context, actorUserID int64, eventID string, groupID int64) ([]repository.Attendee, error) {
 	_, calendar, err := s.attendeeManagementCalendar(ctx, actorUserID, eventID)
 	if err != nil {
@@ -2245,36 +2358,15 @@ func (s *EventService) AddGroupAttendee(ctx context.Context, actorUserID int64, 
 		return nil, ErrAttendeeTargetNotInWorkspace
 	}
 
-	added := []repository.Attendee{}
+	var added []repository.Attendee
 	err = s.withTx(ctx, func(repos txRepos) error {
 		// Reading membership inside the same transaction as the inserts
 		// keeps the snapshot honest: a concurrent membership change can't
 		// land between "read members" and "write attendees" and end up
 		// reflected in neither snapshot.
-		members, err := repos.groups.ListMembers(ctx, group.ID)
-		if err != nil {
-			return fmt.Errorf("list group members: %w", err)
-		}
-
-		for _, member := range members {
-			target, err := repos.users.GetByID(ctx, member.UserID)
-			if err != nil {
-				return fmt.Errorf("look up group member: %w", err)
-			}
-			if target.IsDisabled {
-				continue
-			}
-
-			attendee, err := repos.attendees.Add(ctx, eventID, member.UserID)
-			if err != nil {
-				if errors.Is(err, repository.ErrAlreadyAttendee) {
-					continue
-				}
-				return err
-			}
-			added = append(added, attendee)
-		}
-		return nil
+		var err error
+		added, err = expandGroupMembers(ctx, repos.groups, repos.users, repos.attendees, eventID, group.ID)
+		return err
 	})
 	if err != nil {
 		return nil, fmt.Errorf("add group attendees: %w", err)

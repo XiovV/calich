@@ -31,25 +31,60 @@ function groupTargetKey(groupId: number): TargetKey {
   return `group:${groupId}`;
 }
 
+// StagedAttendeeTarget is a create-mode invite that hasn't been sent yet
+// (#187, ADR-0055): the create POST carries the whole list at once, so
+// there is nothing to commit until Save. A staged Group renders as a
+// single chip and expands to its members server-side, at save — not here.
+export type StagedAttendeeTarget =
+  | { kind: "user"; userId: number; name: string }
+  | { kind: "group"; groupId: number; name: string };
+
+// StagedAttendees is EventAttendeesSection's create-mode contract: the
+// parent (EventModal) owns the staged list, exactly like it owns
+// attachmentDrafts, so Save can read it without a round trip through this
+// component. error is the create POST's rejection, shown as a banner here
+// rather than a toast, since it's specific to what was staged.
+export interface StagedAttendees {
+  targets: StagedAttendeeTarget[];
+  onChange: (targets: StagedAttendeeTarget[]) => void;
+  error: string | null;
+}
+
 interface EventAttendeesSectionProps {
   // The Master Event Attendees are invited to (ADR-0046) — undefined in
-  // create mode, where there's no id yet to invite anyone to; an Override
+  // create mode, where there's no id yet to invite anyone to. An Override
   // never carries its own, mirroring Attachments' own Master-scoping.
   eventId: string | undefined;
   // Whether the caller may invite/remove Attendees — an Editor or Owner of
-  // the Event's Calendar, the same gate the backend's
-  // attendeeManagementCalendar enforces. False renders the list read-only.
+  // the Event's Calendar in edit mode, or simply "a Calendar is selected"
+  // in create mode, since there's no Access to check yet. False renders the
+  // list read-only.
   canManage: boolean;
+  // The Organizer row (ADR-0055): the Event's creator, rendered
+  // non-removable and above the Attendees, in both modes — the signed-in
+  // caller in create mode, sourced from events.created_by once known in
+  // edit mode. Undefined when there's nobody to show (a deleted creator,
+  // or an Event predating the column).
+  organizerName: string | undefined;
+  // Present only in create mode (#187, ADR-0055); absent in edit mode,
+  // where an invite still commits the instant it's issued.
+  staging?: StagedAttendees;
 }
 
 // EventAttendeesSection is the Attendee surface inside EventModal (#168,
-// ADR-0046): who's invited and their Response, an invite picker (User or
-// Group, scoped to the Event's Calendar's Workspace) for whoever can manage
-// the Event, and — independent of canManage — the signed-in caller's own
-// Accept/Decline/Tentative when they're one of the Attendees. Renders
-// nothing in create mode (eventId undefined) or once loaded, canManage is
-// false and there's nobody invited to show.
-export function EventAttendeesSection({ eventId, canManage }: EventAttendeesSectionProps) {
+// #187, ADR-0046, ADR-0055): an Organizer row, who's invited and their
+// Response, and an invite picker (User or Group, scoped to the Event's
+// Calendar's Workspace) for whoever can manage the Event. In edit mode an
+// invite commits immediately; in create mode it's staged locally via
+// `staging` until Save. The signed-in caller's own Accept/Decline/
+// Tentative — independent of canManage — only ever applies once there's a
+// real eventId to respond to.
+export function EventAttendeesSection({
+  eventId,
+  canManage,
+  organizerName,
+  staging,
+}: EventAttendeesSectionProps) {
   const accessToken = useAuthStore((state) => state.accessToken);
   const currentUserId = useAuthStore((state) => state.user?.id);
 
@@ -61,6 +96,8 @@ export function EventAttendeesSection({ eventId, canManage }: EventAttendeesSect
   const [inviteError, setInviteError] = useState<string | null>(null);
   const [removingUserId, setRemovingUserId] = useState<number | null>(null);
   const [isRespondingTo, setIsRespondingTo] = useState<AttendeeResponse | null>(null);
+
+  const isStaging = staging !== undefined;
 
   useEffect(() => {
     if (!accessToken || !eventId) return;
@@ -80,7 +117,7 @@ export function EventAttendeesSection({ eventId, canManage }: EventAttendeesSect
   }, [accessToken, eventId]);
 
   useEffect(() => {
-    if (!accessToken || !eventId || !canManage) return;
+    if (!accessToken || !canManage || (!eventId && !staging)) return;
     let cancelled = false;
     (async () => {
       try {
@@ -110,10 +147,30 @@ export function EventAttendeesSection({ eventId, canManage }: EventAttendeesSect
     return () => {
       cancelled = true;
     };
-  }, [accessToken, eventId, canManage]);
+    // staging?.error is a deliberate dependency in place of staging itself:
+    // a rejected explicit target (ADR-0055) means this list went stale, so
+    // a fresh failure re-fetches it, mirroring "refreshes its member list"
+    // from the ADR's consequences — depending on staging (a fresh object
+    // every render) would instead refetch on every keystroke.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [accessToken, eventId, canManage, staging?.error]);
+
+  const stagedUserIds = new Set(
+    isStaging
+      ? staging.targets.filter((t) => t.kind === "user").map((t) => t.userId)
+      : [],
+  );
+  const stagedGroupIds = new Set(
+    isStaging
+      ? staging.targets.filter((t) => t.kind === "group").map((t) => t.groupId)
+      : [],
+  );
 
   const invitedUserIds = new Set((attendees ?? []).map((a) => a.userId));
-  const pickableUsers = availableUsers.filter((user) => !invitedUserIds.has(user.userId));
+  const pickableUsers = availableUsers.filter(
+    (user) => !invitedUserIds.has(user.userId) && !stagedUserIds.has(user.userId),
+  );
+  const pickableGroups = availableGroups.filter((group) => !stagedGroupIds.has(group.id));
 
   const targetOptions = useMemo(
     () => [
@@ -121,12 +178,12 @@ export function EventAttendeesSection({ eventId, canManage }: EventAttendeesSect
         value: userTargetKey(user.userId),
         label: user.name,
       })),
-      ...availableGroups.map((group) => ({
+      ...pickableGroups.map((group) => ({
         value: groupTargetKey(group.id),
         label: `${group.name} (group)`,
       })),
     ],
-    [pickableUsers, availableGroups],
+    [pickableUsers, pickableGroups],
   );
 
   const effectiveTarget = targetOptions.some((option) => option.value === selectedTarget)
@@ -134,8 +191,24 @@ export function EventAttendeesSection({ eventId, canManage }: EventAttendeesSect
     : (targetOptions[0]?.value ?? "");
 
   async function handleInvite() {
-    if (!accessToken || !eventId || !effectiveTarget) return;
+    if (!effectiveTarget) return;
     const [kind, idPart] = effectiveTarget.split(":");
+
+    if (staging) {
+      if (kind === "user") {
+        const user = pickableUsers.find((u) => u.userId === Number(idPart));
+        if (!user) return;
+        staging.onChange([...staging.targets, { kind: "user", userId: user.userId, name: user.name }]);
+      } else {
+        const group = pickableGroups.find((g) => g.id === Number(idPart));
+        if (!group) return;
+        staging.onChange([...staging.targets, { kind: "group", groupId: group.id, name: group.name }]);
+      }
+      setSelectedTarget("");
+      return;
+    }
+
+    if (!accessToken || !eventId) return;
     setIsInviting(true);
     setInviteError(null);
     try {
@@ -157,6 +230,11 @@ export function EventAttendeesSection({ eventId, canManage }: EventAttendeesSect
     } finally {
       setIsInviting(false);
     }
+  }
+
+  function handleRemoveStaged(target: StagedAttendeeTarget) {
+    if (!staging) return;
+    staging.onChange(staging.targets.filter((t) => t !== target));
   }
 
   async function handleRemove(attendee: Attendee) {
@@ -189,12 +267,17 @@ export function EventAttendeesSection({ eventId, canManage }: EventAttendeesSect
     }
   }
 
-  if (!eventId) return null;
+  if (!eventId && !staging) return null;
 
-  const loading = attendees === null;
+  const loading = !isStaging && attendees === null;
   const ownAttendee = attendees?.find((a) => a.userId === currentUserId);
+  const stagedCount = isStaging ? staging.targets.length : 0;
+  const attendeeCount = isStaging ? stagedCount : (attendees?.length ?? 0);
+  const hasAnyRows = Boolean(organizerName) || attendeeCount > 0;
 
-  if (!loading && !canManage && attendees.length === 0) return null;
+  if (!isStaging && !loading && !canManage && attendeeCount === 0 && !organizerName) return null;
+
+  const bannerError = isStaging ? staging.error : inviteError;
 
   return (
     <div className="mt-4 border-t border-border pt-4">
@@ -204,31 +287,56 @@ export function EventAttendeesSection({ eventId, canManage }: EventAttendeesSect
         <p className="mt-1.5 text-label-sm text-ink-muted">Loading…</p>
       ) : (
         <>
-          {attendees.length > 0 ? (
+          {hasAnyRows ? (
             <ul className="mt-2 flex max-h-40 flex-col gap-1.5 overflow-y-auto">
-              {attendees.map((attendee) => (
-                <li key={attendee.userId} className="flex items-center gap-2">
+              {organizerName && (
+                <li className="flex items-center gap-2">
                   <span className="min-w-0 flex-1 truncate text-body text-ink">
-                    {attendee.name ?? `User ${attendee.userId}`}
-                    {attendee.userId === currentUserId && (
-                      <span className="text-ink-muted"> (you)</span>
-                    )}
+                    {organizerName}
                   </span>
-                  <span className="shrink-0 text-label-sm text-ink-muted">
-                    {RESPONSE_LABEL[attendee.response]}
-                  </span>
-                  {canManage && (
-                    <IconButton
-                      size="tiny"
-                      onClick={() => handleRemove(attendee)}
-                      disabled={removingUserId === attendee.userId}
-                      aria-label={`Remove ${attendee.name ?? "attendee"}`}
-                    >
-                      <Trash2 className="size-3.5" />
-                    </IconButton>
-                  )}
+                  <span className="shrink-0 text-label-sm text-ink-muted">Organizer</span>
                 </li>
-              ))}
+              )}
+              {isStaging
+                ? staging.targets.map((target) => {
+                    const key = target.kind === "user" ? `user:${target.userId}` : `group:${target.groupId}`;
+                    const label = target.kind === "group" ? `${target.name} (group)` : target.name;
+                    return (
+                      <li key={key} className="flex items-center gap-2">
+                        <span className="min-w-0 flex-1 truncate text-body text-ink">{label}</span>
+                        <IconButton
+                          size="tiny"
+                          onClick={() => handleRemoveStaged(target)}
+                          aria-label={`Remove ${target.name}`}
+                        >
+                          <Trash2 className="size-3.5" />
+                        </IconButton>
+                      </li>
+                    );
+                  })
+                : attendees?.map((attendee) => (
+                    <li key={attendee.userId} className="flex items-center gap-2">
+                      <span className="min-w-0 flex-1 truncate text-body text-ink">
+                        {attendee.name ?? `User ${attendee.userId}`}
+                        {attendee.userId === currentUserId && (
+                          <span className="text-ink-muted"> (you)</span>
+                        )}
+                      </span>
+                      <span className="shrink-0 text-label-sm text-ink-muted">
+                        {RESPONSE_LABEL[attendee.response]}
+                      </span>
+                      {canManage && (
+                        <IconButton
+                          size="tiny"
+                          onClick={() => handleRemove(attendee)}
+                          disabled={removingUserId === attendee.userId}
+                          aria-label={`Remove ${attendee.name ?? "attendee"}`}
+                        >
+                          <Trash2 className="size-3.5" />
+                        </IconButton>
+                      )}
+                    </li>
+                  ))}
             </ul>
           ) : (
             <p className="mt-2 text-label-sm text-ink-muted">Nobody has been invited yet.</p>
@@ -259,9 +367,9 @@ export function EventAttendeesSection({ eventId, canManage }: EventAttendeesSect
               </p>
             ))}
 
-          {inviteError && (
+          {bannerError && (
             <p className="mt-2 text-label-sm text-danger" role="alert">
-              {inviteError}
+              {bannerError}
             </p>
           )}
 

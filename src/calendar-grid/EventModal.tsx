@@ -62,7 +62,7 @@ import { DiscardRecurrenceWarning } from "./DiscardRecurrenceWarning";
 import { ReminderRow } from "./ReminderRow";
 import { ReminderOverrideControl } from "./ReminderOverrideControl";
 import { AttachmentRow, type AttachmentDraft } from "./AttachmentRow";
-import { EventAttendeesSection } from "./EventAttendeesSection";
+import { EventAttendeesSection, type StagedAttendeeTarget } from "./EventAttendeesSection";
 
 /** A Reminder plus a local id, so its row keeps stable identity across
  * add/remove/reorder in the Reminders section (Reminder itself has no id —
@@ -171,6 +171,7 @@ export function EventModal(props: EventModalProps) {
     (state) => state.user?.emailReminderChannelAvailable ?? false,
   );
   const accessToken = useAuthStore((state) => state.accessToken);
+  const currentUserName = useAuthStore((state) => state.user?.name);
 
   const isRecurring = mode === "edit" && isRecurringOccurrence(props.occurrence);
   const master =
@@ -228,15 +229,16 @@ export function EventModal(props: EventModalProps) {
   // absent on a Calendar nobody else can see. Only an existing Event has an
   // id to key an override to.
   const showReminderOverride = mode === "edit" && calendarHasOtherRecipients(editedCalendar);
-  // Attribution (#118) uses the same predicate as the Reminder override
-  // control: absent on a Calendar nobody else can see, since it would only
-  // tell the caller what they already know. Also absent when the Event
-  // carries no creator — a deleted account or an Event predating the
-  // column — rather than rendering an empty "Created by" line.
-  const createdByName =
-    mode === "edit" && calendarHasOtherRecipients(editedCalendar)
-      ? props.occurrence.event.createdByName
-      : undefined;
+  // Organizer row (ADR-0055): the signed-in caller in create mode — there's
+  // no Event yet, so they're necessarily its creator-to-be — or the
+  // Event's actual creator once known in edit mode. Undefined when there's
+  // nobody to show: a deleted creator, or an Event predating the column.
+  // Unlike the old "Created by" line this replaces, not gated on
+  // calendarHasOtherRecipients — the Attendees section it now lives in
+  // already renders unconditionally once there's Attendees or an invite
+  // picker to show.
+  const organizerName =
+    mode === "edit" ? props.occurrence.event.createdByName : currentUserName;
   const showAttachmentUploader = mode === "edit" && calendarHasOtherRecipients(editedCalendar);
 
   // #174: when no Calendar is a valid write target, the picker's empty
@@ -270,6 +272,17 @@ export function EventModal(props: EventModalProps) {
   );
   const [isDraggingOverAttachments, setIsDraggingOverAttachments] = useState(false);
   const attachmentInputRef = useRef<HTMLInputElement>(null);
+
+  // Attendees staged at creation (#187, ADR-0055) — create mode only; an
+  // edit's invites still commit the instant they're issued
+  // (EventAttendeesSection's own committing path). attendeeEventId mirrors
+  // attachmentEventId above: undefined until a brand-new Event's create
+  // POST has succeeded, at which point the section switches from staging
+  // to the same committed list an edited Event shows.
+  const [stagedAttendees, setStagedAttendees] = useState<StagedAttendeeTarget[]>([]);
+  const [attendeeCreateError, setAttendeeCreateError] = useState<string | null>(null);
+  const [isSavingWithAttendees, setIsSavingWithAttendees] = useState(false);
+  const attendeeEventId = mode === "edit" ? master?.id : (createdEventId ?? undefined);
 
   const [title, setTitle] = useState(initial.title);
   const [startTime, setStartTime] = useState(initial.startTime);
@@ -495,7 +508,11 @@ export function EventModal(props: EventModalProps) {
   const isTimeRangeValid =
     allDay || timeStringToDate(day, endTime) > timeStringToDate(day, startTime);
   const canSave =
-    !isReadOnlyEvent && title.trim() !== "" && calendarId !== "" && isTimeRangeValid;
+    !isReadOnlyEvent &&
+    title.trim() !== "" &&
+    calendarId !== "" &&
+    isTimeRangeValid &&
+    !isSavingWithAttendees;
 
   async function handleSave() {
     if (!canSave) return;
@@ -503,6 +520,10 @@ export function EventModal(props: EventModalProps) {
     // uploading, this Event is done — Enter shouldn't try to create a
     // second one (the Save button is already hidden by then too).
     if (mode !== "edit" && createdEventId) return;
+    // A create carrying staged Attendees is already in flight — Enter
+    // shouldn't fire a second create while the first is still awaiting its
+    // response (#187, ADR-0055).
+    if (mode !== "edit" && isSavingWithAttendees) return;
 
     // An all-day Event's start/end are whole dates: start is the day itself,
     // end is the exclusive next day (ADR-0017).
@@ -536,20 +557,58 @@ export function EventModal(props: EventModalProps) {
         (draft): draft is Extract<AttachmentDraft, { status: "pending" }> =>
           draft.status === "pending",
       );
-      if (pendingFiles.length === 0) {
+      const attendeeUserIds = stagedAttendees
+        .filter((t): t is Extract<StagedAttendeeTarget, { kind: "user" }> => t.kind === "user")
+        .map((t) => t.userId);
+      const attendeeGroupIds = stagedAttendees
+        .filter((t): t is Extract<StagedAttendeeTarget, { kind: "group" }> => t.kind === "group")
+        .map((t) => t.groupId);
+      const attendeesAreStaged = attendeeUserIds.length > 0 || attendeeGroupIds.length > 0;
+
+      if (pendingFiles.length === 0 && !attendeesAreStaged) {
         addEvent({ id, ...changes, tzid });
         onClose();
         return;
       }
 
-      // The row must exist before an upload can reference it, so the
-      // create POST is awaited here rather than fired-and-forgotten like
-      // the branch above — cancelling the modal (closing without files
-      // staged) still uploads nothing, since this whole branch is skipped
-      // when there's nothing pending (#132, ADR-0040). The dialog stays
-      // open afterwards so per-file progress/retry has somewhere to live;
-      // its footer switches to a single Done button once createdEventId is
-      // set.
+      if (attendeesAreStaged) {
+        // The create POST is awaited before anything is painted on the
+        // grid — a rejected explicit target never shows an Event whose
+        // invites silently didn't go out (#187, ADR-0055). Rejection keeps
+        // the dialog open with the form intact and shows its own banner in
+        // the Attendees section, rather than the generic toast the
+        // Attachment-only branch below relies on.
+        setIsSavingWithAttendees(true);
+        setAttendeeCreateError(null);
+        try {
+          await addEvent({ id, ...changes, tzid }, { attendeeUserIds, attendeeGroupIds });
+        } catch (err) {
+          setAttendeeCreateError(errorMessage(err));
+          return;
+        } finally {
+          setIsSavingWithAttendees(false);
+        }
+        setCreatedEventId(id);
+        for (const draft of pendingFiles) {
+          startAttachmentUpload(draft.file, id, draft.draftId);
+        }
+        // No Attachments pending: success closes the dialog immediately,
+        // same as the no-Attendees/no-Attachments branch above. Pending
+        // Attachments keep it open so their upload progress has somewhere
+        // to live, exactly like the branch below.
+        if (pendingFiles.length === 0) onClose();
+        return;
+      }
+
+      // Only pending Attachments, no staged Attendees — #132/ADR-0040's
+      // existing path. The row must exist before an upload can reference
+      // it, so the create POST is awaited here rather than
+      // fired-and-forgotten like the first branch above — cancelling the
+      // modal (closing without files staged) still uploads nothing, since
+      // this whole branch is skipped when there's nothing pending. The
+      // dialog stays open afterwards so per-file progress/retry has
+      // somewhere to live; its footer switches to a single Done button
+      // once createdEventId is set.
       await addEvent({ id, ...changes, tzid });
       if (!useEventsStore.getState().events.some((event) => event.id === id)) {
         // addEvent already rolled back its optimistic add and toasted the
@@ -952,12 +1011,6 @@ export function EventModal(props: EventModalProps) {
               />
             )}
 
-            {createdByName && (
-              <p className="mt-4 text-label-sm text-ink-muted">
-                Created by {createdByName}
-              </p>
-            )}
-
             <div
               className={`rounded-shell-md p-1.5 transition-colors ${
                 isDraggingOverAttachments && !isReadOnlyEvent
@@ -1007,8 +1060,18 @@ export function EventModal(props: EventModalProps) {
             </div>
 
             <EventAttendeesSection
-              eventId={master?.id}
-              canManage={mode === "edit" && !isReadOnlyEvent}
+              eventId={attendeeEventId}
+              canManage={mode === "edit" ? !isReadOnlyEvent : calendarId !== ""}
+              organizerName={organizerName}
+              staging={
+                mode === "edit" || attendeeEventId
+                  ? undefined
+                  : {
+                      targets: stagedAttendees,
+                      onChange: setStagedAttendees,
+                      error: attendeeCreateError,
+                    }
+              }
             />
 
             <div className="mt-5 flex items-center justify-between gap-2">
@@ -1048,7 +1111,12 @@ export function EventModal(props: EventModalProps) {
                     >
                       Cancel
                     </Dialog.Close>
-                    <Button type="submit" size="small" disabled={!canSave}>
+                    <Button
+                      type="submit"
+                      size="small"
+                      disabled={!canSave}
+                      loading={isSavingWithAttendees}
+                    >
                       Save
                     </Button>
                   </>
