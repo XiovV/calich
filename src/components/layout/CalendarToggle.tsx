@@ -28,7 +28,7 @@ export function CalendarToggle({
       checked={checked}
       onCheckedChange={onCheckedChange}
       aria-label={ariaLabel}
-      className="flex size-4 shrink-0 items-center justify-center rounded-shell-sm border"
+      className="flex size-4 shrink-0 items-center justify-center rounded-[4px] border"
       style={{
         borderColor: opaqueColor,
         backgroundColor: checked ? opaqueColor : "transparent",
