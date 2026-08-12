@@ -17,7 +17,7 @@ A named, independently-toggleable collection that groups events (e.g. "Work", "P
 _Avoid_: calendar list item, source
 
 **Calendar color**:
-The single color a Calendar is displayed in, inherited by every Occurrence it contains — an arbitrary sRGB value with an alpha channel, not a choice from a fixed set. Set by the Owner and shared by every client rather than being each client's private preference: whoever writes last wins, there is no conflict detection, and no bound on how long two clients may disagree. A User with Access may shadow it with a personal override that applies to them alone. See ADR-0029, ADR-0038.
+The single color a Calendar is displayed in, inherited by every Occurrence it contains — an arbitrary sRGB value with an alpha channel, not a choice from a fixed set. Set by the Owner and shared by every client rather than being the Owner's own private preference: whoever writes last wins, there is no conflict detection, and no bound on how long two clients may disagree. Every other User with Access sees their own personal override instead — auto-assigned the moment they first view the Calendar (from the Swatches, or a random color once those run out) and freely repickable afterward. There is no state in which a shared Calendar tracks the Owner's color for someone else. See ADR-0029, ADR-0038, ADR-0057.
 _Avoid_: calendar colour (in prose), color enum
 
 **Swatch**:
@@ -31,6 +31,10 @@ _Avoid_: swatch, checkbox (in prose, for this control specifically), dot (the co
 **Event color**:
 An optional color on a Master or Override, in the same arbitrary-hex value space as Calendar color, that wins outright over the Calendar's color for that Occurrence when set. Absent by default, in which case the Occurrence renders in whatever Calendar color would otherwise resolve for the viewer — an Event does not have to have a color, and most don't. A Calendar's color is shared, resolved-per-viewer state (Owner's value, or that viewer's personal override, ADR-0038); an Event color has no such per-viewer layer — it is one value, set by an Editor, seen identically by everyone with Access. See ADR-0029, ADR-0043.
 _Avoid_: event colour (in prose), custom color, color override (ambiguous with Calendar color's per-User override, which is a different mechanism)
+
+**Event URL**:
+The single optional link on an Event pointing at more information about it — a ticket, a document, a video call address someone pasted. Stored exactly as written and never rejected, so a native client's `message://` or a feed's vendor scheme survives a round-trip unchanged; offered as a click-through only when it is `http` or `https`, and shown as plain text otherwise. Deliberately not a Join button (that is iCalendar's `CONFERENCE`, which this app does not model, having no conferencing to put in it) and deliberately not an Attachment, which is bytes this instance holds. Exactly one per Event, because the iCalendar `URL` it maps to permits no more; Description is where several links go. See ADR-0063.
+_Avoid_: link, event link, web link, conference link (that is a different thing this app does not have), attachment URL
 
 **Event**:
 The stored, saved unit — a titled time block belonging to a single Calendar, with a start, an end, zero or more Reminders, an optional Recurrence rule, and an optional Event color. Its start/end define the first occurrence and the duration every Occurrence inherits. A non-recurring Event is a series of one. Distinct from the Occurrences it produces on the grid.
@@ -84,11 +88,11 @@ One User's personal modifier applied to *every* Reminder on an Event — one off
 _Avoid_: personal reminder, custom alarm, snooze, personal reminder list (it is one modifier, not a list)
 
 **Channel**:
-The delivery method of a Reminder — **Notification** (shown in-app) or **Email** (sent to the User). Corresponds to the iCalendar `VALARM` `ACTION` (`DISPLAY` / `EMAIL`).
+The delivery method of a Reminder — **Notification** (shown in-app) or **Email** (sent to the User). Corresponds to the iCalendar `VALARM` `ACTION` (`DISPLAY` / `EMAIL`). A property of a Reminder and of nothing else: an Invitation has no Channel and is not governed by one, so Channel does not explain where every piece of mail or every Notification comes from.
 _Avoid_: type, kind, action (in prose)
 
 **Notification**:
-The persistent in-app record the server creates when a Reminder on the Notification Channel fires. Lives in the Notification feed and, if a tab is open, is mirrored as a browser notification. A Notification-Channel Reminder is the rule; a Notification is the delivered instance it produces. Distinct from a toast, which is a transient client-only UI message (e.g. an error). See ADR-0021.
+The persistent in-app record of something that concerns one User. Lives in the Notification feed and, if a tab is open, is mirrored as a browser notification. Exactly two things produce one: a Reminder on the Notification Channel firing (where the Reminder is the rule and the Notification the delivered instance), and the User being made an Attendee of an Event. Deliberately nothing else — being removed as an Attendee, an Event moving, and another Attendee's Response all produce none, the last because the Attendee list already shows every Response and a fourteen-person invite would otherwise mean fourteen entries. The Organizer never gets one for their own Event, since an Organizer is never an Attendee. Distinct from a toast, which is a transient client-only UI message (e.g. an error). See ADR-0021, ADR-0061.
 _Avoid_: alert, toast (for this), push
 
 **Day cell**:
@@ -164,7 +168,7 @@ The account record a Session belongs to, validated by the backend. An instance's
 _Avoid_: account, profile
 
 **Email**:
-A User's unique, required login identifier — what a person types to sign in, what CalDAV Basic auth authenticates against (ADR-0024), and what a Share or Workspace Invite names to resolve an account. Also the Email-Channel Reminder's recipient (ADR-0021) — every User always has one, so Email-Channel availability depends only on whether the self-hoster has SMTP configured, not on anything per-User. See ADR-0047.
+A User's unique, required login identifier — what a person types to sign in, what CalDAV Basic auth authenticates against (ADR-0024), and what a Share, a Workspace Invite, or an Attendee invite names to resolve an account. Case-insensitive throughout: one address is one account, at the login form and at the invite field alike, so a stray capital can neither create a second account nor split one person into two Attendees. Also the Email-Channel Reminder's recipient (ADR-0021) — every User always has one, so Email-Channel availability depends only on whether the self-hoster has SMTP configured, not on anything per-User. See ADR-0047, ADR-0058.
 _Avoid_: username, login, identifier (in prose)
 
 **Name**:
@@ -202,7 +206,7 @@ What a `WorkspaceMember` row grants over *that Workspace's membership and settin
 _Avoid_: permission, admin (ambiguous with the retired instance-wide Admin, ADR-0037), role (say Workspace Role to distinguish from a Calendar Share's Role, ADR-0034)
 
 **Invite**:
-A single-use, expiring credential a Workspace's Owner or Admin issues for an email address, granting that email a Membership in the Workspace once accepted. Workspace-scoped, not account-level or Calendar-level — a deliberately different concept from Share, which is why the two may share the English word "invite" in conversation without being the same thing in this glossary. If no User exists with that email, accepting creates one (name, email, password) and joins them to the Workspace in one step; if one already exists, accepting simply adds the Membership. See ADR-0044.
+A single-use, expiring credential a Workspace's Owner or Admin issues for an email address, granting that email a Membership in the Workspace once accepted. Workspace-scoped, not account-level, Calendar-level or Event-level — a deliberately different concept from both Share and Invitation, which is why all three may share the English word "invite" in conversation without being the same thing in this glossary. Accepting one also sweeps up any outstanding email-shaped Attendee rows for that address on Events in the Workspace (ADR-0058). If no User exists with that email, accepting creates one (name, email, password) and joins them to the Workspace in one step; if one already exists, accepting simply adds the Membership. See ADR-0044.
 _Avoid_: invite token (in prose — the credential and the act are one term here), invitation, activation link
 
 ## Sharing
@@ -230,21 +234,25 @@ _Avoid_: permission, privilege (that's the CalDAV property), rights
 There is deliberately **no term for a Calendar someone shared with you.** "Shared Calendar" points both ways — the Owner shares it out, the recipient sees it shared in — and would sit confusingly beside Subscribed Calendar, which is also a Calendar you see and may not write. Say "a Calendar you have Editor Access to" instead. UI copy may still read "Shared with me"; that is a label, not a term.
 
 **Organizer**:
-The User who created an Event — its iCalendar `ORGANIZER` counterpart to `ATTENDEE`, and deliberately never one of its own Attendees. Held on the Event itself rather than as an Attendee row, so an Organizer carries no Response, cannot be invited, removed, or decline their own Event, and an Event whose Organizer's account was deleted simply has none. Distinct from a Calendar's Owner, which is an Access concept on a different object. See ADR-0055.
+The User who created an Event — its iCalendar `ORGANIZER` counterpart to `ATTENDEE`, and deliberately never one of its own Attendees. Held on the Event itself rather than as an Attendee row, so an Organizer carries no Response, cannot be invited, removed, or decline their own Event, and an Event whose Organizer's account was deleted simply has none — typing their own address into the invite field is rejected rather than quietly dropped. Distinct from a Calendar's Owner, which is an Access concept on a different object. Named on the wire as `ORGANIZER`, whose address differs by where the Event is being serialized to (ADR-0059). See ADR-0055.
 _Avoid_: creator, owner (that's the Calendar's), host, chair
 
 **Attendee**:
-A User invited to one specific Event, independent of any Calendar Access — the invite itself is the visibility grant, scoped to that Event alone. May be invited individually or via a Group (expanded to its current members at invite time into individual Attendee rows, since a response has to survive later Group membership changes rather than tracking membership dynamically the way a Group Share does). Its target must belong to the Event's own Workspace, which is why Attendees are not mirrored onto a Linked Calendar: a Provider's attendees are arbitrary email addresses, and an address with no account behind it is unrepresentable here. See ADR-0046, ADR-0052.
-_Avoid_: invitee, guest, participant
+A party invited to one specific Event, independent of any Calendar Access — the invite itself is the visibility grant, scoped to that Event alone. Identified either by a User or, when no account here matches, by a bare email address. There is deliberately **no separate term for the second kind**: the Invitation, the Response set and the `ATTENDEE` line are identical either way, and all that differs is whether this instance happens to hold an account for them. An address is resolved against the Members of the Event's own Workspace when the invite is written, and an outstanding email-shaped Attendee converts to its User if that address later joins the Workspace — a fallback we wrote because we couldn't find their account has no reason to outlive the account appearing. May be invited individually, by typing an address, or via a Group (expanded to its current members at invite time into individual Attendee rows, since a response has to survive later Group membership changes rather than tracking membership dynamically the way a Group Share does); a Group never contains an outside address. Only a User-backed Attendee receives Notifications and Reminders — an emailed one is reminded by their own calendar client, which holds the Invitation. Still not mirrored onto a Linked Calendar, now because a Refresh-written Attendee must be provably incapable of generating an Invitation and that guarantee isn't built. See ADR-0046, ADR-0052, ADR-0058, ADR-0059.
+_Avoid_: invitee, guest, external attendee (as a term — say "an Attendee who isn't a Member" in prose), participant
 
 **Response**:
-An Attendee's answer to their invite — **Needs-Action** (the default, unanswered), **Accepted**, **Declined**, or **Tentative** — iCalendar's `PARTSTAT` values, modelled in full for lossless CalDAV round-tripping even though the web UI leads with only Accept/Decline. See ADR-0046.
+An Attendee's answer to their invite — **Needs-Action** (the default, unanswered), **Accepted**, **Declined**, or **Tentative** — iCalendar's `PARTSTAT` values, modelled in full for lossless CalDAV round-tripping even though the web UI leads with only Accept/Decline. Set in the app by a Member, and by replying to the Invitation in an ordinary mail client by anyone — the same four values arrive either way, so an emailed answer needs no translation. See ADR-0046, ADR-0059.
 _Avoid_: RSVP (the act, not the stored value), status (ambiguous with account state)
+
+**Invitation**:
+The iCalendar message this instance emails an Attendee — a `METHOD:REQUEST` that an ordinary mail client renders as an invite card carrying its own Accept/Decline/Tentative. The only RSVP surface an emailed Attendee has, since this app publishes no link they could click instead. Carries the Event but not its Reminders, so the recipient's client applies its own default alarm rather than the Organizer's habits. Re-sent with an incremented `SEQUENCE` when the Event materially changes — start, end, Recurrence rule, or all-day — and withdrawn by a `METHOD:CANCEL` when the Attendee is removed or the Event deleted. Reaches every Attendee, Member or not: it is the one message a User cannot turn off, because not receiving it means missing a meeting. Distinct from an Invite, which grants Workspace membership, and from a Reminder, which is a cue before an Occurrence rather than a request for an answer. See ADR-0059.
+_Avoid_: invite (reserved for the Workspaces section's Invite), event invite, meeting request, iMIP (that's the mechanism)
 
 ## Attachments
 
 **Attachment**:
-A file uploaded to this instance and held against one Master, shown on every Occurrence of that series. Always bytes this instance stores — a link to a file elsewhere is not an Attachment and is not modelled. Belongs to the series rather than to any one Occurrence, so an Override cannot carry one of its own: "this week's slides" is deliberately unrepresentable. Downloadable by anyone with Access, added and removed by an Owner or Editor, and never present on a Calendar with a Source. See ADR-0040.
+A file uploaded to this instance and held against one Master, shown on every Occurrence of that series. Always bytes this instance stores — a link to a file elsewhere is not an Attachment. Such a link is representable, as the Event URL, but only as a link: one per Event, never downloaded, never sized, never inlined into a Calendar file, and never emitted as `ATTACH`. Belongs to the series rather than to any one Occurrence, so an Override cannot carry one of its own: "this week's slides" is deliberately unrepresentable. Downloadable by anyone with Access, added and removed by an Owner or Editor, and never present on a Calendar with a Source. See ADR-0040.
 _Avoid_: file, upload, document, enclosure, asset
 
 **Managed ID**:
