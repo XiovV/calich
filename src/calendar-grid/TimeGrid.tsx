@@ -7,6 +7,7 @@ import { layoutOverlappingEvents } from "../lib/layoutOverlappingEvents";
 import { columnLayoutToBox } from "../lib/eventBlockGeometry";
 import { useVisibleOccurrences } from "../hooks/useVisibleOccurrences";
 import { usePointerDrag, type DragState } from "../hooks/usePointerDrag";
+import { CLICK_DISTANCE_THRESHOLD_PX, isDragGesture, type Point } from "../lib/pointerDrag";
 import { occurrenceKey, type Occurrence } from "../lib/occurrence";
 import {
   PIXELS_PER_HOUR,
@@ -86,13 +87,16 @@ interface EventDragPreview {
 
 function computeEventDragPreview(
   activeDrag: EventDragPayload,
-  dragDelta: { x: number; y: number },
+  dragDelta: Point,
   visibleOccurrences: Occurrence[],
   calendars: Calendar[],
+  daysToShow: Date[],
 ): EventDragPreview {
   const { start, end } = computeDragTimes(activeDrag, dragDelta.x, dragDelta.y);
   const originDay = startOfDay(activeDrag.occurrence.start);
   const day = activeDrag.kind === "move" ? startOfDay(start) : originDay;
+  const isLastColumn = isSameDay(day, daysToShow[daysToShow.length - 1]);
+  const showReadout = isDragGesture(dragDelta, CLICK_DISTANCE_THRESHOLD_PX);
 
   const originDayOccurrences = visibleOccurrences.filter((occurrence) =>
     isSameDay(occurrence.start, originDay),
@@ -122,6 +126,9 @@ function computeEventDragPreview(
       start,
       end,
       blockStyle,
+      columnWidth: activeDrag.columnWidth,
+      isLastColumn,
+      showReadout,
     },
   };
 }
@@ -198,6 +205,7 @@ export function TimeGrid({
         eventDrag.delta,
         visibleOccurrences,
         calendars,
+        daysToShow,
       )
     : null;
 

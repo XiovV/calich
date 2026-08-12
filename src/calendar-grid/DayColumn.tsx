@@ -16,6 +16,7 @@ import { EventBlock, type EventDragKind } from "./EventBlock";
 import { CurrentTimeLine } from "./CurrentTimeLine";
 import { DraftBlockPreview } from "./DraftBlockPreview";
 import { EventDragPreview } from "./EventDragPreview";
+import { DragReadout } from "./DragReadout";
 
 const DRAFT_PSEUDO_EVENT_ID = "__draft-preview__";
 
@@ -28,6 +29,9 @@ export interface EventDragPreviewData {
   start: Date;
   end: Date;
   blockStyle: CalendarBlockStyle;
+  columnWidth: number;
+  isLastColumn: boolean;
+  showReadout: boolean;
 }
 
 interface DayColumnProps {
@@ -207,6 +211,18 @@ export function DayColumn({
           start={eventDragPreview.start}
           end={eventDragPreview.end}
           blockStyle={eventDragPreview.blockStyle}
+        />
+      )}
+      {eventDragPreview?.showReadout && (
+        <DragReadout
+          top={eventDragPreview.top}
+          height={eventDragPreview.height}
+          left={eventDragPreview.left}
+          width={eventDragPreview.width}
+          start={eventDragPreview.start}
+          end={eventDragPreview.end}
+          columnWidth={eventDragPreview.columnWidth}
+          isLastColumn={eventDragPreview.isLastColumn}
         />
       )}
     </div>
