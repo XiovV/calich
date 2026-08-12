@@ -3,6 +3,7 @@ import { isSameDay } from "date-fns";
 import { layoutOverlappingEvents } from "../lib/layoutOverlappingEvents";
 import { occurrenceKey, type Occurrence } from "../lib/occurrence";
 import { useWorkingHours } from "../hooks/useWorkingHours";
+import { CLICK_DISTANCE_THRESHOLD_PX, isDragGesture } from "../lib/pointerDrag";
 import {
   HOURS_IN_DAY,
   computeDraftBlock,
@@ -49,6 +50,7 @@ interface DayColumnProps {
   ) => void;
   draggingKey: string | null;
   eventDragPreview: EventDragPreviewData | null;
+  isLastColumn: boolean;
 }
 
 export function DayColumn({
@@ -61,6 +63,7 @@ export function DayColumn({
   onOccurrenceDragStart,
   draggingKey,
   eventDragPreview,
+  isLastColumn,
 }: DayColumnProps) {
   const dayOccurrences = occurrences.filter((occurrence) =>
     isSameDay(occurrence.start, day),
@@ -71,11 +74,22 @@ export function DayColumn({
   const columnRef = useRef<HTMLDivElement>(null);
   const [dragStartY, setDragStartY] = useState<number | null>(null);
   const [dragCurrentY, setDragCurrentY] = useState<number | null>(null);
+  const [dragColumnWidth, setDragColumnWidth] = useState(0);
 
   const draftBlock =
     dragStartY !== null && dragCurrentY !== null
       ? computeDraftBlock(day, dragStartY, dragCurrentY, pixelsPerHour)
       : null;
+
+  // Vertical-only: a create-drag never moves across day columns, so the x
+  // component of the click-vs-drag threshold is always 0.
+  const showReadout =
+    dragStartY !== null &&
+    dragCurrentY !== null &&
+    isDragGesture(
+      { x: 0, y: dragCurrentY - dragStartY },
+      CLICK_DISTANCE_THRESHOLD_PX,
+    );
 
   // While a draft is being created, include it as a pseudo-occurrence in the
   // same overlap-layout pass as the real occurrences, so existing events shrink
@@ -118,6 +132,7 @@ export function DayColumn({
     const offsetY = offsetYFromEvent(event.clientY);
     setDragStartY(offsetY);
     setDragCurrentY(offsetY);
+    setDragColumnWidth(columnRef.current?.getBoundingClientRect().width ?? 0);
   }
 
   useEffect(() => {
@@ -188,17 +203,28 @@ export function DayColumn({
             draftLayout.column,
             draftLayout.columnCount,
           );
+          const top = timeToY(draftBlock.start, pixelsPerHour);
+          const height = durationToHeight(
+            draftBlock.start,
+            draftBlock.end,
+            pixelsPerHour,
+          );
           return (
-            <DraftBlockPreview
-              top={timeToY(draftBlock.start, pixelsPerHour)}
-              height={durationToHeight(
-                draftBlock.start,
-                draftBlock.end,
-                pixelsPerHour,
+            <>
+              <DraftBlockPreview top={top} height={height} left={left} width={width} />
+              {showReadout && (
+                <DragReadout
+                  top={top}
+                  height={height}
+                  left={left}
+                  width={width}
+                  start={draftBlock.start}
+                  end={draftBlock.end}
+                  columnWidth={dragColumnWidth}
+                  isLastColumn={isLastColumn}
+                />
               )}
-              left={left}
-              width={width}
-            />
+            </>
           );
         })()}
       {eventDragPreview && (

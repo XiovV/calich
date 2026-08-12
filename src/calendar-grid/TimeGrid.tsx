@@ -40,6 +40,10 @@ interface EventDragPayload {
   columnWidth: number;
 }
 
+function isLastDay(day: Date, daysToShow: Date[]): boolean {
+  return isSameDay(day, daysToShow[daysToShow.length - 1]);
+}
+
 function getAllDayDateAtPoint(
   days: Date[],
   clientX: number,
@@ -95,7 +99,7 @@ function computeEventDragPreview(
   const { start, end } = computeDragTimes(activeDrag, dragDelta.x, dragDelta.y);
   const originDay = startOfDay(activeDrag.occurrence.start);
   const day = activeDrag.kind === "move" ? startOfDay(start) : originDay;
-  const isLastColumn = isSameDay(day, daysToShow[daysToShow.length - 1]);
+  const isLastColumn = isLastDay(day, daysToShow);
   const showReadout = isDragGesture(dragDelta, CLICK_DISTANCE_THRESHOLD_PX);
 
   const originDayOccurrences = visibleOccurrences.filter((occurrence) =>
@@ -295,6 +299,7 @@ export function TimeGrid({
                     ? dragPreview.data
                     : null
                 }
+                isLastColumn={isLastDay(day, daysToShow)}
               />
             ))}
           </div>
