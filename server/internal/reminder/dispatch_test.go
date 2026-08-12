@@ -16,7 +16,7 @@ type fakeNotificationInserter struct {
 }
 
 func (f *fakeNotificationInserter) Insert(_ context.Context, userID int64, eventID string, occurrenceStart time.Time, title string, firedAt time.Time) (repository.Notification, error) {
-	n := repository.Notification{UserID: userID, EventID: eventID, OccurrenceStart: occurrenceStart, Title: title, FiredAt: firedAt}
+	n := repository.Notification{UserID: userID, EventID: eventID, OccurrenceStart: &occurrenceStart, Title: title, FiredAt: firedAt}
 	f.inserts = append(f.inserts, n)
 	return n, nil
 }

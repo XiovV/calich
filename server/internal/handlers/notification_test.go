@@ -113,6 +113,48 @@ func TestNotificationHandler_ListReturnsRecentNotificationsNewestFirst(t *testin
 	if got[0].Title != "Standup" || got[0].EventID != eventID || got[0].Seen {
 		t.Fatalf("unexpected notification: %+v", got[0])
 	}
+	if got[0].Kind != "reminder" || got[0].OccurrenceStart == nil {
+		t.Fatalf("expected a reminder notification with an occurrenceStart, got %+v", got[0])
+	}
+}
+
+// TestNotificationHandler_ListOmitsOccurrenceStartForInviteNotifications
+// covers ADR-0061: an invite Notification's occurrenceStart is absent on
+// the wire, and kind distinguishes it from a fired-Reminder entry.
+func TestNotificationHandler_ListOmitsOccurrenceStartForInviteNotifications(t *testing.T) {
+	baseURL, accessToken, userID, notifications, eventID := newNotificationTestServer(t)
+	ctx := context.Background()
+
+	invitedAt := time.Date(2026, 1, 1, 8, 0, 0, 0, time.UTC)
+	if _, err := notifications.InsertInvite(ctx, userID, eventID, "Standup", invitedAt); err != nil {
+		t.Fatalf("insert invite notification: %v", err)
+	}
+
+	req, err := http.NewRequest(http.MethodGet, baseURL+"/api/notifications/", nil)
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET /api/notifications: %v", err)
+	}
+	defer resp.Body.Close()
+
+	var got []notificationResponse
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("expected 1 notification, got %+v", got)
+	}
+	if got[0].Kind != "invite" {
+		t.Fatalf("expected kind %q, got %q", "invite", got[0].Kind)
+	}
+	if got[0].OccurrenceStart != nil {
+		t.Fatalf("expected a nil occurrenceStart for an invite notification, got %v", *got[0].OccurrenceStart)
+	}
 }
 
 func TestNotificationHandler_ListRequiresAuth(t *testing.T) {

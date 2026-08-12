@@ -19,8 +19,19 @@ const { useNotificationsStore } = await import("./notificationsStore");
 const standup = {
   id: 1,
   eventId: "evt-1",
+  kind: "reminder" as const,
   title: "Standup",
   occurrenceStart: new Date("2026-01-01T09:00:00Z"),
+  firedAt: new Date("2026-01-01T08:50:00Z"),
+  seen: false,
+};
+
+const inviteNotification = {
+  id: 2,
+  eventId: "evt-2",
+  kind: "invite" as const,
+  title: "Planning",
+  occurrenceStart: null,
   firedAt: new Date("2026-01-01T08:50:00Z"),
   seen: false,
 };
@@ -103,6 +114,19 @@ describe("fetchNotifications", () => {
     await useNotificationsStore.getState().fetchNotifications();
 
     expect(notificationSpy).not.toHaveBeenCalled();
+  });
+
+  it("fires a browser notification for an invite Notification without an occurrenceStart", async () => {
+    useNotificationsStore.setState({ notifications: [], initialized: true });
+    vi.mocked(notificationsApi.list).mockResolvedValue([inviteNotification]);
+    const notificationSpy = stubNotification();
+
+    await useNotificationsStore.getState().fetchNotifications();
+
+    expect(notificationSpy).toHaveBeenCalledWith(
+      "Planning",
+      expect.objectContaining({ body: expect.any(String) }),
+    );
   });
 });
 

@@ -58,7 +58,7 @@ func newTestAttendeeService(t *testing.T) (svc *EventService, workspaceRepo *rep
 	}
 
 	calendarService := NewCalendarService(calendarRepo, repository.NewCalendarShareRepository(sqlDB), users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo, repository.NewCalendarGroupShareRepository(sqlDB), repository.NewGroupRepository(sqlDB))
-	svc = NewEventService(sqlDB, repository.NewEventRepository(sqlDB), repository.NewEventExceptionRepository(sqlDB), repository.NewEventReminderRepository(sqlDB), repository.NewReminderOverrideRepository(sqlDB), repository.NewSyncRepository(sqlDB), calendarService, users, repository.NewAttachmentRepository(sqlDB), repository.NewAttendeeRepository(sqlDB), workspaceRepo, repository.NewGroupRepository(sqlDB))
+	svc = NewEventService(sqlDB, repository.NewEventRepository(sqlDB), repository.NewEventExceptionRepository(sqlDB), repository.NewEventReminderRepository(sqlDB), repository.NewReminderOverrideRepository(sqlDB), repository.NewSyncRepository(sqlDB), calendarService, users, repository.NewAttachmentRepository(sqlDB), repository.NewAttendeeRepository(sqlDB), workspaceRepo, repository.NewGroupRepository(sqlDB), repository.NewNotificationRepository(sqlDB))
 
 	return svc, workspaceRepo, users, owner.ID, member.ID, outsider.ID, cal.ID
 }
@@ -195,6 +195,154 @@ func TestEventService_AddAttendee_AlreadyAttendeeRefused(t *testing.T) {
 	_, err := svc.AddAttendee(ctx, ownerID, event.ID, memberID)
 	if !errors.Is(err, repository.ErrAlreadyAttendee) {
 		t.Fatalf("expected ErrAlreadyAttendee, got %v", err)
+	}
+}
+
+// TestEventService_AddAttendee_WritesInviteNotification covers ADR-0061's
+// core acceptance criterion: being made an Attendee writes an invite
+// Notification for the invited user, naming the Event.
+func TestEventService_AddAttendee_WritesInviteNotification(t *testing.T) {
+	svc, _, _, ownerID, memberID, _, calendarID := newTestAttendeeService(t)
+	ctx := context.Background()
+	event := createTestEvent(t, svc, ownerID, calendarID, "evt-1")
+
+	if _, err := svc.AddAttendee(ctx, ownerID, event.ID, memberID); err != nil {
+		t.Fatalf("add attendee: %v", err)
+	}
+
+	notifications, err := svc.notifications.ListRecentByUser(ctx, memberID, 10)
+	if err != nil {
+		t.Fatalf("list notifications: %v", err)
+	}
+	if len(notifications) != 1 {
+		t.Fatalf("expected 1 notification for the invited member, got %+v", notifications)
+	}
+	if notifications[0].Kind != repository.KindInvite {
+		t.Fatalf("expected kind %q, got %q", repository.KindInvite, notifications[0].Kind)
+	}
+	if notifications[0].EventID != event.ID || notifications[0].Title != event.Title {
+		t.Fatalf("expected the notification to name the event, got %+v", notifications[0])
+	}
+	if notifications[0].OccurrenceStart != nil {
+		t.Fatalf("expected a nil occurrence start, got %v", notifications[0].OccurrenceStart)
+	}
+}
+
+// TestEventService_AddAttendee_OrganizerReceivesNoNotification covers
+// ADR-0061: the Organizer never gets an invite Notification for their own
+// Event, since an Organizer is never an Attendee.
+func TestEventService_AddAttendee_OrganizerReceivesNoNotification(t *testing.T) {
+	svc, _, _, ownerID, memberID, _, calendarID := newTestAttendeeService(t)
+	ctx := context.Background()
+	event := createTestEvent(t, svc, ownerID, calendarID, "evt-1")
+
+	if _, err := svc.AddAttendee(ctx, ownerID, event.ID, memberID); err != nil {
+		t.Fatalf("add attendee: %v", err)
+	}
+
+	notifications, err := svc.notifications.ListRecentByUser(ctx, ownerID, 10)
+	if err != nil {
+		t.Fatalf("list notifications: %v", err)
+	}
+	if len(notifications) != 0 {
+		t.Fatalf("expected the organizer to receive no notification, got %+v", notifications)
+	}
+}
+
+// TestEventService_RemoveAttendee_WritesNoNotification covers ADR-0061:
+// being removed as an Attendee produces no Notification.
+func TestEventService_RemoveAttendee_WritesNoNotification(t *testing.T) {
+	svc, _, _, ownerID, memberID, _, calendarID := newTestAttendeeService(t)
+	ctx := context.Background()
+	event := createTestEvent(t, svc, ownerID, calendarID, "evt-1")
+
+	if _, err := svc.AddAttendee(ctx, ownerID, event.ID, memberID); err != nil {
+		t.Fatalf("add attendee: %v", err)
+	}
+	if err := svc.RemoveAttendee(ctx, ownerID, event.ID, memberID); err != nil {
+		t.Fatalf("remove attendee: %v", err)
+	}
+
+	notifications, err := svc.notifications.ListRecentByUser(ctx, memberID, 10)
+	if err != nil {
+		t.Fatalf("list notifications: %v", err)
+	}
+	if len(notifications) != 1 {
+		t.Fatalf("expected only the original invite notification, got %+v", notifications)
+	}
+}
+
+// TestEventService_SetResponse_WritesNoNotificationForOrganizerOrOtherAttendees
+// covers ADR-0061: another Attendee's Response arriving produces no
+// Notification — the Attendee list already shows every Response.
+func TestEventService_SetResponse_WritesNoNotificationForOrganizerOrOtherAttendees(t *testing.T) {
+	svc, _, _, ownerID, memberID, outsiderID, calendarID := newTestAttendeeService(t)
+	ctx := context.Background()
+	event := createTestEvent(t, svc, ownerID, calendarID, "evt-1")
+
+	if _, err := svc.AddAttendee(ctx, ownerID, event.ID, memberID); err != nil {
+		t.Fatalf("add attendee: %v", err)
+	}
+	if _, err := svc.SetResponse(ctx, memberID, event.ID, repository.ResponseAccepted); err != nil {
+		t.Fatalf("set response: %v", err)
+	}
+
+	for _, uid := range []int64{ownerID, outsiderID} {
+		notifications, err := svc.notifications.ListRecentByUser(ctx, uid, 10)
+		if err != nil {
+			t.Fatalf("list notifications: %v", err)
+		}
+		if len(notifications) != 0 {
+			t.Fatalf("expected no notification for user %d from a response, got %+v", uid, notifications)
+		}
+	}
+}
+
+// TestEventService_UpdateAndDelete_WriteNoNotification covers ADR-0061: an
+// Event being edited or deleted produces no Notification — genuinely
+// missing change-notification behaviour deferred to its own decision, not a
+// rider on this ticket.
+func TestEventService_UpdateAndDelete_WriteNoNotification(t *testing.T) {
+	svc, _, _, ownerID, memberID, _, calendarID := newTestAttendeeService(t)
+	ctx := context.Background()
+	event := createTestEvent(t, svc, ownerID, calendarID, "evt-1")
+
+	if _, err := svc.AddAttendee(ctx, ownerID, event.ID, memberID); err != nil {
+		t.Fatalf("add attendee: %v", err)
+	}
+
+	updated, err := svc.Update(ctx, ownerID, event.ID, EventWrite{
+		CalendarID: calendarID,
+		Title:      "Discuss tech stack (moved)",
+		Start:      event.Start.Add(time.Hour),
+		End:        event.End.Add(time.Hour),
+	})
+	if err != nil {
+		t.Fatalf("update: %v", err)
+	}
+
+	notifications, err := svc.notifications.ListRecentByUser(ctx, memberID, 10)
+	if err != nil {
+		t.Fatalf("list notifications: %v", err)
+	}
+	if len(notifications) != 1 {
+		t.Fatalf("expected only the original invite notification after an edit, got %+v", notifications)
+	}
+
+	// Deleting the Event cascades its Notification away too (the
+	// pre-existing notifications.event_id ON DELETE CASCADE, unchanged by
+	// this ticket) — the point being tested is that Delete itself writes no
+	// *new* Notification, not that the old one survives.
+	if err := svc.Delete(ctx, ownerID, updated.ID); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+
+	notifications, err = svc.notifications.ListRecentByUser(ctx, memberID, 10)
+	if err != nil {
+		t.Fatalf("list notifications: %v", err)
+	}
+	if len(notifications) != 0 {
+		t.Fatalf("expected no notifications once the event is deleted, got %+v", notifications)
 	}
 }
 

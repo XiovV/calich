@@ -116,10 +116,11 @@ type EventService struct {
 	attendees         *repository.AttendeeRepository
 	workspaces        *repository.WorkspaceRepository
 	groups            *repository.GroupRepository
+	notifications     *repository.NotificationRepository
 }
 
-func NewEventService(db *sql.DB, events *repository.EventRepository, exceptions *repository.EventExceptionRepository, reminders *repository.EventReminderRepository, reminderOverrides *repository.ReminderOverrideRepository, sync *repository.SyncRepository, calendars *CalendarService, users *repository.UserRepository, attachments *repository.AttachmentRepository, attendees *repository.AttendeeRepository, workspaces *repository.WorkspaceRepository, groups *repository.GroupRepository) *EventService {
-	return &EventService{db: db, events: events, exceptions: exceptions, reminders: reminders, reminderOverrides: reminderOverrides, sync: sync, calendars: calendars, users: users, attachments: attachments, attendees: attendees, workspaces: workspaces, groups: groups}
+func NewEventService(db *sql.DB, events *repository.EventRepository, exceptions *repository.EventExceptionRepository, reminders *repository.EventReminderRepository, reminderOverrides *repository.ReminderOverrideRepository, sync *repository.SyncRepository, calendars *CalendarService, users *repository.UserRepository, attachments *repository.AttachmentRepository, attendees *repository.AttendeeRepository, workspaces *repository.WorkspaceRepository, groups *repository.GroupRepository, notifications *repository.NotificationRepository) *EventService {
+	return &EventService{db: db, events: events, exceptions: exceptions, reminders: reminders, reminderOverrides: reminderOverrides, sync: sync, calendars: calendars, users: users, attachments: attachments, attendees: attendees, workspaces: workspaces, groups: groups, notifications: notifications}
 }
 
 // calendarByID resolves calendarID via s.calendars.Get, translating
@@ -301,34 +302,37 @@ func (s *EventService) ClearReminderOverride(ctx context.Context, userID int64, 
 // transaction holds that connection deadlocks waiting for a connection the
 // transaction itself is holding.
 type txRepos struct {
-	events      *repository.EventRepository
-	exceptions  *repository.EventExceptionRepository
-	reminders   *repository.EventReminderRepository
-	sync        *repository.SyncRepository
-	attachments *repository.AttachmentRepository
-	attendees   *repository.AttendeeRepository
-	groups      *repository.GroupRepository
-	users       *repository.UserRepository
-	workspaces  *repository.WorkspaceRepository
+	events        *repository.EventRepository
+	exceptions    *repository.EventExceptionRepository
+	reminders     *repository.EventReminderRepository
+	sync          *repository.SyncRepository
+	attachments   *repository.AttachmentRepository
+	attendees     *repository.AttendeeRepository
+	groups        *repository.GroupRepository
+	users         *repository.UserRepository
+	workspaces    *repository.WorkspaceRepository
+	notifications *repository.NotificationRepository
 }
 
 // withTx runs fn inside a transaction, passing it transaction-bound clones
 // of the Event, EventException, EventReminder, Sync, Attachment, Attendee,
-// Group, User, and Workspace repositories so a multi-table write —
-// including its change_seq bump — commits or rolls back atomically. Reads
-// and validation belong outside fn, before withTx is called (ADR-0018).
+// Group, User, Workspace, and Notification repositories so a multi-table
+// write — including its change_seq bump — commits or rolls back atomically.
+// Reads and validation belong outside fn, before withTx is called
+// (ADR-0018).
 func (s *EventService) withTx(ctx context.Context, fn func(repos txRepos) error) error {
 	return repository.WithTx(ctx, s.db, func(tx *sql.Tx) error {
 		return fn(txRepos{
-			events:      s.events.WithTx(tx),
-			exceptions:  s.exceptions.WithTx(tx),
-			reminders:   s.reminders.WithTx(tx),
-			sync:        s.sync.WithTx(tx),
-			attachments: s.attachments.WithTx(tx),
-			attendees:   s.attendees.WithTx(tx),
-			groups:      s.groups.WithTx(tx),
-			users:       s.users.WithTx(tx),
-			workspaces:  s.workspaces.WithTx(tx),
+			events:        s.events.WithTx(tx),
+			exceptions:    s.exceptions.WithTx(tx),
+			reminders:     s.reminders.WithTx(tx),
+			sync:          s.sync.WithTx(tx),
+			attachments:   s.attachments.WithTx(tx),
+			attendees:     s.attendees.WithTx(tx),
+			groups:        s.groups.WithTx(tx),
+			users:         s.users.WithTx(tx),
+			workspaces:    s.workspaces.WithTx(tx),
+			notifications: s.notifications.WithTx(tx),
 		})
 	})
 }
@@ -452,7 +456,7 @@ func (s *EventService) Create(ctx context.Context, userID int64, id string, writ
 		if err := repos.reminders.ReplaceByEventID(ctx, e.ID, write.Reminders); err != nil {
 			return fmt.Errorf("persist reminders: %w", err)
 		}
-		if err := s.addCreateAttendees(ctx, repos, e.ID, workspaceID, write.AttendeeUserIDs, write.AttendeeGroupIDs); err != nil {
+		if err := s.addCreateAttendees(ctx, repos, e, workspaceID, write.AttendeeUserIDs, write.AttendeeGroupIDs); err != nil {
 			return err
 		}
 		// Creating an Override changes its Master's calendar object (a new
@@ -500,9 +504,9 @@ func (s *EventService) Create(ctx context.Context, userID int64, id string, writ
 // policy), since the caller named the Group, not its individual members. A
 // User named both individually and via a Group is silently deduplicated,
 // same as AddGroupAttendee already tolerates re-inviting someone.
-func (s *EventService) addCreateAttendees(ctx context.Context, repos txRepos, eventID string, workspaceID int64, userIDs, groupIDs []int64) error {
+func (s *EventService) addCreateAttendees(ctx context.Context, repos txRepos, event repository.Event, workspaceID int64, userIDs, groupIDs []int64) error {
 	for _, targetUserID := range userIDs {
-		if _, err := inviteUser(ctx, repos.users, repos.workspaces, repos.attendees, eventID, workspaceID, targetUserID); err != nil {
+		if _, err := inviteUser(ctx, repos.users, repos.workspaces, repos.attendees, repos.notifications, event, workspaceID, targetUserID); err != nil {
 			return err
 		}
 	}
@@ -519,7 +523,7 @@ func (s *EventService) addCreateAttendees(ctx context.Context, repos txRepos, ev
 			return ErrAttendeeTargetNotInWorkspace
 		}
 
-		if _, err := expandGroupMembers(ctx, repos.groups, repos.users, repos.attendees, eventID, group.ID); err != nil {
+		if _, err := expandGroupMembers(ctx, repos.groups, repos.users, repos.attendees, repos.notifications, event, group.ID); err != nil {
 			return err
 		}
 	}
@@ -2282,12 +2286,18 @@ func (s *EventService) attendeeManagementCalendar(ctx context.Context, actorUser
 // the invite picker, ADR-0037 — from the inviter's perspective they don't
 // exist to invite, same as CalendarService.Share), and already be a Member
 // of workspaceID, before their attendees row is inserted. Takes the User,
-// Workspace, and Attendee repositories directly rather than through
-// EventService or txRepos, so the identical check can run against either
-// the pooled repos (AddAttendee, outside any transaction) or the
+// Workspace, Attendee, and Notification repositories directly rather than
+// through EventService or txRepos, so the identical check can run against
+// either the pooled repos (AddAttendee, outside any transaction) or the
 // transaction-bound ones (Create, inside its own) without duplicating the
 // checks themselves.
-func inviteUser(ctx context.Context, users *repository.UserRepository, workspaces *repository.WorkspaceRepository, attendees *repository.AttendeeRepository, eventID string, workspaceID, targetUserID int64) (repository.Attendee, error) {
+//
+// Writing an invite Notification for targetUserID here, right alongside the
+// attendees row, is what makes "an invite Notification is written when an
+// Attendee row naming a User is written" (ADR-0061) true regardless of
+// which of inviteUser's three callers (AddAttendee, addCreateAttendees,
+// expandGroupMembers's sibling) is the one doing the writing.
+func inviteUser(ctx context.Context, users *repository.UserRepository, workspaces *repository.WorkspaceRepository, attendees *repository.AttendeeRepository, notifications *repository.NotificationRepository, event repository.Event, workspaceID, targetUserID int64) (repository.Attendee, error) {
 	target, err := users.GetByID(ctx, targetUserID)
 	if err != nil {
 		if errors.Is(err, repository.ErrNotFound) {
@@ -2306,7 +2316,14 @@ func inviteUser(ctx context.Context, users *repository.UserRepository, workspace
 		return repository.Attendee{}, fmt.Errorf("get workspace member: %w", err)
 	}
 
-	return attendees.Add(ctx, eventID, targetUserID)
+	attendee, err := attendees.Add(ctx, event.ID, targetUserID)
+	if err != nil {
+		return repository.Attendee{}, err
+	}
+	if _, err := notifications.InsertInvite(ctx, targetUserID, event.ID, event.Title, time.Now()); err != nil {
+		return repository.Attendee{}, fmt.Errorf("insert invite notification: %w", err)
+	}
+	return attendee, nil
 }
 
 // expandGroupMembers is AddGroupAttendee's and Create's shared Group
@@ -2316,12 +2333,15 @@ func inviteUser(ctx context.Context, users *repository.UserRepository, workspace
 // can never produce an Attendee an individual invite would have refused. A
 // member who is already an Attendee of eventID (invited individually, or via
 // another Group) is left untouched rather than failing the whole expansion.
-// Takes the Group, User, and Attendee repositories directly, same reason as
-// inviteUser above — AddGroupAttendee always calls this with transaction-
-// bound repos (reading membership and writing Attendees in the same
-// transaction keeps the snapshot honest against a concurrent membership
-// change); Create's own call is already inside its own transaction.
-func expandGroupMembers(ctx context.Context, groups *repository.GroupRepository, users *repository.UserRepository, attendees *repository.AttendeeRepository, eventID string, groupID int64) ([]repository.Attendee, error) {
+// Takes the Group, User, Attendee, and Notification repositories directly,
+// same reason as inviteUser above — AddGroupAttendee always calls this with
+// transaction-bound repos (reading membership and writing Attendees in the
+// same transaction keeps the snapshot honest against a concurrent
+// membership change); Create's own call is already inside its own
+// transaction. Writes one invite Notification per Attendee row actually
+// added, same as inviteUser (ADR-0061) — a member already an Attendee is
+// skipped and gets no second Notification.
+func expandGroupMembers(ctx context.Context, groups *repository.GroupRepository, users *repository.UserRepository, attendees *repository.AttendeeRepository, notifications *repository.NotificationRepository, event repository.Event, groupID int64) ([]repository.Attendee, error) {
 	members, err := groups.ListMembers(ctx, groupID)
 	if err != nil {
 		return nil, fmt.Errorf("list group members: %w", err)
@@ -2337,12 +2357,15 @@ func expandGroupMembers(ctx context.Context, groups *repository.GroupRepository,
 			continue
 		}
 
-		attendee, err := attendees.Add(ctx, eventID, member.UserID)
+		attendee, err := attendees.Add(ctx, event.ID, member.UserID)
 		if err != nil {
 			if errors.Is(err, repository.ErrAlreadyAttendee) {
 				continue
 			}
 			return nil, err
+		}
+		if _, err := notifications.InsertInvite(ctx, member.UserID, event.ID, event.Title, time.Now()); err != nil {
+			return nil, fmt.Errorf("insert invite notification: %w", err)
 		}
 		added = append(added, attendee)
 	}
@@ -2356,11 +2379,21 @@ func expandGroupMembers(ctx context.Context, groups *repository.GroupRepository,
 // itself is the grant. targetUserID must already be a Member of eventID's
 // Calendar's own Workspace and not Disabled — inviteUser's shared check.
 func (s *EventService) AddAttendee(ctx context.Context, actorUserID int64, eventID string, targetUserID int64) (repository.Attendee, error) {
-	_, calendar, err := s.attendeeManagementCalendar(ctx, actorUserID, eventID)
+	event, calendar, err := s.attendeeManagementCalendar(ctx, actorUserID, eventID)
 	if err != nil {
 		return repository.Attendee{}, err
 	}
-	return inviteUser(ctx, s.users, s.workspaces, s.attendees, eventID, calendar.WorkspaceID, targetUserID)
+
+	var attendee repository.Attendee
+	err = s.withTx(ctx, func(repos txRepos) error {
+		var err error
+		attendee, err = inviteUser(ctx, repos.users, repos.workspaces, repos.attendees, repos.notifications, event, calendar.WorkspaceID, targetUserID)
+		return err
+	})
+	if err != nil {
+		return repository.Attendee{}, err
+	}
+	return attendee, nil
 }
 
 // AddGroupAttendee invites every current member of groupID as an Attendee
@@ -2374,7 +2407,7 @@ func (s *EventService) AddAttendee(ctx context.Context, actorUserID int64, event
 // must belong to eventID's Calendar's own Workspace, mirroring AddAttendee's
 // target check.
 func (s *EventService) AddGroupAttendee(ctx context.Context, actorUserID int64, eventID string, groupID int64) ([]repository.Attendee, error) {
-	_, calendar, err := s.attendeeManagementCalendar(ctx, actorUserID, eventID)
+	event, calendar, err := s.attendeeManagementCalendar(ctx, actorUserID, eventID)
 	if err != nil {
 		return nil, err
 	}
@@ -2397,7 +2430,7 @@ func (s *EventService) AddGroupAttendee(ctx context.Context, actorUserID int64, 
 		// land between "read members" and "write attendees" and end up
 		// reflected in neither snapshot.
 		var err error
-		added, err = expandGroupMembers(ctx, repos.groups, repos.users, repos.attendees, eventID, group.ID)
+		added, err = expandGroupMembers(ctx, repos.groups, repos.users, repos.attendees, repos.notifications, event, group.ID)
 		return err
 	})
 	if err != nil {

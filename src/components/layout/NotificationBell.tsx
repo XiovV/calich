@@ -1,8 +1,10 @@
 import { Popover } from "@base-ui/react/popover";
 import { formatDistanceToNow } from "date-fns";
-import { Bell } from "lucide-react";
-import { useEffect } from "react";
+import { Bell, UserPlus } from "lucide-react";
+import { useEffect, useState } from "react";
+import type { Notification as AppNotification } from "../../lib/notification";
 import { useNotificationsStore } from "../../lib/notificationsStore";
+import { useShellStore } from "../../lib/shellStore";
 import { iconButtonClasses } from "../ui/iconButtonClasses";
 
 // How often the feed is re-polled for newly-fired Notifications while a tab
@@ -11,11 +13,13 @@ import { iconButtonClasses } from "../ui/iconButtonClasses";
 const POLL_INTERVAL_MS = 30_000;
 
 export function NotificationBell() {
+  const [open, setOpen] = useState(false);
   const notifications = useNotificationsStore((state) => state.notifications);
   const fetchNotifications = useNotificationsStore(
     (state) => state.fetchNotifications,
   );
   const markAllSeen = useNotificationsStore((state) => state.markAllSeen);
+  const requestEventOpen = useShellStore((state) => state.requestEventOpen);
   const unseenCount = notifications.filter((n) => !n.seen).length;
 
   useEffect(() => {
@@ -24,12 +28,18 @@ export function NotificationBell() {
     return () => clearInterval(interval);
   }, [fetchNotifications]);
 
+  function handleOpenChange(nextOpen: boolean) {
+    setOpen(nextOpen);
+    if (nextOpen && unseenCount > 0) markAllSeen();
+  }
+
+  function handleNotificationClick(notification: AppNotification) {
+    requestEventOpen(notification.eventId);
+    setOpen(false);
+  }
+
   return (
-    <Popover.Root
-      onOpenChange={(open) => {
-        if (open && unseenCount > 0) markAllSeen();
-      }}
-    >
+    <Popover.Root open={open} onOpenChange={handleOpenChange}>
       <Popover.Trigger
         aria-label="Notifications"
         className={`relative ${iconButtonClasses()}`}
@@ -49,17 +59,30 @@ export function NotificationBell() {
             ) : (
               <ul>
                 {notifications.map((notification) => (
-                  <li
-                    key={notification.id}
-                    className={`px-3 py-2 ${notification.seen ? "" : "bg-surface-hover"}`}
-                  >
-                    <p className="text-body text-ink">{notification.title}</p>
-                    <p className="text-label-sm text-ink-muted">
-                      {notification.occurrenceStart.toLocaleString()} ·{" "}
-                      {formatDistanceToNow(notification.firedAt, {
-                        addSuffix: true,
-                      })}
-                    </p>
+                  <li key={notification.id}>
+                    <button
+                      type="button"
+                      onClick={() => handleNotificationClick(notification)}
+                      className={`w-full px-3 py-2 text-left ${notification.seen ? "" : "bg-surface-hover"}`}
+                    >
+                      <span className="flex items-center gap-1.5">
+                        {notification.kind === "invite" && (
+                          <UserPlus className="size-3.5 shrink-0 text-ink-muted" />
+                        )}
+                        <span className="text-body text-ink">
+                          {notification.title}
+                        </span>
+                      </span>
+                      <p className="text-label-sm text-ink-muted">
+                        {notification.kind === "invite"
+                          ? "You were invited"
+                          : notification.occurrenceStart.toLocaleString()}{" "}
+                        ·{" "}
+                        {formatDistanceToNow(notification.firedAt, {
+                          addSuffix: true,
+                        })}
+                      </p>
+                    </button>
                   </li>
                 ))}
               </ul>

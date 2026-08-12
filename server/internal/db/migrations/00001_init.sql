@@ -395,15 +395,20 @@ CREATE TABLE fired_reminders (
     UNIQUE (reminder_id, occurrence_start, user_id)
 );
 
--- A Notification is the persistent in-app record created when a
--- Notification-Channel Reminder fires (ADR-0021, CONTEXT.md). Title is
--- denormalized (copied at fire time) so a Notification keeps reading
--- correctly even if the Event's title later changes.
+-- A Notification is the persistent in-app record of something that
+-- concerns one User (ADR-0021, ADR-0061, CONTEXT.md) — widened from "what a
+-- Notification-Channel Reminder produces when it fires" to also cover being
+-- made an Attendee of an Event, distinguished by kind. Title is denormalized
+-- (copied at write time) so a Notification keeps reading correctly even if
+-- the Event's title later changes. occurrence_start is meaningful only for
+-- kind = 'reminder' — an 'invite' concerns the Event series rather than one
+-- Occurrence, so it's NULL there.
 CREATE TABLE notifications (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     event_id TEXT NOT NULL REFERENCES events(id) ON DELETE CASCADE,
-    occurrence_start TIMESTAMP NOT NULL,
+    kind TEXT NOT NULL DEFAULT 'reminder' CHECK (kind IN ('reminder', 'invite')),
+    occurrence_start TIMESTAMP,
     title TEXT NOT NULL,
     fired_at TIMESTAMP NOT NULL,
     seen BOOLEAN NOT NULL DEFAULT 0

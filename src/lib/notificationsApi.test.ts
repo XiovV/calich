@@ -19,6 +19,7 @@ afterEach(() => {
 const wireNotification = {
   id: 1,
   eventId: "evt-1",
+  kind: "reminder" as const,
   title: "Standup",
   occurrenceStart: "2026-01-01T09:00:00Z",
   firedAt: "2026-01-01T08:50:00Z",
@@ -36,6 +37,7 @@ describe("notificationsApi.list", () => {
       {
         id: 1,
         eventId: "evt-1",
+        kind: "reminder",
         title: "Standup",
         occurrenceStart: new Date("2026-01-01T09:00:00Z"),
         firedAt: new Date("2026-01-01T08:50:00Z"),
@@ -49,6 +51,37 @@ describe("notificationsApi.list", () => {
         headers: { Authorization: "Bearer token-123" },
       }),
     );
+  });
+
+  it("maps an invite notification's null occurrenceStart to null", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(200, [
+        {
+          id: 2,
+          eventId: "evt-1",
+          kind: "invite",
+          title: "Standup",
+          occurrenceStart: null,
+          firedAt: "2026-01-01T08:50:00Z",
+          seen: false,
+        },
+      ]),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const notifications = await notificationsApi.list("token-123");
+
+    expect(notifications).toEqual([
+      {
+        id: 2,
+        eventId: "evt-1",
+        kind: "invite",
+        title: "Standup",
+        occurrenceStart: null,
+        firedAt: new Date("2026-01-01T08:50:00Z"),
+        seen: false,
+      },
+    ]);
   });
 
   it("throws an ApiError on failure", async () => {

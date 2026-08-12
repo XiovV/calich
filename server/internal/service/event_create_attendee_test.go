@@ -99,7 +99,7 @@ func newCreateAttendeeFixture(t *testing.T) createAttendeeFixture {
 	}
 
 	calendarService := NewCalendarService(calendarRepo, repository.NewCalendarShareRepository(sqlDB), users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo, repository.NewCalendarGroupShareRepository(sqlDB), groupRepo)
-	eventService := NewEventService(sqlDB, repository.NewEventRepository(sqlDB), repository.NewEventExceptionRepository(sqlDB), repository.NewEventReminderRepository(sqlDB), repository.NewReminderOverrideRepository(sqlDB), repository.NewSyncRepository(sqlDB), calendarService, users, repository.NewAttachmentRepository(sqlDB), repository.NewAttendeeRepository(sqlDB), workspaceRepo, groupRepo)
+	eventService := NewEventService(sqlDB, repository.NewEventRepository(sqlDB), repository.NewEventExceptionRepository(sqlDB), repository.NewEventReminderRepository(sqlDB), repository.NewReminderOverrideRepository(sqlDB), repository.NewSyncRepository(sqlDB), calendarService, users, repository.NewAttachmentRepository(sqlDB), repository.NewAttendeeRepository(sqlDB), workspaceRepo, groupRepo, repository.NewNotificationRepository(sqlDB))
 
 	return createAttendeeFixture{
 		events: eventService, users: users, groups: groupRepo,
@@ -148,6 +148,62 @@ func TestEventService_Create_InvitesExplicitUsers(t *testing.T) {
 		if got.ID != event.ID {
 			t.Fatalf("expected event %q, got %q", event.ID, got.ID)
 		}
+	}
+}
+
+// TestEventService_Create_InvitesExplicitUsers_WritesOneInviteNotificationEach
+// covers ADR-0061: inviting Users at create time writes exactly one invite
+// Notification per invited User, naming the Event.
+func TestEventService_Create_InvitesExplicitUsers_WritesOneInviteNotificationEach(t *testing.T) {
+	f := newCreateAttendeeFixture(t)
+	ctx := context.Background()
+
+	event, err := f.events.Create(ctx, f.ownerID, "evt-1", createAttendeeTestWrite(f, EventWrite{
+		AttendeeUserIDs: []int64{f.member1ID, f.member2ID},
+	}))
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	for _, memberID := range []int64{f.member1ID, f.member2ID} {
+		notifications, err := f.events.notifications.ListRecentByUser(ctx, memberID, 10)
+		if err != nil {
+			t.Fatalf("list notifications for %d: %v", memberID, err)
+		}
+		if len(notifications) != 1 {
+			t.Fatalf("expected 1 notification for member %d, got %+v", memberID, notifications)
+		}
+		if notifications[0].Kind != repository.KindInvite || notifications[0].EventID != event.ID || notifications[0].Title != event.Title {
+			t.Fatalf("unexpected notification for member %d: %+v", memberID, notifications[0])
+		}
+	}
+}
+
+// TestEventService_Create_RecurringEventWritesExactlyOneInviteNotification
+// covers ADR-0061's core recurrence acceptance criterion: an invite
+// concerns the Event series rather than one Occurrence, so inviting a User
+// to a recurring Event produces exactly one Notification, not one per
+// expansion.
+func TestEventService_Create_RecurringEventWritesExactlyOneInviteNotification(t *testing.T) {
+	f := newCreateAttendeeFixture(t)
+	ctx := context.Background()
+
+	write := createAttendeeTestWrite(f, EventWrite{AttendeeUserIDs: []int64{f.member1ID}})
+	write.Rrule = "FREQ=DAILY"
+
+	if _, err := f.events.Create(ctx, f.ownerID, "evt-1", write); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	notifications, err := f.events.notifications.ListRecentByUser(ctx, f.member1ID, 10)
+	if err != nil {
+		t.Fatalf("list notifications: %v", err)
+	}
+	if len(notifications) != 1 {
+		t.Fatalf("expected exactly 1 notification for a recurring event's invite, got %+v", notifications)
+	}
+	if notifications[0].OccurrenceStart != nil {
+		t.Fatalf("expected a nil occurrence start, got %v", notifications[0].OccurrenceStart)
 	}
 }
 

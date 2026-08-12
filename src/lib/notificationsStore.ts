@@ -28,10 +28,13 @@ function requireAccessToken(): string {
 function showBrowserNotification(notification: AppNotification) {
   if (typeof Notification === "undefined") return;
 
+  const body =
+    notification.kind === "invite"
+      ? "You were invited."
+      : `Starts ${notification.occurrenceStart.toLocaleString()}`;
+
   const fire = () => {
-    new Notification(notification.title, {
-      body: `Starts ${notification.occurrenceStart.toLocaleString()}`,
-    });
+    new Notification(notification.title, { body });
   };
 
   if (Notification.permission === "granted") {

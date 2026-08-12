@@ -1,24 +1,32 @@
 import { authedFetch, errorFromResponse } from "./apiClient";
-import type { Notification } from "./notification";
+import type { Notification, NotificationKind } from "./notification";
 
 interface NotificationWire {
   id: number;
   eventId: string;
+  kind: NotificationKind;
   title: string;
-  occurrenceStart: string;
+  occurrenceStart: string | null;
   firedAt: string;
   seen: boolean;
 }
 
 function fromWire(wire: NotificationWire): Notification {
-  return {
+  const base = {
     id: wire.id,
     eventId: wire.eventId,
     title: wire.title,
-    occurrenceStart: new Date(wire.occurrenceStart),
     firedAt: new Date(wire.firedAt),
     seen: wire.seen,
   };
+
+  if (wire.kind === "invite") {
+    return { ...base, kind: "invite", occurrenceStart: null };
+  }
+  // occurrenceStart is always set for a reminder Notification (server
+  // invariant) — the one non-null assertion at this wire boundary is what
+  // lets every other reader rely on the type instead of re-checking.
+  return { ...base, kind: "reminder", occurrenceStart: new Date(wire.occurrenceStart!) };
 }
 
 export const notificationsApi = {

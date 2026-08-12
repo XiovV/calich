@@ -95,7 +95,7 @@ func newGroupAttendeeFixture(t *testing.T) groupAttendeeFixture {
 	}
 
 	calendarService := NewCalendarService(calendarRepo, repository.NewCalendarShareRepository(sqlDB), users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo, repository.NewCalendarGroupShareRepository(sqlDB), groupRepo)
-	eventService := NewEventService(sqlDB, repository.NewEventRepository(sqlDB), repository.NewEventExceptionRepository(sqlDB), repository.NewEventReminderRepository(sqlDB), repository.NewReminderOverrideRepository(sqlDB), repository.NewSyncRepository(sqlDB), calendarService, users, repository.NewAttachmentRepository(sqlDB), repository.NewAttendeeRepository(sqlDB), workspaceRepo, groupRepo)
+	eventService := NewEventService(sqlDB, repository.NewEventRepository(sqlDB), repository.NewEventExceptionRepository(sqlDB), repository.NewEventReminderRepository(sqlDB), repository.NewReminderOverrideRepository(sqlDB), repository.NewSyncRepository(sqlDB), calendarService, users, repository.NewAttachmentRepository(sqlDB), repository.NewAttendeeRepository(sqlDB), workspaceRepo, groupRepo, repository.NewNotificationRepository(sqlDB))
 
 	return groupAttendeeFixture{
 		events: eventService, users: users, groups: groupRepo,
@@ -169,6 +169,54 @@ func TestEventService_AddGroupAttendee_ExpandsToMemberRows(t *testing.T) {
 	}
 	if other.Response != repository.ResponseAccepted {
 		t.Fatalf("expected member1's own response to have taken independently, got %q", other.Response)
+	}
+}
+
+// TestEventService_AddGroupAttendee_WritesOneInviteNotificationPerMember
+// covers ADR-0061: expanding a Group into individual Attendee rows writes
+// one invite Notification per row actually added — a Disabled member
+// skipped by the expansion gets none.
+func TestEventService_AddGroupAttendee_WritesOneInviteNotificationPerMember(t *testing.T) {
+	f := newGroupAttendeeFixture(t)
+	ctx := context.Background()
+	event := createGroupAttendeeTestEvent(t, f, "evt-1")
+
+	if _, err := f.events.AddGroupAttendee(ctx, f.ownerID, event.ID, f.groupID); err != nil {
+		t.Fatalf("add group attendee: %v", err)
+	}
+
+	for _, memberID := range []int64{f.member1ID, f.member2ID} {
+		notifications, err := f.events.notifications.ListRecentByUser(ctx, memberID, 10)
+		if err != nil {
+			t.Fatalf("list notifications for %d: %v", memberID, err)
+		}
+		if len(notifications) != 1 || notifications[0].Kind != repository.KindInvite {
+			t.Fatalf("expected exactly 1 invite notification for member %d, got %+v", memberID, notifications)
+		}
+	}
+}
+
+// TestEventService_AddGroupAttendee_SkippedMemberWritesNoNotification covers
+// ADR-0061 from the other direction: a member already an Attendee (skipped
+// by expandGroupMembers) gets no second Notification from the re-invite.
+func TestEventService_AddGroupAttendee_SkippedMemberWritesNoNotification(t *testing.T) {
+	f := newGroupAttendeeFixture(t)
+	ctx := context.Background()
+	event := createGroupAttendeeTestEvent(t, f, "evt-1")
+
+	if _, err := f.events.AddAttendee(ctx, f.ownerID, event.ID, f.member1ID); err != nil {
+		t.Fatalf("add attendee: %v", err)
+	}
+	if _, err := f.events.AddGroupAttendee(ctx, f.ownerID, event.ID, f.groupID); err != nil {
+		t.Fatalf("add group attendee: %v", err)
+	}
+
+	notifications, err := f.events.notifications.ListRecentByUser(ctx, f.member1ID, 10)
+	if err != nil {
+		t.Fatalf("list notifications: %v", err)
+	}
+	if len(notifications) != 1 {
+		t.Fatalf("expected only the original individual-invite notification, got %+v", notifications)
 	}
 }
 

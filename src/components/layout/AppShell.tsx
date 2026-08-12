@@ -32,6 +32,29 @@ export function AppShell() {
   }, [fetchWorkspaces]);
 
   useEffect(() => {
+    // A click on an invite Notification (NotificationBell) requests an
+    // Event by id rather than a specific Occurrence — an invite concerns
+    // the whole series (ADR-0061) — so it's opened at its own start/end
+    // rather than any particular Occurrence's. Subscribed directly (rather
+    // than read via the hook and reacted to in an effect body) so opening
+    // the modal happens in the subscription callback, not synchronously
+    // during a render-driven effect.
+    return useShellStore.subscribe((state) => {
+      if (!state.requestedEventId) return;
+      const event = useEventsStore
+        .getState()
+        .events.find((e) => e.id === state.requestedEventId);
+      if (event) {
+        setEventModalState({
+          mode: "edit",
+          occurrence: { event, start: event.start, end: event.end },
+        });
+      }
+      useShellStore.getState().clearRequestedEventOpen();
+    });
+  }, []);
+
+  useEffect(() => {
     // Refetches on mount, whenever the tab regains focus (so a Share granted
     // or revoked while it was in the background is reflected without a
     // reload, #116), and whenever the active Workspace changes (#155,

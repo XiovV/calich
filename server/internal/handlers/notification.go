@@ -18,23 +18,33 @@ func NewNotificationHandler(notifications *service.NotificationService) *Notific
 	return &NotificationHandler{notifications: notifications}
 }
 
-// notificationResponse is a Notification's wire shape (ADR-0021) — the
-// in-app feed panel's list item.
+// notificationResponse is a Notification's wire shape (ADR-0021, ADR-0061)
+// — the in-app feed panel's list item. OccurrenceStart is omitted for an
+// invite Notification, which concerns the Event series rather than one
+// Occurrence.
 type notificationResponse struct {
-	ID              int64  `json:"id"`
-	EventID         string `json:"eventId"`
-	Title           string `json:"title"`
-	OccurrenceStart string `json:"occurrenceStart"`
-	FiredAt         string `json:"firedAt"`
-	Seen            bool   `json:"seen"`
+	ID              int64   `json:"id"`
+	EventID         string  `json:"eventId"`
+	Kind            string  `json:"kind"`
+	Title           string  `json:"title"`
+	OccurrenceStart *string `json:"occurrenceStart,omitempty"`
+	FiredAt         string  `json:"firedAt"`
+	Seen            bool    `json:"seen"`
 }
 
 func toNotificationResponse(n repository.Notification) notificationResponse {
+	var occurrenceStart *string
+	if n.OccurrenceStart != nil {
+		formatted := n.OccurrenceStart.UTC().Format(time.RFC3339Nano)
+		occurrenceStart = &formatted
+	}
+
 	return notificationResponse{
 		ID:              n.ID,
 		EventID:         n.EventID,
+		Kind:            n.Kind,
 		Title:           n.Title,
-		OccurrenceStart: n.OccurrenceStart.UTC().Format(time.RFC3339Nano),
+		OccurrenceStart: occurrenceStart,
 		FiredAt:         n.FiredAt.UTC().Format(time.RFC3339Nano),
 		Seen:            n.Seen,
 	}

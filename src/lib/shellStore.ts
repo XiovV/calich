@@ -15,6 +15,13 @@ interface ShellState {
   // that disappears (revoked) drops out of it, so a later re-Share is
   // "unseen" again and gets auto-checked rather than staying invisible.
   knownCalendarIds: Set<string>;
+  // requestedEventId is set by a click on an invite Notification (the
+  // NotificationBell has no reach into AppShell's own eventModalState) and
+  // cleared once AppShell has resolved it into an opened EventModal — a
+  // one-shot request, not an ongoing "which event is open" record.
+  requestedEventId: string | null;
+  requestEventOpen: (eventId: string) => void;
+  clearRequestedEventOpen: () => void;
   setSelectedDate: (date: Date) => void;
   setActiveView: (view: ActiveView) => void;
   setCheckedCalendarIds: (ids: Iterable<string>) => void;
@@ -44,6 +51,9 @@ export const useShellStore = create<ShellState>((set) => ({
   knownCalendarIds: new Set(
     useCalendarsStore.getState().calendars.map((calendar) => calendar.id),
   ),
+  requestedEventId: null,
+  requestEventOpen: (eventId) => set({ requestedEventId: eventId }),
+  clearRequestedEventOpen: () => set({ requestedEventId: null }),
   setSelectedDate: (date) => set({ selectedDate: date }),
   setActiveView: (view) => set({ activeView: view }),
   setCheckedCalendarIds: (ids) => set({ checkedCalendarIds: new Set(ids) }),

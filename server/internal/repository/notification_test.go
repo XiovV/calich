@@ -68,6 +68,12 @@ func TestNotificationRepository_InsertAndListRecentByUser(t *testing.T) {
 	if created.Seen {
 		t.Fatalf("expected a freshly inserted Notification to be unseen")
 	}
+	if created.Kind != KindReminder {
+		t.Fatalf("expected kind %q, got %q", KindReminder, created.Kind)
+	}
+	if created.OccurrenceStart == nil || !created.OccurrenceStart.Equal(occurrenceStart) {
+		t.Fatalf("expected occurrence start %v, got %+v", occurrenceStart, created.OccurrenceStart)
+	}
 
 	// A second user's Notification must not leak into the first user's feed.
 	if _, err := repo.Insert(ctx, otherUserID, eventID, occurrenceStart, "Standup", firedAt); err != nil {
@@ -143,5 +149,70 @@ func TestNotificationRepository_MarkAllSeen(t *testing.T) {
 	}
 	if otherList[0].Seen {
 		t.Fatalf("expected other user's notification %d to remain unseen", otherNotification.ID)
+	}
+}
+
+// TestNotificationRepository_InsertInviteHasNilOccurrenceStart covers
+// ADR-0061: an invite Notification concerns the Event series rather than
+// one Occurrence, so occurrence_start round-trips as nil rather than a
+// zero-value time.
+func TestNotificationRepository_InsertInviteHasNilOccurrenceStart(t *testing.T) {
+	repo, userID, _, eventID := newTestNotificationRepository(t)
+	ctx := context.Background()
+
+	invitedAt := time.Date(2026, 1, 1, 8, 0, 0, 0, time.UTC)
+	created, err := repo.InsertInvite(ctx, userID, eventID, "Standup", invitedAt)
+	if err != nil {
+		t.Fatalf("insert invite: %v", err)
+	}
+	if created.Kind != KindInvite {
+		t.Fatalf("expected kind %q, got %q", KindInvite, created.Kind)
+	}
+	if created.OccurrenceStart != nil {
+		t.Fatalf("expected a nil occurrence start, got %v", created.OccurrenceStart)
+	}
+	if created.Seen {
+		t.Fatalf("expected a freshly inserted invite Notification to be unseen")
+	}
+
+	list, err := repo.ListRecentByUser(ctx, userID, 10)
+	if err != nil {
+		t.Fatalf("list recent: %v", err)
+	}
+	if len(list) != 1 {
+		t.Fatalf("expected 1 notification, got %d: %+v", len(list), list)
+	}
+	if list[0].Kind != KindInvite || list[0].OccurrenceStart != nil {
+		t.Fatalf("expected a nil-occurrence-start invite notification, got %+v", list[0])
+	}
+}
+
+// TestNotificationRepository_ListRecentByUserMixesReminderAndInviteKinds
+// covers ADR-0061's "one feed" decision: reminder and invite Notifications
+// share the same table, list, and newest-first ordering.
+func TestNotificationRepository_ListRecentByUserMixesReminderAndInviteKinds(t *testing.T) {
+	repo, userID, _, eventID := newTestNotificationRepository(t)
+	ctx := context.Background()
+
+	occurrenceStart := time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC)
+	if _, err := repo.Insert(ctx, userID, eventID, occurrenceStart, "Standup", time.Date(2026, 1, 1, 8, 50, 0, 0, time.UTC)); err != nil {
+		t.Fatalf("insert reminder: %v", err)
+	}
+	if _, err := repo.InsertInvite(ctx, userID, eventID, "Standup", time.Date(2026, 1, 1, 8, 55, 0, 0, time.UTC)); err != nil {
+		t.Fatalf("insert invite: %v", err)
+	}
+
+	list, err := repo.ListRecentByUser(ctx, userID, 10)
+	if err != nil {
+		t.Fatalf("list recent: %v", err)
+	}
+	if len(list) != 2 {
+		t.Fatalf("expected 2 notifications, got %d: %+v", len(list), list)
+	}
+	if list[0].Kind != KindInvite {
+		t.Fatalf("expected the more recently written invite first, got %+v", list)
+	}
+	if list[1].Kind != KindReminder {
+		t.Fatalf("expected the reminder second, got %+v", list)
 	}
 }
