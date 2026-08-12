@@ -95,7 +95,11 @@ func TestCalendarHandler_Update_OwnerColorWriteUpdatesTheCalendarItself(t *testi
 	}
 }
 
-func TestCalendarHandler_Update_NonOwnerClearsOverrideFallsBackToOwnerColor(t *testing.T) {
+// Under ADR-0057, clearing a non-Owner's override doesn't leave them
+// tracking the Owner's colour — the very next resolution auto-assigns a
+// fresh personal one (here, the first free Swatch, since this User can see
+// no other coloured Calendar in the Workspace).
+func TestCalendarHandler_Update_NonOwnerClearsOverrideReassignsAFreshColor(t *testing.T) {
 	s := newShareTestServer(t)
 
 	shareResp := doJSON(t, http.MethodPost, s.baseURL+"/api/calendars/"+s.calendarID+"/shares", s.ownerToken, shareRequest{Email: "other@example.com", Role: repository.RoleViewer})
@@ -117,8 +121,8 @@ func TestCalendarHandler_Update_NonOwnerClearsOverrideFallsBackToOwnerColor(t *t
 	if err := json.NewDecoder(clearResp.Body).Decode(&cleared); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if cleared.Color != "#12809CFF" {
-		t.Fatalf("expected the cleared override to fall back to the owner's colour, got %q", cleared.Color)
+	if cleared.Color != "#E2483DFF" {
+		t.Fatalf("expected the cleared override to be freshly auto-assigned (first free Swatch), got %q", cleared.Color)
 	}
 }
 

@@ -536,12 +536,13 @@ func TestPropPatch_ViewerSetsOwnColorOverride_Returns200(t *testing.T) {
 	}
 }
 
-// A non-owner's <remove> of calendar-color clears their own override,
-// falling back to the Calendar's own colour — unlike the Owner's, whose
-// backing column is NOT NULL, an override row simply may not exist, so
-// there's a real "unset" to perform (ADR-0038's acceptance criteria: "A
-// User ... can ... clear it to fall back to the Owner's").
-func TestPropPatch_NonOwnerRemoveColorOverride_Returns200AndFallsBackToOwnersColor(t *testing.T) {
+// A non-owner's <remove> of calendar-color clears their own override —
+// unlike the Owner's, whose backing column is NOT NULL, an override row
+// simply may not exist, so there's a real "unset" to perform. Under
+// ADR-0057, clearing it doesn't leave the editor tracking the Owner's
+// colour: the very next resolution auto-assigns a fresh personal one, since
+// "no override" no longer means "follow the Owner" for a non-Owner.
+func TestPropPatch_NonOwnerRemoveColorOverride_Returns200AndReassignsAFreshColor(t *testing.T) {
 	env := newTestCalDAVEnv(t)
 	editorID, editorSecret := env.addSharedUser(t, "editor", repository.RoleEditor)
 
@@ -565,8 +566,19 @@ func TestPropPatch_NonOwnerRemoveColorOverride_Returns200AndFallsBackToOwnersCol
 	if err != nil {
 		t.Fatalf("resolve editor's view: %v", err)
 	}
-	if view.Color != "#12809CFF" {
-		t.Fatalf("expected the editor's resolved colour to fall back to the owner's after removal, got %q", view.Color)
+	if view.Color == "#654321FF" {
+		t.Fatalf("expected the cleared override to be gone, still got the old override %q", view.Color)
+	}
+	if view.Color == "#12809CFF" {
+		t.Fatalf("expected a freshly auto-assigned colour (ADR-0057), not the Owner's own colour")
+	}
+
+	ownerCal, err := env.calendarService.Get(t.Context(), env.userID, env.calendarID)
+	if err != nil {
+		t.Fatalf("get calendar: %v", err)
+	}
+	if ownerCal.Color != "#12809CFF" {
+		t.Fatalf("expected the owner's own colour to stay unchanged, got %q", ownerCal.Color)
 	}
 }
 

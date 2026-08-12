@@ -1,8 +1,8 @@
-// calendar_color_test.go covers #106/ADR-0038's per-User colour override:
-// DisplayColor's fallback to the Calendar's own colour, that an override
-// affects only the User who set it, that the Owner's colour stays the
-// default new Shares inherit, and that revoking or leaving a Share cleans
-// up the leaver's override.
+// calendar_color_test.go covers #106/ADR-0038's per-User colour override —
+// that an override affects only the User who set it, and that revoking or
+// leaving a Share cleans up the leaver's override — and #194/ADR-0057's
+// auto-assignment: a shared Calendar with no override gets one computed and
+// persisted on first resolution, rather than falling back to the Owner's.
 package service
 
 import (
@@ -41,7 +41,10 @@ func TestCalendarService_SetColorOverride_ResolvesForThatUserOnly(t *testing.T) 
 	}
 }
 
-func TestCalendarService_ResolveDisplayColor_FallsBackToCalendarColorWithNoOverride(t *testing.T) {
+// ADR-0057 amends ADR-0038: a shared Calendar with no override no longer
+// falls back to the Owner's colour — it gets one auto-assigned and
+// persisted the first time it resolves for that viewer.
+func TestCalendarService_ResolveDisplayColor_AutoAssignsAFreshColorWithNoOverride(t *testing.T) {
 	svc, _, ownerID, otherID, calendarID := newTestShareService(t)
 	ctx := context.Background()
 
@@ -53,8 +56,29 @@ func TestCalendarService_ResolveDisplayColor_FallsBackToCalendarColorWithNoOverr
 	if err != nil {
 		t.Fatalf("resolve other's view: %v", err)
 	}
-	if otherView.Color != "#12809CFF" {
-		t.Fatalf("expected other's resolved colour to fall back to the calendar's own, got %q", otherView.Color)
+	// The Owner's own calendar colour (peacock) isn't visible to otherID as
+	// an already-resolved colour to avoid — it's the very calendar being
+	// resolved, with no override yet — so the first Swatch (tomato) wins.
+	if otherView.Color != "#E2483DFF" {
+		t.Fatalf("expected other's resolved colour to be the first free Swatch, got %q", otherView.Color)
+	}
+
+	// The assignment persists — the same viewer's next resolution returns
+	// the same colour rather than recomputing it.
+	again, err := svc.AccessWithColor(ctx, otherID, calendarID)
+	if err != nil {
+		t.Fatalf("resolve other's view again: %v", err)
+	}
+	if again.Color != otherView.Color {
+		t.Fatalf("expected the auto-assigned colour to persist, got %q then %q", otherView.Color, again.Color)
+	}
+
+	ownerView, err := svc.AccessWithColor(ctx, ownerID, calendarID)
+	if err != nil {
+		t.Fatalf("resolve owner's view: %v", err)
+	}
+	if ownerView.Color != "#12809CFF" {
+		t.Fatalf("expected the owner's resolved colour to stay the calendar's own, got %q", ownerView.Color)
 	}
 }
 
@@ -101,7 +125,10 @@ func TestCalendarService_SetColorOverride_StrangerRefused(t *testing.T) {
 	}
 }
 
-func TestCalendarService_ClearColorOverride_FallsBackToCalendarColor(t *testing.T) {
+// Clearing a non-Owner's override doesn't leave them tracking the Owner's
+// colour under ADR-0057 — the very next resolution auto-assigns a fresh
+// personal one instead.
+func TestCalendarService_ClearColorOverride_ReassignsAFreshColor(t *testing.T) {
 	svc, _, ownerID, otherID, calendarID := newTestShareService(t)
 	ctx := context.Background()
 
@@ -120,8 +147,8 @@ func TestCalendarService_ClearColorOverride_FallsBackToCalendarColor(t *testing.
 	if err != nil {
 		t.Fatalf("resolve view: %v", err)
 	}
-	if view.Color != "#12809CFF" {
-		t.Fatalf("expected the colour to fall back to the calendar's own after clearing, got %q", view.Color)
+	if view.Color != "#E2483DFF" {
+		t.Fatalf("expected the colour to be freshly auto-assigned (first free Swatch) after clearing, got %q", view.Color)
 	}
 }
 
@@ -158,8 +185,10 @@ func TestCalendarService_RevokeShare_ClearsColorOverride(t *testing.T) {
 		t.Fatalf("revoke share: %v", err)
 	}
 
-	// Re-granting a Share doesn't resurrect the old override — it must
-	// have actually been deleted, not merely hidden while Access is None.
+	// Re-granting a Share doesn't resurrect the old override — it must have
+	// actually been deleted, not merely hidden while Access is None: a fresh
+	// colour gets auto-assigned (ADR-0057) rather than the stale override
+	// reappearing.
 	if _, _, err := svc.Share(ctx, ownerID, calendarID, "other@example.com", repository.RoleViewer); err != nil {
 		t.Fatalf("re-share: %v", err)
 	}
@@ -167,8 +196,8 @@ func TestCalendarService_RevokeShare_ClearsColorOverride(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve view: %v", err)
 	}
-	if view.Color != "#12809CFF" {
-		t.Fatalf("expected the override to have been cleared by revoke, got %q", view.Color)
+	if view.Color != "#E2483DFF" {
+		t.Fatalf("expected the override to have been cleared by revoke and freshly auto-assigned on re-share, got %q", view.Color)
 	}
 }
 
@@ -196,8 +225,8 @@ func TestCalendarService_LeaveShare_ClearsColorOverride(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve view: %v", err)
 	}
-	if view.Color != "#12809CFF" {
-		t.Fatalf("expected the override to have been cleared by leaving, got %q", view.Color)
+	if view.Color != "#E2483DFF" {
+		t.Fatalf("expected the override to have been cleared by leaving and freshly auto-assigned on re-share, got %q", view.Color)
 	}
 }
 

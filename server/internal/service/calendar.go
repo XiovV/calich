@@ -181,6 +181,11 @@ func (s *CalendarService) ListAccessible(ctx context.Context, userID int64) ([]C
 	if err != nil {
 		return nil, fmt.Errorf("list shared calendars: %w", err)
 	}
+	// Sorted by Calendar id — not creation time — so a batch of Calendars
+	// that all still lack a colour override get auto-assigned one in
+	// Calendar-id order (ADR-0057): a stable tiebreak, independent of the
+	// query's own ordering.
+	sort.Slice(shared, func(i, j int) bool { return shared[i].ID < shared[j].ID })
 
 	result := make([]CalendarWithAccess, 0, len(owned)+len(shared))
 	for _, c := range owned {
@@ -231,6 +236,9 @@ func (s *CalendarService) ListAccessibleInWorkspace(ctx context.Context, userID,
 	if err != nil {
 		return nil, fmt.Errorf("list shared calendars: %w", err)
 	}
+	// See ListAccessible's identical sort: Calendar-id order makes a batch
+	// auto-assignment deterministic (ADR-0057).
+	sort.Slice(shared, func(i, j int) bool { return shared[i].ID < shared[j].ID })
 
 	result := make([]CalendarWithAccess, 0, len(owned)+len(shared))
 	for _, c := range owned {
@@ -266,13 +274,16 @@ func (s *CalendarService) ListAccessibleInWorkspace(ctx context.Context, userID,
 	return result, nil
 }
 
-// resolveDisplayColor computes DisplayColor(user, calendar) (ADR-0038): the
-// User's own override on calendar if they've set one, otherwise the
-// Calendar's own stored colour. The single place both the REST Calendar
-// responses and CalDAV's calendar-color property resolve the value they
-// show, so a Subscribed Calendar's publisher-tracking (ADR-0032) — which
-// only ever touches the stored colour — is transparently overridden by a
-// User's own choice without either mechanism knowing about the other.
+// resolveDisplayColor computes DisplayColor(user, calendar) (ADR-0038,
+// amended by ADR-0057): the User's own override on calendar if they've set
+// one; the Calendar's own stored colour if they own it; otherwise a colour
+// auto-assigned and persisted right now, so the same call that first renders
+// a shared Calendar to a User also fixes its colour for good. The single
+// place both the REST Calendar responses and CalDAV's calendar-color
+// property resolve the value they show, so a Subscribed Calendar's
+// publisher-tracking (ADR-0032) — which only ever touches the stored
+// colour — is transparently overridden by a User's own choice without
+// either mechanism knowing about the other.
 func (s *CalendarService) resolveDisplayColor(ctx context.Context, userID int64, calendar repository.Calendar) (string, error) {
 	override, err := s.colorOverrides.Get(ctx, userID, calendar.ID)
 	if err == nil {
@@ -281,7 +292,55 @@ func (s *CalendarService) resolveDisplayColor(ctx context.Context, userID int64,
 	if !errors.Is(err, repository.ErrNotFound) {
 		return "", fmt.Errorf("get calendar color override: %w", err)
 	}
-	return calendar.Color, nil
+	if calendar.UserID == userID {
+		return calendar.Color, nil
+	}
+
+	used, err := s.usedDisplayColors(ctx, userID, calendar.WorkspaceID)
+	if err != nil {
+		return "", err
+	}
+	color := pickFreeColor(used)
+	if err := s.colorOverrides.Upsert(ctx, userID, calendar.ID, color); err != nil {
+		return "", fmt.Errorf("auto-assign calendar color: %w", err)
+	}
+	return color, nil
+}
+
+// usedDisplayColors returns the resolved DisplayColor (not each Calendar's
+// raw stored colour) of every Calendar userID can currently see in
+// workspaceID — owned (which already includes a Subscribed or Linked
+// Calendar, both owned by the User who added them) and shared-in alike —
+// the set pickFreeColor must avoid colliding with (ADR-0057). A shared
+// Calendar with no override of its own yet contributes nothing: it hasn't
+// been resolved, so there's nothing to compare against, and it gets its own
+// turn through resolveDisplayColor — in Calendar-id order across a batch,
+// see ListAccessible and ListAccessibleInWorkspace.
+func (s *CalendarService) usedDisplayColors(ctx context.Context, userID, workspaceID int64) ([]string, error) {
+	owned, err := s.calendars.ListByUserAndWorkspace(ctx, userID, workspaceID)
+	if err != nil {
+		return nil, fmt.Errorf("list owned calendars: %w", err)
+	}
+	shared, err := s.calendars.ListSharedWithUserAndWorkspace(ctx, userID, workspaceID)
+	if err != nil {
+		return nil, fmt.Errorf("list shared calendars: %w", err)
+	}
+
+	used := make([]string, 0, len(owned)+len(shared))
+	for _, c := range owned {
+		used = append(used, c.Color)
+	}
+	for _, c := range shared {
+		override, err := s.colorOverrides.Get(ctx, userID, c.ID)
+		if err == nil {
+			used = append(used, override)
+			continue
+		}
+		if !errors.Is(err, repository.ErrNotFound) {
+			return nil, fmt.Errorf("get calendar color override: %w", err)
+		}
+	}
+	return used, nil
 }
 
 // AccessWithColor resolves userID's Access to id's Calendar together with
