@@ -28,12 +28,6 @@ interface CalendarsState {
   // updateCalendar, since the colour applied is exactly the one the caller
   // just picked, with no override-vs-fallback ambiguity to resolve.
   setCalendarColor: (id: string, color: string) => Promise<void>;
-  // clearCalendarColor removes the caller's personal override on id,
-  // falling back to the Owner's colour (ADR-0038, #122). Not optimistic,
-  // unlike setCalendarColor: the fallback colour is whatever the Owner's is,
-  // which this store must never resolve itself — only the server's response
-  // says what it is.
-  clearCalendarColor: (id: string) => Promise<void>;
   // Resolves to whether the delete actually succeeded, so callers that
   // cascade other local state off of it (e.g. deleteCalendarCascade) know
   // whether to undo that cascade too.
@@ -186,19 +180,6 @@ export const useCalendarsStore = create<CalendarsState>((set, get) => ({
     } catch {
       set({ calendars: previousCalendars });
       toast.error("Failed to update calendar color.");
-    }
-  },
-
-  clearCalendarColor: async (id) => {
-    try {
-      const updated = await calendarsApi.clearColor(requireAccessToken(), id);
-      set((state) => ({
-        calendars: state.calendars.map((calendar) =>
-          calendar.id === id ? { ...calendar, color: updated.color } : calendar,
-        ),
-      }));
-    } catch {
-      toast.error("Failed to clear calendar color.");
     }
   },
 

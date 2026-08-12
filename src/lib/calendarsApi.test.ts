@@ -189,27 +189,6 @@ describe("calendarsApi.updateColor", () => {
   });
 });
 
-describe("calendarsApi.clearColor", () => {
-  it("patches an empty color to signal falling back to the owner's", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(
-      jsonResponse(200, { id: "cal-1", name: "Family", color: "#12809CFF" }),
-    );
-    vi.stubGlobal("fetch", fetchMock);
-
-    const updated = await calendarsApi.clearColor("token-123", "cal-1");
-
-    expect(updated).toEqual({ id: "cal-1", name: "Family", color: "#12809CFF" });
-    expect(fetchMock).toHaveBeenCalledWith(
-      "/api/calendars/cal-1",
-      expect.objectContaining({
-        method: "PATCH",
-        credentials: "include",
-        body: JSON.stringify({ color: "" }),
-      }),
-    );
-  });
-});
-
 describe("calendarsApi.previewSubscription", () => {
   it("posts the url with dryRun=1 and returns the preview", async () => {
     const fetchMock = vi.fn().mockResolvedValue(

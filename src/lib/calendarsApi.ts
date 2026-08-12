@@ -135,14 +135,6 @@ export const calendarsApi = {
     return (await response.json()) as Calendar;
   },
 
-  // clearColor removes the caller's personal colour override on id,
-  // falling back to the Owner's (ADR-0038) — an empty color is the server's
-  // "clear" signal on this endpoint, since a non-Owner's write never touches
-  // the Calendar's own NOT NULL colour column (#122).
-  async clearColor(accessToken: string, id: string): Promise<Calendar> {
-    return calendarsApi.updateColor(accessToken, id, "");
-  },
-
   async remove(accessToken: string, id: string): Promise<void> {
     const response = await authedFetch(accessToken, `/api/calendars/${id}`, {
       method: "DELETE",

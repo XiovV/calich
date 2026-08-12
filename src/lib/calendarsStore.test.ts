@@ -6,7 +6,6 @@ vi.mock("./calendarsApi", () => ({
     create: vi.fn(),
     update: vi.fn(),
     updateColor: vi.fn(),
-    clearColor: vi.fn(),
     remove: vi.fn(),
     leave: vi.fn(),
     subscribe: vi.fn(),
@@ -181,30 +180,6 @@ describe("setCalendarColor", () => {
 
     expect(useCalendarsStore.getState().calendars).toEqual([personal]);
     expect(toast.error).toHaveBeenCalledWith("Failed to update calendar color.");
-  });
-});
-
-describe("clearCalendarColor", () => {
-  it("applies the server's resolved fallback colour rather than guessing it", async () => {
-    const shared = { ...personal, color: "#654321FF" };
-    useCalendarsStore.setState({ calendars: [shared] });
-    vi.mocked(calendarsApi.clearColor).mockResolvedValue({ ...personal, color: "#12809CFF" });
-
-    await useCalendarsStore.getState().clearCalendarColor("cal-1");
-
-    expect(useCalendarsStore.getState().calendars[0].color).toBe("#12809CFF");
-    expect(calendarsApi.clearColor).toHaveBeenCalledWith("token-123", "cal-1");
-  });
-
-  it("shows a toast when the API call fails, leaving the override in place", async () => {
-    const shared = { ...personal, color: "#654321FF" };
-    useCalendarsStore.setState({ calendars: [shared] });
-    vi.mocked(calendarsApi.clearColor).mockRejectedValue(new Error("network error"));
-
-    await useCalendarsStore.getState().clearCalendarColor("cal-1");
-
-    expect(useCalendarsStore.getState().calendars).toEqual([shared]);
-    expect(toast.error).toHaveBeenCalledWith("Failed to clear calendar color.");
   });
 });
 

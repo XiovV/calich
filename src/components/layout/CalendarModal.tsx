@@ -31,7 +31,6 @@ export function CalendarModal(props: CalendarModalProps) {
   const calendars = useCalendarsStore((state) => state.calendars);
   const updateCalendar = useCalendarsStore((state) => state.updateCalendar);
   const setCalendarColor = useCalendarsStore((state) => state.setCalendarColor);
-  const clearCalendarColor = useCalendarsStore((state) => state.clearCalendarColor);
 
   const [name, setName] = useState(mode === "edit" ? props.calendar.name : "");
   const [color, setColor] = useState(() =>
@@ -45,9 +44,9 @@ export function CalendarModal(props: CalendarModalProps) {
   const isSubscribed = mode === "edit" && isSubscribedCalendar(props.calendar);
   // canManage decides whose colour this dialog is editing (ADR-0038, #122):
   // an Owner's picker is the Calendar's colour and the default everyone
-  // inherits; anyone else's is their own personal override alone. Name,
-  // Subscription URL, KeepAlarms and sharing stay Owner-only, so a non-Owner
-  // sees only the colour picker and a way to fall back to the Owner's.
+  // inherits; anyone else's is their own personal override alone (auto-
+  // assigned on first view per ADR-0057). Name, Subscription URL, KeepAlarms
+  // and sharing stay Owner-only, so a non-Owner sees only the colour picker.
   const canManage = mode === "create" || canManageCalendar(props.calendar);
   const showSharing = mode === "edit" && canManage;
   // initialUrl is the masked value the dialog opened with (#88, ADR-0032:
@@ -57,7 +56,6 @@ export function CalendarModal(props: CalendarModalProps) {
   const initialUrl =
     mode === "edit" ? (props.calendar.sourceUrl ?? "") : "";
   const [url, setUrl] = useState(initialUrl);
-  const [isResettingColor, setIsResettingColor] = useState(false);
   const sharingSectionRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -73,17 +71,6 @@ export function CalendarModal(props: CalendarModalProps) {
     mode === "edit" && !canManage
       ? true
       : name.trim() !== "" && (!isSubscribed || url.trim() !== "");
-
-  async function handleResetColor() {
-    if (mode !== "edit") return;
-    setIsResettingColor(true);
-    try {
-      await clearCalendarColor(props.calendar.id);
-    } finally {
-      setIsResettingColor(false);
-    }
-    onClose();
-  }
 
   function handleSave() {
     if (!canSave) return;
@@ -182,16 +169,6 @@ export function CalendarModal(props: CalendarModalProps) {
             <div className="mt-2">
               <ColorSwatchPicker value={color} onValueChange={setColor} />
             </div>
-            {mode === "edit" && !canManage && (
-              <button
-                type="button"
-                onClick={handleResetColor}
-                disabled={isResettingColor}
-                className="mt-2 text-label-sm text-accent hover:underline disabled:opacity-50"
-              >
-                Reset to the owner&apos;s color
-              </button>
-            )}
           </div>
 
           {isSubscribed && canManage && (
