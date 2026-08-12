@@ -875,6 +875,58 @@ func (s *EventService) attachAttachments(ctx context.Context, events []repositor
 	return nil
 }
 
+// attachOrganizersAndAttendees is attachOrganizersAndAttendeesTo for a
+// contiguous slice — the value-slice convenience wrapper hydrateSeries uses,
+// mirroring attachReminders/attachRemindersTo's split.
+func (s *EventService) attachOrganizersAndAttendees(ctx context.Context, events []repository.Event) error {
+	pointers := make([]*repository.Event, len(events))
+	for i := range events {
+		pointers[i] = &events[i]
+	}
+	return s.attachOrganizersAndAttendeesTo(ctx, pointers)
+}
+
+// attachOrganizersAndAttendeesTo fills in each event's Attendees (with
+// Name/Email) and its Organizer's CreatedByName/CreatedByEmail, batching one
+// query across all of them rather than one per Event — the CalDAV/ICS
+// codec's read path (ADR-0062), which needs the mailto addresses
+// attachCreatedByNames and attachAttendeeCounts don't carry. Scoped per
+// Event row like attachRemindersTo: a Master and each of its Overrides can
+// each carry their own Attendees and their own Organizer (#193, ADR-0055).
+func (s *EventService) attachOrganizersAndAttendeesTo(ctx context.Context, events []*repository.Event) error {
+	ids := make([]string, 0, len(events))
+	for _, e := range events {
+		ids = append(ids, e.ID)
+	}
+	attendeesByEvent, err := s.attendees.ListWithNamesByEventIDs(ctx, ids)
+	if err != nil {
+		return fmt.Errorf("list attendees: %w", err)
+	}
+
+	organizerIDs := make([]int64, 0)
+	seen := make(map[int64]bool)
+	for _, e := range events {
+		if e.CreatedBy == nil || seen[*e.CreatedBy] {
+			continue
+		}
+		seen[*e.CreatedBy] = true
+		organizerIDs = append(organizerIDs, *e.CreatedBy)
+	}
+	organizers, err := s.users.GetByIDs(ctx, organizerIDs)
+	if err != nil {
+		return fmt.Errorf("list organizers: %w", err)
+	}
+
+	for _, e := range events {
+		e.Attendees = attendeesByEvent[e.ID]
+		if e.CreatedBy != nil {
+			e.CreatedByName = organizers[*e.CreatedBy].Name
+			e.CreatedByEmail = organizers[*e.CreatedBy].Email
+		}
+	}
+	return nil
+}
+
 // Get returns id if userID can see it — via Calendar Access or, failing
 // that, as one of its Attendees (ADR-0046, #161).
 func (s *EventService) Get(ctx context.Context, userID int64, id string) (repository.Event, error) {
@@ -1456,11 +1508,12 @@ func (s *EventService) GetSeries(ctx context.Context, userID int64, masterID str
 	return s.hydrateSeries(ctx, master, overridesByParent[masterID])
 }
 
-// hydrateSeries attaches Exdates to master, then Reminders and Attachments
-// to master and overrides together, returning master then overrides — the
-// tail GetSeries and GetAttendeeOnlySeries share once each has resolved
-// masterID and confirmed the caller's own visibility to it (Calendar
-// Access, or Attendee — ADR-0046).
+// hydrateSeries attaches Exdates to master, then Reminders, Attachments, and
+// each row's own Attendees/Organizer to master and overrides together,
+// returning master then overrides — the tail GetSeries and
+// GetAttendeeOnlySeries share once each has resolved masterID and confirmed
+// the caller's own visibility to it (Calendar Access, or Attendee —
+// ADR-0046).
 func (s *EventService) hydrateSeries(ctx context.Context, master repository.Event, overrides []repository.Event) (repository.Event, []repository.Event, error) {
 	masters := []repository.Event{master}
 	if err := s.attachExdates(ctx, masters); err != nil {
@@ -1473,6 +1526,9 @@ func (s *EventService) hydrateSeries(ctx context.Context, master repository.Even
 		return repository.Event{}, nil, err
 	}
 	if err := s.attachAttachments(ctx, all); err != nil {
+		return repository.Event{}, nil, err
+	}
+	if err := s.attachOrganizersAndAttendees(ctx, all); err != nil {
 		return repository.Event{}, nil, err
 	}
 
@@ -1720,11 +1776,12 @@ func (s *EventService) GetAttendeeOnlySeries(ctx context.Context, userID int64, 
 }
 
 // attachOverridesAndReminders loads each of masters' Overrides and attaches
-// Reminders to both masters and their Overrides in place, returning a
-// parentID-keyed map of the Overrides. Shared by every read path that
-// recomposes whole series — ListSeriesByCalendar and SyncSince (ADR-0025).
-// Callers have already checked the caller's Access to masters' Calendar, so
-// this needs no userID of its own.
+// Reminders, Attendees, and each row's own Organizer to both masters and
+// their Overrides in place, returning a parentID-keyed map of the
+// Overrides. Shared by every read path that recomposes whole series —
+// ListSeriesByCalendar and SyncSince (ADR-0025, ADR-0062). Callers have
+// already checked the caller's Access to masters' Calendar, so this needs
+// no userID of its own.
 func (s *EventService) attachOverridesAndReminders(ctx context.Context, masters []repository.Event) (map[string][]repository.Event, error) {
 	masterIDs := eventIDs(masters)
 	overridesByParent, err := s.events.ListChildrenByParentIDs(ctx, masterIDs)
@@ -1746,6 +1803,9 @@ func (s *EventService) attachOverridesAndReminders(ctx context.Context, masters 
 		}
 	}
 	if err := s.attachRemindersTo(ctx, all); err != nil {
+		return nil, err
+	}
+	if err := s.attachOrganizersAndAttendeesTo(ctx, all); err != nil {
 		return nil, err
 	}
 

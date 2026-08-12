@@ -155,19 +155,22 @@ func (r *AttendeeRepository) ListUserIDsByEventIDs(ctx context.Context, eventIDs
 	return result, nil
 }
 
-// AttendeeWithName pairs an Attendee with the display Name of the User it
-// belongs to — ListByEventID's row, mirroring GroupMember's plain shape but
-// with the Name a caller displaying an Attendee list actually needs.
+// AttendeeWithName pairs an Attendee with the display Name and Email of the
+// User it belongs to — ListByEventID's row, mirroring GroupMember's plain
+// shape but with the Name a caller displaying an Attendee list actually
+// needs. Email rides along for the codec's ATTENDEE mailto address
+// (ADR-0062); the wire handler still whitelists which fields it exposes.
 type AttendeeWithName struct {
 	Attendee
-	Name string
+	Name  string
+	Email string
 }
 
 // ListByEventID returns every Attendee of eventID with their Name, ordered
 // by Name.
 func (r *AttendeeRepository) ListByEventID(ctx context.Context, eventID string) ([]AttendeeWithName, error) {
 	rows, err := r.db.QueryContext(ctx,
-		`SELECT a.event_id, a.user_id, a.response, a.created_at, u.name
+		`SELECT a.event_id, a.user_id, a.response, a.created_at, u.name, u.email
 		 FROM attendees a
 		 JOIN users u ON u.id = a.user_id
 		 WHERE a.event_id = ?
@@ -182,7 +185,7 @@ func (r *AttendeeRepository) ListByEventID(ctx context.Context, eventID string) 
 	attendees := []AttendeeWithName{}
 	for rows.Next() {
 		var a AttendeeWithName
-		if err := rows.Scan(&a.EventID, &a.UserID, &a.Response, &a.CreatedAt, &a.Name); err != nil {
+		if err := rows.Scan(&a.EventID, &a.UserID, &a.Response, &a.CreatedAt, &a.Name, &a.Email); err != nil {
 			return nil, fmt.Errorf("scan attendee: %w", err)
 		}
 		attendees = append(attendees, a)
@@ -191,4 +194,45 @@ func (r *AttendeeRepository) ListByEventID(ctx context.Context, eventID string) 
 		return nil, fmt.Errorf("iterate attendees: %w", err)
 	}
 	return attendees, nil
+}
+
+// ListWithNamesByEventIDs returns every Attendee of any of eventIDs with
+// their Name and Email, keyed by event id and ordered by Name within each —
+// the batched counterpart to ListByEventID, ListUserIDsByEventIDs' shape,
+// for the codec's ATTENDEE emission across a whole series (master plus
+// overrides) in one query rather than one per VEVENT (ADR-0062).
+func (r *AttendeeRepository) ListWithNamesByEventIDs(ctx context.Context, eventIDs []string) (map[string][]AttendeeWithName, error) {
+	result := make(map[string][]AttendeeWithName)
+	if len(eventIDs) == 0 {
+		return result, nil
+	}
+
+	args := make([]any, len(eventIDs))
+	for i, id := range eventIDs {
+		args[i] = id
+	}
+	rows, err := r.db.QueryContext(ctx,
+		`SELECT a.event_id, a.user_id, a.response, a.created_at, u.name, u.email
+		 FROM attendees a
+		 JOIN users u ON u.id = a.user_id
+		 WHERE a.event_id IN (`+placeholders(len(eventIDs))+`)
+		 ORDER BY a.event_id, u.name`,
+		args...,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list attendees: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var a AttendeeWithName
+		if err := rows.Scan(&a.EventID, &a.UserID, &a.Response, &a.CreatedAt, &a.Name, &a.Email); err != nil {
+			return nil, fmt.Errorf("scan attendee: %w", err)
+		}
+		result[a.EventID] = append(result[a.EventID], a)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate attendees: %w", err)
+	}
+	return result, nil
 }

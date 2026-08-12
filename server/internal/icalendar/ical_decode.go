@@ -3,7 +3,12 @@
 // (ADR-0025). Anything it does not recognize — VALARM actions other than
 // DISPLAY/EMAIL, end-relative or absolute-datetime TRIGGERs (ADR-0020
 // deferred) — is silently dropped rather than rejected, matching ADR-0026's
-// "unmodeled data is normalized away, not preserved" decision.
+// "unmodeled data is normalized away, not preserved" decision. ATTENDEE and
+// ORGANIZER are deliberately in that set even though buildVEvent now emits
+// both outbound: ParsedEvent carries no Attendee field, so a native client's
+// added/removed ATTENDEE lines are discarded and the guest list is
+// re-emitted from this app's own state on the next GET (ADR-0062) — the
+// guest list is owned by this app's API, CalDAV only reads it.
 package icalendar
 
 import (

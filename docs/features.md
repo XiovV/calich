@@ -80,7 +80,8 @@ Built on `emersion/go-webdav`'s `caldav` package + `emersion/go-ical`, mounted a
 
 - **Single-user instance** — no open sign-up; schema supports multi-user later, but the rule "one account" is enforced today.
 - **No Digest auth for CalDAV** — Basic-over-TLS only.
-- **CalDAV round-trips are lossy**: `CATEGORIES`, `ATTENDEE`/`ORGANIZER`, `STATUS`, `CLASS`, `URL`, `GEO`, custom `X-` properties, and non-before-start VALARM triggers are silently dropped on every PUT — no sidecar store.
+- **CalDAV round-trips are lossy**: `CATEGORIES`, `STATUS`, `CLASS`, `GEO`, custom `X-` properties, and non-before-start VALARM triggers are silently dropped on every PUT — no sidecar store.
+- **`ATTENDEE`/`ORGANIZER` are emitted but never read back**: both are serialized outbound (CalDAV and Calendar files) from the Event's own Attendees/Organizer, but a native client's added or removed `ATTENDEE` lines on PUT are discarded — the guest list is owned by this app's API and always re-emitted from its own state on the next GET (ADR-0062).
 - **No per-event color** — RFC 7986 `COLOR` on VEVENT deliberately rejected.
 - **No CTag propagation for calendar-color changes** — convergence is undefined, last-write-wins.
 - **ICS import is not backup/restore** — no dedupe or UID preservation at import time (Subscriptions plan to reopen this narrowly, see below).

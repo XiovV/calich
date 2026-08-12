@@ -305,11 +305,49 @@ func buildVEvent(e repository.Event, uid string, recurrenceID *time.Time, recurr
 		v.Props.Add(prop)
 	}
 
+	appendOrganizerProp(v, e)
+	appendAttendeeProps(v, e.Attendees)
+
 	for _, reminder := range e.Reminders {
 		v.Children = append(v.Children, buildVAlarm(e, reminder))
 	}
 
 	return v, nil
+}
+
+// appendOrganizerProp adds ORGANIZER naming e's Organizer — the User named
+// by CreatedBy — with CN=CreatedByName and that User's own Email as the
+// mailto address, the CalDAV/Calendar-file form ADR-0059 defines (the
+// Invitation's own ORGANIZER, naming this instance's address instead, is
+// built separately). A no-op when CreatedBy is nil: an Event whose
+// Organizer's account was since deleted simply has none (CONTEXT.md).
+func appendOrganizerProp(v *ical.Event, e repository.Event) {
+	if e.CreatedBy == nil {
+		return
+	}
+	prop := ical.NewProp(ical.PropOrganizer)
+	if e.CreatedByName != "" {
+		prop.Params.Set(ical.ParamCommonName, e.CreatedByName)
+	}
+	prop.Value = "mailto:" + e.CreatedByEmail
+	v.Props.Add(prop)
+}
+
+// appendAttendeeProps adds one ATTENDEE per attendees, naming their Response
+// as PARTSTAT — attendees.response already stores iCalendar's PARTSTAT
+// vocabulary verbatim (ADR-0046), upper-cased here since the column holds it
+// lowercase (ADR-0062). No properties at all for an empty attendees, so an
+// Event with no Attendees round-trips with no ATTENDEE lines.
+func appendAttendeeProps(v *ical.Event, attendees []repository.AttendeeWithName) {
+	for _, a := range attendees {
+		prop := ical.NewProp(ical.PropAttendee)
+		if a.Name != "" {
+			prop.Params.Set(ical.ParamCommonName, a.Name)
+		}
+		prop.Params.Set(ical.ParamParticipationStatus, strings.ToUpper(a.Response))
+		prop.Value = "mailto:" + a.Email
+		v.Props.Add(prop)
+	}
 }
 
 // buildVAlarm renders one Reminder as a VALARM: ACTION:DISPLAY for the

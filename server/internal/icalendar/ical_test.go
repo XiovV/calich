@@ -303,6 +303,128 @@ func TestSeriesToICal_AllDayReminder_TriggerMeasuredFromNineAM(t *testing.T) {
 	}
 }
 
+func TestSeriesToICal_Organizer_EmittedWithNameAndMailto(t *testing.T) {
+	organizerID := int64(7)
+	master := repository.Event{
+		ID:             "evt-1",
+		Title:          "Meeting",
+		Start:          time.Date(2026, 7, 1, 15, 0, 0, 0, time.UTC),
+		End:            time.Date(2026, 7, 1, 16, 0, 0, 0, time.UTC),
+		CreatedAt:      time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC),
+		CreatedBy:      &organizerID,
+		CreatedByName:  "Alice Example",
+		CreatedByEmail: "alice@example.com",
+	}
+
+	body := mustEncode(t, master, nil)
+
+	if !strings.Contains(body, "ORGANIZER;CN=Alice Example:mailto:alice@example.com") {
+		t.Fatalf("expected ORGANIZER naming the creator, got:\n%s", body)
+	}
+}
+
+func TestSeriesToICal_NoOrganizer_WhenCreatedByNil(t *testing.T) {
+	master := repository.Event{
+		ID:        "evt-1",
+		Title:     "Meeting",
+		Start:     time.Date(2026, 7, 1, 15, 0, 0, 0, time.UTC),
+		End:       time.Date(2026, 7, 1, 16, 0, 0, 0, time.UTC),
+		CreatedAt: time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC),
+	}
+
+	body := mustEncode(t, master, nil)
+
+	if strings.Contains(body, "ORGANIZER") {
+		t.Fatalf("expected no ORGANIZER when CreatedBy is nil (creator deleted, or never recorded), got:\n%s", body)
+	}
+}
+
+func TestSeriesToICal_Attendees_EmittedWithPartstatAndMailto(t *testing.T) {
+	master := repository.Event{
+		ID:        "evt-1",
+		Title:     "Meeting",
+		Start:     time.Date(2026, 7, 1, 15, 0, 0, 0, time.UTC),
+		End:       time.Date(2026, 7, 1, 16, 0, 0, 0, time.UTC),
+		CreatedAt: time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC),
+		Attendees: []repository.AttendeeWithName{
+			{Attendee: repository.Attendee{Response: repository.ResponseAccepted}, Name: "Bob Guest", Email: "bob@example.com"},
+			{Attendee: repository.Attendee{Response: repository.ResponseNeedsAction}, Name: "Carol Guest", Email: "carol@example.com"},
+		},
+	}
+
+	body := mustEncode(t, master, nil)
+
+	if strings.Count(body, "BEGIN:VALARM") != 0 {
+		t.Fatalf("test setup error: unexpected VALARM in body:\n%s", body)
+	}
+	if !strings.Contains(body, "ATTENDEE;CN=Bob Guest;PARTSTAT=ACCEPTED:mailto:bob@example.com") {
+		t.Fatalf("expected an ATTENDEE for Bob with PARTSTAT=ACCEPTED, got:\n%s", body)
+	}
+	if !strings.Contains(body, "ATTENDEE;CN=Carol Guest;PARTSTAT=NEEDS-ACTION:mailto:carol@example.com") {
+		t.Fatalf("expected an ATTENDEE for Carol with PARTSTAT=NEEDS-ACTION, got:\n%s", body)
+	}
+}
+
+func TestSeriesToICal_NoAttendees_OmitsAttendeeProperty(t *testing.T) {
+	master := repository.Event{
+		ID:        "evt-1",
+		Title:     "Meeting",
+		Start:     time.Date(2026, 7, 1, 15, 0, 0, 0, time.UTC),
+		End:       time.Date(2026, 7, 1, 16, 0, 0, 0, time.UTC),
+		CreatedAt: time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC),
+	}
+
+	body := mustEncode(t, master, nil)
+
+	if strings.Contains(body, "ATTENDEE") {
+		t.Fatalf("expected no ATTENDEE property for an Event with no Attendees, got:\n%s", body)
+	}
+}
+
+func TestSeriesToICal_AttendeesSurviveMasterOverrideSplit(t *testing.T) {
+	recurrenceID := time.Date(2026, 6, 9, 9, 0, 0, 0, time.UTC)
+	master := repository.Event{
+		ID:        "evt-1",
+		Title:     "Standup",
+		Start:     time.Date(2026, 6, 2, 9, 0, 0, 0, time.UTC),
+		End:       time.Date(2026, 6, 2, 9, 30, 0, 0, time.UTC),
+		Rrule:     "FREQ=WEEKLY;BYDAY=TU",
+		CreatedAt: time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC),
+		Attendees: []repository.AttendeeWithName{
+			{Attendee: repository.Attendee{Response: repository.ResponseAccepted}, Name: "Bob Guest", Email: "bob@example.com"},
+		},
+	}
+	parentID := "evt-1"
+	override := repository.Event{
+		ID:           "evt-2",
+		ParentID:     &parentID,
+		RecurrenceID: &recurrenceID,
+		Title:        "Standup (moved)",
+		Start:        time.Date(2026, 6, 9, 11, 0, 0, 0, time.UTC),
+		End:          time.Date(2026, 6, 9, 11, 30, 0, 0, time.UTC),
+		CreatedAt:    time.Date(2026, 6, 8, 0, 0, 0, 0, time.UTC),
+		Attendees: []repository.AttendeeWithName{
+			{Attendee: repository.Attendee{Response: repository.ResponseTentative}, Name: "Dana Guest", Email: "dana@example.com"},
+		},
+	}
+
+	body := mustEncode(t, master, []repository.Event{override})
+
+	if !strings.Contains(body, "ATTENDEE;CN=Bob Guest;PARTSTAT=ACCEPTED:mailto:bob@example.com") {
+		t.Fatalf("expected the master's own Attendee to survive, got:\n%s", body)
+	}
+	if !strings.Contains(body, "ATTENDEE;CN=Dana Guest;PARTSTAT=TENTATIVE:mailto:dana@example.com") {
+		t.Fatalf("expected the override's own, distinct Attendee to survive, got:\n%s", body)
+	}
+	if strings.Contains(body, "Carol") {
+		t.Fatalf("test setup error: unexpected attendee name in body:\n%s", body)
+	}
+	// The override must not inherit the master's guest, and vice versa.
+	if strings.Count(body, "ATTENDEE") != 2 {
+		t.Fatalf("expected exactly one ATTENDEE per VEVENT (two total), got:\n%s", body)
+	}
+}
+
 func TestCalendarETag_ChangesWhenReconstructionChanges(t *testing.T) {
 	base := repository.Event{
 		ID:        "evt-1",

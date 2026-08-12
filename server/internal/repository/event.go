@@ -75,6 +75,16 @@ type Event struct {
 	// column — populated by the service layer from users, mirroring how
 	// Exdates and Reminders are attached. Empty whenever CreatedBy is nil.
 	CreatedByName string
+	// CreatedByEmail is CreatedBy's Email, populated alongside
+	// CreatedByName — the Organizer's mailto address the codec's ORGANIZER
+	// property needs (ADR-0055, ADR-0062). Empty whenever CreatedBy is nil.
+	CreatedByEmail string
+	// Attendees are this Event's own Attendees with their Name and Email
+	// (ADR-0046, ADR-0062), for the codec's ATTENDEE emission. Not a
+	// column — populated by the service layer from the attendees table,
+	// mirroring Reminders. Scoped to this row alone, not the whole series:
+	// an Override can carry Attendees distinct from its Master's (#193).
+	Attendees []AttendeeWithName
 	// Attachments are this Event's Attachments (#132, ADR-0040) — set only
 	// on a Master; an Override never carries its own. Not a column —
 	// populated by the service layer from event_attachments, mirroring
