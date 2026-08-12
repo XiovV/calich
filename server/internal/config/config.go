@@ -42,6 +42,15 @@ type Config struct {
 	SMTPUser string
 	SMTPPass string
 	SMTPFrom string
+	// IMAP transport the reply poller reads Attendee Responses back from
+	// (ADR-0059) — the same mailbox SMTP_FROM sends from. Email delivery is
+	// only wired up when every one of these is set; with no IMAP configured,
+	// invitations still send (SMTPConfigured governs that independently) but
+	// no Response ever comes back.
+	IMAPHost string
+	IMAPPort string
+	IMAPUser string
+	IMAPPass string
 	// SubscriptionRefreshInterval is the background poller's default
 	// refresh cadence for a Subscribed Calendar whose feed states none of
 	// its own — SUBSCRIPTION_REFRESH_INTERVAL, parsed as a Go duration
@@ -67,6 +76,10 @@ func Load() Config {
 		SMTPUser:                    getEnv("SMTP_USER", ""),
 		SMTPPass:                    getEnv("SMTP_PASS", ""),
 		SMTPFrom:                    getEnv("SMTP_FROM", ""),
+		IMAPHost:                    getEnv("IMAP_HOST", ""),
+		IMAPPort:                    getEnv("IMAP_PORT", ""),
+		IMAPUser:                    getEnv("IMAP_USER", ""),
+		IMAPPass:                    getEnv("IMAP_PASS", ""),
 		SubscriptionRefreshInterval: getEnvDuration("SUBSCRIPTION_REFRESH_INTERVAL", defaultSubscriptionRefreshInterval),
 		MaxAttachmentSize:           getEnvInt64("MAX_ATTACHMENT_SIZE", defaultMaxAttachmentSize),
 		MaxAttachmentsPerEvent:      getEnvInt("MAX_ATTACHMENTS_PER_EVENT", defaultMaxAttachmentsPerEvent),
@@ -120,6 +133,15 @@ func getEnvInt(key string, fallback int) int {
 // (ADR-0021).
 func (c Config) SMTPConfigured() bool {
 	return c.SMTPHost != "" && c.SMTPPort != "" && c.SMTPUser != "" && c.SMTPPass != "" && c.SMTPFrom != ""
+}
+
+// ImapConfigured reports whether every IMAP setting needed to read
+// Attendee Responses back is present — the reply poller only runs when
+// this is true (ADR-0059). Independent of SMTPConfigured: an instance can
+// send Invitations with no IMAP configured, those Attendees simply stay
+// needs-action forever.
+func (c Config) ImapConfigured() bool {
+	return c.IMAPHost != "" && c.IMAPPort != "" && c.IMAPUser != "" && c.IMAPPass != ""
 }
 
 // getEnvBool parses key as a bool (e.g. "true"/"false", "1"/"0"), falling

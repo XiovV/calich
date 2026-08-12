@@ -35,7 +35,7 @@ func newAppPasswordTestServer(t *testing.T) (*httptest.Server, string) {
 
 	appPasswords := service.NewAppPasswordService(repository.NewAppPasswordRepository(sqlDB), users)
 	h := NewAppPasswordHandler(appPasswords)
-	authHandler := NewAuthHandler(auth, false)
+	authHandler := NewAuthHandler(auth, false, false)
 
 	r := chi.NewRouter()
 	r.Post("/api/auth/login", authHandler.Login)

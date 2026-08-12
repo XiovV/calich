@@ -20,10 +20,14 @@ type AuthHandler struct {
 	// (ADR-0021) — combined with the user's own email to compute
 	// meResponse's emailReminderChannelAvailable.
 	smtpConfigured bool
+	// imapConfigured is whether the self-hoster has set up IMAP transport
+	// (ADR-0059) — meResponse's invitationRepliesConfigured, which Settings
+	// uses to disclose whether an emailed Response ever comes back.
+	imapConfigured bool
 }
 
-func NewAuthHandler(auth *service.AuthService, smtpConfigured bool) *AuthHandler {
-	return &AuthHandler{auth: auth, smtpConfigured: smtpConfigured}
+func NewAuthHandler(auth *service.AuthService, smtpConfigured, imapConfigured bool) *AuthHandler {
+	return &AuthHandler{auth: auth, smtpConfigured: smtpConfigured, imapConfigured: imapConfigured}
 }
 
 type loginRequest struct {
@@ -270,6 +274,12 @@ type meResponse struct {
 	// (ADR-0047), so this collapses to just whether the self-hoster has SMTP
 	// configured (ADR-0021, ADR-0010).
 	EmailReminderChannelAvailable bool `json:"email_reminder_channel_available"`
+	// InvitationRepliesConfigured is whether this instance has IMAP set up
+	// to read Attendee Responses back (ADR-0059) — independent of
+	// EmailReminderChannelAvailable's SMTP: an instance can send
+	// Invitations with this false, those Attendees just stay needs-action
+	// forever. Settings discloses this once, beside the SMTP configuration.
+	InvitationRepliesConfigured bool `json:"invitation_replies_configured"`
 	// SyncedDeviceRemindersEnabled is "let my synced devices show reminder
 	// pop-ups (disable in-app reminder notifications)" (ADR-0027).
 	SyncedDeviceRemindersEnabled bool `json:"synced_device_reminders_enabled"`
@@ -289,6 +299,7 @@ func (h *AuthHandler) toMeResponse(user repository.User) meResponse {
 		MustChangePassword:            user.MustChangePassword,
 		Email:                         user.Email,
 		EmailReminderChannelAvailable: h.smtpConfigured,
+		InvitationRepliesConfigured:   h.imapConfigured,
 		SyncedDeviceRemindersEnabled:  user.SyncedDeviceRemindersEnabled,
 		WeekStart:                     user.WeekStart,
 		DefaultView:                   user.DefaultView,

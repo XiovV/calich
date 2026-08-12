@@ -18,6 +18,7 @@ import (
 	"github.com/XiovV/calendar/server/internal/mailer"
 	"github.com/XiovV/calendar/server/internal/outbox"
 	"github.com/XiovV/calendar/server/internal/reminder"
+	"github.com/XiovV/calendar/server/internal/reply"
 	"github.com/XiovV/calendar/server/internal/repository"
 	"github.com/XiovV/calendar/server/internal/router"
 	"github.com/XiovV/calendar/server/internal/service"
@@ -46,6 +47,14 @@ const attachmentSweepInterval = 24 * time.Hour
 // scheduler's minute, since an Invitation is the one message a User cannot
 // turn off and a self-hoster would notice a slow one.
 const outboxTickInterval = 10 * time.Second
+
+// replyTickInterval is how often the reply poller checks the ORGANIZER
+// mailbox for unseen mail (ADR-0059) — coarser than the outbox's own
+// interval since a Response arriving "one poller cycle late" is an accepted
+// cost (ADR-0059), not a promise of anything approaching real time, and a
+// self-hoster's IMAP provider is one more thing not worth polling harder
+// than necessary.
+const replyTickInterval = time.Minute
 
 func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
@@ -125,7 +134,7 @@ func main() {
 	importService := service.NewImportService(eventService, calendarService, attachmentStore, cfg.MaxAttachmentSize, cfg.MaxAttachmentsPerEvent)
 	subscribeService := service.NewSubscribeService(eventService, calendarService, cfg.SubscriptionRefreshInterval)
 
-	authHandler := handlers.NewAuthHandler(authService, cfg.SMTPConfigured())
+	authHandler := handlers.NewAuthHandler(authService, cfg.SMTPConfigured(), cfg.ImapConfigured())
 	calendarHandler := handlers.NewCalendarHandler(calendarService, eventService, importService, subscribeService, attachmentStore)
 	eventHandler := handlers.NewEventHandler(eventService, attachmentStore)
 	attachmentHandler := handlers.NewAttachmentHandler(attachmentService, cfg.MaxAttachmentSize)
@@ -188,6 +197,18 @@ func main() {
 		go outboxWorker.Run(outboxCtx, outboxTickInterval)
 	}
 
+	// The reply poller: reads Attendee Responses back from the ORGANIZER
+	// mailbox (ADR-0059). Absent entirely when IMAP isn't configured — its
+	// absence never disables sending Invitations, those Attendees just stay
+	// needs-action forever.
+	replyCtx, stopReply := context.WithCancel(context.Background())
+	defer stopReply()
+	if cfg.ImapConfigured() {
+		imapClient := reply.NewIMAPClient(cfg.IMAPHost, cfg.IMAPPort, cfg.IMAPUser, cfg.IMAPPass)
+		replyWorker := reply.NewWorker(imapClient, eventService)
+		go replyWorker.Run(replyCtx, replyTickInterval)
+	}
+
 	go func() {
 		logger.Info("starting server", "port", cfg.Port, "data_dir", cfg.DataDir)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
@@ -205,6 +226,7 @@ func main() {
 	stopPoller()
 	stopSweeper()
 	stopOutbox()
+	stopReply()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 

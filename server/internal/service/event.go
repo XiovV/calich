@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/XiovV/calendar/server/internal/icalendar"
 	"github.com/XiovV/calendar/server/internal/recurrence"
 	"github.com/XiovV/calendar/server/internal/repository"
 )
@@ -1672,17 +1673,15 @@ func (s *EventService) GetOccurrence(ctx context.Context, userID int64, id strin
 		return repository.Event{}, err
 	}
 
-	for _, override := range overrides {
-		if override.RecurrenceID != nil && override.RecurrenceID.Equal(occurrenceStart) {
-			flattened := override
-			flattened.ParentID = nil
-			flattened.RecurrenceID = nil
-			// An Override never carries a rule of its own (ADR-0016), so
-			// this is always already "", but cleared explicitly since
-			// icalendar.OccurrenceToICal trusts its caller to have done so.
-			flattened.Rrule = ""
-			return flattened, nil
-		}
+	if override, ok := findOverrideForOccurrence(overrides, occurrenceStart); ok {
+		flattened := override
+		flattened.ParentID = nil
+		flattened.RecurrenceID = nil
+		// An Override never carries a rule of its own (ADR-0016), so
+		// this is always already "", but cleared explicitly since
+		// icalendar.OccurrenceToICal trusts its caller to have done so.
+		flattened.Rrule = ""
+		return flattened, nil
 	}
 
 	valid, err := isOccurrenceStart(master, occurrenceStart)
@@ -1699,6 +1698,19 @@ func (s *EventService) GetOccurrence(ctx context.Context, userID int64, id strin
 	flattened.Rrule = ""
 	flattened.Exdates = nil
 	return flattened, nil
+}
+
+// findOverrideForOccurrence returns the Override in overrides that replaces
+// occurrenceStart, if any — the "does this Occurrence have an Override"
+// lookup GetOccurrence and resolveReplyEvent both need, kept in one place so
+// the two don't drift apart on what counts as a match.
+func findOverrideForOccurrence(overrides []repository.Event, occurrenceStart time.Time) (repository.Event, bool) {
+	for _, override := range overrides {
+		if override.RecurrenceID != nil && override.RecurrenceID.Equal(occurrenceStart) {
+			return override, true
+		}
+	}
+	return repository.Event{}, false
 }
 
 // isOccurrenceStart reports whether occurrenceStart is a real, non-excepted
@@ -3098,4 +3110,69 @@ func (s *EventService) SetResponse(ctx context.Context, userID int64, eventID, r
 		return repository.Attendee{}, err
 	}
 	return s.attendees.SetResponse(ctx, eventID, userID, response)
+}
+
+// ApplyReply resolves an inbound METHOD:REPLY (icalendar.ParsedReply) and
+// writes the Response it names — the reply poller's write path (#202,
+// ADR-0059), called with no acting User in view, so it runs no Access check:
+// the right to answer for an Attendee row was already established when they
+// were invited, the same reasoning loadInvitationForAttendee applies for
+// outbound sends. applied is false, with no error, when there is nowhere
+// for the reply to go — an unknown UID or an address that isn't an Attendee
+// of the resolved row — so the caller logs it and drops it rather than
+// guessing (ADR-0059).
+func (s *EventService) ApplyReply(ctx context.Context, reply icalendar.ParsedReply) (applied bool, err error) {
+	row, err := s.resolveReplyEvent(ctx, reply.UID, reply.RecurrenceID)
+	if err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			return false, nil
+		}
+		return false, fmt.Errorf("resolve reply event: %w", err)
+	}
+
+	attendees, err := s.attendees.ListByEventID(ctx, row.ID)
+	if err != nil {
+		return false, fmt.Errorf("list attendees: %w", err)
+	}
+
+	for _, a := range attendees {
+		if !strings.EqualFold(a.Email, reply.Attendee) {
+			continue
+		}
+		if a.UserID != nil {
+			if _, err := s.attendees.SetResponse(ctx, row.ID, *a.UserID, reply.Response); err != nil {
+				return false, fmt.Errorf("set response: %w", err)
+			}
+		} else if _, err := s.attendees.SetResponseByEmail(ctx, row.ID, a.Email, reply.Response); err != nil {
+			return false, fmt.Errorf("set response: %w", err)
+		}
+		return true, nil
+	}
+	return false, nil
+}
+
+// resolveReplyEvent resolves a REPLY's (UID, RecurrenceID) to the Event row
+// that carries the Attendee it answers for: the Override row for that
+// Occurrence when one exists (findOverrideForOccurrence, shared with
+// GetOccurrence's own resolution so the two can't drift apart on what
+// counts as a match), else the Master's own row — since an Attendee invited
+// to a whole series has only the Master's row to answer on until that
+// Occurrence is split off into its own Override.
+func (s *EventService) resolveReplyEvent(ctx context.Context, uid string, recurrenceID *time.Time) (repository.Event, error) {
+	master, err := s.events.GetByID(ctx, uid)
+	if err != nil {
+		return repository.Event{}, err
+	}
+	if recurrenceID == nil {
+		return master, nil
+	}
+
+	children, err := s.events.ListChildrenByParentIDs(ctx, []string{uid})
+	if err != nil {
+		return repository.Event{}, fmt.Errorf("list children: %w", err)
+	}
+	if override, ok := findOverrideForOccurrence(children[uid], *recurrenceID); ok {
+		return override, nil
+	}
+	return master, nil
 }

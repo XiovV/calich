@@ -19,10 +19,15 @@ import (
 
 func newAuthTestServer(t *testing.T) *httptest.Server {
 	t.Helper()
-	return newAuthTestServerWithSMTP(t, false)
+	return newAuthTestServerWithMail(t, false, false)
 }
 
 func newAuthTestServerWithSMTP(t *testing.T, smtpConfigured bool) *httptest.Server {
+	t.Helper()
+	return newAuthTestServerWithMail(t, smtpConfigured, false)
+}
+
+func newAuthTestServerWithMail(t *testing.T, smtpConfigured, imapConfigured bool) *httptest.Server {
 	t.Helper()
 
 	sqlDB, err := db.OpenInMemory()
@@ -41,7 +46,7 @@ func newAuthTestServerWithSMTP(t *testing.T, smtpConfigured bool) *httptest.Serv
 	// the only path that used to.
 	mustSeedUserRequiringPasswordChange(t, users, "admin", "admin")
 
-	h := NewAuthHandler(auth, smtpConfigured)
+	h := NewAuthHandler(auth, smtpConfigured, imapConfigured)
 
 	r := chi.NewRouter()
 	r.Post("/api/auth/login", h.Login)
@@ -237,7 +242,7 @@ func TestLogin_DisabledAccount_SucceedsButMeIsBlocked(t *testing.T) {
 		t.Fatalf("disable user: %v", err)
 	}
 
-	h := NewAuthHandler(auth, false)
+	h := NewAuthHandler(auth, false, false)
 	r := chi.NewRouter()
 	r.Post("/api/auth/login", h.Login)
 	r.With(httpauth.RequireAuth(auth), httpauth.RequireActiveUser(auth), httpauth.RequireEnabledUser(auth)).Get("/api/auth/me", h.Me)
@@ -420,6 +425,52 @@ func TestMe_EmailReminderChannelAvailable_TrueWithSMTPConfigured(t *testing.T) {
 	}
 }
 
+// TestMe_InvitationRepliesConfigured_FalseWithoutIMAP covers ADR-0059's
+// "an instance can send Invitations with no IMAP configured" — Settings
+// needs this to disclose that a Response never comes back, independent of
+// whether SMTP is configured.
+func TestMe_InvitationRepliesConfigured_FalseWithoutIMAP(t *testing.T) {
+	srv := newAuthTestServerWithMail(t, true, false)
+	accessToken := authenticatedAccessToken(t, srv)
+
+	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/api/auth/me", nil)
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET /api/auth/me: %v", err)
+	}
+	defer resp.Body.Close()
+
+	var me meResponse
+	if err := json.NewDecoder(resp.Body).Decode(&me); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if me.InvitationRepliesConfigured {
+		t.Fatalf("expected invitation replies to be unconfigured without IMAP configured")
+	}
+}
+
+func TestMe_InvitationRepliesConfigured_TrueWithIMAPConfigured(t *testing.T) {
+	srv := newAuthTestServerWithMail(t, true, true)
+	accessToken := authenticatedAccessToken(t, srv)
+
+	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/api/auth/me", nil)
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET /api/auth/me: %v", err)
+	}
+	defer resp.Body.Close()
+
+	var me meResponse
+	if err := json.NewDecoder(resp.Body).Decode(&me); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if !me.InvitationRepliesConfigured {
+		t.Fatalf("expected invitation replies to be configured once IMAP is configured")
+	}
+}
+
 func TestUpdateEmail_ChangesTheLoginIdentifier(t *testing.T) {
 	srv := newAuthTestServer(t)
 	accessToken := authenticatedAccessToken(t, srv)
@@ -572,7 +623,7 @@ func TestUpdateName_DuplicateNameIsAllowed(t *testing.T) {
 		t.Fatalf("change password: %v", err)
 	}
 
-	h := NewAuthHandler(auth, false)
+	h := NewAuthHandler(auth, false, false)
 	r := chi.NewRouter()
 	r.Post("/api/auth/login", h.Login)
 	r.With(httpauth.RequireAuth(auth), httpauth.RequireActiveUser(auth)).Put("/api/auth/name", h.UpdateName)

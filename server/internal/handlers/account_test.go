@@ -47,7 +47,7 @@ func newAccountHandlerTestServer(t *testing.T) *accountHandlerTestServer {
 	auth := service.NewAuthService(users, sessions, workspaces, repository.NewWorkspaceInviteRepository(sqlDB), calendars, []byte("test-secret"), "", "", "", true)
 	accounts := service.NewAccountService(sqlDB, users, sessions, calendarRepo, shareRepo, workspaceRepo, workspaces)
 
-	authHandler := NewAuthHandler(auth, false)
+	authHandler := NewAuthHandler(auth, false, false)
 	accountHandler := NewAccountHandler(accounts)
 
 	r := chi.NewRouter()

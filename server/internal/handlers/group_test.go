@@ -48,7 +48,7 @@ func newGroupHandlerTestServer(t *testing.T) *groupHandlerTestServer {
 	auth := service.NewAuthService(users, sessions, workspaces, inviteRepo, calendars, []byte("test-secret"), "", "", "", true)
 	groups := service.NewGroupService(repository.NewGroupRepository(sqlDB), workspaceRepo)
 
-	authHandler := NewAuthHandler(auth, false)
+	authHandler := NewAuthHandler(auth, false, false)
 	groupHandler := NewGroupHandler(groups)
 
 	r := chi.NewRouter()

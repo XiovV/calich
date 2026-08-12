@@ -189,3 +189,42 @@ func TestAttendeeRepository_ListUserIDsByEventIDs_ExcludesEmailShapedAttendees(t
 		t.Fatalf("expected only the User-backed member's id [%d], got %+v", member.ID, ids)
 	}
 }
+
+// TestAttendeeRepository_SetResponseByEmail_UpdatesAndReadsBack is
+// SetResponse's email-shaped counterpart (#202): the reply poller has no
+// session to authenticate a User-backed SetResponse call through, and an
+// email-shaped Attendee has no user_id to key on regardless.
+func TestAttendeeRepository_SetResponseByEmail_UpdatesAndReadsBack(t *testing.T) {
+	repo, _, eventID := newTestAttendeeRepository(t)
+	ctx := context.Background()
+
+	if _, err := repo.AddEmail(ctx, eventID, "guest@example.com"); err != nil {
+		t.Fatalf("add email: %v", err)
+	}
+
+	updated, err := repo.SetResponseByEmail(ctx, eventID, "guest@example.com", ResponseAccepted)
+	if err != nil {
+		t.Fatalf("set response by email: %v", err)
+	}
+	if updated.Response != ResponseAccepted {
+		t.Fatalf("expected response %q, got %q", ResponseAccepted, updated.Response)
+	}
+
+	fetched, err := repo.getByEmail(ctx, eventID, "guest@example.com")
+	if err != nil {
+		t.Fatalf("get by email: %v", err)
+	}
+	if fetched.Response != ResponseAccepted {
+		t.Fatalf("expected persisted response %q, got %q", ResponseAccepted, fetched.Response)
+	}
+}
+
+// TestAttendeeRepository_SetResponseByEmail_NotFoundErrors mirrors
+// SetResponse's own not-a-member behaviour: there is no row to write onto,
+// distinguishable from a successful no-op update (#202).
+func TestAttendeeRepository_SetResponseByEmail_NotFoundErrors(t *testing.T) {
+	repo, _, eventID := newTestAttendeeRepository(t)
+	if _, err := repo.SetResponseByEmail(context.Background(), eventID, "nobody@example.com", ResponseAccepted); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected ErrNotFound, got %v", err)
+	}
+}

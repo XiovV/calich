@@ -19,6 +19,11 @@ export interface User {
   // account always has an email now (ADR-0047), so this collapses to just
   // whether the self-hoster has SMTP configured (ADR-0021, ADR-0010).
   emailReminderChannelAvailable: boolean;
+  // Whether this instance has IMAP configured to read Attendee Responses
+  // back (ADR-0059) — independent of emailReminderChannelAvailable's SMTP:
+  // Invitations still send with this false, those Attendees just stay
+  // Needs-Action forever.
+  invitationRepliesConfigured: boolean;
   // "Let my synced devices show reminder pop-ups (disable in-app reminder
   // notifications)" (ADR-0027). Defaults false.
   syncedDeviceRemindersEnabled: boolean;
@@ -53,6 +58,7 @@ interface MeWire {
   must_change_password: boolean;
   email: string;
   email_reminder_channel_available: boolean;
+  invitation_replies_configured: boolean;
   synced_device_reminders_enabled: boolean;
   week_start: number;
   default_view: ActiveView;
@@ -68,6 +74,7 @@ function fromMeWire(wire: MeWire): User {
     mustChangePassword: wire.must_change_password,
     email: wire.email,
     emailReminderChannelAvailable: wire.email_reminder_channel_available,
+    invitationRepliesConfigured: wire.invitation_replies_configured,
     syncedDeviceRemindersEnabled: wire.synced_device_reminders_enabled,
     weekStart: wire.week_start,
     defaultView: wire.default_view,

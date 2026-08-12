@@ -38,7 +38,7 @@ func newTestRouter(t *testing.T) http.Handler {
 	if _, _, err := authService.Bootstrap(context.Background()); err != nil {
 		t.Fatalf("bootstrap: %v", err)
 	}
-	authHandler := handlers.NewAuthHandler(authService, false)
+	authHandler := handlers.NewAuthHandler(authService, false, false)
 	workspaceHandler := handlers.NewWorkspaceHandler(workspaceService)
 	eventService := service.NewEventService(sqlDB, repository.NewEventRepository(sqlDB), repository.NewEventExceptionRepository(sqlDB), repository.NewEventReminderRepository(sqlDB), repository.NewReminderOverrideRepository(sqlDB), repository.NewSyncRepository(sqlDB), calendarService, users, repository.NewAttachmentRepository(sqlDB), repository.NewAttendeeRepository(sqlDB), workspaceRepo, repository.NewGroupRepository(sqlDB), repository.NewNotificationRepository(sqlDB), nil)
 	attachmentStore := attachmentstore.New(t.TempDir())

@@ -117,6 +117,25 @@ func (r *AttendeeRepository) SetResponse(ctx context.Context, eventID string, us
 	return r.Get(ctx, eventID, userID)
 }
 
+// SetResponseByEmail updates email's own response on eventID — SetResponse's
+// email-shaped counterpart, reached by the reply poller (#202, ADR-0059)
+// rather than the in-app SetResponse endpoint: an email-shaped Attendee has no
+// session to authenticate a User-backed SetResponse call through, and no
+// user_id to key on regardless.
+func (r *AttendeeRepository) SetResponseByEmail(ctx context.Context, eventID, email, response string) (AttendeeWithName, error) {
+	res, err := r.db.ExecContext(ctx,
+		`UPDATE attendees SET response = ? WHERE event_id = ? AND email = ?`,
+		response, eventID, email,
+	)
+	if err != nil {
+		return AttendeeWithName{}, fmt.Errorf("update email attendee response: %w", err)
+	}
+	if err := requireAffected(res); err != nil {
+		return AttendeeWithName{}, err
+	}
+	return r.getByEmail(ctx, eventID, email)
+}
+
 // AddEmail inserts an attendees row binding email to eventID with no
 // account behind it (ADR-0058, #200): an Attendee who is not a Member, on an
 // instance that couldn't resolve the typed address against one. email is

@@ -11,7 +11,10 @@ import { DeleteAccountDialog } from "./DeleteAccountDialog";
 // label) and Email (the login identifier and Email-Channel Reminder
 // recipient, ADR-0021). The Email Channel only becomes selectable in the
 // event modal once the self-hoster has SMTP configured — see
-// reminderChannelOptions.
+// reminderChannelOptions. Also where ADR-0059's IMAP disclosure lives,
+// beside the SMTP-backed fields rather than as a warning on every invite
+// (#202): plain text, shown only when Invitations are actually being sent
+// but nothing reads Responses back.
 export function AccountSection() {
   const user = useAuthStore((state) => state.user);
   const accessToken = useAuthStore((state) => state.accessToken);
@@ -143,6 +146,14 @@ export function AccountSection() {
       {emailAction.error && <p className="mt-2 text-label-sm text-danger">{emailAction.error}</p>}
       {emailSaved && !emailAction.error && (
         <p className="mt-2 text-label-sm text-ink-muted">Saved.</p>
+      )}
+
+      {user?.emailReminderChannelAvailable && !user.invitationRepliesConfigured && (
+        <p className="mt-2 text-label-sm text-ink-muted">
+          Invitations are emailed to Attendees, but this instance has no IMAP configured, so
+          Accept/Decline/Tentative replies from their mail client never come back — those
+          Attendees stay Needs-Action.
+        </p>
       )}
 
       <div className="mt-8 border-t border-border pt-6">
