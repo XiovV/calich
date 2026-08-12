@@ -16,6 +16,7 @@ import (
 	"github.com/XiovV/calendar/server/internal/db"
 	"github.com/XiovV/calendar/server/internal/handlers"
 	"github.com/XiovV/calendar/server/internal/mailer"
+	"github.com/XiovV/calendar/server/internal/outbox"
 	"github.com/XiovV/calendar/server/internal/reminder"
 	"github.com/XiovV/calendar/server/internal/repository"
 	"github.com/XiovV/calendar/server/internal/router"
@@ -39,6 +40,12 @@ const subscriptionPollerTickInterval = time.Minute
 // (#132, ADR-0040) — daily, since an orphan is only wasted disk, not a
 // correctness problem, so there is no reason to chase it more eagerly.
 const attachmentSweepInterval = 24 * time.Hour
+
+// outboxTickInterval is how often the outbox Worker checks for queued
+// Invitations (ADR-0059, ADR-0060) — much finer than the reminder
+// scheduler's minute, since an Invitation is the one message a User cannot
+// turn off and a self-hoster would notice a slow one.
+const outboxTickInterval = 10 * time.Second
 
 func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
@@ -75,18 +82,22 @@ func main() {
 	eventRepo := repository.NewEventRepository(sqlDB)
 	attendeeRepo := repository.NewAttendeeRepository(sqlDB)
 	notificationRepo := repository.NewNotificationRepository(sqlDB)
-	eventService := service.NewEventService(sqlDB, eventRepo, repository.NewEventExceptionRepository(sqlDB), repository.NewEventReminderRepository(sqlDB), reminderOverrideRepo, repository.NewSyncRepository(sqlDB), calendarService, users, attachmentRepo, attendeeRepo, workspaceRepo, groupRepo, notificationRepo)
+	// smtpMailer serves Reminder email delivery (ADR-0021) and Invitation
+	// delivery (ADR-0059) alike — nil when this deployment has no SMTP
+	// transport configured, in which case Reminders fall back to the log
+	// sink and inviteUser/expandGroupMembers queue no Invitation at all
+	// (eventOutbox stays nil too, ADR-0059's "no affordance" posture).
+	var smtpMailer *mailer.SMTPMailer
+	var eventOutbox *repository.OutboxRepository
+	if cfg.SMTPConfigured() {
+		smtpMailer = mailer.NewSMTPMailer(cfg.SMTPHost, cfg.SMTPPort, cfg.SMTPUser, cfg.SMTPPass, cfg.SMTPFrom)
+		eventOutbox = repository.NewOutboxRepository(sqlDB)
+	}
+	eventService := service.NewEventService(sqlDB, eventRepo, repository.NewEventExceptionRepository(sqlDB), repository.NewEventReminderRepository(sqlDB), reminderOverrideRepo, repository.NewSyncRepository(sqlDB), calendarService, users, attachmentRepo, attendeeRepo, workspaceRepo, groupRepo, notificationRepo, eventOutbox)
 	attachmentStore := attachmentstore.New(cfg.DataDir)
 	attachmentService := service.NewAttachmentService(attachmentRepo, eventRepo, calendarService, eventService, attachmentStore, cfg.MaxAttachmentsPerEvent)
 	notificationService := service.NewNotificationService(notificationRepo)
 	appPasswordService := service.NewAppPasswordService(repository.NewAppPasswordRepository(sqlDB), users)
-	// smtpMailer serves Reminder email delivery (ADR-0021) — nil, and
-	// Reminders fall back to the log sink, when this deployment has no SMTP
-	// transport configured.
-	var smtpMailer *mailer.SMTPMailer
-	if cfg.SMTPConfigured() {
-		smtpMailer = mailer.NewSMTPMailer(cfg.SMTPHost, cfg.SMTPPort, cfg.SMTPUser, cfg.SMTPPass, cfg.SMTPFrom)
-	}
 	accountService := service.NewAccountService(sqlDB, users, sessions, calendarRepo, shareRepo, workspaceRepo, workspaceService)
 
 	ctx := context.Background()
@@ -166,6 +177,17 @@ func main() {
 	sweeper := service.NewAttachmentSweeper(attachmentRepo, attachmentStore)
 	go sweeper.Run(sweeperCtx, attachmentSweepInterval)
 
+	// The outbox Worker: drains queued Invitations (ADR-0059, ADR-0060).
+	// Absent entirely when eventOutbox is nil (no SMTP configured) — there
+	// is nothing queued to drain, and nothing to send it with.
+	outboxCtx, stopOutbox := context.WithCancel(context.Background())
+	defer stopOutbox()
+	if eventOutbox != nil {
+		invitationSender := service.NewInvitationSender(eventService, smtpMailer, cfg.SMTPFrom)
+		outboxWorker := outbox.NewWorker(eventOutbox, invitationSender, time.Now)
+		go outboxWorker.Run(outboxCtx, outboxTickInterval)
+	}
+
 	go func() {
 		logger.Info("starting server", "port", cfg.Port, "data_dir", cfg.DataDir)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
@@ -182,6 +204,7 @@ func main() {
 	stopScheduler()
 	stopPoller()
 	stopSweeper()
+	stopOutbox()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 

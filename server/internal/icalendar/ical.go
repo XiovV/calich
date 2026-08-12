@@ -319,18 +319,27 @@ func buildVEvent(e repository.Event, uid string, recurrenceID *time.Time, recurr
 // by CreatedBy — with CN=CreatedByName and that User's own Email as the
 // mailto address, the CalDAV/Calendar-file form ADR-0059 defines (the
 // Invitation's own ORGANIZER, naming this instance's address instead, is
-// built separately). A no-op when CreatedBy is nil: an Event whose
+// built separately by overrideInvitationOrganizer, sharing organizerProp's
+// same CN/mailto shape). A no-op when CreatedBy is nil: an Event whose
 // Organizer's account was since deleted simply has none (CONTEXT.md).
 func appendOrganizerProp(v *ical.Event, e repository.Event) {
 	if e.CreatedBy == nil {
 		return
 	}
+	v.Props.Add(organizerProp(e.CreatedByName, e.CreatedByEmail))
+}
+
+// organizerProp builds one ORGANIZER property naming name as CN and address
+// as its mailto value — the shape appendOrganizerProp (the CalDAV/Calendar
+// file form) and overrideInvitationOrganizer (the Invitation's own form,
+// ADR-0059) share, differing only in which address they carry.
+func organizerProp(name, address string) *ical.Prop {
 	prop := ical.NewProp(ical.PropOrganizer)
-	if e.CreatedByName != "" {
-		prop.Params.Set(ical.ParamCommonName, e.CreatedByName)
+	if name != "" {
+		prop.Params.Set(ical.ParamCommonName, name)
 	}
-	prop.Value = "mailto:" + e.CreatedByEmail
-	v.Props.Add(prop)
+	prop.Value = "mailto:" + address
+	return prop
 }
 
 // appendAttendeeProps adds one ATTENDEE per attendees, naming their Response

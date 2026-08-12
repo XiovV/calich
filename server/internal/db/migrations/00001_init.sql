@@ -479,7 +479,34 @@ CREATE TABLE deleted_objects (
 
 CREATE INDEX idx_deleted_objects_calendar_change_seq ON deleted_objects(calendar_id, change_seq);
 
+-- outbox is a queued Invitation email (ADR-0059, ADR-0060): one row per
+-- Attendee row it accompanies, written in the same transaction so a failed
+-- send never loses the Attendee and a rolled-back create queues nothing. A
+-- background ticker drains rows in id order (oldest first), which is what
+-- makes delivery per-recipient ordered without any locking — a later
+-- message can never be sent before an earlier one to the same recipient
+-- resolves. recipient_user_id is the only recipient shape today (Members
+-- only); an email-shaped Attendee (ADR-0058) has no account to notify here.
+-- method is fixed to 'REQUEST' for now — CANCEL (re-issue on change,
+-- withdrawal on removal/delete) is #201's, and widening the CHECK is a
+-- table rebuild either way.
+CREATE TABLE outbox (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    event_id          TEXT NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+    recipient_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    method            TEXT NOT NULL DEFAULT 'REQUEST' CHECK (method = 'REQUEST'),
+    status            TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'sent', 'failed')),
+    attempts          INTEGER NOT NULL DEFAULT 0,
+    next_attempt_at   TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    last_error        TEXT,
+    created_at        TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    sent_at           TIMESTAMP
+);
+
+CREATE INDEX idx_outbox_status_id ON outbox(status, id);
+
 -- +goose Down
+DROP TABLE outbox;
 DROP TABLE deleted_objects;
 DROP TABLE change_sequence;
 DROP TABLE event_attachments;

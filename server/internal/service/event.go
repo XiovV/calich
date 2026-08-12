@@ -117,10 +117,17 @@ type EventService struct {
 	workspaces        *repository.WorkspaceRepository
 	groups            *repository.GroupRepository
 	notifications     *repository.NotificationRepository
+	// outbox queues an Invitation alongside every Attendee row a User is
+	// named on (ADR-0059, ADR-0060) — nil when this deployment has no SMTP
+	// transport configured, in which case inviteUser and expandGroupMembers
+	// simply queue nothing (ADR-0059's "no affordance" posture already
+	// governs who can be invited at all; this is the same posture applied to
+	// the write path).
+	outbox *repository.OutboxRepository
 }
 
-func NewEventService(db *sql.DB, events *repository.EventRepository, exceptions *repository.EventExceptionRepository, reminders *repository.EventReminderRepository, reminderOverrides *repository.ReminderOverrideRepository, sync *repository.SyncRepository, calendars *CalendarService, users *repository.UserRepository, attachments *repository.AttachmentRepository, attendees *repository.AttendeeRepository, workspaces *repository.WorkspaceRepository, groups *repository.GroupRepository, notifications *repository.NotificationRepository) *EventService {
-	return &EventService{db: db, events: events, exceptions: exceptions, reminders: reminders, reminderOverrides: reminderOverrides, sync: sync, calendars: calendars, users: users, attachments: attachments, attendees: attendees, workspaces: workspaces, groups: groups, notifications: notifications}
+func NewEventService(db *sql.DB, events *repository.EventRepository, exceptions *repository.EventExceptionRepository, reminders *repository.EventReminderRepository, reminderOverrides *repository.ReminderOverrideRepository, sync *repository.SyncRepository, calendars *CalendarService, users *repository.UserRepository, attachments *repository.AttachmentRepository, attendees *repository.AttendeeRepository, workspaces *repository.WorkspaceRepository, groups *repository.GroupRepository, notifications *repository.NotificationRepository, outbox *repository.OutboxRepository) *EventService {
+	return &EventService{db: db, events: events, exceptions: exceptions, reminders: reminders, reminderOverrides: reminderOverrides, sync: sync, calendars: calendars, users: users, attachments: attachments, attendees: attendees, workspaces: workspaces, groups: groups, notifications: notifications, outbox: outbox}
 }
 
 // calendarByID resolves calendarID via s.calendars.Get, translating
@@ -312,17 +319,21 @@ type txRepos struct {
 	users         *repository.UserRepository
 	workspaces    *repository.WorkspaceRepository
 	notifications *repository.NotificationRepository
+	// outbox is nil when EventService.outbox is nil (no SMTP configured) —
+	// inviteUser and expandGroupMembers check for that rather than calling
+	// through a nil repository.
+	outbox *repository.OutboxRepository
 }
 
 // withTx runs fn inside a transaction, passing it transaction-bound clones
 // of the Event, EventException, EventReminder, Sync, Attachment, Attendee,
-// Group, User, Workspace, and Notification repositories so a multi-table
-// write — including its change_seq bump — commits or rolls back atomically.
-// Reads and validation belong outside fn, before withTx is called
-// (ADR-0018).
+// Group, User, Workspace, Notification, and (when configured) Outbox
+// repositories so a multi-table write — including its change_seq bump —
+// commits or rolls back atomically. Reads and validation belong outside fn,
+// before withTx is called (ADR-0018).
 func (s *EventService) withTx(ctx context.Context, fn func(repos txRepos) error) error {
 	return repository.WithTx(ctx, s.db, func(tx *sql.Tx) error {
-		return fn(txRepos{
+		repos := txRepos{
 			events:        s.events.WithTx(tx),
 			exceptions:    s.exceptions.WithTx(tx),
 			reminders:     s.reminders.WithTx(tx),
@@ -333,7 +344,11 @@ func (s *EventService) withTx(ctx context.Context, fn func(repos txRepos) error)
 			users:         s.users.WithTx(tx),
 			workspaces:    s.workspaces.WithTx(tx),
 			notifications: s.notifications.WithTx(tx),
-		})
+		}
+		if s.outbox != nil {
+			repos.outbox = s.outbox.WithTx(tx)
+		}
+		return fn(repos)
 	})
 }
 
@@ -506,7 +521,7 @@ func (s *EventService) Create(ctx context.Context, userID int64, id string, writ
 // same as AddGroupAttendee already tolerates re-inviting someone.
 func (s *EventService) addCreateAttendees(ctx context.Context, repos txRepos, event repository.Event, workspaceID int64, userIDs, groupIDs []int64) error {
 	for _, targetUserID := range userIDs {
-		if _, err := inviteUser(ctx, repos.users, repos.workspaces, repos.attendees, repos.notifications, event, workspaceID, targetUserID); err != nil {
+		if _, err := inviteUser(ctx, repos.users, repos.workspaces, repos.attendees, repos.notifications, repos.outbox, event, workspaceID, targetUserID); err != nil {
 			return err
 		}
 	}
@@ -523,7 +538,7 @@ func (s *EventService) addCreateAttendees(ctx context.Context, repos txRepos, ev
 			return ErrAttendeeTargetNotInWorkspace
 		}
 
-		if _, err := expandGroupMembers(ctx, repos.groups, repos.users, repos.attendees, repos.notifications, event, group.ID); err != nil {
+		if _, err := expandGroupMembers(ctx, repos.groups, repos.users, repos.attendees, repos.notifications, repos.outbox, event, group.ID); err != nil {
 			return err
 		}
 	}
@@ -2356,8 +2371,14 @@ func (s *EventService) attendeeManagementCalendar(ctx context.Context, actorUser
 // attendees row, is what makes "an invite Notification is written when an
 // Attendee row naming a User is written" (ADR-0061) true regardless of
 // which of inviteUser's three callers (AddAttendee, addCreateAttendees,
-// expandGroupMembers's sibling) is the one doing the writing.
-func inviteUser(ctx context.Context, users *repository.UserRepository, workspaces *repository.WorkspaceRepository, attendees *repository.AttendeeRepository, notifications *repository.NotificationRepository, event repository.Event, workspaceID, targetUserID int64) (repository.Attendee, error) {
+// expandGroupMembers's sibling) is the one doing the writing. Enqueuing an
+// Invitation alongside it, when outbox is non-nil, does the same for
+// ADR-0059/ADR-0060: the outbox row commits in the same transaction as the
+// attendees row it belongs to, so a failed send never loses the Attendee
+// and a rolled-back invite queues nothing. outbox is nil when this
+// deployment has no SMTP transport configured (EventService.outbox), in
+// which case nothing is queued and the invite still succeeds.
+func inviteUser(ctx context.Context, users *repository.UserRepository, workspaces *repository.WorkspaceRepository, attendees *repository.AttendeeRepository, notifications *repository.NotificationRepository, outbox *repository.OutboxRepository, event repository.Event, workspaceID, targetUserID int64) (repository.Attendee, error) {
 	target, err := users.GetByID(ctx, targetUserID)
 	if err != nil {
 		if errors.Is(err, repository.ErrNotFound) {
@@ -2383,6 +2404,11 @@ func inviteUser(ctx context.Context, users *repository.UserRepository, workspace
 	if _, err := notifications.InsertInvite(ctx, targetUserID, event.ID, event.Title, time.Now()); err != nil {
 		return repository.Attendee{}, fmt.Errorf("insert invite notification: %w", err)
 	}
+	if outbox != nil {
+		if _, err := outbox.Enqueue(ctx, event.ID, targetUserID); err != nil {
+			return repository.Attendee{}, fmt.Errorf("enqueue invitation: %w", err)
+		}
+	}
 	return attendee, nil
 }
 
@@ -2400,8 +2426,10 @@ func inviteUser(ctx context.Context, users *repository.UserRepository, workspace
 // membership change); Create's own call is already inside its own
 // transaction. Writes one invite Notification per Attendee row actually
 // added, same as inviteUser (ADR-0061) — a member already an Attendee is
-// skipped and gets no second Notification.
-func expandGroupMembers(ctx context.Context, groups *repository.GroupRepository, users *repository.UserRepository, attendees *repository.AttendeeRepository, notifications *repository.NotificationRepository, event repository.Event, groupID int64) ([]repository.Attendee, error) {
+// skipped and gets no second Notification. Enqueues one Invitation per
+// Attendee row actually added too, same as inviteUser, when outbox is
+// non-nil (ADR-0059, ADR-0060).
+func expandGroupMembers(ctx context.Context, groups *repository.GroupRepository, users *repository.UserRepository, attendees *repository.AttendeeRepository, notifications *repository.NotificationRepository, outbox *repository.OutboxRepository, event repository.Event, groupID int64) ([]repository.Attendee, error) {
 	members, err := groups.ListMembers(ctx, groupID)
 	if err != nil {
 		return nil, fmt.Errorf("list group members: %w", err)
@@ -2427,6 +2455,11 @@ func expandGroupMembers(ctx context.Context, groups *repository.GroupRepository,
 		if _, err := notifications.InsertInvite(ctx, member.UserID, event.ID, event.Title, time.Now()); err != nil {
 			return nil, fmt.Errorf("insert invite notification: %w", err)
 		}
+		if outbox != nil {
+			if _, err := outbox.Enqueue(ctx, event.ID, member.UserID); err != nil {
+				return nil, fmt.Errorf("enqueue invitation: %w", err)
+			}
+		}
 		added = append(added, attendee)
 	}
 	return added, nil
@@ -2447,7 +2480,7 @@ func (s *EventService) AddAttendee(ctx context.Context, actorUserID int64, event
 	var attendee repository.Attendee
 	err = s.withTx(ctx, func(repos txRepos) error {
 		var err error
-		attendee, err = inviteUser(ctx, repos.users, repos.workspaces, repos.attendees, repos.notifications, event, calendar.WorkspaceID, targetUserID)
+		attendee, err = inviteUser(ctx, repos.users, repos.workspaces, repos.attendees, repos.notifications, repos.outbox, event, calendar.WorkspaceID, targetUserID)
 		return err
 	})
 	if err != nil {
@@ -2490,7 +2523,7 @@ func (s *EventService) AddGroupAttendee(ctx context.Context, actorUserID int64, 
 		// land between "read members" and "write attendees" and end up
 		// reflected in neither snapshot.
 		var err error
-		added, err = expandGroupMembers(ctx, repos.groups, repos.users, repos.attendees, repos.notifications, event, group.ID)
+		added, err = expandGroupMembers(ctx, repos.groups, repos.users, repos.attendees, repos.notifications, repos.outbox, event, group.ID)
 		return err
 	})
 	if err != nil {
@@ -2521,6 +2554,68 @@ func (s *EventService) ListAttendees(ctx context.Context, userID int64, eventID 
 		return nil, err
 	}
 	return s.attendees.ListByEventID(ctx, eventID)
+}
+
+// LoadInvitation resolves eventID + recipientUserID into the Event —
+// hydrated with its Organizer's Name/Email and its full current Attendee
+// list (ADR-0062), but never its Reminders, so icalendar.InvitationToICal
+// renders no VALARM (ADR-0059) — and masterAnchor, the Master's own row when
+// eventID names an Override (InvitationToICal's RECURRENCE-ID formatting
+// contract), nil otherwise. Called by the outbox Worker's Sender with no
+// acting User in view, so it skips every Access check getVisibleEvent would
+// run — the invite was already authorized when the Attendee row (and this
+// Invitation's outbox row) was written.
+//
+// ok is false when there is nothing left to send: eventID no longer
+// resolves, or recipientUserID is no longer one of its Attendees — either
+// removed, or the Event deleted, since the outbox row was queued. Neither
+// case is an error; it just means the Worker has nothing to do.
+func (s *EventService) LoadInvitation(ctx context.Context, eventID string, recipientUserID int64) (event repository.Event, masterAnchor *repository.Event, ok bool, err error) {
+	e, err := s.events.GetByID(ctx, eventID)
+	if err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			return repository.Event{}, nil, false, nil
+		}
+		return repository.Event{}, nil, false, fmt.Errorf("get event: %w", err)
+	}
+
+	attendees, err := s.attendees.ListByEventID(ctx, eventID)
+	if err != nil {
+		return repository.Event{}, nil, false, fmt.Errorf("list attendees: %w", err)
+	}
+	found := false
+	for _, a := range attendees {
+		if a.UserID == recipientUserID {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return repository.Event{}, nil, false, nil
+	}
+	e.Attendees = attendees
+
+	if e.CreatedBy != nil {
+		organizer, err := s.users.GetByID(ctx, *e.CreatedBy)
+		if err != nil {
+			if !errors.Is(err, repository.ErrNotFound) {
+				return repository.Event{}, nil, false, fmt.Errorf("get organizer: %w", err)
+			}
+		} else {
+			e.CreatedByName = organizer.Name
+			e.CreatedByEmail = organizer.Email
+		}
+	}
+
+	if e.ParentID != nil {
+		master, err := s.events.GetByID(ctx, *e.ParentID)
+		if err != nil {
+			return repository.Event{}, nil, false, fmt.Errorf("get master event: %w", err)
+		}
+		masterAnchor = &master
+	}
+
+	return e, masterAnchor, true, nil
 }
 
 func isValidResponse(response string) bool {
