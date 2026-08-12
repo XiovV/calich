@@ -69,6 +69,23 @@ func TestCalendarService_Share(t *testing.T) {
 	}
 }
 
+// TestCalendarService_Share_CaseInsensitiveEmail covers #196 (ADR-0058):
+// Share-target resolution is Email-keyed (ADR-0047), so typing the target's
+// address with different case than it's stored in must still resolve to the
+// same User, since users.email is COLLATE NOCASE.
+func TestCalendarService_Share_CaseInsensitiveEmail(t *testing.T) {
+	svc, _, ownerID, otherID, calendarID := newTestShareService(t)
+	ctx := context.Background()
+
+	share, _, err := svc.Share(ctx, ownerID, calendarID, "Other@Example.com", repository.RoleEditor)
+	if err != nil {
+		t.Fatalf("share: %v", err)
+	}
+	if share.UserID != otherID {
+		t.Fatalf("expected share to resolve to user %d, got %d", otherID, share.UserID)
+	}
+}
+
 // TestCalendarService_Share_ChangesRole covers "an Owner can change an
 // existing Share's Role" (#100's acceptance criteria) — sharing again with
 // a different Role updates it rather than erroring or creating a second

@@ -21,6 +21,15 @@
 -- header, which net/http splits on the first colon. name is a non-unique
 -- display label and may contain anything (ADR-0047).
 --
+-- email is COLLATE NOCASE (ADR-0058, #196): one address is one account
+-- regardless of case, both at the UNIQUE constraint and at every WHERE
+-- email = ? lookup, since SQLite resolves a bare column comparison's
+-- collating sequence from the column itself. The app also folds case on
+-- write (Register, UpdateEmail, Bootstrap, Workspace Invite issuance), which
+-- this constraint alone can't provide: it's what makes a plain Go string
+-- comparison between a stored email and a freshly typed one (e.g.
+-- AcceptWorkspaceInviteExisting) agree without going through SQL.
+--
 -- synced_device_reminders_enabled resolves the CalDAV double-fire question
 -- (ADR-0027): when on, the reminder scheduler skips the Notification channel
 -- because the user's synced devices already raise their own pop-ups from the
@@ -40,7 +49,7 @@ CREATE TABLE users (
     name TEXT NOT NULL,
     password_hash TEXT NOT NULL,
     must_change_password INTEGER NOT NULL DEFAULT 0,
-    email TEXT NOT NULL UNIQUE,
+    email TEXT NOT NULL COLLATE NOCASE UNIQUE,
     synced_device_reminders_enabled INTEGER NOT NULL DEFAULT 0,
     is_disabled INTEGER NOT NULL DEFAULT 0,
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,

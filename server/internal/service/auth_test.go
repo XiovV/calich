@@ -153,6 +153,39 @@ func TestBootstrap_UsesEnvCredentialsWhenBothSet(t *testing.T) {
 	}
 }
 
+// TestBootstrap_FoldsInitialEmailCase covers #196 (ADR-0058): INITIAL_EMAIL
+// is operator-typed like any other email input, so a mixed-case value must
+// be folded to lowercase on write, the same as Register and UpdateEmail.
+func TestBootstrap_FoldsInitialEmailCase(t *testing.T) {
+	sqlDB, err := db.OpenInMemory()
+	if err != nil {
+		t.Fatalf("open in-memory db: %v", err)
+	}
+	t.Cleanup(func() { sqlDB.Close() })
+
+	users := repository.NewUserRepository(sqlDB)
+	sessions := repository.NewSessionRepository(sqlDB)
+	workspaceRepo := repository.NewWorkspaceRepository(sqlDB)
+	calendarRepo := repository.NewCalendarRepository(sqlDB)
+	shareRepo := repository.NewCalendarShareRepository(sqlDB)
+	workspaces := NewWorkspaceService(sqlDB, workspaceRepo, repository.NewWorkspaceInviteRepository(sqlDB), calendarRepo, shareRepo)
+	calendars := NewCalendarService(calendarRepo, shareRepo, users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo, repository.NewCalendarGroupShareRepository(sqlDB), repository.NewGroupRepository(sqlDB))
+	svc := NewAuthService(users, sessions, workspaces, repository.NewWorkspaceInviteRepository(sqlDB), calendars, []byte("test-secret"), "Admin", "Admin@Example.com", "hunter2", false)
+
+	ctx := context.Background()
+	user, _, err := svc.Bootstrap(ctx)
+	if err != nil {
+		t.Fatalf("bootstrap: %v", err)
+	}
+	if user.Email != "admin@example.com" {
+		t.Fatalf("expected bootstrapped email to be folded to lowercase, got %q", user.Email)
+	}
+
+	if _, err := svc.Login(ctx, "admin@example.com", "hunter2"); err != nil {
+		t.Fatalf("expected login with the folded email to work, got: %v", err)
+	}
+}
+
 func TestBootstrap_NoopWhenUsersExist(t *testing.T) {
 	svc := newTestAuthService(t, "admin", "admin")
 	ctx := context.Background()
@@ -409,6 +442,60 @@ func TestRegister_DuplicateNameIsAllowed(t *testing.T) {
 	}
 	if _, err := svc.Register(ctx, "alice", "alice2@example.com", "hunter2"); err != nil {
 		t.Fatalf("expected two accounts to share a name, got: %v", err)
+	}
+}
+
+// TestRegister_DuplicateEmail_DifferentCase_ReturnsErrEmailTaken covers #196
+// (ADR-0058): one address is one account regardless of case, so registering
+// "Damir@x.com" and then "damir@x.com" is a duplicate, not two accounts.
+func TestRegister_DuplicateEmail_DifferentCase_ReturnsErrEmailTaken(t *testing.T) {
+	svc := newTestAuthServiceWithSignups(t, "", "", true)
+	ctx := context.Background()
+
+	if _, err := svc.Register(ctx, "alice", "Alice@Example.com", "hunter2"); err != nil {
+		t.Fatalf("register alice: %v", err)
+	}
+	if _, err := svc.Register(ctx, "alice-two", "alice@example.com", "hunter2"); !errors.Is(err, ErrEmailTaken) {
+		t.Fatalf("expected ErrEmailTaken, got %v", err)
+	}
+}
+
+// TestRegister_FoldsEmailCase_LoginWithDifferentCaseAuthenticatesSameUser
+// covers #196's primary acceptance criterion: registering with a mixed-case
+// address and signing in with a different case must authenticate the same
+// User, and the stored Email must come back folded to lowercase.
+func TestRegister_FoldsEmailCase_LoginWithDifferentCaseAuthenticatesSameUser(t *testing.T) {
+	svc := newTestAuthServiceWithSignups(t, "", "", true)
+	ctx := context.Background()
+
+	registered, err := svc.Register(ctx, "damir", "Damir@x.com", "hunter2")
+	if err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	registeredUserID, err := svc.Authenticate(ctx, registered.AccessToken)
+	if err != nil {
+		t.Fatalf("authenticate registration access token: %v", err)
+	}
+
+	stored, err := svc.users.GetByEmail(ctx, "damir@x.com")
+	if err != nil {
+		t.Fatalf("get by email: %v", err)
+	}
+	if stored.Email != "damir@x.com" {
+		t.Fatalf("expected stored email to be folded to lowercase, got %q", stored.Email)
+	}
+
+	loggedIn, err := svc.Login(ctx, "damir@x.com", "hunter2")
+	if err != nil {
+		t.Fatalf("login: %v", err)
+	}
+	loggedInUserID, err := svc.Authenticate(ctx, loggedIn.AccessToken)
+	if err != nil {
+		t.Fatalf("authenticate login access token: %v", err)
+	}
+
+	if loggedInUserID != registeredUserID {
+		t.Fatalf("expected login with a different case to authenticate the same user %d, got %d", registeredUserID, loggedInUserID)
 	}
 }
 

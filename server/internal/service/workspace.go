@@ -528,7 +528,12 @@ func (s *WorkspaceService) CreateInvite(ctx context.Context, actorUserID, worksp
 		return WorkspaceInviteResult{}, err
 	}
 
-	email = strings.TrimSpace(email)
+	// Folded to lowercase (ADR-0058, #196): an invite is later matched
+	// against a stored, already-folded users.email by plain Go string
+	// equality (AuthService.AcceptWorkspaceInviteExisting), and against a
+	// registrant's own folded input when the invite creates a brand-new
+	// account (AuthService.AcceptWorkspaceInviteNewAccount).
+	email = normalizeEmail(email)
 	if _, err := mail.ParseAddress(email); err != nil {
 		return WorkspaceInviteResult{}, ErrInvalidEmail
 	}

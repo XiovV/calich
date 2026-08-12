@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"golang.org/x/crypto/bcrypt"
@@ -170,6 +171,29 @@ func TestAppPasswordService_Authenticate_RejectsWrongSecret(t *testing.T) {
 	_, err := svc.Authenticate(ctx, email, "not-the-right-secret")
 	if !errors.Is(err, ErrInvalidAppPasswordCredentials) {
 		t.Fatalf("expected ErrInvalidAppPasswordCredentials, got %v", err)
+	}
+}
+
+// TestAppPasswordService_Authenticate_CaseInsensitiveEmail covers #196
+// (ADR-0058): CalDAV Basic auth must authenticate regardless of the case a
+// native client sends, since users.email is stored folded and COLLATE
+// NOCASE either way.
+func TestAppPasswordService_Authenticate_CaseInsensitiveEmail(t *testing.T) {
+	svc, userID, email := newTestAppPasswordServiceWithEmail(t)
+	ctx := context.Background()
+
+	created, err := svc.Create(ctx, userID, "iPhone")
+	if err != nil {
+		t.Fatalf("create app password: %v", err)
+	}
+
+	shouted := strings.ToUpper(email)
+	gotUserID, err := svc.Authenticate(ctx, shouted, created.Secret)
+	if err != nil {
+		t.Fatalf("authenticate with %q: %v", shouted, err)
+	}
+	if gotUserID != userID {
+		t.Fatalf("expected user id %d, got %d", userID, gotUserID)
 	}
 }
 

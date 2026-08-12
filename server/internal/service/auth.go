@@ -126,16 +126,27 @@ func validateName(name string) (string, error) {
 	return name, nil
 }
 
-// validateEmail trims email and checks it against the one set of rules
+// normalizeEmail trims and lowercases an email address — the fold shared by
+// every path that stores or resolves one, however loosely or strictly it
+// otherwise validates the value: validateEmail, Bootstrap, and
+// WorkspaceService.CreateInvite (ADR-0058, #196). Folding is what keeps a
+// stored email comparable by plain Go string equality (e.g.
+// AuthService.AcceptWorkspaceInviteExisting) — users.email's COLLATE NOCASE
+// only helps SQL-level lookups, not that.
+func normalizeEmail(email string) string {
+	return strings.ToLower(strings.TrimSpace(email))
+}
+
+// validateEmail normalizes email and checks it against the one set of rules
 // shared by every path that picks or changes the account's login identifier
-// — Register, AuthService.UpdateEmail, and Bootstrap (ADR-0047). A colon or
-// other whitespace is rejected because Go's net/http.Request.BasicAuth
-// splits credentials on the first colon: an email containing one could
-// create an account that can never authenticate over CalDAV
+// — Register and AuthService.UpdateEmail (ADR-0047). A colon or other
+// whitespace is rejected because Go's net/http.Request.BasicAuth splits
+// credentials on the first colon: an email containing one could create an
+// account that can never authenticate over CalDAV
 // (AppPasswordService.Authenticate). Ordinary email addresses never contain
 // either, so this isn't a new restriction in practice.
 func validateEmail(email string) (string, error) {
-	email = strings.TrimSpace(email)
+	email = normalizeEmail(email)
 	if email == "" {
 		return "", ErrEmailRequired
 	}
@@ -211,7 +222,10 @@ func (s *AuthService) Bootstrap(ctx context.Context) (user repository.User, crea
 		return repository.User{}, false, fmt.Errorf("hash bootstrap password: %w", err)
 	}
 
-	newUser, err := s.users.Create(ctx, s.initialName, s.initialEmail, string(hash), false)
+	// Folded to lowercase (ADR-0058, #196) like every other path that stores
+	// an email — INITIAL_EMAIL is operator-typed and just as likely to carry
+	// stray capitals as a Register form.
+	newUser, err := s.users.Create(ctx, s.initialName, normalizeEmail(s.initialEmail), string(hash), false)
 	if err != nil {
 		return repository.User{}, false, fmt.Errorf("create bootstrap user: %w", err)
 	}

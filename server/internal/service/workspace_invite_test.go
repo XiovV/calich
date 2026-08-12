@@ -452,6 +452,68 @@ func TestAuthService_AcceptWorkspaceInviteExisting_RejectsAlreadyMember(t *testi
 	}
 }
 
+// TestWorkspaceService_CreateInvite_FoldsEmailCase covers #196 (ADR-0058):
+// an invite typed with stray capitals is stored folded to lowercase, the
+// same as every other email write path.
+func TestWorkspaceService_CreateInvite_FoldsEmailCase(t *testing.T) {
+	workspaces, _, users := newTestWorkspaceInviteHarness(t)
+	ctx := context.Background()
+
+	owner, err := users.Create(ctx, "alice", "alice@example.com", "hash", false)
+	if err != nil {
+		t.Fatalf("create owner: %v", err)
+	}
+	workspace, err := workspaces.CreateForOwner(ctx, owner.ID, "Alice's Workspace")
+	if err != nil {
+		t.Fatalf("create workspace: %v", err)
+	}
+
+	invite, err := workspaces.CreateInvite(ctx, owner.ID, workspace.ID, "Bob@Example.com")
+	if err != nil {
+		t.Fatalf("create invite: %v", err)
+	}
+	if invite.Invite.Email != "bob@example.com" {
+		t.Fatalf("expected invite email to be folded to lowercase, got %q", invite.Invite.Email)
+	}
+}
+
+// TestAuthService_AcceptWorkspaceInviteExisting_CaseInsensitiveEmailMatch
+// covers #196's third acceptance criterion directly: a Workspace Invite
+// issued for "Damir@x.com" is accepted by a User whose stored Email is
+// "damir@x.com" — both sides fold to the same value on write, so the plain
+// Go string comparison in AcceptWorkspaceInviteExisting agrees.
+func TestAuthService_AcceptWorkspaceInviteExisting_CaseInsensitiveEmailMatch(t *testing.T) {
+	workspaces, auth, users := newTestWorkspaceInviteHarness(t)
+	ctx := context.Background()
+
+	owner, err := users.Create(ctx, "alice", "alice@example.com", "hash", false)
+	if err != nil {
+		t.Fatalf("create owner: %v", err)
+	}
+	workspace, err := workspaces.CreateForOwner(ctx, owner.ID, "Alice's Workspace")
+	if err != nil {
+		t.Fatalf("create workspace: %v", err)
+	}
+
+	bob, err := users.Create(ctx, "bob", "damir@x.com", "hash", false)
+	if err != nil {
+		t.Fatalf("create bob: %v", err)
+	}
+
+	invite, err := workspaces.CreateInvite(ctx, owner.ID, workspace.ID, "Damir@x.com")
+	if err != nil {
+		t.Fatalf("create invite: %v", err)
+	}
+
+	joined, err := auth.AcceptWorkspaceInviteExisting(ctx, bob.ID, invite.Token)
+	if err != nil {
+		t.Fatalf("expected the case-differing invite to be accepted, got: %v", err)
+	}
+	if joined.ID != workspace.ID {
+		t.Fatalf("expected to join %d, got %+v", workspace.ID, joined)
+	}
+}
+
 func TestAuthService_PreviewWorkspaceInvite_ReportsWhetherUserExists(t *testing.T) {
 	workspaces, auth, users := newTestWorkspaceInviteHarness(t)
 	ctx := context.Background()

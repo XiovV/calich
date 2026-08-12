@@ -55,6 +55,44 @@ func TestUserRepository_GetByEmail_NotFound(t *testing.T) {
 	}
 }
 
+// TestUserRepository_Create_DuplicateEmail_DifferentCase covers #196
+// (ADR-0058): users.email is COLLATE NOCASE, so the UNIQUE constraint itself
+// rejects a case-differing duplicate — independent of whether the caller
+// folded case before writing.
+func TestUserRepository_Create_DuplicateEmail_DifferentCase(t *testing.T) {
+	repo := newTestUserRepository(t)
+	ctx := context.Background()
+
+	if _, err := repo.Create(ctx, "admin", "admin@example.com", "hash1", true); err != nil {
+		t.Fatalf("create first user: %v", err)
+	}
+
+	if _, err := repo.Create(ctx, "someone-else", "Admin@Example.com", "hash2", true); !errors.Is(err, ErrEmailTaken) {
+		t.Fatalf("expected ErrEmailTaken for a case-differing duplicate, got %v", err)
+	}
+}
+
+// TestUserRepository_GetByEmail_CaseInsensitive covers #196 (ADR-0058):
+// users.email's COLLATE NOCASE makes a plain "WHERE email = ?" lookup
+// case-insensitive regardless of the case either side happens to carry.
+func TestUserRepository_GetByEmail_CaseInsensitive(t *testing.T) {
+	repo := newTestUserRepository(t)
+	ctx := context.Background()
+
+	created, err := repo.Create(ctx, "admin", "admin@example.com", "hashed-password", true)
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+
+	fetched, err := repo.GetByEmail(ctx, "Admin@Example.COM")
+	if err != nil {
+		t.Fatalf("get by email with different case: %v", err)
+	}
+	if fetched != created {
+		t.Fatalf("expected fetched user %+v to equal created user %+v", fetched, created)
+	}
+}
+
 func TestUserRepository_Create_DuplicateEmail(t *testing.T) {
 	repo := newTestUserRepository(t)
 	ctx := context.Background()
