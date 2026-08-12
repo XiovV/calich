@@ -273,6 +273,65 @@ func TestWorker_Tick_EmailRecipientKeyIsCaseInsensitive(t *testing.T) {
 	}
 }
 
+// TestWorker_Tick_ACancelNeverOvertakesTheRequestItWithdraws covers the AC
+// bullet directly (#201): a REQUEST and a later CANCEL queued for the same
+// recipient — the shape EventService produces when an Attendee is removed
+// or an Event deleted shortly after being invited — are sent in that same
+// order, regardless of Method. Worker.Tick draws no distinction between the
+// two; per-recipient ordering already falls out of ListPending's id order
+// plus per-recipient blocking, which this exercises directly.
+func TestWorker_Tick_ACancelNeverOvertakesTheRequestItWithdraws(t *testing.T) {
+	store := &fakeStore{messages: []repository.OutboxMessage{
+		{ID: 1, EventID: "evt-1", RecipientUserID: userID(10), Method: repository.OutboxMethodRequest, Status: repository.OutboxStatusPending},
+		{ID: 2, EventID: "evt-2", RecipientUserID: userID(20), Method: repository.OutboxMethodRequest, Status: repository.OutboxStatusPending},
+		{ID: 3, EventID: "evt-1", RecipientUserID: userID(10), Method: repository.OutboxMethodCancel, Status: repository.OutboxStatusPending},
+	}}
+	sender := &fakeSender{}
+	w := NewWorker(store, sender, func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) })
+
+	if err := w.Tick(context.Background()); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+
+	if len(sender.calls) != 3 {
+		t.Fatalf("expected all 3 messages sent, got calls %+v", sender.calls)
+	}
+	var requestIdx, cancelIdx int
+	for i, id := range sender.calls {
+		if id == 1 {
+			requestIdx = i
+		}
+		if id == 3 {
+			cancelIdx = i
+		}
+	}
+	if requestIdx >= cancelIdx {
+		t.Fatalf("expected the REQUEST (message 1) sent before the CANCEL that withdraws it (message 3), got calls %+v", sender.calls)
+	}
+}
+
+// TestWorker_Tick_ARequestStillBackingOffBlocksItsOwnCancel covers the same
+// AC bullet from the failure side: if the original REQUEST hasn't gone out
+// yet (still backing off after a transient failure), the CANCEL behind it
+// must not jump ahead and reach the recipient first.
+func TestWorker_Tick_ARequestStillBackingOffBlocksItsOwnCancel(t *testing.T) {
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	store := &fakeStore{messages: []repository.OutboxMessage{
+		{ID: 1, EventID: "evt-1", RecipientUserID: userID(10), Method: repository.OutboxMethodRequest, Status: repository.OutboxStatusPending, NextAttemptAt: now.Add(time.Hour)},
+		{ID: 2, EventID: "evt-1", RecipientUserID: userID(10), Method: repository.OutboxMethodCancel, Status: repository.OutboxStatusPending, NextAttemptAt: now},
+	}}
+	sender := &fakeSender{}
+	w := NewWorker(store, sender, func() time.Time { return now })
+
+	if err := w.Tick(context.Background()); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+
+	if len(sender.calls) != 0 {
+		t.Fatalf("expected the CANCEL blocked behind its own still-backing-off REQUEST, got calls %+v", sender.calls)
+	}
+}
+
 func TestWorker_Tick_NothingPendingIsANoOp(t *testing.T) {
 	store := &fakeStore{}
 	sender := &fakeSender{}

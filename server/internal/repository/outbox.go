@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"time"
 )
@@ -16,24 +17,65 @@ const (
 	OutboxStatusFailed  = "failed"
 )
 
-// OutboxMethodRequest is the only Method an OutboxMessage carries today — a
-// METHOD:REQUEST Invitation. CANCEL (re-issue on change, withdrawal on
-// removal/delete) is #201's.
-const OutboxMethodRequest = "REQUEST"
+// OutboxMethodRequest is a METHOD:REQUEST Invitation — a fresh invite or a
+// re-issued one (ADR-0059). OutboxMethodCancel is a METHOD:CANCEL
+// withdrawal, queued on Attendee removal or Event deletion (#201).
+const (
+	OutboxMethodRequest = "REQUEST"
+	OutboxMethodCancel  = "CANCEL"
+)
 
-// OutboxMessage is a queued Invitation email (ADR-0059, ADR-0060): written
-// in the same transaction as the Attendee row it accompanies, so a failed
-// send never loses the Attendee and a rolled-back create queues nothing.
-// RecipientUserID and RecipientEmail are nullable with exactly one set
-// (#200, ADR-0058), mirroring Attendee's own two shapes: a User-backed
+// OutboxCancelSnapshot is a CANCEL OutboxMessage's self-contained payload
+// (ADR-0059, ADR-0060, #201): everything InvitationSender needs to render a
+// METHOD:CANCEL, captured by EventService at the moment the row it withdraws
+// (or the Attendee row on that still-live Event) still exists. Unlike a
+// REQUEST — which InvitationSender always rebuilds from live state, per its
+// own doc comment — a CANCEL's very purpose is to outlive what it withdraws,
+// so it cannot re-read anything at send time.
+type OutboxCancelSnapshot struct {
+	// UID is the withdrawn row's iTIP UID: its own id on a Master or a
+	// standalone Event, its Master's id on an Override
+	// (icalendar.InvitationToICal's own contract).
+	UID string `json:"uid"`
+	// RecurrenceID is set only when the withdrawn row was an Override.
+	RecurrenceID *time.Time `json:"recurrenceId,omitempty"`
+	AllDay       bool       `json:"allDay"`
+	Tzid         *string    `json:"tzid,omitempty"`
+	Start        time.Time  `json:"start"`
+	End          time.Time  `json:"end"`
+	Title        string     `json:"title"`
+	// Sequence is the row's iTIP SEQUENCE at the moment it was withdrawn —
+	// never bumped further by a cancellation itself.
+	Sequence int64 `json:"sequence"`
+	// OrganizerName/OrganizerEmail are the withdrawn row's own Organizer
+	// (#193, ADR-0055) — CN on the wire; the instance mailbox itself
+	// (ADR-0059's ORGANIZER split) is resolved by InvitationSender at send
+	// time from its own configured from address, same as a REQUEST.
+	OrganizerName  string `json:"organizerName"`
+	OrganizerEmail string `json:"organizerEmail"`
+	// RecipientEmail/RecipientName are this one recipient's own address and
+	// CN — resolved once here since the Attendee row itself may already be
+	// gone by send time.
+	RecipientEmail string `json:"recipientEmail"`
+	RecipientName  string `json:"recipientName"`
+}
+
+// OutboxMessage is a queued Invitation or Cancellation email (ADR-0059,
+// ADR-0060, #201): written in the same transaction as the Attendee row it
+// accompanies (or, for a CANCEL, the row/Attendee-row it withdraws), so a
+// failed send never loses the Attendee and a rolled-back create queues
+// nothing. RecipientUserID and RecipientEmail are nullable with exactly one
+// set (#200, ADR-0058), mirroring Attendee's own two shapes: a User-backed
 // Attendee queues the former, an email-shaped one — no account to notify
-// in-app, but still an Invitation to send — the latter.
+// in-app, but still an Invitation to send — the latter. Snapshot is non-nil
+// only when Method is OutboxMethodCancel.
 type OutboxMessage struct {
 	ID              int64
 	EventID         string
 	RecipientUserID *int64
 	RecipientEmail  *string
 	Method          string
+	Snapshot        *OutboxCancelSnapshot
 	Status          string
 	Attempts        int
 	NextAttemptAt   time.Time
@@ -103,10 +145,46 @@ func (r *OutboxRepository) EnqueueEmail(ctx context.Context, eventID string, rec
 	return r.Get(ctx, id)
 }
 
+// EnqueueCancel writes a pending CANCEL OutboxMessage for recipientUserID on
+// eventID, carrying snapshot — everything InvitationSender needs to render
+// it, since the row (or Attendee row) it withdraws may be gone by send time
+// (ADR-0059, ADR-0060, #201).
+func (r *OutboxRepository) EnqueueCancel(ctx context.Context, eventID string, recipientUserID int64, snapshot OutboxCancelSnapshot) (OutboxMessage, error) {
+	return r.enqueueCancel(ctx, eventID, &recipientUserID, nil, snapshot)
+}
+
+// EnqueueCancelEmail is EnqueueCancel's email-shaped counterpart (#200,
+// ADR-0058), mirroring EnqueueEmail's relationship to Enqueue.
+func (r *OutboxRepository) EnqueueCancelEmail(ctx context.Context, eventID string, recipientEmail string, snapshot OutboxCancelSnapshot) (OutboxMessage, error) {
+	return r.enqueueCancel(ctx, eventID, nil, &recipientEmail, snapshot)
+}
+
+func (r *OutboxRepository) enqueueCancel(ctx context.Context, eventID string, recipientUserID *int64, recipientEmail *string, snapshot OutboxCancelSnapshot) (OutboxMessage, error) {
+	encoded, err := json.Marshal(snapshot)
+	if err != nil {
+		return OutboxMessage{}, fmt.Errorf("marshal cancel snapshot: %w", err)
+	}
+
+	res, err := r.db.ExecContext(ctx,
+		`INSERT INTO outbox (event_id, recipient_user_id, recipient_email, method, snapshot) VALUES (?, ?, ?, ?, ?)`,
+		eventID, recipientUserID, recipientEmail, OutboxMethodCancel, string(encoded),
+	)
+	if err != nil {
+		return OutboxMessage{}, fmt.Errorf("insert outbox message: %w", err)
+	}
+
+	id, err := res.LastInsertId()
+	if err != nil {
+		return OutboxMessage{}, fmt.Errorf("get last insert id: %w", err)
+	}
+
+	return r.Get(ctx, id)
+}
+
 // Get returns one OutboxMessage by id, or ErrNotFound.
 func (r *OutboxRepository) Get(ctx context.Context, id int64) (OutboxMessage, error) {
 	row := r.db.QueryRowContext(ctx,
-		`SELECT id, event_id, recipient_user_id, recipient_email, method, status, attempts, next_attempt_at, last_error, created_at, sent_at
+		`SELECT id, event_id, recipient_user_id, recipient_email, method, snapshot, status, attempts, next_attempt_at, last_error, created_at, sent_at
 		 FROM outbox WHERE id = ?`,
 		id,
 	)
@@ -126,9 +204,10 @@ func scanOutboxMessage(row rowScanner) (OutboxMessage, error) {
 	var m OutboxMessage
 	var recipientUserID sql.NullInt64
 	var recipientEmail sql.NullString
+	var snapshot sql.NullString
 	var lastError sql.NullString
 	var sentAt sql.NullTime
-	if err := row.Scan(&m.ID, &m.EventID, &recipientUserID, &recipientEmail, &m.Method, &m.Status, &m.Attempts, &m.NextAttemptAt, &lastError, &m.CreatedAt, &sentAt); err != nil {
+	if err := row.Scan(&m.ID, &m.EventID, &recipientUserID, &recipientEmail, &m.Method, &snapshot, &m.Status, &m.Attempts, &m.NextAttemptAt, &lastError, &m.CreatedAt, &sentAt); err != nil {
 		return OutboxMessage{}, err
 	}
 	if recipientUserID.Valid {
@@ -138,6 +217,13 @@ func scanOutboxMessage(row rowScanner) (OutboxMessage, error) {
 	if recipientEmail.Valid {
 		email := recipientEmail.String
 		m.RecipientEmail = &email
+	}
+	if snapshot.Valid {
+		var s OutboxCancelSnapshot
+		if err := json.Unmarshal([]byte(snapshot.String), &s); err != nil {
+			return OutboxMessage{}, fmt.Errorf("unmarshal cancel snapshot: %w", err)
+		}
+		m.Snapshot = &s
 	}
 	m.LastError = lastError.String
 	if sentAt.Valid {
@@ -153,7 +239,7 @@ func scanOutboxMessage(row rowScanner) (OutboxMessage, error) {
 // past them to a later message for someone else.
 func (r *OutboxRepository) ListPending(ctx context.Context, limit int) ([]OutboxMessage, error) {
 	rows, err := r.db.QueryContext(ctx,
-		`SELECT id, event_id, recipient_user_id, recipient_email, method, status, attempts, next_attempt_at, last_error, created_at, sent_at
+		`SELECT id, event_id, recipient_user_id, recipient_email, method, snapshot, status, attempts, next_attempt_at, last_error, created_at, sent_at
 		 FROM outbox WHERE status = ? ORDER BY id ASC LIMIT ?`,
 		OutboxStatusPending, limit,
 	)

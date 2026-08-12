@@ -254,6 +254,149 @@ func TestOutboxRepository_MarkSentRecordsSentAt(t *testing.T) {
 	}
 }
 
+// testCancelSnapshot returns a representative OutboxCancelSnapshot for
+// EnqueueCancel/EnqueueCancelEmail tests.
+func testCancelSnapshot() OutboxCancelSnapshot {
+	return OutboxCancelSnapshot{
+		UID:            "evt-1",
+		AllDay:         false,
+		Start:          time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC),
+		End:            time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC),
+		Title:          "Standup",
+		Sequence:       2,
+		OrganizerName:  "Owner",
+		OrganizerEmail: "owner@example.com",
+		RecipientEmail: "member@example.com",
+		RecipientName:  "Member",
+	}
+}
+
+func TestOutboxRepository_EnqueueCancelRoundTripsSnapshot(t *testing.T) {
+	repo, _, userID, eventID := newTestOutboxRepository(t)
+	ctx := context.Background()
+
+	recurrenceID := time.Date(2026, 2, 1, 9, 0, 0, 0, time.UTC)
+	snapshot := testCancelSnapshot()
+	snapshot.RecurrenceID = &recurrenceID
+	zone := "Europe/Berlin"
+	snapshot.Tzid = &zone
+
+	msg, err := repo.EnqueueCancel(ctx, eventID, userID, snapshot)
+	if err != nil {
+		t.Fatalf("enqueue cancel: %v", err)
+	}
+	if msg.Method != OutboxMethodCancel {
+		t.Fatalf("expected method %q, got %q", OutboxMethodCancel, msg.Method)
+	}
+	if msg.RecipientUserID == nil || *msg.RecipientUserID != userID {
+		t.Fatalf("expected RecipientUserID %d, got %+v", userID, msg)
+	}
+	if msg.Snapshot == nil {
+		t.Fatalf("expected a non-nil snapshot, got %+v", msg)
+	}
+	got := *msg.Snapshot
+	if got.UID != snapshot.UID || got.Title != snapshot.Title || got.Sequence != snapshot.Sequence {
+		t.Fatalf("expected snapshot to round-trip UID/Title/Sequence, got %+v", got)
+	}
+	if got.RecurrenceID == nil || !got.RecurrenceID.Equal(recurrenceID) {
+		t.Fatalf("expected RecurrenceID %v, got %+v", recurrenceID, got.RecurrenceID)
+	}
+	if got.Tzid == nil || *got.Tzid != zone {
+		t.Fatalf("expected Tzid %q, got %+v", zone, got.Tzid)
+	}
+	if got.OrganizerEmail != snapshot.OrganizerEmail || got.RecipientEmail != snapshot.RecipientEmail {
+		t.Fatalf("expected organizer/recipient email to round-trip, got %+v", got)
+	}
+
+	// Get, not just the Enqueue return value, must also round-trip it —
+	// this is what the outbox Worker actually reads back via ListPending.
+	fetched, err := repo.Get(ctx, msg.ID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if fetched.Snapshot == nil || fetched.Snapshot.UID != snapshot.UID {
+		t.Fatalf("expected Get to round-trip the snapshot, got %+v", fetched)
+	}
+}
+
+func TestOutboxRepository_EnqueueCancelEmailRoundTripsSnapshot(t *testing.T) {
+	repo, _, _, eventID := newTestOutboxRepository(t)
+	ctx := context.Background()
+
+	snapshot := testCancelSnapshot()
+	msg, err := repo.EnqueueCancelEmail(ctx, eventID, "guest@example.com", snapshot)
+	if err != nil {
+		t.Fatalf("enqueue cancel email: %v", err)
+	}
+	if msg.Method != OutboxMethodCancel {
+		t.Fatalf("expected method %q, got %q", OutboxMethodCancel, msg.Method)
+	}
+	if msg.RecipientUserID != nil {
+		t.Fatalf("expected a nil RecipientUserID on an email-shaped cancel, got %v", *msg.RecipientUserID)
+	}
+	if msg.RecipientEmail == nil || *msg.RecipientEmail != "guest@example.com" {
+		t.Fatalf("expected RecipientEmail %q, got %+v", "guest@example.com", msg)
+	}
+	if msg.Snapshot == nil || msg.Snapshot.RecipientEmail != snapshot.RecipientEmail {
+		t.Fatalf("expected snapshot to round-trip, got %+v", msg.Snapshot)
+	}
+}
+
+// TestOutboxRepository_RequestMessageCarriesNoSnapshot covers the other
+// half of the CANCEL/REQUEST split: a REQUEST enqueued the ordinary way
+// carries no snapshot at all — sendInvitation always rebuilds from live
+// state instead (InvitationSender.Send's own contract).
+func TestOutboxRepository_RequestMessageCarriesNoSnapshot(t *testing.T) {
+	repo, _, userID, eventID := newTestOutboxRepository(t)
+	ctx := context.Background()
+
+	msg, err := repo.Enqueue(ctx, eventID, userID)
+	if err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+	if msg.Snapshot != nil {
+		t.Fatalf("expected a nil snapshot on a REQUEST message, got %+v", msg.Snapshot)
+	}
+}
+
+// TestOutboxRepository_CancelSurvivesEventDeletion covers the schema-level
+// reason event_id carries no foreign key (#201): a CANCEL is queued for
+// exactly the moment its Event row disappears, so it must still be there —
+// snapshot intact — after that row is gone, in the very same transaction
+// that deleted it.
+func TestOutboxRepository_CancelSurvivesEventDeletion(t *testing.T) {
+	repo, sqlDB, userID, eventID := newTestOutboxRepository(t)
+	ctx := context.Background()
+
+	events := NewEventRepository(sqlDB)
+	snapshot := testCancelSnapshot()
+
+	err := WithTx(ctx, sqlDB, func(tx *sql.Tx) error {
+		if _, err := repo.WithTx(tx).EnqueueCancel(ctx, eventID, userID, snapshot); err != nil {
+			return err
+		}
+		return events.WithTx(tx).Delete(ctx, eventID)
+	})
+	if err != nil {
+		t.Fatalf("enqueue cancel + delete event in one tx: %v", err)
+	}
+
+	pending, err := repo.ListPending(ctx, 10)
+	if err != nil {
+		t.Fatalf("list pending: %v", err)
+	}
+	if len(pending) != 1 {
+		t.Fatalf("expected the cancel message to survive its event's deletion, got %+v", pending)
+	}
+	if pending[0].Snapshot == nil || pending[0].Snapshot.UID != snapshot.UID {
+		t.Fatalf("expected the snapshot to still be intact, got %+v", pending[0].Snapshot)
+	}
+
+	if _, err := events.GetByID(ctx, eventID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected the event to actually be gone, got %v", err)
+	}
+}
+
 // TestOutboxRepository_EnqueueRollsBackWithItsTransaction covers the
 // ADR-0060 atomicity guarantee at the repository level: a caller that
 // enqueues inside a transaction it then rolls back is left with no outbox

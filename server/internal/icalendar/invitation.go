@@ -1,11 +1,16 @@
-// invitation.go renders one Attendee's Invitation (ADR-0059): a standalone
-// METHOD:REQUEST VCALENDAR carrying a single VEVENT, built from the same
-// buildVEvent the CalDAV/Calendar-file codec uses so the two never drift
-// apart in shape — only ORGANIZER and VALARM differ.
+// invitation.go renders one Attendee's Invitation or Cancellation
+// (ADR-0059): a standalone VCALENDAR carrying a single VEVENT.
+// InvitationToICal's METHOD:REQUEST is built from the same buildVEvent the
+// CalDAV/Calendar-file codec uses so the two never drift apart in shape —
+// only ORGANIZER and VALARM differ. CancellationToICal's METHOD:CANCEL
+// (#201) is built from a repository.OutboxCancelSnapshot instead, since by
+// the time it sends, the row (or Attendee row) it withdraws may already be
+// gone.
 package icalendar
 
 import (
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/emersion/go-ical"
@@ -13,10 +18,12 @@ import (
 	"github.com/XiovV/calendar/server/internal/repository"
 )
 
-// MethodRequest is the only Method an Invitation carries today — a fresh
-// invite. MethodCancel (withdrawal on removal/delete, #201) isn't wired up
-// yet.
-const MethodRequest = "REQUEST"
+// MethodRequest is a fresh (or re-issued) invite. MethodCancel is a
+// withdrawal, queued on Attendee removal or Event deletion (#201).
+const (
+	MethodRequest = "REQUEST"
+	MethodCancel  = "CANCEL"
+)
 
 // InvitationToICal renders event as an Invitation: buildVEvent's usual
 // VEVENT shape (ATTENDEE lines included, ADR-0062), minus VALARM — the
@@ -79,4 +86,69 @@ func overrideInvitationOrganizer(v *ical.Event, e repository.Event, fromAddress 
 		return
 	}
 	v.Props.Set(organizerProp(e.CreatedByName, fromAddress))
+}
+
+// CancellationToICal renders snap as a Cancellation: a METHOD:CANCEL
+// VCALENDAR withdrawing the Invitation previously sent to one recipient
+// (ADR-0059, #201). Built entirely from snap rather than a live Event/
+// Attendee lookup — unlike InvitationToICal, which always reflects state as
+// it stands right now, a Cancellation's own purpose is to still render
+// correctly after the row (or Attendee row) it withdraws is gone. ORGANIZER
+// names fromAddress (this instance's own mailbox), the same ADR-0059 split
+// InvitationToICal applies via overrideInvitationOrganizer; ATTENDEE names
+// only the one recipient this message addresses, not the row's whole
+// Attendee list — RFC 5546's CANCEL carries just the Attendee(s) actually
+// being cancelled.
+func CancellationToICal(snap repository.OutboxCancelSnapshot, fromAddress string) (*ical.Calendar, error) {
+	cal := newVCalendar()
+	cal.Props.SetText(ical.PropMethod, MethodCancel)
+
+	if snap.Tzid != nil {
+		vtz, err := buildVTimezone(*snap.Tzid)
+		if err != nil {
+			return nil, fmt.Errorf("build vtimezone %q: %w", *snap.Tzid, err)
+		}
+		cal.Children = append(cal.Children, vtz)
+	}
+
+	v := ical.NewEvent()
+	v.Props.SetText(ical.PropUID, snap.UID)
+	v.Props.SetDateTime(ical.PropDateTimeStamp, time.Now().UTC())
+	v.Props.SetText(ical.PropSummary, snap.Title)
+	v.Props.SetText(ical.PropStatus, "CANCELLED")
+
+	sequenceProp := ical.NewProp(ical.PropSequence)
+	sequenceProp.Value = strconv.FormatInt(snap.Sequence, 10)
+	v.Props.Set(sequenceProp)
+
+	startProp, err := newDateTimeProp(ical.PropDateTimeStart, snap.Start, snap.AllDay, snap.Tzid)
+	if err != nil {
+		return nil, err
+	}
+	v.Props.Add(startProp)
+	endProp, err := newDateTimeProp(ical.PropDateTimeEnd, snap.End, snap.AllDay, snap.Tzid)
+	if err != nil {
+		return nil, err
+	}
+	v.Props.Add(endProp)
+
+	if snap.RecurrenceID != nil {
+		prop, err := newDateTimeProp(ical.PropRecurrenceID, *snap.RecurrenceID, snap.AllDay, snap.Tzid)
+		if err != nil {
+			return nil, fmt.Errorf("build recurrence-id: %w", err)
+		}
+		v.Props.Add(prop)
+	}
+
+	v.Props.Add(organizerProp(snap.OrganizerName, fromAddress))
+
+	attendeeProp := ical.NewProp(ical.PropAttendee)
+	if snap.RecipientName != "" {
+		attendeeProp.Params.Set(ical.ParamCommonName, snap.RecipientName)
+	}
+	attendeeProp.Value = "mailto:" + snap.RecipientEmail
+	v.Props.Add(attendeeProp)
+
+	cal.Children = append(cal.Children, v.Component)
+	return cal, nil
 }

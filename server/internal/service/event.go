@@ -118,6 +118,25 @@ func normalizeEventColor(color *string) (*string, error) {
 	return &normalized, nil
 }
 
+// colorEqual reports whether a and b name the same Event color override,
+// including both being nil ("inherit the Calendar's color", ADR-0043).
+func colorEqual(a, b *string) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
+}
+
+// materialFieldsChanged reports whether write's start, end, rrule or all_day
+// differ from existing's — the ADR-0059 material-change set: per RFC 5546,
+// changing any of these is what must reset a recipient's PARTSTAT back to
+// needs-action, via a re-issued Invitation carrying an incremented SEQUENCE
+// (#201). Time.Equal, not ==, since existing came back from a database
+// round-trip and write from the caller.
+func materialFieldsChanged(existing repository.Event, write EventWrite) bool {
+	return !existing.Start.Equal(write.Start) || !existing.End.Equal(write.End) || existing.Rrule != write.Rrule || existing.AllDay != write.AllDay
+}
+
 type EventService struct {
 	db                *sql.DB
 	events            *repository.EventRepository
@@ -999,7 +1018,13 @@ func (s *EventService) Get(ctx context.Context, userID int64, id string) (reposi
 }
 
 // Update rewrites id's fields. write.ParentID and write.RecurrenceID are
-// ignored — see EventWrite.
+// ignored — see EventWrite. Re-sends id's Invitation to its own current
+// Attendees whenever a field an Invitation renders actually changed,
+// bumping its iTIP sequence only when the change is material — start, end,
+// rrule, or all_day (ADR-0059, #201). A rule-pattern change forces
+// "All events" and discards id's existing Overrides/Exceptions (ADR-0016);
+// each discarded Override's own Attendees get a METHOD:CANCEL first, same
+// as Delete, since discarding an Override is deleting an Event.
 func (s *EventService) Update(ctx context.Context, userID int64, id string, write EventWrite) (repository.Event, error) {
 	write.Title = strings.TrimSpace(write.Title)
 	if write.Title == "" {
@@ -1048,19 +1073,45 @@ func (s *EventService) Update(ctx context.Context, userID int64, id string, writ
 	// nothing to discard.
 	discardChildren := existing.ParentID == nil && !samePattern(existing.Rrule, write.Rrule)
 
+	// material is the ADR-0059 change set that resets a recipient's PARTSTAT
+	// — start, end, rrule, all_day — and is the only thing that bumps this
+	// row's own iTIP sequence. contentChanged widens that to everything an
+	// Invitation actually renders — title, description, location and colour
+	// (ADR-0063) on top of the material set: any of it re-sends the
+	// Invitation to every one of id's own current Attendees, bumped or not.
+	material := materialFieldsChanged(existing, write)
+	newSequence := existing.Sequence
+	if material {
+		newSequence++
+	}
+	contentChanged := material || existing.Title != write.Title || existing.Description != write.Description || existing.Location != write.Location || !colorEqual(existing.Color, write.Color)
+
 	var updated repository.Event
 	err = s.withTx(ctx, func(repos txRepos) error {
 		seq, err := repos.sync.NextChangeSeq(ctx)
 		if err != nil {
 			return err
 		}
-		u, err := repos.events.Update(ctx, id, write.fields(), seq)
+		u, err := repos.events.Update(ctx, id, write.fields(), seq, newSequence)
 		if err != nil {
 			return err
 		}
 		updated = u
 
 		if discardChildren {
+			// A discarded Override is a deleted Event exactly as much as one
+			// removed through Delete — its own Attendees, if any, are owed
+			// the same METHOD:CANCEL (ADR-0059, #201), captured before the
+			// row disappears.
+			discardedByParent, err := repos.events.ListChildrenByParentIDs(ctx, []string{id})
+			if err != nil {
+				return fmt.Errorf("list discarded overrides: %w", err)
+			}
+			for _, child := range discardedByParent[id] {
+				if err := s.enqueueCancellationsForRow(ctx, repos, child); err != nil {
+					return err
+				}
+			}
 			if err := repos.events.DeleteChildrenOf(ctx, id); err != nil {
 				return fmt.Errorf("discard overrides: %w", err)
 			}
@@ -1078,6 +1129,12 @@ func (s *EventService) Update(ctx context.Context, userID int64, id string, writ
 		if existing.ParentID != nil {
 			if err := repos.events.SetChangeSeq(ctx, *existing.ParentID, seq); err != nil {
 				return fmt.Errorf("bump parent change_seq: %w", err)
+			}
+		}
+
+		if contentChanged {
+			if err := s.enqueueReinvitations(ctx, repos, id, nil, nil); err != nil {
+				return err
 			}
 		}
 		return nil
@@ -1376,6 +1433,10 @@ func (s *EventService) createSubscribedSeries(ctx context.Context, repos txRepos
 // insert only); Overrides created here inherit it from write.ExternalUID,
 // exactly as createSubscribedSeries does.
 func (s *EventService) updateSubscribedSeries(ctx context.Context, repos txRepos, userID int64, calendarID, masterID string, write SeriesWrite) error {
+	existingMaster, err := repos.events.GetByID(ctx, masterID)
+	if err != nil {
+		return fmt.Errorf("get existing master: %w", err)
+	}
 	existingOverrides, err := repos.events.ListChildrenByParentIDs(ctx, []string{masterID})
 	if err != nil {
 		return fmt.Errorf("list existing overrides: %w", err)
@@ -1401,7 +1462,10 @@ func (s *EventService) updateSubscribedSeries(ctx context.Context, repos txRepos
 		Description: write.Description,
 		Location:    write.Location,
 	}
-	if _, err := repos.events.Update(ctx, masterID, master, seq); err != nil {
+	// A Subscription's Refresh reconcile carries no iTIP lifecycle of its own
+	// (a Subscribed Calendar's Events carry no Attendees, ADR-0032/ADR-0059)
+	// — sequence is simply preserved rather than material-change detected.
+	if _, err := repos.events.Update(ctx, masterID, master, seq, existingMaster.Sequence); err != nil {
 		return fmt.Errorf("update master: %w", err)
 	}
 	if err := repos.reminders.ReplaceByEventID(ctx, masterID, write.Reminders); err != nil {
@@ -1434,7 +1498,7 @@ func (s *EventService) updateSubscribedSeries(ctx context.Context, repos txRepos
 		}
 
 		if existing, ok := existingByRecurrenceID[key]; ok {
-			if _, err := repos.events.Update(ctx, existing.ID, override, seq); err != nil {
+			if _, err := repos.events.Update(ctx, existing.ID, override, seq, existing.Sequence); err != nil {
 				return fmt.Errorf("update override: %w", err)
 			}
 			if err := repos.reminders.ReplaceByEventID(ctx, existing.ID, o.Reminders); err != nil {
@@ -1967,7 +2031,12 @@ func (s *EventService) AttendeeOnlyCTag(ctx context.Context, userID int64) (int6
 // leaves no row for sync-collection to diff against, so its removal is
 // recorded as a tombstone instead; deleting an Override still leaves its
 // Master's calendar object changed, so the Master's change_seq bumps
-// instead (ADR-0025).
+// instead (ADR-0025). Withdraws every affected row's own Invitations with a
+// METHOD:CANCEL (ADR-0059, #201): deleting a Master cancels its own
+// Attendees and, separately, each of its Overrides' own Attendees with that
+// row's own RECURRENCE-ID — a series is never treated as a single Event for
+// this — captured before anything is removed, since a CANCEL must outlive
+// the row it withdraws.
 func (s *EventService) Delete(ctx context.Context, userID int64, id string) error {
 	existing, err := s.getOwnedEvent(ctx, userID, id)
 	if err != nil {
@@ -1978,6 +2047,20 @@ func (s *EventService) Delete(ctx context.Context, userID int64, id string) erro
 	}
 
 	return s.withTx(ctx, func(repos txRepos) error {
+		rows := []repository.Event{existing}
+		if existing.ParentID == nil {
+			children, err := repos.events.ListChildrenByParentIDs(ctx, []string{id})
+			if err != nil {
+				return fmt.Errorf("list children for cancellation: %w", err)
+			}
+			rows = append(rows, children[id]...)
+		}
+		for _, row := range rows {
+			if err := s.enqueueCancellationsForRow(ctx, repos, row); err != nil {
+				return err
+			}
+		}
+
 		if err := repos.events.Delete(ctx, id); err != nil {
 			return err
 		}
@@ -2036,7 +2119,9 @@ func (s *EventService) AddException(ctx context.Context, userID int64, parentID 
 // ReparentFrom moves every Override/Exception of oldParentID at-or-after
 // fromStart to belong to newParentID instead — the "this and following" split
 // reparenting at the boundary (ADR-0016). Both events must already exist and
-// belong to the caller.
+// belong to the caller. A moved Override's own Attendees, if any, are
+// withdrawn under its old UID and re-invited under its new one (ADR-0059,
+// #201) — see the withTx body's own comment.
 func (s *EventService) ReparentFrom(ctx context.Context, userID int64, oldParentID, newParentID string, fromStart time.Time) error {
 	oldParent, err := s.getOwnedEvent(ctx, userID, oldParentID)
 	if err != nil {
@@ -2063,6 +2148,32 @@ func (s *EventService) ReparentFrom(ctx context.Context, userID int64, oldParent
 	}
 
 	return s.withTx(ctx, func(repos txRepos) error {
+		// Reparenting changes a moved Override's own iTIP UID — Invitations
+		// key it off ParentID (icalendar.InvitationToICal) — which a
+		// recipient's client can only ever be told about via cancel-old,
+		// invite-new; there is no in-place SEQUENCE bump for a UID change.
+		// So each moved Override's own Attendees, if any, are told now:
+		// captured, and cancelled under oldParentID, before
+		// ReparentOverridesFrom below moves the row and a fresh REQUEST —
+		// scheduled here but, like every REQUEST, rendered from live state
+		// only once it actually sends — picks up newParentID instead
+		// (ADR-0059, #201).
+		childrenByOldParent, err := repos.events.ListChildrenByParentIDs(ctx, []string{oldParentID})
+		if err != nil {
+			return fmt.Errorf("list children to reparent: %w", err)
+		}
+		for _, child := range childrenByOldParent[oldParentID] {
+			if child.RecurrenceID == nil || child.RecurrenceID.Before(fromStart) {
+				continue
+			}
+			if err := s.enqueueCancellationsForRow(ctx, repos, child); err != nil {
+				return err
+			}
+			if err := s.enqueueReinvitations(ctx, repos, child.ID, nil, nil); err != nil {
+				return err
+			}
+		}
+
 		if err := repos.events.ReparentOverridesFrom(ctx, oldParentID, newParentID, fromStart); err != nil {
 			return fmt.Errorf("reparent overrides: %w", err)
 		}
@@ -2278,7 +2389,10 @@ func (s *EventService) PutSeries(ctx context.Context, userID int64, calendarID, 
 			Color:       write.Color,
 		}
 		if masterExists {
-			if _, err := repos.events.Update(ctx, masterID, master, seq); err != nil {
+			// A CalDAV PUT carries no iTIP lifecycle of its own (ADR-0062:
+			// CalDAV emits ATTENDEE but ignores it inbound) — sequence is
+			// simply preserved rather than material-change detected.
+			if _, err := repos.events.Update(ctx, masterID, master, seq, existingMaster.Sequence); err != nil {
 				return fmt.Errorf("update master: %w", err)
 			}
 		} else {
@@ -2320,7 +2434,7 @@ func (s *EventService) PutSeries(ctx context.Context, userID int64, calendarID, 
 			}
 
 			if existing, ok := existingByRecurrenceID[key]; ok {
-				if _, err := repos.events.Update(ctx, existing.ID, override, seq); err != nil {
+				if _, err := repos.events.Update(ctx, existing.ID, override, seq, existing.Sequence); err != nil {
 					return fmt.Errorf("update override: %w", err)
 				}
 				if err := repos.reminders.ReplaceByEventID(ctx, existing.ID, o.Reminders); err != nil {
@@ -2381,6 +2495,127 @@ func (s *EventService) attendeeManagementCalendar(ctx context.Context, actorUser
 		return repository.Event{}, repository.Calendar{}, err
 	}
 	return event, calendar, nil
+}
+
+// enqueueReinvitations re-queues a REQUEST Invitation to every one of
+// eventID's own current Attendees except those named in exceptUserIDs/
+// exceptEmails — Update's ADR-0059 re-send, run whenever contentChanged said
+// something an Invitation renders actually changed, and AddAttendee/
+// AddGroupAttendee/RemoveAttendee's own re-send for everyone *else*: the
+// Attendee list itself is a non-material change that still re-sends (every
+// REQUEST renders the row's whole current ATTENDEE list, ADR-0062), but the
+// one Attendee just added or removed already gets their own dedicated
+// message — a fresh invite or a CANCEL — so they're excluded here to avoid
+// sending them a redundant second one. Both maps are nil from Update's own
+// call, which excludes nobody. Reuses OutboxRepository.Enqueue/EnqueueEmail,
+// exactly like inviteUser/inviteEmail do for a brand-new Attendee: the
+// message carries no snapshot of its own (repository.OutboxMessage's
+// Method-REQUEST half), since InvitationSender always rebuilds a REQUEST
+// from live state — including the row's own Sequence, already bumped (or
+// not) by the caller's write before this runs. A no-op when outbox is nil
+// (no SMTP configured) or eventID has no other Attendees.
+func (s *EventService) enqueueReinvitations(ctx context.Context, repos txRepos, eventID string, exceptUserIDs map[int64]bool, exceptEmails map[string]bool) error {
+	if repos.outbox == nil {
+		return nil
+	}
+	attendees, err := repos.attendees.ListByEventID(ctx, eventID)
+	if err != nil {
+		return fmt.Errorf("list attendees for re-invitation: %w", err)
+	}
+	for _, a := range attendees {
+		if a.UserID != nil {
+			if exceptUserIDs[*a.UserID] {
+				continue
+			}
+			if _, err := repos.outbox.Enqueue(ctx, eventID, *a.UserID); err != nil {
+				return fmt.Errorf("enqueue re-invitation: %w", err)
+			}
+			continue
+		}
+		if exceptEmails[a.Email] {
+			continue
+		}
+		if _, err := repos.outbox.EnqueueEmail(ctx, eventID, a.Email); err != nil {
+			return fmt.Errorf("enqueue re-invitation: %w", err)
+		}
+	}
+	return nil
+}
+
+// enqueueCancellation queues one CANCEL withdrawing row's Invitation from a
+// single Attendee — exactly one of userID/email is set, mirroring
+// inviteUser/inviteEmail's own split (ADR-0058). uid is row's iTIP UID: its
+// own id on a Master or a standalone Event, its Master's id on an Override
+// (icalendar.InvitationToICal's contract). Captures row's current fields
+// plus its own Organizer into repository.OutboxCancelSnapshot right now,
+// rather than a live lookup at send time — a CANCEL's purpose is to outlive
+// the row (or the Attendee row) it withdraws, unlike a REQUEST.
+func (s *EventService) enqueueCancellation(ctx context.Context, repos txRepos, row repository.Event, recipientName, recipientEmail string, userID *int64, email *string) error {
+	uid := row.ID
+	if row.ParentID != nil {
+		uid = *row.ParentID
+	}
+
+	var organizerName, organizerEmail string
+	if row.CreatedBy != nil {
+		organizer, err := repos.users.GetByID(ctx, *row.CreatedBy)
+		if err != nil && !errors.Is(err, repository.ErrNotFound) {
+			return fmt.Errorf("look up organizer: %w", err)
+		}
+		organizerName, organizerEmail = organizer.Name, organizer.Email
+	}
+
+	snapshot := repository.OutboxCancelSnapshot{
+		UID:            uid,
+		RecurrenceID:   row.RecurrenceID,
+		AllDay:         row.AllDay,
+		Tzid:           row.Tzid,
+		Start:          row.Start,
+		End:            row.End,
+		Title:          row.Title,
+		Sequence:       row.Sequence,
+		OrganizerName:  organizerName,
+		OrganizerEmail: organizerEmail,
+		RecipientEmail: recipientEmail,
+		RecipientName:  recipientName,
+	}
+
+	if userID != nil {
+		if _, err := repos.outbox.EnqueueCancel(ctx, row.ID, *userID, snapshot); err != nil {
+			return fmt.Errorf("enqueue cancellation: %w", err)
+		}
+		return nil
+	}
+	if _, err := repos.outbox.EnqueueCancelEmail(ctx, row.ID, *email, snapshot); err != nil {
+		return fmt.Errorf("enqueue cancellation: %w", err)
+	}
+	return nil
+}
+
+// enqueueCancellationsForRow queues a CANCEL to every one of row's own
+// current Attendees — Delete's per-row fan-out over enqueueCancellation, one
+// per Attendee. A no-op when outbox is nil.
+func (s *EventService) enqueueCancellationsForRow(ctx context.Context, repos txRepos, row repository.Event) error {
+	if repos.outbox == nil {
+		return nil
+	}
+	attendees, err := repos.attendees.ListByEventID(ctx, row.ID)
+	if err != nil {
+		return fmt.Errorf("list attendees for cancellation: %w", err)
+	}
+	for _, a := range attendees {
+		if a.UserID != nil {
+			if err := s.enqueueCancellation(ctx, repos, row, a.Name, a.Email, a.UserID, nil); err != nil {
+				return err
+			}
+			continue
+		}
+		email := a.Email
+		if err := s.enqueueCancellation(ctx, repos, row, a.Name, a.Email, nil, &email); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // inviteUser is AddAttendee's and Create's shared explicit-target check
@@ -2569,6 +2804,11 @@ func expandGroupMembers(ctx context.Context, groups *repository.GroupRepository,
 // eventID alone, with no Calendar Access of their own required — the invite
 // itself is the grant. targetUserID must already be a Member of eventID's
 // Calendar's own Workspace and not Disabled — inviteUser's shared check.
+// Also re-sends the Invitation to every one of eventID's other current
+// Attendees, unbumped: the Attendee list is itself a non-material change
+// (ADR-0059) — every REQUEST renders the row's whole current list
+// (ADR-0062) — and targetUserID already gets their own fresh invite, so
+// they're excluded from this re-send.
 func (s *EventService) AddAttendee(ctx context.Context, actorUserID int64, eventID string, targetUserID int64) (repository.Attendee, error) {
 	event, calendar, err := s.attendeeManagementCalendar(ctx, actorUserID, eventID)
 	if err != nil {
@@ -2579,7 +2819,10 @@ func (s *EventService) AddAttendee(ctx context.Context, actorUserID int64, event
 	err = s.withTx(ctx, func(repos txRepos) error {
 		var err error
 		attendee, err = inviteUser(ctx, repos.users, repos.workspaces, repos.attendees, repos.notifications, repos.outbox, event, calendar.WorkspaceID, targetUserID)
-		return err
+		if err != nil {
+			return err
+		}
+		return s.enqueueReinvitations(ctx, repos, eventID, map[int64]bool{targetUserID: true}, nil)
 	})
 	if err != nil {
 		return repository.Attendee{}, err
@@ -2592,7 +2835,9 @@ func (s *EventService) AddAttendee(ctx context.Context, actorUserID int64, event
 // eventID's Calendar, same as AddAttendee. rawEmail is resolved against
 // eventID's Calendar's own Workspace before anything is written —
 // inviteEmail's shared check — producing a User-backed Attendee on a match
-// and an email-shaped one otherwise.
+// and an email-shaped one otherwise. Re-sends to every other current
+// Attendee, same as AddAttendee (ADR-0059, #201), excluding whichever shape
+// the new Attendee actually took.
 func (s *EventService) AddAttendeeByEmail(ctx context.Context, actorUserID int64, eventID string, rawEmail string) (repository.AttendeeWithName, error) {
 	event, calendar, err := s.attendeeManagementCalendar(ctx, actorUserID, eventID)
 	if err != nil {
@@ -2603,7 +2848,13 @@ func (s *EventService) AddAttendeeByEmail(ctx context.Context, actorUserID int64
 	err = s.withTx(ctx, func(repos txRepos) error {
 		var err error
 		attendee, err = inviteEmail(ctx, repos.users, repos.workspaces, repos.attendees, repos.notifications, repos.outbox, event, calendar.WorkspaceID, rawEmail)
-		return err
+		if err != nil {
+			return err
+		}
+		if attendee.UserID != nil {
+			return s.enqueueReinvitations(ctx, repos, eventID, map[int64]bool{*attendee.UserID: true}, nil)
+		}
+		return s.enqueueReinvitations(ctx, repos, eventID, nil, map[string]bool{attendee.Email: true})
 	})
 	if err != nil {
 		return repository.AttendeeWithName{}, err
@@ -2620,7 +2871,11 @@ func (s *EventService) AddAttendeeByEmail(ctx context.Context, actorUserID int64
 // retroactively add or remove Attendees this call created, since attendees
 // rows carry no link back to the Group they were invited through. groupID
 // must belong to eventID's Calendar's own Workspace, mirroring AddAttendee's
-// target check.
+// target check. Re-sends to every other current Attendee, same as
+// AddAttendee, excluding every member actually added this call — a member
+// already an Attendee (expandGroupMembers' own lenient skip) is not
+// excluded, since they get no dedicated message of their own to make this
+// one redundant.
 func (s *EventService) AddGroupAttendee(ctx context.Context, actorUserID int64, eventID string, groupID int64) ([]repository.Attendee, error) {
 	event, calendar, err := s.attendeeManagementCalendar(ctx, actorUserID, eventID)
 	if err != nil {
@@ -2646,7 +2901,17 @@ func (s *EventService) AddGroupAttendee(ctx context.Context, actorUserID int64, 
 		// reflected in neither snapshot.
 		var err error
 		added, err = expandGroupMembers(ctx, repos.groups, repos.users, repos.attendees, repos.notifications, repos.outbox, event, group.ID)
-		return err
+		if err != nil {
+			return err
+		}
+		if len(added) == 0 {
+			return nil
+		}
+		exceptUserIDs := make(map[int64]bool, len(added))
+		for _, a := range added {
+			exceptUserIDs[a.UserID] = true
+		}
+		return s.enqueueReinvitations(ctx, repos, eventID, exceptUserIDs, nil)
 	})
 	if err != nil {
 		return nil, fmt.Errorf("add group attendees: %w", err)
@@ -2659,23 +2924,63 @@ func (s *EventService) AddGroupAttendee(ctx context.Context, actorUserID int64, 
 // caller with Editor Access to (or ownership of) eventID's Calendar (#161,
 // ADR-0046). Removing their row revokes their visibility to eventID; what
 // happens to their historical response is left undecided by ADR-0046, and
-// this simply deletes the row.
+// this simply deletes the row. Withdraws their Invitation with a
+// METHOD:CANCEL, addressed to them alone, then re-sends to every remaining
+// Attendee, unbumped — the Attendee list changing is itself a non-material
+// change (ADR-0059, #201).
 func (s *EventService) RemoveAttendee(ctx context.Context, actorUserID int64, eventID string, targetUserID int64) error {
-	if _, _, err := s.attendeeManagementCalendar(ctx, actorUserID, eventID); err != nil {
+	event, _, err := s.attendeeManagementCalendar(ctx, actorUserID, eventID)
+	if err != nil {
 		return err
 	}
-	return s.attendees.Remove(ctx, eventID, targetUserID)
+
+	return s.withTx(ctx, func(repos txRepos) error {
+		if err := repos.attendees.Remove(ctx, eventID, targetUserID); err != nil {
+			return err
+		}
+		if repos.outbox == nil {
+			return nil
+		}
+		target, err := repos.users.GetByID(ctx, targetUserID)
+		if err != nil && !errors.Is(err, repository.ErrNotFound) {
+			return fmt.Errorf("look up removed attendee: %w", err)
+		}
+		if err == nil {
+			if err := s.enqueueCancellation(ctx, repos, event, target.Name, target.Email, &targetUserID, nil); err != nil {
+				return err
+			}
+		}
+		// targetUserID's own row is already gone from the table by now, so
+		// it needs no exclusion here the way AddAttendee's re-send does.
+		return s.enqueueReinvitations(ctx, repos, eventID, nil, nil)
+	})
 }
 
 // RemoveAttendeeByEmail revokes email's Attendee invite to eventID
 // (ADR-0058, #200) — the email-shaped counterpart to RemoveAttendee, same
 // caller requirement. email is normalized the same way inviteEmail writes
-// it, so a differently-cased address still matches the stored row.
+// it, so a differently-cased address still matches the stored row. Withdraws
+// their Invitation with a METHOD:CANCEL and re-sends to every remaining
+// Attendee, same as RemoveAttendee (ADR-0059, #201).
 func (s *EventService) RemoveAttendeeByEmail(ctx context.Context, actorUserID int64, eventID string, email string) error {
-	if _, _, err := s.attendeeManagementCalendar(ctx, actorUserID, eventID); err != nil {
+	event, _, err := s.attendeeManagementCalendar(ctx, actorUserID, eventID)
+	if err != nil {
 		return err
 	}
-	return s.attendees.RemoveEmail(ctx, eventID, normalizeEmail(email))
+	normalized := normalizeEmail(email)
+
+	return s.withTx(ctx, func(repos txRepos) error {
+		if err := repos.attendees.RemoveEmail(ctx, eventID, normalized); err != nil {
+			return err
+		}
+		if repos.outbox == nil {
+			return nil
+		}
+		if err := s.enqueueCancellation(ctx, repos, event, "", normalized, nil, &normalized); err != nil {
+			return err
+		}
+		return s.enqueueReinvitations(ctx, repos, eventID, nil, nil)
+	})
 }
 
 // ListAttendees returns every Attendee of eventID with their Name, for

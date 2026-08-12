@@ -78,8 +78,8 @@ func NewWorker(store Store, sender Sender, now func() time.Time) *Worker {
 // blocks every later message to that *same* recipient — never a later one
 // to someone else. That is what makes delivery per-recipient ordered
 // (ADR-0060) with no locking: the only messages that could ever need
-// ordering against each other — a REQUEST, a re-issued REQUEST, a CANCEL,
-// once #201 lands — are exactly the ones this stalls behind one another.
+// ordering against each other — a REQUEST, a re-issued REQUEST, a CANCEL
+// (#201) — are exactly the ones this stalls behind one another.
 func (w *Worker) Tick(ctx context.Context) error {
 	messages, err := w.store.ListPending(ctx, batchSize)
 	if err != nil {

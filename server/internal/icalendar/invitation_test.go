@@ -180,3 +180,124 @@ func TestInvitationToICal_Override_UsesMasterUIDAndRecurrenceID(t *testing.T) {
 		t.Fatalf("expected a RECURRENCE-ID for an Override Invitation, got:\n%s", body)
 	}
 }
+
+func mustEncodeCancellation(t *testing.T, snap repository.OutboxCancelSnapshot, fromAddress string) string {
+	t.Helper()
+	cal, err := CancellationToICal(snap, fromAddress)
+	if err != nil {
+		t.Fatalf("CancellationToICal: %v", err)
+	}
+	var buf bytes.Buffer
+	if err := ical.NewEncoder(&buf).Encode(cal); err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	return buf.String()
+}
+
+// TestCancellationToICal_CarriesMethodCancelAndStatusCancelled covers the
+// #201 baseline: a Cancellation's VCALENDAR/VEVENT is a distinct shape from
+// an Invitation's, not a REQUEST with a different label.
+func TestCancellationToICal_CarriesMethodCancelAndStatusCancelled(t *testing.T) {
+	snap := repository.OutboxCancelSnapshot{
+		UID:            "evt-1",
+		Start:          time.Date(2026, 6, 1, 9, 0, 0, 0, time.UTC),
+		End:            time.Date(2026, 6, 1, 9, 30, 0, 0, time.UTC),
+		Title:          "Standup",
+		Sequence:       2,
+		OrganizerName:  "Alice Example",
+		OrganizerEmail: "alice@example.com",
+		RecipientEmail: "bob@example.com",
+		RecipientName:  "Bob Guest",
+	}
+
+	body := mustEncodeCancellation(t, snap, "calendar@example.com")
+
+	if !strings.Contains(body, "METHOD:CANCEL") {
+		t.Fatalf("expected METHOD:CANCEL, got:\n%s", body)
+	}
+	if !strings.Contains(body, "STATUS:CANCELLED") {
+		t.Fatalf("expected STATUS:CANCELLED, got:\n%s", body)
+	}
+	if !strings.Contains(body, "UID:evt-1") {
+		t.Fatalf("expected UID:evt-1, got:\n%s", body)
+	}
+	if !strings.Contains(body, "SEQUENCE:2") {
+		t.Fatalf("expected SEQUENCE:2, got:\n%s", body)
+	}
+	if strings.Contains(body, "RECURRENCE-ID") {
+		t.Fatalf("expected no RECURRENCE-ID for a Master cancellation, got:\n%s", body)
+	}
+}
+
+// TestCancellationToICal_OrganizerNamesTheInstanceMailbox mirrors
+// InvitationToICal's own ORGANIZER split (ADR-0059): the instance's own
+// mailbox on the wire, the withdrawn row's real Organizer only as CN.
+func TestCancellationToICal_OrganizerNamesTheInstanceMailbox(t *testing.T) {
+	snap := repository.OutboxCancelSnapshot{
+		UID:            "evt-1",
+		Start:          time.Date(2026, 6, 1, 9, 0, 0, 0, time.UTC),
+		End:            time.Date(2026, 6, 1, 9, 30, 0, 0, time.UTC),
+		Title:          "Standup",
+		OrganizerName:  "Alice Example",
+		OrganizerEmail: "alice@example.com",
+		RecipientEmail: "bob@example.com",
+	}
+
+	body := mustEncodeCancellation(t, snap, "calendar@example.com")
+
+	if !strings.Contains(body, "ORGANIZER;CN=Alice Example:mailto:calendar@example.com") {
+		t.Fatalf("expected ORGANIZER naming the instance mailbox with the organizer's CN, got:\n%s", body)
+	}
+	if strings.Contains(body, "mailto:alice@example.com") {
+		t.Fatalf("expected the organizer's own address to not appear anywhere, got:\n%s", body)
+	}
+}
+
+// TestCancellationToICal_AttendeeNamesOnlyTheOneRecipient covers RFC 5546's
+// CANCEL shape: only the recipient this message addresses appears as
+// ATTENDEE, never a whole guest list — unlike InvitationToICal's REQUEST,
+// which does carry every Attendee (ADR-0062).
+func TestCancellationToICal_AttendeeNamesOnlyTheOneRecipient(t *testing.T) {
+	snap := repository.OutboxCancelSnapshot{
+		UID:            "evt-1",
+		Start:          time.Date(2026, 6, 1, 9, 0, 0, 0, time.UTC),
+		End:            time.Date(2026, 6, 1, 9, 30, 0, 0, time.UTC),
+		Title:          "Standup",
+		RecipientEmail: "bob@example.com",
+		RecipientName:  "Bob Guest",
+	}
+
+	body := mustEncodeCancellation(t, snap, "calendar@example.com")
+
+	if !strings.Contains(body, "ATTENDEE;CN=Bob Guest:mailto:bob@example.com") {
+		t.Fatalf("expected an ATTENDEE for Bob, got:\n%s", body)
+	}
+	if strings.Count(body, "ATTENDEE") != 1 {
+		t.Fatalf("expected exactly one ATTENDEE line, got:\n%s", body)
+	}
+}
+
+// TestCancellationToICal_RecurrenceIDForAnOverride mirrors
+// TestInvitationToICal_Override_UsesMasterUIDAndRecurrenceID: an Override's
+// Cancellation carries the Master's UID plus its own RECURRENCE-ID.
+func TestCancellationToICal_RecurrenceIDForAnOverride(t *testing.T) {
+	masterID := "evt-master"
+	recurrenceID := time.Date(2026, 7, 8, 15, 0, 0, 0, time.UTC)
+	snap := repository.OutboxCancelSnapshot{
+		UID:            masterID,
+		RecurrenceID:   &recurrenceID,
+		Start:          time.Date(2026, 7, 8, 16, 0, 0, 0, time.UTC),
+		End:            time.Date(2026, 7, 8, 17, 0, 0, 0, time.UTC),
+		Title:          "Weekly sync (moved)",
+		RecipientEmail: "bob@example.com",
+	}
+
+	body := mustEncodeCancellation(t, snap, "calendar@example.com")
+
+	if !strings.Contains(body, "UID:"+masterID) {
+		t.Fatalf("expected the Master's own UID, got:\n%s", body)
+	}
+	if !strings.Contains(body, "RECURRENCE-ID") {
+		t.Fatalf("expected a RECURRENCE-ID for an Override cancellation, got:\n%s", body)
+	}
+}

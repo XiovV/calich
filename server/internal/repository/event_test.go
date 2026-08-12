@@ -87,6 +87,63 @@ func TestEventRepository_CreateAndGetByID(t *testing.T) {
 	}
 }
 
+// TestEventRepository_Create_SequenceDefaultsToZero covers the ADR-0059
+// baseline (#201): a brand-new Event/Master/Override always starts at iTIP
+// SEQUENCE 0, the value its first Invitation carries.
+func TestEventRepository_Create_SequenceDefaultsToZero(t *testing.T) {
+	repo, userID, calendarID, _ := newTestEventRepository(t)
+	ctx := context.Background()
+
+	start := time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC)
+	end := time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC)
+	created, err := repo.Create(ctx, "evt-1", &userID, EventFields{CalendarID: calendarID, Title: "Standup", Start: start, End: end}, 0)
+	if err != nil {
+		t.Fatalf("create event: %v", err)
+	}
+	if created.Sequence != 0 {
+		t.Fatalf("expected a fresh Event to start at sequence 0, got %d", created.Sequence)
+	}
+
+	fetched, err := repo.GetByID(ctx, "evt-1")
+	if err != nil {
+		t.Fatalf("get by id: %v", err)
+	}
+	if fetched.Sequence != 0 {
+		t.Fatalf("expected fetched sequence 0, got %d", fetched.Sequence)
+	}
+}
+
+// TestEventRepository_Update_WritesTheGivenSequence covers Update's own
+// contract (#201): the caller decides sequence's new value — this only
+// persists and round-trips whatever it's handed, whether bumped or left
+// unchanged.
+func TestEventRepository_Update_WritesTheGivenSequence(t *testing.T) {
+	repo, userID, calendarID, _ := newTestEventRepository(t)
+	ctx := context.Background()
+
+	start := time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC)
+	end := time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC)
+	if _, err := repo.Create(ctx, "evt-1", &userID, EventFields{CalendarID: calendarID, Title: "Standup", Start: start, End: end}, 0); err != nil {
+		t.Fatalf("create event: %v", err)
+	}
+
+	updated, err := repo.Update(ctx, "evt-1", EventFields{CalendarID: calendarID, Title: "Standup", Start: start, End: end}, 0, 3)
+	if err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	if updated.Sequence != 3 {
+		t.Fatalf("expected sequence 3 after update, got %d", updated.Sequence)
+	}
+
+	fetched, err := repo.GetByID(ctx, "evt-1")
+	if err != nil {
+		t.Fatalf("get by id: %v", err)
+	}
+	if fetched.Sequence != 3 {
+		t.Fatalf("expected fetched sequence 3, got %d", fetched.Sequence)
+	}
+}
+
 func TestEventRepository_CreateAndUpdate_PersistsAllDay(t *testing.T) {
 	repo, userID, calendarID, _ := newTestEventRepository(t)
 	ctx := context.Background()
@@ -110,7 +167,7 @@ func TestEventRepository_CreateAndUpdate_PersistsAllDay(t *testing.T) {
 		t.Fatalf("expected fetched event to be all-day, got %+v", fetched)
 	}
 
-	updated, err := repo.Update(ctx, "evt-1", EventFields{CalendarID: calendarID, Title: "Holiday", Start: start, End: end}, 0)
+	updated, err := repo.Update(ctx, "evt-1", EventFields{CalendarID: calendarID, Title: "Holiday", Start: start, End: end}, 0, 0)
 	if err != nil {
 		t.Fatalf("update: %v", err)
 	}
@@ -145,7 +202,7 @@ func TestEventRepository_CreateAndUpdate_RoundTripsTzid(t *testing.T) {
 	}
 
 	zone := "Europe/Berlin"
-	updated, err := repo.Update(ctx, "evt-1", EventFields{CalendarID: calendarID, Title: "Standup", Start: start, End: end, Tzid: &zone}, 0)
+	updated, err := repo.Update(ctx, "evt-1", EventFields{CalendarID: calendarID, Title: "Standup", Start: start, End: end, Tzid: &zone}, 0, 0)
 	if err != nil {
 		t.Fatalf("update: %v", err)
 	}
@@ -346,7 +403,7 @@ func TestEventRepository_Update(t *testing.T) {
 	newStart := mustParseTime(t, "2026-01-01T11:00:00Z")
 	newEnd := mustParseTime(t, "2026-01-01T12:00:00Z")
 
-	updated, err := repo.Update(ctx, "evt-1", EventFields{CalendarID: calendarID, Title: "Renamed", Start: newStart, End: newEnd}, 0)
+	updated, err := repo.Update(ctx, "evt-1", EventFields{CalendarID: calendarID, Title: "Renamed", Start: newStart, End: newEnd}, 0, 0)
 	if err != nil {
 		t.Fatalf("update: %v", err)
 	}
@@ -361,7 +418,7 @@ func TestEventRepository_Update_NotFound(t *testing.T) {
 	start := mustParseTime(t, "2026-01-01T09:00:00Z")
 	end := mustParseTime(t, "2026-01-01T10:00:00Z")
 
-	_, err := repo.Update(context.Background(), "nope", EventFields{CalendarID: calendarID, Title: "Renamed", Start: start, End: end}, 0)
+	_, err := repo.Update(context.Background(), "nope", EventFields{CalendarID: calendarID, Title: "Renamed", Start: start, End: end}, 0, 0)
 	if !errors.Is(err, ErrNotFound) {
 		t.Fatalf("expected ErrNotFound, got %v", err)
 	}

@@ -59,10 +59,43 @@ func (m *SMTPMailer) SendInvitation(to, fromName, replyTo, subject string, ics [
 	return smtp.SendMail(addr, auth, m.From, []string{to}, msg)
 }
 
+// SendCancellation delivers a Cancellation (ADR-0059, #201) — a
+// METHOD:CANCEL counterpart to SendInvitation, same message shape and same
+// From/Reply-To split, so a mail client withdraws the calendar entry it
+// rendered from the original Invitation rather than showing a second,
+// unrelated attachment.
+func (m *SMTPMailer) SendCancellation(to, fromName, replyTo, subject string, ics []byte) error {
+	msg, err := buildCancellationMessage(m, to, fromName, replyTo, subject, ics)
+	if err != nil {
+		return err
+	}
+
+	addr := m.Host + ":" + m.Port
+	auth := smtp.PlainAuth("", m.User, m.Pass, m.Host)
+	return smtp.SendMail(addr, auth, m.From, []string{to}, msg)
+}
+
 // buildInvitationMessage renders SendInvitation's raw message — headers plus
 // a multipart/alternative body — split out as its own pure function so it
 // can be tested without dialing SMTP.
 func buildInvitationMessage(m *SMTPMailer, to, fromName, replyTo, subject string, ics []byte) ([]byte, error) {
+	return buildCalendarMessage(m, to, fromName, replyTo, subject, ics, "REQUEST", "invite.ics",
+		"This message contains a calendar invitation. Open it in a calendar app to accept, decline, or reply tentative.")
+}
+
+// buildCancellationMessage is buildInvitationMessage's METHOD:CANCEL
+// counterpart, split out the same way for the same reason (#201).
+func buildCancellationMessage(m *SMTPMailer, to, fromName, replyTo, subject string, ics []byte) ([]byte, error) {
+	return buildCalendarMessage(m, to, fromName, replyTo, subject, ics, "CANCEL", "cancel.ics",
+		"This message contains a calendar cancellation notice. Open it in a calendar app to remove the event.")
+}
+
+// buildCalendarMessage is buildInvitationMessage's and
+// buildCancellationMessage's shared builder — headers plus a
+// multipart/alternative body carrying ics as a text/calendar;method=<method>
+// part, differing only in that method, the calendar part's filename, and the
+// plain-text fallback's wording.
+func buildCalendarMessage(m *SMTPMailer, to, fromName, replyTo, subject string, ics []byte, method, filename, plainText string) ([]byte, error) {
 	var buf bytes.Buffer
 
 	from := mail.Address{Name: fromName, Address: m.From}
@@ -83,14 +116,14 @@ func buildInvitationMessage(m *SMTPMailer, to, fromName, replyTo, subject string
 	if err != nil {
 		return nil, fmt.Errorf("create plain-text part: %w", err)
 	}
-	if _, err := fmt.Fprintf(plainPart, "%s\r\n\r\nThis message contains a calendar invitation. Open it in a calendar app to accept, decline, or reply tentative.\r\n", subject); err != nil {
+	if _, err := fmt.Fprintf(plainPart, "%s\r\n\r\n%s\r\n", subject, plainText); err != nil {
 		return nil, fmt.Errorf("write plain-text part: %w", err)
 	}
 
 	calPart, err := mw.CreatePart(textproto.MIMEHeader{
-		"Content-Type":              {`text/calendar; method=REQUEST; charset=UTF-8`},
+		"Content-Type":              {`text/calendar; method=` + method + `; charset=UTF-8`},
 		"Content-Transfer-Encoding": {"base64"},
-		"Content-Disposition":       {`inline; filename="invite.ics"`},
+		"Content-Disposition":       {`inline; filename="` + filename + `"`},
 	})
 	if err != nil {
 		return nil, fmt.Errorf("create calendar part: %w", err)

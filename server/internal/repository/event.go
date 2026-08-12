@@ -107,6 +107,15 @@ type Event struct {
 	// answer at List/Get time, rather than needing a separate round-trip to
 	// the Attendees endpoint.
 	AttendeeCount int
+	// Sequence is this row's own iTIP SEQUENCE (ADR-0059, #201) — distinct
+	// from ChangeSeq (CalDAV's per-object marker, bumped on every write) and
+	// never touched by one. It only increments when start, end, rrule or
+	// all_day changes (EventService's material-change set), which is what
+	// makes a recipient's client reset their PARTSTAT and re-ask them (RFC
+	// 5546). Scoped to this row alone: an Override tracks its own SEQUENCE
+	// independently of its Master's, since each is its own VEVENT on the
+	// wire.
+	Sequence int64
 }
 
 type EventRepository struct {
@@ -161,7 +170,7 @@ func (r *EventRepository) Create(ctx context.Context, id string, createdBy *int6
 
 func (r *EventRepository) GetByID(ctx context.Context, id string) (Event, error) {
 	return scanEvent(r.db.QueryRowContext(ctx,
-		`SELECT id, calendar_id, title, "start", "end", all_day, rrule, parent_id, recurrence_id, tzid, description, location, color, external_uid, created_by, created_at, change_seq FROM events WHERE id = ?`,
+		`SELECT id, calendar_id, title, "start", "end", all_day, rrule, parent_id, recurrence_id, tzid, description, location, color, external_uid, created_by, created_at, change_seq, sequence FROM events WHERE id = ?`,
 		id,
 	))
 }
@@ -190,7 +199,7 @@ func (r *EventRepository) ListByCalendarIDs(ctx context.Context, calendarIDs []s
 		return []Event{}, nil
 	}
 
-	query := `SELECT id, calendar_id, title, "start", "end", all_day, rrule, parent_id, recurrence_id, tzid, description, location, color, external_uid, created_by, created_at, change_seq FROM events WHERE calendar_id IN (` + placeholders(len(calendarIDs)) + `)`
+	query := `SELECT id, calendar_id, title, "start", "end", all_day, rrule, parent_id, recurrence_id, tzid, description, location, color, external_uid, created_by, created_at, change_seq, sequence FROM events WHERE calendar_id IN (` + placeholders(len(calendarIDs)) + `)`
 	args := make([]any, len(calendarIDs))
 	for i, id := range calendarIDs {
 		args[i] = id
@@ -204,7 +213,7 @@ func (r *EventRepository) ListByCalendarIDs(ctx context.Context, calendarIDs []s
 // of a User's visible Events (ADR-0046), which EventService.List unions
 // with ListByCalendarIDs' Calendar-Access half.
 func (r *EventRepository) ListByAttendeeUserID(ctx context.Context, userID int64, from, to *time.Time) ([]Event, error) {
-	query := `SELECT id, calendar_id, title, "start", "end", all_day, rrule, parent_id, recurrence_id, tzid, description, location, color, external_uid, created_by, created_at, change_seq FROM events WHERE id IN (SELECT event_id FROM attendees WHERE user_id = ?)`
+	query := `SELECT id, calendar_id, title, "start", "end", all_day, rrule, parent_id, recurrence_id, tzid, description, location, color, external_uid, created_by, created_at, change_seq, sequence FROM events WHERE id IN (SELECT event_id FROM attendees WHERE user_id = ?)`
 	return r.listWindowed(ctx, query, []any{userID}, from, to)
 }
 
@@ -325,7 +334,7 @@ type EventWithOwner struct {
 // every account, unlike ListByCalendarIDs' per-caller scoping.
 func (r *EventRepository) ListAllWithReminders(ctx context.Context) ([]EventWithOwner, error) {
 	rows, err := r.db.QueryContext(ctx,
-		`SELECT events.id, events.calendar_id, events.title, events."start", events."end", events.all_day, events.rrule, events.parent_id, events.recurrence_id, events.tzid, events.description, events.location, events.color, events.external_uid, events.created_by, events.created_at, events.change_seq, calendars.user_id
+		`SELECT events.id, events.calendar_id, events.title, events."start", events."end", events.all_day, events.rrule, events.parent_id, events.recurrence_id, events.tzid, events.description, events.location, events.color, events.external_uid, events.created_by, events.created_at, events.change_seq, events.sequence, calendars.user_id
 		 FROM events
 		 JOIN calendars ON calendars.id = events.calendar_id
 		 WHERE EXISTS (SELECT 1 FROM event_reminders WHERE event_reminders.event_id = events.id)
@@ -439,11 +448,14 @@ func dedupeInt64s(ids []int64) []int64 {
 }
 
 // Update rewrites id's columns from f. f.ParentID and f.RecurrenceID are
-// ignored — see EventFields.
-func (r *EventRepository) Update(ctx context.Context, id string, f EventFields, changeSeq int64) (Event, error) {
+// ignored — see EventFields. sequence is the row's new iTIP SEQUENCE
+// (ADR-0059, #201) — the caller decides its value (bumped on a material
+// change, left as-is otherwise), since only EventService knows whether f
+// differs from the row being replaced.
+func (r *EventRepository) Update(ctx context.Context, id string, f EventFields, changeSeq, sequence int64) (Event, error) {
 	res, err := r.db.ExecContext(ctx,
-		`UPDATE events SET calendar_id = ?, title = ?, "start" = ?, "end" = ?, all_day = ?, rrule = ?, tzid = ?, description = ?, location = ?, color = ?, change_seq = ? WHERE id = ?`,
-		f.CalendarID, f.Title, f.Start, f.End, f.AllDay, f.Rrule, f.Tzid, f.Description, f.Location, f.Color, changeSeq, id,
+		`UPDATE events SET calendar_id = ?, title = ?, "start" = ?, "end" = ?, all_day = ?, rrule = ?, tzid = ?, description = ?, location = ?, color = ?, change_seq = ?, sequence = ? WHERE id = ?`,
+		f.CalendarID, f.Title, f.Start, f.End, f.AllDay, f.Rrule, f.Tzid, f.Description, f.Location, f.Color, changeSeq, sequence, id,
 	)
 	if err != nil {
 		return Event{}, fmt.Errorf("update event: %w", err)
@@ -517,7 +529,7 @@ func (r *EventRepository) ListChildrenByParentIDs(ctx context.Context, parentIDs
 		return result, nil
 	}
 
-	query := `SELECT id, calendar_id, title, "start", "end", all_day, rrule, parent_id, recurrence_id, tzid, description, location, color, external_uid, created_by, created_at, change_seq
+	query := `SELECT id, calendar_id, title, "start", "end", all_day, rrule, parent_id, recurrence_id, tzid, description, location, color, external_uid, created_by, created_at, change_seq, sequence
 		 FROM events WHERE parent_id IN (` + placeholders(len(parentIDs)) + `) ORDER BY recurrence_id`
 	args := make([]any, 0, len(parentIDs))
 	for _, id := range parentIDs {
@@ -549,7 +561,7 @@ func (r *EventRepository) ListChildrenByParentIDs(ctx context.Context, parentIDs
 // (ADR-0025).
 func (r *EventRepository) ListMastersByCalendar(ctx context.Context, calendarID string) ([]Event, error) {
 	rows, err := r.db.QueryContext(ctx,
-		`SELECT id, calendar_id, title, "start", "end", all_day, rrule, parent_id, recurrence_id, tzid, description, location, color, external_uid, created_by, created_at, change_seq
+		`SELECT id, calendar_id, title, "start", "end", all_day, rrule, parent_id, recurrence_id, tzid, description, location, color, external_uid, created_by, created_at, change_seq, sequence
 		 FROM events WHERE calendar_id = ? AND parent_id IS NULL ORDER BY id`,
 		calendarID,
 	)
@@ -578,7 +590,7 @@ func (r *EventRepository) ListMastersByCalendar(ctx context.Context, calendarID 
 // half of a sync-collection REPORT's diff (ADR-0025).
 func (r *EventRepository) ListMastersChangedSince(ctx context.Context, calendarID string, since int64) ([]Event, error) {
 	rows, err := r.db.QueryContext(ctx,
-		`SELECT id, calendar_id, title, "start", "end", all_day, rrule, parent_id, recurrence_id, tzid, description, location, color, external_uid, created_by, created_at, change_seq
+		`SELECT id, calendar_id, title, "start", "end", all_day, rrule, parent_id, recurrence_id, tzid, description, location, color, external_uid, created_by, created_at, change_seq, sequence
 		 FROM events WHERE calendar_id = ? AND parent_id IS NULL AND change_seq > ? ORDER BY change_seq`,
 		calendarID, since,
 	)
@@ -621,7 +633,7 @@ func scanEventRow(row scanner, e *Event, extraDest ...any) error {
 	var color sql.NullString
 	var externalUID sql.NullString
 	var createdBy sql.NullInt64
-	dest := append([]any{&e.ID, &e.CalendarID, &e.Title, &e.Start, &e.End, &e.AllDay, &e.Rrule, &parentID, &recurrenceID, &tzid, &description, &location, &color, &externalUID, &createdBy, &e.CreatedAt, &e.ChangeSeq}, extraDest...)
+	dest := append([]any{&e.ID, &e.CalendarID, &e.Title, &e.Start, &e.End, &e.AllDay, &e.Rrule, &parentID, &recurrenceID, &tzid, &description, &location, &color, &externalUID, &createdBy, &e.CreatedAt, &e.ChangeSeq, &e.Sequence}, extraDest...)
 	if err := row.Scan(dest...); err != nil {
 		return err
 	}

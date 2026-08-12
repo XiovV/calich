@@ -299,6 +299,15 @@ CREATE TABLE calendar_user_colors (
 -- color is an optional Event color in the same arbitrary-hex space as
 -- Calendar color, winning outright over the Calendar's color when set
 -- (ADR-0043). NULL means "inherit the Calendar's color".
+--
+-- sequence is this row's own iTIP SEQUENCE (ADR-0059, #201): distinct from
+-- change_seq (CalDAV's per-object change marker, bumped on every write) and
+-- never touched by one, it only increments when start, end, rrule or all_day
+-- changes — RFC 5546's material-change set, the one that resets a recipient's
+-- PARTSTAT — so a title fix or a colour change re-sends the Invitation
+-- without wiping anyone's Response. Scoped to this row alone, not the whole
+-- series: an Override tracks its own SEQUENCE independently of its Master's,
+-- since each is its own VEVENT on the wire.
 CREATE TABLE events (
     id TEXT PRIMARY KEY,
     calendar_id TEXT NOT NULL REFERENCES calendars(id) ON DELETE CASCADE,
@@ -316,7 +325,8 @@ CREATE TABLE events (
     change_seq INTEGER NOT NULL DEFAULT 0,
     external_uid TEXT,
     created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
-    color TEXT
+    color TEXT,
+    sequence INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE INDEX idx_events_calendar_id ON events(calendar_id);
@@ -495,28 +505,37 @@ CREATE TABLE deleted_objects (
 
 CREATE INDEX idx_deleted_objects_calendar_change_seq ON deleted_objects(calendar_id, change_seq);
 
--- outbox is a queued Invitation email (ADR-0059, ADR-0060): one row per
--- Attendee row it accompanies, written in the same transaction so a failed
--- send never loses the Attendee and a rolled-back create queues nothing. A
--- background ticker drains rows in id order (oldest first), which is what
--- makes delivery per-recipient ordered without any locking — a later
--- message can never be sent before an earlier one to the same recipient
--- resolves. recipient_user_id and recipient_email are nullable with exactly
+-- outbox is a queued Invitation or Cancellation email (ADR-0059, ADR-0060,
+-- #201): one row per Attendee row it accompanies, written in the same
+-- transaction so a failed send never loses the Attendee and a rolled-back
+-- create queues nothing. A background ticker drains rows in id order (oldest
+-- first), which is what makes delivery per-recipient ordered without any
+-- locking — a later message can never be sent before an earlier one to the
+-- same recipient resolves, so a CANCEL can never overtake the REQUEST it
+-- withdraws. recipient_user_id and recipient_email are nullable with exactly
 -- one set (#200, ADR-0058): a User-backed Attendee queues the former, an
 -- email-shaped one — no account to notify in-app, but still an Invitation
 -- to send — the latter. recipient_email is COLLATE NOCASE for the same
 -- reason attendees.email is, even though nothing queries this column by
 -- value today (the Worker's per-recipient blocking key folds case in Go
 -- instead) — case-insensitivity is this app's baseline for every email
--- column, not an opt-in per query. method is fixed to 'REQUEST' for now —
--- CANCEL (re-issue on change, withdrawal on removal/delete) is #201's, and
--- widening the CHECK is a table rebuild either way.
+-- column, not an opt-in per query.
+--
+-- event_id carries no REFERENCES: a CANCEL is queued for exactly the moment
+-- the Event row (or the Attendee row it withdraws) stops existing, so an
+-- ON DELETE CASCADE here would erase the very message being queued to
+-- explain that deletion, in the same transaction that deletes it. snapshot
+-- is a CANCEL-only, JSON-encoded repository.OutboxCancelSnapshot: everything
+-- InvitationSender needs to render a METHOD:CANCEL, captured while the row
+-- it withdraws still exists — NULL on a REQUEST, which always renders from
+-- live state instead (InvitationSender.Send's own contract).
 CREATE TABLE outbox (
     id                INTEGER PRIMARY KEY AUTOINCREMENT,
-    event_id          TEXT NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+    event_id          TEXT NOT NULL,
     recipient_user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
     recipient_email   TEXT COLLATE NOCASE,
-    method            TEXT NOT NULL DEFAULT 'REQUEST' CHECK (method = 'REQUEST'),
+    method            TEXT NOT NULL DEFAULT 'REQUEST' CHECK (method IN ('REQUEST', 'CANCEL')),
+    snapshot          TEXT,
     status            TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'sent', 'failed')),
     attempts          INTEGER NOT NULL DEFAULT 0,
     next_attempt_at   TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
