@@ -174,7 +174,7 @@ func TestEventHandler_Create_InvitesExplicitUserAndGroup(t *testing.T) {
 	if err := json.NewDecoder(attendeesResp.Body).Decode(&attendees); err != nil {
 		t.Fatalf("decode attendees: %v", err)
 	}
-	if len(attendees) != 1 || attendees[0].UserID != f.memberID {
+	if len(attendees) != 1 || attendees[0].UserID == nil || *attendees[0].UserID != f.memberID {
 		t.Fatalf("expected [%d], got %+v", f.memberID, attendees)
 	}
 }

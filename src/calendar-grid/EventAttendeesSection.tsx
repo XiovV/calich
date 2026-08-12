@@ -8,6 +8,7 @@ import { errorMessage } from "../lib/errorMessage";
 import { toast } from "../lib/toast";
 import { Button } from "../components/ui/Button";
 import { IconButton } from "../components/ui/IconButton";
+import { Input } from "../components/ui/Input";
 import { Select } from "../components/ui/Select";
 
 const RESPONSE_LABEL: Record<AttendeeResponse, string> = {
@@ -34,9 +35,13 @@ function groupTargetKey(groupId: number): TargetKey {
 // (#187, ADR-0055): the create POST carries the whole list at once, so
 // there is nothing to commit until Save. A staged Group renders as a
 // single chip and expands to its members server-side, at save — not here.
+// A staged email (#200, ADR-0058) is resolved against the Workspace at
+// save time too — it may still turn into a User-backed Attendee if it
+// matches a Member by then.
 export type StagedAttendeeTarget =
   | { kind: "user"; userId: number; name: string }
-  | { kind: "group"; groupId: number; name: string };
+  | { kind: "group"; groupId: number; name: string }
+  | { kind: "email"; email: string };
 
 // StagedAttendees is EventAttendeesSection's create-mode contract: the
 // parent (EventModal) owns the staged list, exactly like it owns
@@ -68,6 +73,11 @@ interface EventAttendeesSectionProps {
   // Present only in create mode (#187, ADR-0055); absent in edit mode,
   // where an invite still commits the instant it's issued.
   staging?: StagedAttendees;
+  // Whether typing an arbitrary address is offered at all (#200, ADR-0058):
+  // this instance's own emailReminderChannelAvailable — SMTP configured.
+  // With no SMTP the affordance is absent entirely, same as the picker
+  // staying Members-only always was.
+  allowEmailInvite: boolean;
 }
 
 // EventAttendeesSection is the Attendee surface inside EventModal (#168,
@@ -83,6 +93,7 @@ export function EventAttendeesSection({
   canManage,
   organizerName,
   staging,
+  allowEmailInvite,
 }: EventAttendeesSectionProps) {
   const accessToken = useAuthStore((state) => state.accessToken);
   const currentUserId = useAuthStore((state) => state.user?.id);
@@ -94,7 +105,12 @@ export function EventAttendeesSection({
   const [isInviting, setIsInviting] = useState(false);
   const [inviteError, setInviteError] = useState<string | null>(null);
   const [removingUserId, setRemovingUserId] = useState<number | null>(null);
+  const [removingEmail, setRemovingEmail] = useState<string | null>(null);
   const [isRespondingTo, setIsRespondingTo] = useState<AttendeeResponse | null>(null);
+
+  const [emailInput, setEmailInput] = useState("");
+  const [isInvitingEmail, setIsInvitingEmail] = useState(false);
+  const [emailInviteError, setEmailInviteError] = useState<string | null>(null);
 
   const isStaging = staging !== undefined;
 
@@ -171,6 +187,23 @@ export function EventAttendeesSection({
   );
   const pickableGroups = availableGroups.filter((group) => !stagedGroupIds.has(group.id));
 
+  // Dedupe checked client-side purely to skip a pointless round trip — the
+  // backend is the actual authority (case-insensitive UNIQUE, ADR-0058) and
+  // still rejects a repeat this misses (e.g. a staged Group that would
+  // expand to include it at save).
+  const stagedEmails = new Set(
+    isStaging
+      ? staging.targets
+          .filter((t) => t.kind === "email")
+          .map((t) => t.email.toLowerCase())
+      : [],
+  );
+  const invitedEmails = new Set(
+    (attendees ?? [])
+      .filter((a) => a.userId === null && a.email)
+      .map((a) => a.email!.toLowerCase()),
+  );
+
   const targetOptions = useMemo(
     () => [
       ...pickableUsers.map((user) => ({
@@ -220,7 +253,9 @@ export function EventAttendeesSection({
         const byId = new Map(availableUsers.map((u) => [u.userId, u.name]));
         setAttendees((prev) => [
           ...(prev ?? []),
-          ...invited.map((a) => ({ ...a, name: byId.get(a.userId) })),
+          // Group expansion only ever produces User-backed rows, so
+          // a.userId is never null here (#200, ADR-0058).
+          ...invited.map((a) => ({ ...a, name: a.userId !== null ? byId.get(a.userId) : undefined })),
         ]);
       }
       setSelectedTarget("");
@@ -231,23 +266,72 @@ export function EventAttendeesSection({
     }
   }
 
+  // handleInviteEmail invites (or stages) the typed address (#200,
+  // ADR-0058) — a free-text sibling to handleInvite's picker, since an
+  // arbitrary address is never one of targetOptions.
+  async function handleInviteEmail() {
+    const email = emailInput.trim();
+    if (!email) return;
+    if (stagedEmails.has(email.toLowerCase()) || invitedEmails.has(email.toLowerCase())) {
+      setEmailInviteError("Already invited to this event.");
+      return;
+    }
+
+    if (staging) {
+      staging.onChange([...staging.targets, { kind: "email", email }]);
+      setEmailInput("");
+      setEmailInviteError(null);
+      return;
+    }
+
+    if (!accessToken || !eventId) return;
+    setIsInvitingEmail(true);
+    setEmailInviteError(null);
+    try {
+      const invited = await attendeesApi.addEmail(accessToken, eventId, email);
+      setAttendees((prev) => [...(prev ?? []), invited]);
+      setEmailInput("");
+    } catch (err) {
+      setEmailInviteError(errorMessage(err));
+    } finally {
+      setIsInvitingEmail(false);
+    }
+  }
+
   function handleRemoveStaged(target: StagedAttendeeTarget) {
     if (!staging) return;
     staging.onChange(staging.targets.filter((t) => t !== target));
   }
 
-  async function handleRemove(attendee: Attendee) {
+  async function handleRemove(userId: number, name: string | undefined) {
     if (!accessToken || !eventId) return;
-    setRemovingUserId(attendee.userId);
+    setRemovingUserId(userId);
     const previous = attendees;
-    setAttendees((prev) => (prev ?? []).filter((a) => a.userId !== attendee.userId));
+    setAttendees((prev) => (prev ?? []).filter((a) => a.userId !== userId));
     try {
-      await attendeesApi.remove(accessToken, eventId, attendee.userId);
+      await attendeesApi.remove(accessToken, eventId, userId);
     } catch {
       setAttendees(previous);
-      toast.error(`Failed to remove ${attendee.name ?? "attendee"}.`);
+      toast.error(`Failed to remove ${name ?? "attendee"}.`);
     } finally {
       setRemovingUserId(null);
+    }
+  }
+
+  // handleRemoveByEmail is handleRemove's email-shaped counterpart (#200,
+  // ADR-0058) — an email-shaped Attendee has no userId to remove through.
+  async function handleRemoveByEmail(email: string) {
+    if (!accessToken || !eventId) return;
+    setRemovingEmail(email);
+    const previous = attendees;
+    setAttendees((prev) => (prev ?? []).filter((a) => a.email !== email));
+    try {
+      await attendeesApi.removeEmail(accessToken, eventId, email);
+    } catch {
+      setAttendees(previous);
+      toast.error(`Failed to remove ${email}.`);
+    } finally {
+      setRemovingEmail(null);
     }
   }
 
@@ -296,44 +380,74 @@ export function EventAttendeesSection({
               )}
               {isStaging
                 ? staging.targets.map((target) => {
-                    const key = target.kind === "user" ? `user:${target.userId}` : `group:${target.groupId}`;
-                    const label = target.kind === "group" ? `${target.name} (group)` : target.name;
+                    const key =
+                      target.kind === "user"
+                        ? `user:${target.userId}`
+                        : target.kind === "group"
+                          ? `group:${target.groupId}`
+                          : `email:${target.email}`;
+                    const label =
+                      target.kind === "group"
+                        ? `${target.name} (group)`
+                        : target.kind === "email"
+                          ? target.email
+                          : target.name;
+                    const removeLabel = target.kind === "email" ? target.email : target.name;
                     return (
                       <li key={key} className="flex items-center gap-2">
                         <span className="min-w-0 flex-1 truncate text-body text-ink">{label}</span>
+                        {target.kind === "email" && (
+                          <span className="shrink-0 text-label-sm text-ink-muted">Not a member</span>
+                        )}
                         <IconButton
                           size="tiny"
                           onClick={() => handleRemoveStaged(target)}
-                          aria-label={`Remove ${target.name}`}
+                          aria-label={`Remove ${removeLabel}`}
                         >
                           <Trash2 className="size-3.5" />
                         </IconButton>
                       </li>
                     );
                   })
-                : attendees?.map((attendee) => (
-                    <li key={attendee.userId} className="flex items-center gap-2">
-                      <span className="min-w-0 flex-1 truncate text-body text-ink">
-                        {attendee.name ?? `User ${attendee.userId}`}
-                        {attendee.userId === currentUserId && (
-                          <span className="text-ink-muted"> (you)</span>
+                : attendees?.map((attendee) => {
+                    const isMember = attendee.userId !== null;
+                    const key = isMember ? attendee.userId : `email:${attendee.email}`;
+                    const label = isMember ? (attendee.name ?? `User ${attendee.userId}`) : attendee.email;
+                    return (
+                      <li key={key} className="flex items-center gap-2">
+                        <span className="min-w-0 flex-1 truncate text-body text-ink">
+                          {label}
+                          {attendee.userId === currentUserId && (
+                            <span className="text-ink-muted"> (you)</span>
+                          )}
+                        </span>
+                        {!isMember && (
+                          <span className="shrink-0 text-label-sm text-ink-muted">Not a member</span>
                         )}
-                      </span>
-                      <span className="shrink-0 text-label-sm text-ink-muted">
-                        {RESPONSE_LABEL[attendee.response]}
-                      </span>
-                      {canManage && (
-                        <IconButton
-                          size="tiny"
-                          onClick={() => handleRemove(attendee)}
-                          disabled={removingUserId === attendee.userId}
-                          aria-label={`Remove ${attendee.name ?? "attendee"}`}
-                        >
-                          <Trash2 className="size-3.5" />
-                        </IconButton>
-                      )}
-                    </li>
-                  ))}
+                        <span className="shrink-0 text-label-sm text-ink-muted">
+                          {RESPONSE_LABEL[attendee.response]}
+                        </span>
+                        {canManage && (
+                          <IconButton
+                            size="tiny"
+                            onClick={() =>
+                              isMember
+                                ? handleRemove(attendee.userId!, attendee.name)
+                                : handleRemoveByEmail(attendee.email!)
+                            }
+                            disabled={
+                              isMember
+                                ? removingUserId === attendee.userId
+                                : removingEmail === attendee.email
+                            }
+                            aria-label={`Remove ${attendee.name ?? attendee.email ?? "attendee"}`}
+                          >
+                            <Trash2 className="size-3.5" />
+                          </IconButton>
+                        )}
+                      </li>
+                    );
+                  })}
             </ul>
           ) : (
             <p className="mt-2 text-label-sm text-ink-muted">Nobody has been invited yet.</p>
@@ -364,9 +478,42 @@ export function EventAttendeesSection({
               </p>
             ))}
 
+          {canManage && allowEmailInvite && (
+            <div className="mt-2 flex items-center gap-2">
+              <Input
+                type="email"
+                size="small"
+                value={emailInput}
+                onChange={(e) => setEmailInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    handleInviteEmail();
+                  }
+                }}
+                placeholder="Invite by email address"
+                aria-label="Email address to invite"
+                className="min-w-0 flex-1"
+              />
+              <Button
+                size="small"
+                onClick={handleInviteEmail}
+                disabled={!emailInput.trim() || isInvitingEmail}
+                loading={isInvitingEmail}
+              >
+                Invite
+              </Button>
+            </div>
+          )}
+
           {bannerError && (
             <p className="mt-2 text-label-sm text-danger" role="alert">
               {bannerError}
+            </p>
+          )}
+          {emailInviteError && (
+            <p className="mt-2 text-label-sm text-danger" role="alert">
+              {emailInviteError}
             </p>
           )}
 

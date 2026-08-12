@@ -4,7 +4,11 @@ import { authedFetch, errorFromResponse } from "./apiClient";
 // invite a User or a Group (expanded to individual rows at invite time) as
 // Attendees, independent of Calendar Access — the invite itself grants
 // visibility to that one Event. An Attendee sets their own Response;
-// nobody else may set it for them.
+// nobody else may set it for them. A typed email address is a third kind of
+// target (#200, ADR-0058): resolved against the Event's own Workspace at
+// write time, producing either a User-backed Attendee (userId set) or an
+// email-shaped one (userId null) — a party invited to this Event with no
+// account on this instance.
 
 export type AttendeeResponse = "needs-action" | "accepted" | "declined" | "tentative";
 
@@ -12,11 +16,18 @@ export type AttendeeResponse = "needs-action" | "accepted" | "declined" | "tenta
 // needed), so — like groupsApi.ts's Group — there's no separate wire type
 // or mapper.
 export interface Attendee {
-  userId: number;
+  // Null for an email-shaped Attendee (#200, ADR-0058) — no account behind
+  // it, so nothing to key an invite/remove/reminder-fan-out on.
+  userId: number | null;
   // Absent only in AddGroupAttendee's response, which the backend doesn't
   // join against the User for (mirrors WorkspaceMemberRole's own narrower
-  // response shape).
+  // response shape). Always empty for an email-shaped Attendee — there's no
+  // User row to source a display name from.
   name?: string;
+  // Present on every list/invite response except AddGroupAttendee's (same
+  // reason as name). The address itself for an email-shaped Attendee, the
+  // resolved User's own email otherwise.
+  email?: string;
   response: AttendeeResponse;
 }
 
@@ -46,6 +57,22 @@ export const attendeesApi = {
     return (await response.json()) as Attendee;
   },
 
+  // Invites email as an Attendee of eventId (#200, ADR-0058) — resolved
+  // against the Event's own Workspace at write time, same caller
+  // requirement as add. Rejected (400) for a malformed address, the
+  // Organizer's own address, or a Disabled Member's address.
+  async addEmail(accessToken: string, eventId: string, email: string): Promise<Attendee> {
+    const response = await authedFetch(accessToken, `/api/events/${eventId}/attendees`, {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email }),
+    });
+    if (!response.ok) throw await errorFromResponse(response);
+
+    return (await response.json()) as Attendee;
+  },
+
   // Invites every current member of groupId as an individual Attendee of
   // eventId — a one-time snapshot expansion, not a dynamic Group Share
   // (#162, ADR-0046). Same caller requirement as add.
@@ -68,6 +95,17 @@ export const attendeesApi = {
       method: "DELETE",
       credentials: "include",
     });
+    if (!response.ok) throw await errorFromResponse(response);
+  },
+
+  // Revokes email's Attendee invite to eventId (#200, ADR-0058) — the
+  // email-shaped counterpart to remove, same caller requirement.
+  async removeEmail(accessToken: string, eventId: string, email: string): Promise<void> {
+    const response = await authedFetch(
+      accessToken,
+      `/api/events/${eventId}/attendees/email/${encodeURIComponent(email)}`,
+      { method: "DELETE", credentials: "include" },
+    );
     if (!response.ok) throw await errorFromResponse(response);
   },
 

@@ -117,10 +117,64 @@ func (r *AttendeeRepository) SetResponse(ctx context.Context, eventID string, us
 	return r.Get(ctx, eventID, userID)
 }
 
-// ListUserIDsByEventIDs returns every Attendee's user_id on any of eventIDs,
-// keyed by event id — the reminder fan-out's batched read path (ADR-0021,
-// ADR-0046), unioned onto RecipientUserIDs alongside each Event's Calendar
-// Access-holders rather than replacing them.
+// AddEmail inserts an attendees row binding email to eventID with no
+// account behind it (ADR-0058, #200): an Attendee who is not a Member, on an
+// instance that couldn't resolve the typed address against one. email is
+// expected already normalized (trimmed, lowercased) by the caller — the
+// column's own COLLATE NOCASE makes the UNIQUE constraint case-insensitive
+// regardless, but a consistent stored form is what lets a plain Go string
+// comparison (LoadInvitationForEmail) agree with it.
+func (r *AttendeeRepository) AddEmail(ctx context.Context, eventID, email string) (AttendeeWithName, error) {
+	if _, err := r.db.ExecContext(ctx,
+		`INSERT INTO attendees (event_id, email) VALUES (?, ?)`,
+		eventID, email,
+	); err != nil {
+		if strings.Contains(err.Error(), "UNIQUE constraint failed") {
+			return AttendeeWithName{}, ErrAlreadyAttendee
+		}
+		return AttendeeWithName{}, fmt.Errorf("insert email attendee: %w", err)
+	}
+	return r.getByEmail(ctx, eventID, email)
+}
+
+// getByEmail returns email's Attendee row on eventID — AddEmail's read-back,
+// mirroring Get's role for the User-backed shape. UserID is always nil and
+// Name always empty: there is no User row to join against.
+func (r *AttendeeRepository) getByEmail(ctx context.Context, eventID, email string) (AttendeeWithName, error) {
+	var a AttendeeWithName
+	err := r.db.QueryRowContext(ctx,
+		`SELECT event_id, email, response, created_at FROM attendees WHERE event_id = ? AND email = ?`,
+		eventID, email,
+	).Scan(&a.EventID, &a.Email, &a.Response, &a.CreatedAt)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return AttendeeWithName{}, ErrNotFound
+		}
+		return AttendeeWithName{}, fmt.Errorf("scan email attendee: %w", err)
+	}
+	return a, nil
+}
+
+// RemoveEmail deletes email's attendees row from eventID — the email-shaped
+// counterpart to Remove.
+func (r *AttendeeRepository) RemoveEmail(ctx context.Context, eventID, email string) error {
+	res, err := r.db.ExecContext(ctx,
+		`DELETE FROM attendees WHERE event_id = ? AND email = ?`,
+		eventID, email,
+	)
+	if err != nil {
+		return fmt.Errorf("delete email attendee: %w", err)
+	}
+	return requireAffected(res)
+}
+
+// ListUserIDsByEventIDs returns every User-backed Attendee's user_id on any
+// of eventIDs, keyed by event id — the reminder fan-out's batched read path
+// (ADR-0021, ADR-0046), unioned onto RecipientUserIDs alongside each Event's
+// Calendar Access-holders rather than replacing them. An email-shaped
+// Attendee (ADR-0058, #200) has no user_id and is filtered out here rather
+// than in the caller: they get no Reminders on any Channel, since they hold
+// the Invitation in their own calendar and their own client reminds them.
 func (r *AttendeeRepository) ListUserIDsByEventIDs(ctx context.Context, eventIDs []string) (map[string][]int64, error) {
 	result := make(map[string][]int64)
 	if len(eventIDs) == 0 {
@@ -132,7 +186,7 @@ func (r *AttendeeRepository) ListUserIDsByEventIDs(ctx context.Context, eventIDs
 		args[i] = id
 	}
 	rows, err := r.db.QueryContext(ctx,
-		`SELECT event_id, user_id FROM attendees WHERE event_id IN (`+placeholders(len(eventIDs))+`)`,
+		`SELECT event_id, user_id FROM attendees WHERE user_id IS NOT NULL AND event_id IN (`+placeholders(len(eventIDs))+`)`,
 		args...,
 	)
 	if err != nil {
@@ -155,26 +209,35 @@ func (r *AttendeeRepository) ListUserIDsByEventIDs(ctx context.Context, eventIDs
 	return result, nil
 }
 
-// AttendeeWithName pairs an Attendee with the display Name and Email of the
-// User it belongs to — ListByEventID's row, mirroring GroupMember's plain
-// shape but with the Name a caller displaying an Attendee list actually
-// needs. Email rides along for the codec's ATTENDEE mailto address
-// (ADR-0062); the wire handler still whitelists which fields it exposes.
+// AttendeeWithName is one Attendee row hydrated for display and for the
+// codec's ATTENDEE emission (ADR-0062) — ListByEventID's row, mirroring
+// GroupMember's plain shape but with the Name a caller displaying an
+// Attendee list actually needs. Not an embedded Attendee: UserID is nullable
+// here (ADR-0058, #200), since a row can be User-backed or email-shaped, which
+// Attendee itself (Get/Add/SetResponse/Remove's shape) never is — those only
+// ever operate on the User-backed half. UserID nil means email-shaped: Name
+// is then always "" (no User row to join against) and Email is the
+// attendees.email column verbatim rather than a joined user's; the wire
+// handler still whitelists which fields it exposes.
 type AttendeeWithName struct {
-	Attendee
-	Name  string
-	Email string
+	EventID   string
+	UserID    *int64
+	Response  string
+	CreatedAt time.Time
+	Name      string
+	Email     string
 }
 
-// ListByEventID returns every Attendee of eventID with their Name, ordered
-// by Name.
+// ListByEventID returns every Attendee of eventID with their Name (empty for
+// an email-shaped Attendee), ordered by Name then Email so User-backed rows
+// sort together ahead of email-shaped ones.
 func (r *AttendeeRepository) ListByEventID(ctx context.Context, eventID string) ([]AttendeeWithName, error) {
 	rows, err := r.db.QueryContext(ctx,
-		`SELECT a.event_id, a.user_id, a.response, a.created_at, u.name, u.email
+		`SELECT a.event_id, a.user_id, a.response, a.created_at, COALESCE(u.name, ''), COALESCE(u.email, a.email)
 		 FROM attendees a
-		 JOIN users u ON u.id = a.user_id
+		 LEFT JOIN users u ON u.id = a.user_id
 		 WHERE a.event_id = ?
-		 ORDER BY u.name`,
+		 ORDER BY u.name, a.email`,
 		eventID,
 	)
 	if err != nil {
@@ -184,8 +247,8 @@ func (r *AttendeeRepository) ListByEventID(ctx context.Context, eventID string) 
 
 	attendees := []AttendeeWithName{}
 	for rows.Next() {
-		var a AttendeeWithName
-		if err := rows.Scan(&a.EventID, &a.UserID, &a.Response, &a.CreatedAt, &a.Name, &a.Email); err != nil {
+		a, err := scanAttendeeWithName(rows)
+		if err != nil {
 			return nil, fmt.Errorf("scan attendee: %w", err)
 		}
 		attendees = append(attendees, a)
@@ -197,10 +260,11 @@ func (r *AttendeeRepository) ListByEventID(ctx context.Context, eventID string) 
 }
 
 // ListWithNamesByEventIDs returns every Attendee of any of eventIDs with
-// their Name and Email, keyed by event id and ordered by Name within each —
-// the batched counterpart to ListByEventID, ListUserIDsByEventIDs' shape,
-// for the codec's ATTENDEE emission across a whole series (master plus
-// overrides) in one query rather than one per VEVENT (ADR-0062).
+// their Name and Email, keyed by event id and ordered within each the same
+// way ListByEventID is — the batched counterpart to ListByEventID,
+// ListUserIDsByEventIDs' shape, for the codec's ATTENDEE emission across a
+// whole series (master plus overrides) in one query rather than one per
+// VEVENT (ADR-0062).
 func (r *AttendeeRepository) ListWithNamesByEventIDs(ctx context.Context, eventIDs []string) (map[string][]AttendeeWithName, error) {
 	result := make(map[string][]AttendeeWithName)
 	if len(eventIDs) == 0 {
@@ -212,11 +276,11 @@ func (r *AttendeeRepository) ListWithNamesByEventIDs(ctx context.Context, eventI
 		args[i] = id
 	}
 	rows, err := r.db.QueryContext(ctx,
-		`SELECT a.event_id, a.user_id, a.response, a.created_at, u.name, u.email
+		`SELECT a.event_id, a.user_id, a.response, a.created_at, COALESCE(u.name, ''), COALESCE(u.email, a.email)
 		 FROM attendees a
-		 JOIN users u ON u.id = a.user_id
+		 LEFT JOIN users u ON u.id = a.user_id
 		 WHERE a.event_id IN (`+placeholders(len(eventIDs))+`)
-		 ORDER BY a.event_id, u.name`,
+		 ORDER BY a.event_id, u.name, a.email`,
 		args...,
 	)
 	if err != nil {
@@ -225,8 +289,8 @@ func (r *AttendeeRepository) ListWithNamesByEventIDs(ctx context.Context, eventI
 	defer rows.Close()
 
 	for rows.Next() {
-		var a AttendeeWithName
-		if err := rows.Scan(&a.EventID, &a.UserID, &a.Response, &a.CreatedAt, &a.Name, &a.Email); err != nil {
+		a, err := scanAttendeeWithName(rows)
+		if err != nil {
 			return nil, fmt.Errorf("scan attendee: %w", err)
 		}
 		result[a.EventID] = append(result[a.EventID], a)
@@ -235,4 +299,19 @@ func (r *AttendeeRepository) ListWithNamesByEventIDs(ctx context.Context, eventI
 		return nil, fmt.Errorf("iterate attendees: %w", err)
 	}
 	return result, nil
+}
+
+// scanAttendeeWithName scans one row of ListByEventID/ListWithNamesByEventIDs'
+// shared column list, satisfied by both *sql.Row and *sql.Rows.
+func scanAttendeeWithName(row rowScanner) (AttendeeWithName, error) {
+	var a AttendeeWithName
+	var userID sql.NullInt64
+	if err := row.Scan(&a.EventID, &userID, &a.Response, &a.CreatedAt, &a.Name, &a.Email); err != nil {
+		return AttendeeWithName{}, err
+	}
+	if userID.Valid {
+		id := userID.Int64
+		a.UserID = &id
+	}
+	return a, nil
 }

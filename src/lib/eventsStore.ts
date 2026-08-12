@@ -19,14 +19,21 @@ type EventChanges = Partial<Omit<Event, "id">>;
 
 // StagedCreateAttendees is Create's optional Attendee payload (#187,
 // ADR-0055): a Group id expands to its current members server-side, inside
-// the same transaction as the Event row itself.
+// the same transaction as the Event row itself. attendeeEmails are typed
+// addresses (#200, ADR-0058), resolved the same way in the same
+// transaction.
 export interface StagedCreateAttendees {
   attendeeUserIds?: number[];
   attendeeGroupIds?: number[];
+  attendeeEmails?: string[];
 }
 
 function hasStagedAttendees(attendees: StagedCreateAttendees | undefined): boolean {
-  return Boolean(attendees?.attendeeUserIds?.length || attendees?.attendeeGroupIds?.length);
+  return Boolean(
+    attendees?.attendeeUserIds?.length ||
+      attendees?.attendeeGroupIds?.length ||
+      attendees?.attendeeEmails?.length,
+  );
 }
 
 interface EventsState {

@@ -138,9 +138,12 @@ export const eventsApi = {
       color?: string;
       // Attendees to invite as part of this create (#187, ADR-0055) — a
       // Group id expands to its current members server-side, inside the
-      // same transaction as the Event row itself.
+      // same transaction as the Event row itself. attendeeEmails are typed
+      // addresses (#200, ADR-0058), resolved against the Calendar's own
+      // Workspace the same way, in the same transaction.
       attendeeUserIds?: number[];
       attendeeGroupIds?: number[];
+      attendeeEmails?: string[];
     },
   ): Promise<Event> {
     const response = await authedFetch(accessToken, "/api/events/", {
@@ -164,6 +167,7 @@ export const eventsApi = {
         color: event.color,
         attendeeUserIds: event.attendeeUserIds,
         attendeeGroupIds: event.attendeeGroupIds,
+        attendeeEmails: event.attendeeEmails,
       }),
     });
     if (!response.ok) throw await errorFromResponse(response);

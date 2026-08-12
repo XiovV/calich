@@ -31,12 +31,24 @@ func NewInvitationSender(events *EventService, mailer InvitationMailer, from str
 // Send builds msg's Invitation from the Event and Attendee state as it
 // stands right now — never a snapshot taken when msg was queued, so an
 // Invitation sent late still reflects a title fixed or a guest added in the
-// meantime — and sends it. Returns nil without sending anything when
-// EventService.LoadInvitation reports there is nothing left to send: the
-// Attendee was removed, or the Event deleted, after msg was queued. That is
-// success, not failure — the outbox Worker marks msg sent either way.
+// meantime — and sends it. Dispatches to LoadInvitation or
+// LoadInvitationForEmail depending on which shape msg's recipient is
+// (#200, ADR-0058). Returns nil without sending anything when that reports
+// there is nothing left to send: the Attendee was removed, or the Event
+// deleted, after msg was queued. That is success, not failure — the outbox
+// Worker marks msg sent either way.
 func (s *InvitationSender) Send(ctx context.Context, msg repository.OutboxMessage) error {
-	event, masterAnchor, ok, err := s.events.LoadInvitation(ctx, msg.EventID, msg.RecipientUserID)
+	var event repository.Event
+	var masterAnchor *repository.Event
+	var ok bool
+	var err error
+	var recipientEmail string
+	if msg.RecipientUserID != nil {
+		event, masterAnchor, ok, err = s.events.LoadInvitation(ctx, msg.EventID, *msg.RecipientUserID)
+	} else {
+		recipientEmail = *msg.RecipientEmail
+		event, masterAnchor, ok, err = s.events.LoadInvitationForEmail(ctx, msg.EventID, recipientEmail)
+	}
 	if err != nil {
 		return fmt.Errorf("load invitation: %w", err)
 	}
@@ -44,11 +56,15 @@ func (s *InvitationSender) Send(ctx context.Context, msg repository.OutboxMessag
 		return nil
 	}
 
-	var recipient repository.AttendeeWithName
-	for _, a := range event.Attendees {
-		if a.UserID == msg.RecipientUserID {
-			recipient = a
-			break
+	// A User-backed recipient's Email rides along on the Attendee row
+	// itself (repository.AttendeeWithName.Email); an email-shaped
+	// recipient's is already known from msg and doesn't need looking up.
+	if msg.RecipientUserID != nil {
+		for _, a := range event.Attendees {
+			if a.UserID != nil && *a.UserID == *msg.RecipientUserID {
+				recipientEmail = a.Email
+				break
+			}
 		}
 	}
 
@@ -62,7 +78,7 @@ func (s *InvitationSender) Send(ctx context.Context, msg repository.OutboxMessag
 	}
 
 	subject := fmt.Sprintf("Invitation: %s", event.Title)
-	if err := s.mailer.SendInvitation(recipient.Email, event.CreatedByName, event.CreatedByEmail, subject, ics); err != nil {
+	if err := s.mailer.SendInvitation(recipientEmail, event.CreatedByName, event.CreatedByEmail, subject, ics); err != nil {
 		return fmt.Errorf("send invitation: %w", err)
 	}
 	return nil

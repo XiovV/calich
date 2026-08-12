@@ -9,6 +9,17 @@ import (
 	"github.com/XiovV/calendar/server/internal/repository"
 )
 
+// userID builds a *int64 test messages can assign to RecipientUserID —
+// composite literals can't take the address of an untyped constant.
+func userID(id int64) *int64 {
+	return &id
+}
+
+// email builds a *string test messages can assign to RecipientEmail.
+func email(address string) *string {
+	return &address
+}
+
 // fakeStore is an in-memory stand-in for *repository.OutboxRepository,
 // giving a test direct visibility into every state transition a Tick makes.
 type fakeStore struct {
@@ -80,7 +91,7 @@ func (f *fakeSender) Send(_ context.Context, msg repository.OutboxMessage) error
 
 func TestWorker_Tick_SendsAPendingMessageAndMarksItSent(t *testing.T) {
 	store := &fakeStore{messages: []repository.OutboxMessage{
-		{ID: 1, EventID: "evt-1", RecipientUserID: 10, Status: repository.OutboxStatusPending},
+		{ID: 1, EventID: "evt-1", RecipientUserID: userID(10), Status: repository.OutboxStatusPending},
 	}}
 	sender := &fakeSender{}
 	w := NewWorker(store, sender, func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) })
@@ -103,9 +114,9 @@ func TestWorker_Tick_SendsAPendingMessageAndMarksItSent(t *testing.T) {
 // by the first recipient's — and must not jump ahead of it either.
 func TestWorker_Tick_OrdersDeliveryPerRecipient(t *testing.T) {
 	store := &fakeStore{messages: []repository.OutboxMessage{
-		{ID: 1, EventID: "evt-1", RecipientUserID: 10, Status: repository.OutboxStatusPending},
-		{ID: 2, EventID: "evt-2", RecipientUserID: 20, Status: repository.OutboxStatusPending},
-		{ID: 3, EventID: "evt-3", RecipientUserID: 10, Status: repository.OutboxStatusPending},
+		{ID: 1, EventID: "evt-1", RecipientUserID: userID(10), Status: repository.OutboxStatusPending},
+		{ID: 2, EventID: "evt-2", RecipientUserID: userID(20), Status: repository.OutboxStatusPending},
+		{ID: 3, EventID: "evt-3", RecipientUserID: userID(10), Status: repository.OutboxStatusPending},
 	}}
 	sender := &fakeSender{}
 	w := NewWorker(store, sender, func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) })
@@ -140,9 +151,9 @@ func TestWorker_Tick_OrdersDeliveryPerRecipient(t *testing.T) {
 func TestWorker_Tick_ARecipientsBackoffDoesNotBlockAnotherRecipient(t *testing.T) {
 	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	store := &fakeStore{messages: []repository.OutboxMessage{
-		{ID: 1, EventID: "evt-1", RecipientUserID: 10, Status: repository.OutboxStatusPending, NextAttemptAt: now.Add(time.Hour)},
-		{ID: 2, EventID: "evt-2", RecipientUserID: 20, Status: repository.OutboxStatusPending, NextAttemptAt: now},
-		{ID: 3, EventID: "evt-3", RecipientUserID: 10, Status: repository.OutboxStatusPending, NextAttemptAt: now},
+		{ID: 1, EventID: "evt-1", RecipientUserID: userID(10), Status: repository.OutboxStatusPending, NextAttemptAt: now.Add(time.Hour)},
+		{ID: 2, EventID: "evt-2", RecipientUserID: userID(20), Status: repository.OutboxStatusPending, NextAttemptAt: now},
+		{ID: 3, EventID: "evt-3", RecipientUserID: userID(10), Status: repository.OutboxStatusPending, NextAttemptAt: now},
 	}}
 	sender := &fakeSender{}
 	w := NewWorker(store, sender, func() time.Time { return now })
@@ -165,7 +176,7 @@ func TestWorker_Tick_ARecipientsBackoffDoesNotBlockAnotherRecipient(t *testing.T
 func TestWorker_Tick_FailureBelowMaxAttemptsSchedulesRetryWithBackoff(t *testing.T) {
 	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	store := &fakeStore{messages: []repository.OutboxMessage{
-		{ID: 1, EventID: "evt-1", RecipientUserID: 10, Status: repository.OutboxStatusPending, Attempts: 0},
+		{ID: 1, EventID: "evt-1", RecipientUserID: userID(10), Status: repository.OutboxStatusPending, Attempts: 0},
 	}}
 	sender := &fakeSender{fail: map[int64]error{1: errors.New("smtp: connection refused")}}
 	w := NewWorker(store, sender, func() time.Time { return now })
@@ -195,7 +206,7 @@ func TestWorker_Tick_FailureBelowMaxAttemptsSchedulesRetryWithBackoff(t *testing
 func TestWorker_Tick_ExhaustingBackoffReachesTerminalFailedState(t *testing.T) {
 	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	store := &fakeStore{messages: []repository.OutboxMessage{
-		{ID: 1, EventID: "evt-1", RecipientUserID: 10, Status: repository.OutboxStatusPending, Attempts: maxAttempts - 1},
+		{ID: 1, EventID: "evt-1", RecipientUserID: userID(10), Status: repository.OutboxStatusPending, Attempts: maxAttempts - 1},
 	}}
 	sender := &fakeSender{fail: map[int64]error{1: errors.New("smtp: giving up")}}
 	w := NewWorker(store, sender, func() time.Time { return now })
@@ -210,6 +221,55 @@ func TestWorker_Tick_ExhaustingBackoffReachesTerminalFailedState(t *testing.T) {
 	}
 	if got.Attempts != maxAttempts {
 		t.Fatalf("expected %d attempts recorded, got %d", maxAttempts, got.Attempts)
+	}
+}
+
+// TestWorker_Tick_EmailRecipientIsBlockedSeparatelyFromAUserRecipient covers
+// an email-shaped OutboxMessage (#200, ADR-0058): its own backoff blocks
+// only later messages to that same address, never a User-backed recipient's
+// message, and the reverse — a User recipient backing off never blocks an
+// unrelated email recipient either.
+func TestWorker_Tick_EmailRecipientIsBlockedSeparatelyFromAUserRecipient(t *testing.T) {
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	store := &fakeStore{messages: []repository.OutboxMessage{
+		{ID: 1, EventID: "evt-1", RecipientEmail: email("guest@example.com"), Status: repository.OutboxStatusPending, NextAttemptAt: now.Add(time.Hour)},
+		{ID: 2, EventID: "evt-2", RecipientUserID: userID(20), Status: repository.OutboxStatusPending, NextAttemptAt: now},
+		{ID: 3, EventID: "evt-3", RecipientEmail: email("guest@example.com"), Status: repository.OutboxStatusPending, NextAttemptAt: now},
+	}}
+	sender := &fakeSender{}
+	w := NewWorker(store, sender, func() time.Time { return now })
+
+	if err := w.Tick(context.Background()); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+
+	if len(sender.calls) != 1 || sender.calls[0] != 2 {
+		t.Fatalf("expected only message 2 (the unrelated User recipient) to send this tick, got calls %+v", sender.calls)
+	}
+	if store.messages[2].Status != repository.OutboxStatusPending {
+		t.Fatalf("expected message 3 to remain pending — blocked behind message 1, its own recipient's still-backing-off earlier message")
+	}
+}
+
+// TestWorker_Tick_EmailRecipientKeyIsCaseInsensitive covers matching
+// differently-cased addresses to the same recipient (ADR-0058's
+// case-insensitive email everywhere) so ordering isn't accidentally lost to
+// a stray uppercase letter.
+func TestWorker_Tick_EmailRecipientKeyIsCaseInsensitive(t *testing.T) {
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	store := &fakeStore{messages: []repository.OutboxMessage{
+		{ID: 1, EventID: "evt-1", RecipientEmail: email("Guest@Example.com"), Status: repository.OutboxStatusPending, NextAttemptAt: now.Add(time.Hour)},
+		{ID: 2, EventID: "evt-2", RecipientEmail: email("guest@example.com"), Status: repository.OutboxStatusPending, NextAttemptAt: now},
+	}}
+	sender := &fakeSender{}
+	w := NewWorker(store, sender, func() time.Time { return now })
+
+	if err := w.Tick(context.Background()); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+
+	if len(sender.calls) != 0 {
+		t.Fatalf("expected message 2 blocked behind message 1's same (case-insensitively) recipient, got calls %+v", sender.calls)
 	}
 }
 

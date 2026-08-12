@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strconv"
 	"time"
 
@@ -217,10 +218,11 @@ var eventWriteErrors = []errorCase{
 // On create, a missing parent is named as such — parentId is a body field the
 // client chose. On the exception and reparent paths it is the URL's event, so
 // those render it as a plain "event not found" 404 instead.
-// The three Attendee-at-create cases (#187, ADR-0055) mirror
+// The Attendee-at-create cases (#187, ADR-0055, #200/ADR-0058) mirror
 // addAttendeeErrors/addGroupAttendeeErrors exactly — a create carrying
-// Attendees can fail for the same reasons AddAttendee/AddGroupAttendee do,
-// just rendered from the same endpoint as the rest of Create's validation.
+// Attendees can fail for the same reasons AddAttendee/AddGroupAttendee/
+// AddAttendeeByEmail do, just rendered from the same endpoint as the rest of
+// Create's validation.
 var createEventErrors = alsoHandling(eventWriteErrors,
 	errorCase{service.ErrInvalidOverride, badRequest("an override must not have its own recurrence rule, and requires a recurrence id")},
 	errorCase{service.ErrParentIsOverride, badRequest("parent event must be a master, not an override")},
@@ -228,7 +230,10 @@ var createEventErrors = alsoHandling(eventWriteErrors,
 	errorCase{service.ErrUserNotFound, badRequest("user not found")},
 	errorCase{service.ErrAttendeeTargetNotInWorkspace, badRequest("attendee target does not belong to this workspace")},
 	errorCase{service.ErrGroupNotFound, badRequest("group not found")},
-	errorCase{repository.ErrAlreadyAttendee, conflict("already_attendee", "user is already an attendee of this event")},
+	errorCase{repository.ErrAlreadyAttendee, conflict("already_attendee", "already invited to this event")},
+	errorCase{service.ErrInvalidEmail, badRequest("email must be a valid address and must not contain whitespace or a colon")},
+	errorCase{service.ErrAttendeeIsOrganizer, badRequest("cannot invite the event's organizer as an attendee")},
+	errorCase{service.ErrAttendeeEmailInvitesUnavailable, badRequest("email invitations are not available on this instance")},
 )
 
 var updateEventErrors = alsoHandling(eventWriteErrors,
@@ -317,12 +322,14 @@ type createEventRequest struct {
 	// Color is this Event's own color override — absent/null means "inherit
 	// the Calendar's color" (ADR-0043).
 	Color *string `json:"color,omitempty"`
-	// AttendeeUserIds and AttendeeGroupIds name Attendees to invite as part
-	// of this create (#187, ADR-0055) — createEventRequest's alone; update
-	// carries no Attendee fields of its own, since an existing Event's
-	// invites go through AddAttendee/AddGroupAttendee instead.
-	AttendeeUserIds  []int64 `json:"attendeeUserIds,omitempty"`
-	AttendeeGroupIds []int64 `json:"attendeeGroupIds,omitempty"`
+	// AttendeeUserIds, AttendeeGroupIds, and AttendeeEmails name Attendees to
+	// invite as part of this create (#187, ADR-0055, #200/ADR-0058) —
+	// createEventRequest's alone; update carries no Attendee fields of its
+	// own, since an existing Event's invites go through AddAttendee/
+	// AddGroupAttendee/AddAttendeeByEmail instead.
+	AttendeeUserIds  []int64  `json:"attendeeUserIds,omitempty"`
+	AttendeeGroupIds []int64  `json:"attendeeGroupIds,omitempty"`
+	AttendeeEmails   []string `json:"attendeeEmails,omitempty"`
 }
 
 // parseEventTimes converts a decoded body's start/end strings into instants,
@@ -382,6 +389,7 @@ func (h *EventHandler) Create(w http.ResponseWriter, r *http.Request) {
 		Color:            req.Color,
 		AttendeeUserIDs:  req.AttendeeUserIds,
 		AttendeeGroupIDs: req.AttendeeGroupIds,
+		AttendeeEmails:   req.AttendeeEmails,
 	})
 	if respondError(w, err, createEventErrors, "failed to create event") {
 		return
@@ -546,15 +554,28 @@ func (h *EventHandler) Reparent(w http.ResponseWriter, r *http.Request) {
 
 // attendeeWire is an Attendee's wire shape (#161, ADR-0046), shared by the
 // list, invite, and response endpoints — an Attendee has no other
-// representation.
+// representation. UserID is nil for an email-shaped Attendee (#200,
+// ADR-0058) — a client renders it by Email instead, marked as not a Member,
+// since there's no account behind it.
 type attendeeWire struct {
-	UserID   int64  `json:"userId"`
+	UserID   *int64 `json:"userId,omitempty"`
 	Name     string `json:"name,omitempty"`
+	Email    string `json:"email,omitempty"`
 	Response string `json:"response"`
 }
 
 func toAttendeeResponse(a repository.AttendeeWithName) attendeeWire {
-	return attendeeWire{UserID: a.UserID, Name: a.Name, Response: a.Response}
+	w := attendeeWire{UserID: a.UserID, Name: a.Name, Response: a.Response}
+	if a.UserID == nil {
+		// Email is the only identifier an email-shaped Attendee has
+		// (#200, ADR-0058), so it belongs on the wire. For a User-backed
+		// row it's the Email a.UserID's own account holds — Name already
+		// identifies them here, and exposing their real address to every
+		// other Attendee of the Event (which needs no Calendar Access,
+		// ADR-0046) is a wider grant than #200 asked for.
+		w.Email = a.Email
+	}
+	return w
 }
 
 // attendeeVisibilityErrors renders EventService.ListAttendees' not-visible
@@ -566,11 +587,15 @@ var attendeeVisibilityErrors = []errorCase{
 
 // addAttendeeErrors is eventNotFoundErrors (a caller with no Editor Access
 // sees the same "event not found"/"read-only" answers writing an Event
-// already does) plus the Attendee-specific failure modes (#161, ADR-0046).
+// already does) plus the Attendee-specific failure modes (#161, ADR-0046)
+// and the typed-address ones inviteEmail can fail with (#200, ADR-0058).
 var addAttendeeErrors = alsoHandling(eventNotFoundErrors,
 	errorCase{service.ErrUserNotFound, badRequest("user not found")},
 	errorCase{service.ErrAttendeeTargetNotInWorkspace, badRequest("attendee target does not belong to this workspace")},
-	errorCase{repository.ErrAlreadyAttendee, conflict("already_attendee", "user is already an attendee of this event")},
+	errorCase{repository.ErrAlreadyAttendee, conflict("already_attendee", "already invited to this event")},
+	errorCase{service.ErrInvalidEmail, badRequest("email must be a valid address and must not contain whitespace or a colon")},
+	errorCase{service.ErrAttendeeIsOrganizer, badRequest("cannot invite the event's organizer as an attendee")},
+	errorCase{service.ErrAttendeeEmailInvitesUnavailable, badRequest("email invitations are not available on this instance")},
 )
 
 var setResponseErrors = []errorCase{
@@ -603,13 +628,18 @@ func (h *EventHandler) ListAttendees(w http.ResponseWriter, r *http.Request) {
 	httpresponse.JSON(w, http.StatusOK, response)
 }
 
+// addAttendeeRequest carries exactly one of UserID or Email (#200,
+// ADR-0058) — the picker's existing Member/Group target, or a typed
+// address. Neither or both set is a plain invalid_request 400, not one of
+// addAttendeeErrors' cases, since it names no target at all to check.
 type addAttendeeRequest struct {
-	UserID int64 `json:"userId"`
+	UserID *int64  `json:"userId,omitempty"`
+	Email  *string `json:"email,omitempty"`
 }
 
-// AddAttendee serves POST /api/events/{id}/attendees: invites userId as an
-// Attendee of id, callable only by an Editor of id's Calendar (#161,
-// ADR-0046).
+// AddAttendee serves POST /api/events/{id}/attendees: invites userId or
+// email as an Attendee of id, callable only by an Editor of id's Calendar
+// (#161, ADR-0046, #200/ADR-0058).
 func (h *EventHandler) AddAttendee(w http.ResponseWriter, r *http.Request) {
 	userID, ok := httpauth.UserIDFromContext(r.Context())
 	if !ok {
@@ -624,13 +654,26 @@ func (h *EventHandler) AddAttendee(w http.ResponseWriter, r *http.Request) {
 		httpresponse.Error(w, http.StatusBadRequest, "invalid_request", "request body must be valid JSON")
 		return
 	}
+	if (req.UserID == nil) == (req.Email == nil) {
+		httpresponse.Error(w, http.StatusBadRequest, "invalid_request", "exactly one of userId or email must be set")
+		return
+	}
 
-	attendee, err := h.events.AddAttendee(r.Context(), userID, id, req.UserID)
+	if req.Email != nil {
+		attendee, err := h.events.AddAttendeeByEmail(r.Context(), userID, id, *req.Email)
+		if respondError(w, err, addAttendeeErrors, "failed to add attendee") {
+			return
+		}
+		httpresponse.JSON(w, http.StatusCreated, toAttendeeResponse(attendee))
+		return
+	}
+
+	attendee, err := h.events.AddAttendee(r.Context(), userID, id, *req.UserID)
 	if respondError(w, err, addAttendeeErrors, "failed to add attendee") {
 		return
 	}
 
-	httpresponse.JSON(w, http.StatusCreated, attendeeWire{UserID: attendee.UserID, Response: attendee.Response})
+	httpresponse.JSON(w, http.StatusCreated, attendeeWire{UserID: &attendee.UserID, Response: attendee.Response})
 }
 
 // addGroupAttendeeErrors is eventNotFoundErrors plus the Group-invite
@@ -671,7 +714,7 @@ func (h *EventHandler) AddGroupAttendee(w http.ResponseWriter, r *http.Request) 
 
 	response := make([]attendeeWire, len(attendees))
 	for i, a := range attendees {
-		response[i] = attendeeWire{UserID: a.UserID, Response: a.Response}
+		response[i] = attendeeWire{UserID: &a.UserID, Response: a.Response}
 	}
 
 	httpresponse.JSON(w, http.StatusCreated, response)
@@ -696,6 +739,33 @@ func (h *EventHandler) RemoveAttendee(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.events.RemoveAttendee(r.Context(), userID, id, targetUserID); respondError(w, err, eventNotFoundErrors, "failed to remove attendee") {
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// RemoveAttendeeByEmail serves DELETE /api/events/{id}/attendees/email/{email}:
+// revokes email's Attendee invite to id (#200, ADR-0058) — the email-shaped
+// counterpart to RemoveAttendee, same caller requirement. email travels
+// percent-encoded in the path (an address contains '@' and possibly '+');
+// chi.URLParam returns it verbatim rather than decoded, since chi routes
+// off r.URL.RawPath whenever it's present, so it's unescaped by hand here.
+func (h *EventHandler) RemoveAttendeeByEmail(w http.ResponseWriter, r *http.Request) {
+	userID, ok := httpauth.UserIDFromContext(r.Context())
+	if !ok {
+		httpresponse.Error(w, http.StatusUnauthorized, "unauthorized", "authentication required")
+		return
+	}
+
+	id := chi.URLParam(r, "id")
+	targetEmail, err := url.PathUnescape(chi.URLParam(r, "email"))
+	if err != nil {
+		httpresponse.Error(w, http.StatusBadRequest, "invalid_request", "email must be a valid URL-encoded path segment")
+		return
+	}
+
+	if err := h.events.RemoveAttendeeByEmail(r.Context(), userID, id, targetEmail); respondError(w, err, eventNotFoundErrors, "failed to remove attendee") {
 		return
 	}
 
@@ -731,5 +801,5 @@ func (h *EventHandler) SetAttendeeResponse(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	httpresponse.JSON(w, http.StatusOK, attendeeWire{UserID: attendee.UserID, Response: attendee.Response})
+	httpresponse.JSON(w, http.StatusOK, attendeeWire{UserID: &attendee.UserID, Response: attendee.Response})
 }

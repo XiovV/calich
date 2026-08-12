@@ -666,7 +666,11 @@ export function EventModal(props: EventModalProps) {
       const attendeeGroupIds = stagedAttendees
         .filter((t): t is Extract<StagedAttendeeTarget, { kind: "group" }> => t.kind === "group")
         .map((t) => t.groupId);
-      const attendeesAreStaged = attendeeUserIds.length > 0 || attendeeGroupIds.length > 0;
+      const attendeeEmails = stagedAttendees
+        .filter((t): t is Extract<StagedAttendeeTarget, { kind: "email" }> => t.kind === "email")
+        .map((t) => t.email);
+      const attendeesAreStaged =
+        attendeeUserIds.length > 0 || attendeeGroupIds.length > 0 || attendeeEmails.length > 0;
 
       if (pendingFiles.length === 0 && !attendeesAreStaged) {
         addEvent({ id, ...changes, tzid });
@@ -684,7 +688,7 @@ export function EventModal(props: EventModalProps) {
         setIsSavingWithAttendees(true);
         setAttendeeCreateError(null);
         try {
-          await addEvent({ id, ...changes, tzid }, { attendeeUserIds, attendeeGroupIds });
+          await addEvent({ id, ...changes, tzid }, { attendeeUserIds, attendeeGroupIds, attendeeEmails });
         } catch (err) {
           setAttendeeCreateError(errorMessage(err));
           return;
@@ -1228,6 +1232,7 @@ export function EventModal(props: EventModalProps) {
                     eventId={attendeeEventId}
                     canManage={mode === "edit" ? !isReadOnlyEvent : calendarId !== ""}
                     organizerName={organizerName}
+                    allowEmailInvite={emailAvailable}
                     staging={
                       mode === "edit" || attendeeEventId
                         ? undefined

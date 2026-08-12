@@ -360,7 +360,7 @@ func TestEventService_Create_SkipsDisabledGroupMember(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list attendees: %v", err)
 	}
-	if len(attendees) != 1 || attendees[0].UserID != f.member2ID {
+	if len(attendees) != 1 || attendees[0].UserID == nil || *attendees[0].UserID != f.member2ID {
 		t.Fatalf("expected only member2, got %+v", attendees)
 	}
 }

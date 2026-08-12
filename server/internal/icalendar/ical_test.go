@@ -347,8 +347,8 @@ func TestSeriesToICal_Attendees_EmittedWithPartstatAndMailto(t *testing.T) {
 		End:       time.Date(2026, 7, 1, 16, 0, 0, 0, time.UTC),
 		CreatedAt: time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC),
 		Attendees: []repository.AttendeeWithName{
-			{Attendee: repository.Attendee{Response: repository.ResponseAccepted}, Name: "Bob Guest", Email: "bob@example.com"},
-			{Attendee: repository.Attendee{Response: repository.ResponseNeedsAction}, Name: "Carol Guest", Email: "carol@example.com"},
+			{Response: repository.ResponseAccepted, Name: "Bob Guest", Email: "bob@example.com"},
+			{Response: repository.ResponseNeedsAction, Name: "Carol Guest", Email: "carol@example.com"},
 		},
 	}
 
@@ -391,7 +391,7 @@ func TestSeriesToICal_AttendeesSurviveMasterOverrideSplit(t *testing.T) {
 		Rrule:     "FREQ=WEEKLY;BYDAY=TU",
 		CreatedAt: time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC),
 		Attendees: []repository.AttendeeWithName{
-			{Attendee: repository.Attendee{Response: repository.ResponseAccepted}, Name: "Bob Guest", Email: "bob@example.com"},
+			{Response: repository.ResponseAccepted, Name: "Bob Guest", Email: "bob@example.com"},
 		},
 	}
 	parentID := "evt-1"
@@ -404,7 +404,7 @@ func TestSeriesToICal_AttendeesSurviveMasterOverrideSplit(t *testing.T) {
 		End:          time.Date(2026, 6, 9, 11, 30, 0, 0, time.UTC),
 		CreatedAt:    time.Date(2026, 6, 8, 0, 0, 0, 0, time.UTC),
 		Attendees: []repository.AttendeeWithName{
-			{Attendee: repository.Attendee{Response: repository.ResponseTentative}, Name: "Dana Guest", Email: "dana@example.com"},
+			{Response: repository.ResponseTentative, Name: "Dana Guest", Email: "dana@example.com"},
 		},
 	}
 

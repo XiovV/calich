@@ -70,6 +70,21 @@ var (
 	// ErrInvalidResponse is returned by SetResponse when response isn't one
 	// of the iCalendar PARTSTAT values ADR-0046 defines.
 	ErrInvalidResponse = errors.New("response must be \"needs-action\", \"accepted\", \"declined\", or \"tentative\"")
+	// ErrAttendeeIsOrganizer is returned by inviteEmail when a typed address
+	// (ADR-0058, #200) matches the Event's own Organizer, whether typed by
+	// the Organizer themselves or by an Editor. Rejected rather than
+	// silently dropped: ADR-0055 made the Organizer structurally not an
+	// Attendee, and admitting the row is one SetResponse away from an
+	// Organizer who declined their own meeting.
+	ErrAttendeeIsOrganizer = errors.New("cannot invite the event's organizer as an attendee")
+	// ErrAttendeeEmailInvitesUnavailable is returned by inviteEmail when a
+	// typed address resolves to no account on this instance and outbox is
+	// nil (no SMTP configured, ADR-0059). Mirrors the picker-side posture
+	// ADR-0058 already takes ("the affordance is absent entirely") applied
+	// to the write path: an email-shaped row nobody can ever deliver to is
+	// not a degraded invite, it's a row that means nothing, so it's refused
+	// rather than written.
+	ErrAttendeeEmailInvitesUnavailable = errors.New("email invitations are not available on this instance")
 )
 
 // isValidReminderChannel reports whether channel is one of the Channels
@@ -376,16 +391,18 @@ type EventWrite struct {
 	// nil, never the Calendar's current hex — see ResolveColor's contract in
 	// docs/adr/0043-per-event-color-override.md.
 	Color *string
-	// AttendeeUserIDs and AttendeeGroupIDs are Attendees to invite as part
-	// of this create, written inside the same transaction as the Event
-	// itself (#187, ADR-0055). Explicit targets are strict — an unknown
-	// User, a target outside the Calendar's Workspace, or a bad Group id
-	// fails the whole create — while each named Group's member expansion
-	// stays lenient, exactly like AddGroupAttendee (ADR-0046). Both are nil
+	// AttendeeUserIDs, AttendeeGroupIDs, and AttendeeEmails are Attendees to
+	// invite as part of this create, written inside the same transaction as
+	// the Event itself (#187, ADR-0055, #200/ADR-0058). Explicit targets are
+	// strict — an unknown User, a target outside the Calendar's Workspace, a
+	// bad Group id, or a malformed/organizer/disabled-member address fails
+	// the whole create — while each named Group's member expansion stays
+	// lenient, exactly like AddGroupAttendee (ADR-0046). All three are nil
 	// on every write path other than Create; Update carries no Attendee
 	// fields of its own.
 	AttendeeUserIDs  []int64
 	AttendeeGroupIDs []int64
+	AttendeeEmails   []string
 }
 
 // fields projects the write onto the columns the repository stores, dropping
@@ -450,7 +467,7 @@ func (s *EventService) Create(ctx context.Context, userID int64, id string, writ
 	// to check against it — every other Create stays exactly as cheap as it
 	// was before #187.
 	var workspaceID int64
-	if len(write.AttendeeUserIDs) > 0 || len(write.AttendeeGroupIDs) > 0 {
+	if len(write.AttendeeUserIDs) > 0 || len(write.AttendeeGroupIDs) > 0 || len(write.AttendeeEmails) > 0 {
 		calendar, err := s.calendarByID(ctx, userID, write.CalendarID)
 		if err != nil {
 			return repository.Event{}, err
@@ -471,7 +488,7 @@ func (s *EventService) Create(ctx context.Context, userID int64, id string, writ
 		if err := repos.reminders.ReplaceByEventID(ctx, e.ID, write.Reminders); err != nil {
 			return fmt.Errorf("persist reminders: %w", err)
 		}
-		if err := s.addCreateAttendees(ctx, repos, e, workspaceID, write.AttendeeUserIDs, write.AttendeeGroupIDs); err != nil {
+		if err := s.addCreateAttendees(ctx, repos, e, workspaceID, write.AttendeeUserIDs, write.AttendeeGroupIDs, write.AttendeeEmails); err != nil {
 			return err
 		}
 		// Creating an Override changes its Master's calendar object (a new
@@ -503,12 +520,13 @@ func (s *EventService) Create(ctx context.Context, userID int64, id string, writ
 }
 
 // addCreateAttendees writes eventID's initial Attendees inside Create's own
-// transaction (#187, ADR-0055), reusing inviteUser and expandGroupMembers —
-// the same checks and the same Group-expansion loop AddAttendee and
-// AddGroupAttendee run, just against repos, the transaction-bound
-// repositories, never the EventService's own pooled ones — a pooled call
-// here would deadlock against the single-connection test database while the
-// transaction holds its one connection (txRepos' doc comment).
+// transaction (#187, ADR-0055), reusing inviteUser, expandGroupMembers, and
+// inviteEmail — the same checks and the same Group-expansion loop
+// AddAttendee, AddGroupAttendee, and AddAttendeeByEmail run, just against
+// repos, the transaction-bound repositories, never the EventService's own
+// pooled ones — a pooled call here would deadlock against the
+// single-connection test database while the transaction holds its one
+// connection (txRepos' doc comment).
 //
 // userIDs are explicit targets and strict, matching inviteUser's own
 // checks: an unknown or Disabled User, or one outside workspaceID, fails
@@ -518,8 +536,11 @@ func (s *EventService) Create(ctx context.Context, userID int64, id string, writ
 // valid Group's member expansion stays lenient (expandGroupMembers' own
 // policy), since the caller named the Group, not its individual members. A
 // User named both individually and via a Group is silently deduplicated,
-// same as AddGroupAttendee already tolerates re-inviting someone.
-func (s *EventService) addCreateAttendees(ctx context.Context, repos txRepos, event repository.Event, workspaceID int64, userIDs, groupIDs []int64) error {
+// same as AddGroupAttendee already tolerates re-inviting someone. emails are
+// explicit and strict too, matching inviteEmail's own checks (ADR-0058,
+// #200): malformed, naming the Organizer, or naming a Disabled Member all
+// fail the create.
+func (s *EventService) addCreateAttendees(ctx context.Context, repos txRepos, event repository.Event, workspaceID int64, userIDs, groupIDs []int64, emails []string) error {
 	for _, targetUserID := range userIDs {
 		if _, err := inviteUser(ctx, repos.users, repos.workspaces, repos.attendees, repos.notifications, repos.outbox, event, workspaceID, targetUserID); err != nil {
 			return err
@@ -539,6 +560,12 @@ func (s *EventService) addCreateAttendees(ctx context.Context, repos txRepos, ev
 		}
 
 		if _, err := expandGroupMembers(ctx, repos.groups, repos.users, repos.attendees, repos.notifications, repos.outbox, event, group.ID); err != nil {
+			return err
+		}
+	}
+
+	for _, email := range emails {
+		if _, err := inviteEmail(ctx, repos.users, repos.workspaces, repos.attendees, repos.notifications, repos.outbox, event, workspaceID, email); err != nil {
 			return err
 		}
 	}
@@ -2412,6 +2439,77 @@ func inviteUser(ctx context.Context, users *repository.UserRepository, workspace
 	return attendee, nil
 }
 
+// inviteEmail is AddAttendeeByEmail's and Create's shared typed-address
+// check (ADR-0058, #200): rawEmail is validated and folded the same way
+// every other login-identifier-shaped input in this app is
+// (service.validateEmail), then resolved against workspaceID's Members
+// before anything is written. A match writes a User-backed Attendee by
+// delegating straight to inviteUser — which is also what makes a Disabled
+// Member's address rejected rather than downgraded to an email row: it's
+// the same disabled check inviteUser already runs for an explicit user id
+// target, inherited for free rather than duplicated. Anything else
+// (including the same address belonging to a User in a *different*
+// Workspace on this instance — ADR-0058's deliberate "treated as an
+// outsider") writes an email-shaped Attendee instead, with no Notification
+// (no account to notify) and, when outbox is configured, its own Invitation
+// enqueued.
+//
+// The Event's own Organizer's address is rejected outright, before the
+// Member lookup even runs — admitting it is one SetResponse away from an
+// Organizer who declined their own meeting (ADR-0055). Takes the User,
+// Workspace, Attendee, and Notification repositories directly, same reason
+// as inviteUser: the identical check must run against both the pooled repos
+// (AddAttendeeByEmail) and the transaction-bound ones (Create).
+func inviteEmail(ctx context.Context, users *repository.UserRepository, workspaces *repository.WorkspaceRepository, attendees *repository.AttendeeRepository, notifications *repository.NotificationRepository, outbox *repository.OutboxRepository, event repository.Event, workspaceID int64, rawEmail string) (repository.AttendeeWithName, error) {
+	email, err := validateEmail(rawEmail)
+	if err != nil {
+		return repository.AttendeeWithName{}, ErrInvalidEmail
+	}
+
+	if event.CreatedBy != nil {
+		organizer, err := users.GetByID(ctx, *event.CreatedBy)
+		if err != nil && !errors.Is(err, repository.ErrNotFound) {
+			return repository.AttendeeWithName{}, fmt.Errorf("look up organizer: %w", err)
+		}
+		if err == nil && organizer.Email == email {
+			return repository.AttendeeWithName{}, ErrAttendeeIsOrganizer
+		}
+	}
+
+	target, err := users.GetByEmail(ctx, email)
+	if err != nil && !errors.Is(err, repository.ErrNotFound) {
+		return repository.AttendeeWithName{}, fmt.Errorf("look up user by email: %w", err)
+	}
+	if err == nil {
+		if _, memErr := workspaces.GetMember(ctx, workspaceID, target.ID); memErr == nil {
+			attendee, err := inviteUser(ctx, users, workspaces, attendees, notifications, outbox, event, workspaceID, target.ID)
+			if err != nil {
+				return repository.AttendeeWithName{}, err
+			}
+			userID := attendee.UserID
+			return repository.AttendeeWithName{EventID: attendee.EventID, UserID: &userID, Response: attendee.Response, CreatedAt: attendee.CreatedAt, Name: target.Name, Email: target.Email}, nil
+		} else if !errors.Is(memErr, repository.ErrNotFound) {
+			return repository.AttendeeWithName{}, fmt.Errorf("get workspace member: %w", memErr)
+		}
+		// target exists on this instance but in a different Workspace (or
+		// none at all) — an outsider from this Event's Workspace's point of
+		// view, so falls through to the email-shaped write below (ADR-0058).
+	}
+
+	if outbox == nil {
+		return repository.AttendeeWithName{}, ErrAttendeeEmailInvitesUnavailable
+	}
+
+	added, err := attendees.AddEmail(ctx, event.ID, email)
+	if err != nil {
+		return repository.AttendeeWithName{}, err
+	}
+	if _, err := outbox.EnqueueEmail(ctx, event.ID, email); err != nil {
+		return repository.AttendeeWithName{}, fmt.Errorf("enqueue invitation: %w", err)
+	}
+	return added, nil
+}
+
 // expandGroupMembers is AddGroupAttendee's and Create's shared Group
 // expansion (#162, #187, ADR-0046, ADR-0055): one attendees row per current,
 // enabled member of groupID. A Disabled member is silently skipped, same as
@@ -2489,6 +2587,30 @@ func (s *EventService) AddAttendee(ctx context.Context, actorUserID int64, event
 	return attendee, nil
 }
 
+// AddAttendeeByEmail invites rawEmail as an Attendee of eventID (ADR-0058,
+// #200), callable by any caller with Editor Access to (or ownership of)
+// eventID's Calendar, same as AddAttendee. rawEmail is resolved against
+// eventID's Calendar's own Workspace before anything is written —
+// inviteEmail's shared check — producing a User-backed Attendee on a match
+// and an email-shaped one otherwise.
+func (s *EventService) AddAttendeeByEmail(ctx context.Context, actorUserID int64, eventID string, rawEmail string) (repository.AttendeeWithName, error) {
+	event, calendar, err := s.attendeeManagementCalendar(ctx, actorUserID, eventID)
+	if err != nil {
+		return repository.AttendeeWithName{}, err
+	}
+
+	var attendee repository.AttendeeWithName
+	err = s.withTx(ctx, func(repos txRepos) error {
+		var err error
+		attendee, err = inviteEmail(ctx, repos.users, repos.workspaces, repos.attendees, repos.notifications, repos.outbox, event, calendar.WorkspaceID, rawEmail)
+		return err
+	})
+	if err != nil {
+		return repository.AttendeeWithName{}, err
+	}
+	return attendee, nil
+}
+
 // AddGroupAttendee invites every current member of groupID as an Attendee
 // of eventID, callable by any caller with Editor Access to (or ownership
 // of) eventID's Calendar (#162, ADR-0046). This is a one-time snapshot
@@ -2545,6 +2667,17 @@ func (s *EventService) RemoveAttendee(ctx context.Context, actorUserID int64, ev
 	return s.attendees.Remove(ctx, eventID, targetUserID)
 }
 
+// RemoveAttendeeByEmail revokes email's Attendee invite to eventID
+// (ADR-0058, #200) — the email-shaped counterpart to RemoveAttendee, same
+// caller requirement. email is normalized the same way inviteEmail writes
+// it, so a differently-cased address still matches the stored row.
+func (s *EventService) RemoveAttendeeByEmail(ctx context.Context, actorUserID int64, eventID string, email string) error {
+	if _, _, err := s.attendeeManagementCalendar(ctx, actorUserID, eventID); err != nil {
+		return err
+	}
+	return s.attendees.RemoveEmail(ctx, eventID, normalizeEmail(email))
+}
+
 // ListAttendees returns every Attendee of eventID with their Name, for
 // display — callable by anyone who can see eventID at all (getVisibleEvent):
 // existing Calendar Access, or being an Attendee themselves (#161,
@@ -2571,6 +2704,26 @@ func (s *EventService) ListAttendees(ctx context.Context, userID int64, eventID 
 // removed, or the Event deleted, since the outbox row was queued. Neither
 // case is an error; it just means the Worker has nothing to do.
 func (s *EventService) LoadInvitation(ctx context.Context, eventID string, recipientUserID int64) (event repository.Event, masterAnchor *repository.Event, ok bool, err error) {
+	return s.loadInvitationForAttendee(ctx, eventID, func(a repository.AttendeeWithName) bool {
+		return a.UserID != nil && *a.UserID == recipientUserID
+	})
+}
+
+// LoadInvitationForEmail is LoadInvitation's email-shaped counterpart
+// (ADR-0058, #200): the same resolution and hydration, but matching the
+// current Attendee list on recipientEmail — already normalized by the
+// caller — instead of a user_id, since an email-shaped Attendee has no
+// account to key on.
+func (s *EventService) LoadInvitationForEmail(ctx context.Context, eventID string, recipientEmail string) (event repository.Event, masterAnchor *repository.Event, ok bool, err error) {
+	return s.loadInvitationForAttendee(ctx, eventID, func(a repository.AttendeeWithName) bool {
+		return a.UserID == nil && a.Email == recipientEmail
+	})
+}
+
+// loadInvitationForAttendee is LoadInvitation's and LoadInvitationForEmail's
+// shared body: resolve eventID, find the current Attendee row matches
+// picks out, and hydrate Organizer/masterAnchor around it.
+func (s *EventService) loadInvitationForAttendee(ctx context.Context, eventID string, matches func(repository.AttendeeWithName) bool) (event repository.Event, masterAnchor *repository.Event, ok bool, err error) {
 	e, err := s.events.GetByID(ctx, eventID)
 	if err != nil {
 		if errors.Is(err, repository.ErrNotFound) {
@@ -2585,7 +2738,7 @@ func (s *EventService) LoadInvitation(ctx context.Context, eventID string, recip
 	}
 	found := false
 	for _, a := range attendees {
-		if a.UserID == recipientUserID {
+		if matches(a) {
 			found = true
 			break
 		}

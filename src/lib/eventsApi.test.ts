@@ -191,6 +191,26 @@ describe("eventsApi.create", () => {
     expect(body.attendeeUserIds).toEqual([7, 8]);
     expect(body.attendeeGroupIds).toEqual([3]);
   });
+
+  // Typed addresses staged at create time (#200, ADR-0058) — resolved
+  // against the Calendar's own Workspace server-side, same transaction as
+  // attendeeUserIds/attendeeGroupIds.
+  it("sends attendeeEmails when staged", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(201, wireEvent));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await eventsApi.create("token-123", {
+      id: "evt-1",
+      calendarId: "cal-1",
+      title: "Standup",
+      start: new Date("2026-01-01T09:00:00Z"),
+      end: new Date("2026-01-01T10:00:00Z"),
+      attendeeEmails: ["guest@example.com"],
+    });
+
+    const body = JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string);
+    expect(body.attendeeEmails).toEqual(["guest@example.com"]);
+  });
 });
 
 describe("eventsApi all-day serialization", () => {

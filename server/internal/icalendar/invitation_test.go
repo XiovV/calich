@@ -11,6 +11,12 @@ import (
 	"github.com/XiovV/calendar/server/internal/repository"
 )
 
+// attendeeUserID builds a *int64 test Attendees can assign to UserID —
+// composite literals can't take the address of an untyped constant.
+func attendeeUserID(id int64) *int64 {
+	return &id
+}
+
 func mustEncodeInvitation(t *testing.T, event repository.Event, masterAnchor *repository.Event, fromAddress string) string {
 	t.Helper()
 	cal, err := InvitationToICal(event, masterAnchor, fromAddress)
@@ -125,8 +131,8 @@ func TestInvitationToICal_AttendeesEmittedWithPartstatAndMailto(t *testing.T) {
 		End:       time.Date(2026, 7, 1, 16, 0, 0, 0, time.UTC),
 		CreatedAt: time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC),
 		Attendees: []repository.AttendeeWithName{
-			{Attendee: repository.Attendee{UserID: 1, Response: repository.ResponseAccepted}, Name: "Bob Guest", Email: "bob@example.com"},
-			{Attendee: repository.Attendee{UserID: 2, Response: repository.ResponseNeedsAction}, Name: "Carol Guest", Email: "carol@example.com"},
+			{UserID: attendeeUserID(1), Response: repository.ResponseAccepted, Name: "Bob Guest", Email: "bob@example.com"},
+			{UserID: attendeeUserID(2), Response: repository.ResponseNeedsAction, Name: "Carol Guest", Email: "carol@example.com"},
 		},
 	}
 

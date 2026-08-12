@@ -10,6 +10,13 @@ import (
 	"github.com/XiovV/calendar/server/internal/repository"
 )
 
+// outboxUserID builds a *int64 test OutboxMessages can assign to
+// RecipientUserID — composite literals can't take the address of a
+// variable inline.
+func outboxUserID(id int64) *int64 {
+	return &id
+}
+
 // newTestOutboxAttendeeService is newTestAttendeeService plus a real,
 // wired-in OutboxRepository — standing in for a deployment with SMTP
 // configured — so the outbox-enqueueing tests in this file can assert on
@@ -87,7 +94,7 @@ func TestEventService_AddAttendee_EnqueuesInvitation(t *testing.T) {
 	if len(pending) != 1 {
 		t.Fatalf("expected 1 queued invitation, got %+v", pending)
 	}
-	if pending[0].EventID != event.ID || pending[0].RecipientUserID != memberID {
+	if pending[0].EventID != event.ID || pending[0].RecipientUserID == nil || *pending[0].RecipientUserID != memberID {
 		t.Fatalf("expected an invitation for (%s, %d), got %+v", event.ID, memberID, pending[0])
 	}
 	if pending[0].Method != repository.OutboxMethodRequest {
@@ -153,7 +160,7 @@ func TestEventService_AddGroupAttendee_EnqueuesOneInvitationPerAddedMember(t *te
 	if len(pending) != 2 {
 		t.Fatalf("expected 2 queued invitations (one per group member), got %+v", pending)
 	}
-	recipients := map[int64]bool{pending[0].RecipientUserID: true, pending[1].RecipientUserID: true}
+	recipients := map[int64]bool{*pending[0].RecipientUserID: true, *pending[1].RecipientUserID: true}
 	if !recipients[memberID] || !recipients[otherMemberID] {
 		t.Fatalf("expected invitations for both %d and %d, got %+v", memberID, otherMemberID, pending)
 	}
@@ -326,7 +333,7 @@ func TestInvitationSender_Send_BuildsAndSendsTheInvitation(t *testing.T) {
 	mailer := &fakeInvitationMailer{}
 	sender := NewInvitationSender(svc, mailer, "calendar@example.com")
 
-	err := sender.Send(ctx, repository.OutboxMessage{EventID: event.ID, RecipientUserID: memberID})
+	err := sender.Send(ctx, repository.OutboxMessage{EventID: event.ID, RecipientUserID: outboxUserID(memberID)})
 	if err != nil {
 		t.Fatalf("send: %v", err)
 	}
@@ -365,10 +372,51 @@ func TestInvitationSender_Send_SkipsGracefullyWhenNothingLeftToSend(t *testing.T
 	mailer := &fakeInvitationMailer{}
 	sender := NewInvitationSender(svc, mailer, "calendar@example.com")
 
-	if err := sender.Send(ctx, repository.OutboxMessage{EventID: event.ID, RecipientUserID: memberID}); err != nil {
+	if err := sender.Send(ctx, repository.OutboxMessage{EventID: event.ID, RecipientUserID: outboxUserID(memberID)}); err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
 	if len(mailer.calls) != 0 {
 		t.Fatalf("expected no mailer call, got %+v", mailer.calls)
+	}
+}
+
+// outboxEmail builds a *string test OutboxMessages can assign to
+// RecipientEmail.
+func outboxEmail(address string) *string {
+	return &address
+}
+
+// TestInvitationSender_Send_BuildsAndSendsTheInvitation_EmailShapedRecipient
+// is TestInvitationSender_Send_BuildsAndSendsTheInvitation's email-shaped
+// counterpart (#200, ADR-0058): an email-shaped OutboxMessage resolves
+// through LoadInvitationForEmail rather than LoadInvitation and mails the
+// typed address directly, with no User row to source it from.
+func TestInvitationSender_Send_BuildsAndSendsTheInvitation_EmailShapedRecipient(t *testing.T) {
+	f := newEmailAttendeeFixture(t, true)
+	ctx := context.Background()
+	event := createEmailAttendeeTestEvent(t, f)
+	if _, err := f.events.AddAttendeeByEmail(ctx, f.ownerID, event.ID, "guest@example.com"); err != nil {
+		t.Fatalf("add attendee by email: %v", err)
+	}
+
+	mailer := &fakeInvitationMailer{}
+	sender := NewInvitationSender(f.events, mailer, "calendar@example.com")
+
+	err := sender.Send(ctx, repository.OutboxMessage{EventID: event.ID, RecipientEmail: outboxEmail("guest@example.com")})
+	if err != nil {
+		t.Fatalf("send: %v", err)
+	}
+	if len(mailer.calls) != 1 {
+		t.Fatalf("expected 1 mailer call, got %+v", mailer.calls)
+	}
+	call := mailer.calls[0]
+	if call.to != "guest@example.com" {
+		t.Fatalf("expected recipient guest@example.com, got %q", call.to)
+	}
+	if call.fromName != "owner" {
+		t.Fatalf("expected the organizer's Name as fromName, got %q", call.fromName)
+	}
+	if call.replyTo != "owner@example.com" {
+		t.Fatalf("expected the organizer's own address as replyTo, got %q", call.replyTo)
 	}
 }

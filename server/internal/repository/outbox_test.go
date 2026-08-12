@@ -67,14 +67,47 @@ func TestOutboxRepository_EnqueueDefaultsToPendingRequest(t *testing.T) {
 	if msg.Method != OutboxMethodRequest {
 		t.Fatalf("expected method %q, got %q", OutboxMethodRequest, msg.Method)
 	}
-	if msg.EventID != eventID || msg.RecipientUserID != userID {
+	if msg.EventID != eventID || msg.RecipientUserID == nil || *msg.RecipientUserID != userID {
 		t.Fatalf("unexpected message identity: %+v", msg)
+	}
+	if msg.RecipientEmail != nil {
+		t.Fatalf("expected a nil RecipientEmail on a User-backed message, got %v", *msg.RecipientEmail)
 	}
 	if msg.Attempts != 0 {
 		t.Fatalf("expected 0 attempts on a fresh message, got %d", msg.Attempts)
 	}
 	if msg.SentAt != nil {
 		t.Fatalf("expected a nil SentAt on a fresh message, got %v", msg.SentAt)
+	}
+}
+
+// TestOutboxRepository_EnqueueEmailDefaultsToPendingRequest covers
+// EnqueueEmail (#200, ADR-0058) — Enqueue's email-shaped counterpart, for a
+// recipient with no account on this instance.
+func TestOutboxRepository_EnqueueEmailDefaultsToPendingRequest(t *testing.T) {
+	repo, _, _, eventID := newTestOutboxRepository(t)
+	ctx := context.Background()
+
+	msg, err := repo.EnqueueEmail(ctx, eventID, "guest@example.com")
+	if err != nil {
+		t.Fatalf("enqueue email: %v", err)
+	}
+	if msg.Status != OutboxStatusPending {
+		t.Fatalf("expected status %q, got %q", OutboxStatusPending, msg.Status)
+	}
+	if msg.RecipientUserID != nil {
+		t.Fatalf("expected a nil RecipientUserID on an email-shaped message, got %v", *msg.RecipientUserID)
+	}
+	if msg.RecipientEmail == nil || *msg.RecipientEmail != "guest@example.com" {
+		t.Fatalf("expected RecipientEmail %q, got %+v", "guest@example.com", msg)
+	}
+
+	fetched, err := repo.Get(ctx, msg.ID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if fetched.RecipientEmail == nil || *fetched.RecipientEmail != "guest@example.com" {
+		t.Fatalf("expected Get to round-trip RecipientEmail, got %+v", fetched)
 	}
 }
 

@@ -24,12 +24,15 @@ const OutboxMethodRequest = "REQUEST"
 // OutboxMessage is a queued Invitation email (ADR-0059, ADR-0060): written
 // in the same transaction as the Attendee row it accompanies, so a failed
 // send never loses the Attendee and a rolled-back create queues nothing.
-// RecipientUserID is the only recipient shape today — Members only, since an
-// email-shaped Attendee (ADR-0058) has no account here to notify.
+// RecipientUserID and RecipientEmail are nullable with exactly one set
+// (#200, ADR-0058), mirroring Attendee's own two shapes: a User-backed
+// Attendee queues the former, an email-shaped one — no account to notify
+// in-app, but still an Invitation to send — the latter.
 type OutboxMessage struct {
 	ID              int64
 	EventID         string
-	RecipientUserID int64
+	RecipientUserID *int64
+	RecipientEmail  *string
 	Method          string
 	Status          string
 	Attempts        int
@@ -75,10 +78,35 @@ func (r *OutboxRepository) Enqueue(ctx context.Context, eventID string, recipien
 	return r.Get(ctx, id)
 }
 
+// EnqueueEmail is Enqueue's email-shaped counterpart (#200, ADR-0058): a
+// pending REQUEST OutboxMessage for recipientEmail, who has no account on
+// this instance to key a recipient_user_id on. recipientEmail is expected
+// already normalized (trimmed, lowercased) by the caller, same as
+// AttendeeRepository.AddEmail — it's what makes
+// EventService.LoadInvitationForEmail's plain Go string comparison against
+// the stored attendees.email agree with this column's value, rather than
+// relying on both sides happening to be typed identically.
+func (r *OutboxRepository) EnqueueEmail(ctx context.Context, eventID string, recipientEmail string) (OutboxMessage, error) {
+	res, err := r.db.ExecContext(ctx,
+		`INSERT INTO outbox (event_id, recipient_email, method) VALUES (?, ?, ?)`,
+		eventID, recipientEmail, OutboxMethodRequest,
+	)
+	if err != nil {
+		return OutboxMessage{}, fmt.Errorf("insert outbox message: %w", err)
+	}
+
+	id, err := res.LastInsertId()
+	if err != nil {
+		return OutboxMessage{}, fmt.Errorf("get last insert id: %w", err)
+	}
+
+	return r.Get(ctx, id)
+}
+
 // Get returns one OutboxMessage by id, or ErrNotFound.
 func (r *OutboxRepository) Get(ctx context.Context, id int64) (OutboxMessage, error) {
 	row := r.db.QueryRowContext(ctx,
-		`SELECT id, event_id, recipient_user_id, method, status, attempts, next_attempt_at, last_error, created_at, sent_at
+		`SELECT id, event_id, recipient_user_id, recipient_email, method, status, attempts, next_attempt_at, last_error, created_at, sent_at
 		 FROM outbox WHERE id = ?`,
 		id,
 	)
@@ -96,10 +124,20 @@ func (r *OutboxRepository) Get(ctx context.Context, id int64) (OutboxMessage, er
 // *sql.Row and *sql.Rows, so it serves Get and ListPending alike.
 func scanOutboxMessage(row rowScanner) (OutboxMessage, error) {
 	var m OutboxMessage
+	var recipientUserID sql.NullInt64
+	var recipientEmail sql.NullString
 	var lastError sql.NullString
 	var sentAt sql.NullTime
-	if err := row.Scan(&m.ID, &m.EventID, &m.RecipientUserID, &m.Method, &m.Status, &m.Attempts, &m.NextAttemptAt, &lastError, &m.CreatedAt, &sentAt); err != nil {
+	if err := row.Scan(&m.ID, &m.EventID, &recipientUserID, &recipientEmail, &m.Method, &m.Status, &m.Attempts, &m.NextAttemptAt, &lastError, &m.CreatedAt, &sentAt); err != nil {
 		return OutboxMessage{}, err
+	}
+	if recipientUserID.Valid {
+		id := recipientUserID.Int64
+		m.RecipientUserID = &id
+	}
+	if recipientEmail.Valid {
+		email := recipientEmail.String
+		m.RecipientEmail = &email
 	}
 	m.LastError = lastError.String
 	if sentAt.Valid {
@@ -115,7 +153,7 @@ func scanOutboxMessage(row rowScanner) (OutboxMessage, error) {
 // past them to a later message for someone else.
 func (r *OutboxRepository) ListPending(ctx context.Context, limit int) ([]OutboxMessage, error) {
 	rows, err := r.db.QueryContext(ctx,
-		`SELECT id, event_id, recipient_user_id, method, status, attempts, next_attempt_at, last_error, created_at, sent_at
+		`SELECT id, event_id, recipient_user_id, recipient_email, method, status, attempts, next_attempt_at, last_error, created_at, sent_at
 		 FROM outbox WHERE status = ? ORDER BY id ASC LIMIT ?`,
 		OutboxStatusPending, limit,
 	)

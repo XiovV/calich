@@ -84,6 +84,69 @@ describe("attendeesApi.add", () => {
   });
 });
 
+describe("attendeesApi.addEmail", () => {
+  it("posts email and returns the created attendee", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(201, { userId: null, email: "guest@example.com", response: "needs-action" }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const attendee = await attendeesApi.addEmail("token-123", "event-1", "guest@example.com");
+
+    expect(attendee).toEqual({ userId: null, email: "guest@example.com", response: "needs-action" });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/events/event-1/attendees",
+      expect.objectContaining({
+        method: "POST",
+        credentials: "include",
+        headers: expect.objectContaining({ Authorization: "Bearer token-123" }),
+        body: JSON.stringify({ email: "guest@example.com" }),
+      }),
+    );
+  });
+
+  it("throws an ApiError on a malformed address", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(400, { error: { code: "invalid_request", message: "email must be a valid address" } }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      attendeesApi.addEmail("token-123", "event-1", "not-an-email"),
+    ).rejects.toBeInstanceOf(ApiError);
+  });
+});
+
+describe("attendeesApi.removeEmail", () => {
+  it("sends a DELETE request to the attendee's URL-encoded address", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(emptyResponse(204));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      attendeesApi.removeEmail("token-123", "event-1", "guest@example.com"),
+    ).resolves.toBeUndefined();
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/events/event-1/attendees/email/guest%40example.com",
+      expect.objectContaining({
+        method: "DELETE",
+        credentials: "include",
+        headers: { Authorization: "Bearer token-123" },
+      }),
+    );
+  });
+
+  it("throws on failure", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(404, { error: { code: "not_found", message: "event not found" } }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      attendeesApi.removeEmail("token-123", "event-1", "guest@example.com"),
+    ).rejects.toMatchObject({ code: "not_found" });
+  });
+});
+
 describe("attendeesApi.addGroup", () => {
   it("posts groupId and returns every expanded attendee", async () => {
     const fetchMock = vi.fn().mockResolvedValue(

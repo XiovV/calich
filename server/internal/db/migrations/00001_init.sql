@@ -416,17 +416,33 @@ CREATE TABLE notifications (
 
 CREATE INDEX idx_notifications_user_id ON notifications(user_id, fired_at DESC);
 
--- attendees is an Attendee (ADR-0046): a User invited to one specific Event,
--- independent of Calendar Access — the invite itself is the grant, scoped to
--- that Event alone. response is the iCalendar PARTSTAT the Attendee has set
--- on their own invite. The user_id index drives "which Events is this User
--- an Attendee of" — the visible-events union's reverse-lookup direction.
+-- attendees is an Attendee (ADR-0046): a User or a bare email address
+-- (ADR-0058, #200) invited to one specific Event, independent of Calendar
+-- Access — the invite itself is the grant, scoped to that Event alone.
+-- response is the iCalendar PARTSTAT the Attendee has set on their own
+-- invite; an email-shaped Attendee has no account to set it through and
+-- stays needs-action forever. The user_id index drives "which Events is
+-- this User an Attendee of" — the visible-events union's reverse-lookup
+-- direction.
+--
+-- user_id and email are both nullable with exactly one set (ADR-0058): one
+-- table, one Response state machine, one list, one ATTENDEE line, rather
+-- than a second entity that differs from this one in nothing a caller cares
+-- about. email is COLLATE NOCASE for the same reason users.email is
+-- (case-insensitive matching against a typed address). The old
+-- PRIMARY KEY (event_id, user_id) constrained nothing once user_id allows
+-- NULLs — SQLite treats every NULL as distinct — so it's replaced by two
+-- UNIQUE constraints, one per shape, which is what actually stops the same
+-- person being invited twice under either.
 CREATE TABLE attendees (
     event_id TEXT NOT NULL REFERENCES events(id) ON DELETE CASCADE,
-    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+    email TEXT COLLATE NOCASE,
     response TEXT NOT NULL DEFAULT 'needs-action' CHECK (response IN ('needs-action', 'accepted', 'declined', 'tentative')),
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (event_id, user_id)
+    CHECK ((user_id IS NULL) <> (email IS NULL)),
+    UNIQUE (event_id, user_id),
+    UNIQUE (event_id, email)
 );
 
 CREATE INDEX idx_attendees_user_id ON attendees(user_id);
@@ -485,22 +501,29 @@ CREATE INDEX idx_deleted_objects_calendar_change_seq ON deleted_objects(calendar
 -- background ticker drains rows in id order (oldest first), which is what
 -- makes delivery per-recipient ordered without any locking — a later
 -- message can never be sent before an earlier one to the same recipient
--- resolves. recipient_user_id is the only recipient shape today (Members
--- only); an email-shaped Attendee (ADR-0058) has no account to notify here.
--- method is fixed to 'REQUEST' for now — CANCEL (re-issue on change,
--- withdrawal on removal/delete) is #201's, and widening the CHECK is a
--- table rebuild either way.
+-- resolves. recipient_user_id and recipient_email are nullable with exactly
+-- one set (#200, ADR-0058): a User-backed Attendee queues the former, an
+-- email-shaped one — no account to notify in-app, but still an Invitation
+-- to send — the latter. recipient_email is COLLATE NOCASE for the same
+-- reason attendees.email is, even though nothing queries this column by
+-- value today (the Worker's per-recipient blocking key folds case in Go
+-- instead) — case-insensitivity is this app's baseline for every email
+-- column, not an opt-in per query. method is fixed to 'REQUEST' for now —
+-- CANCEL (re-issue on change, withdrawal on removal/delete) is #201's, and
+-- widening the CHECK is a table rebuild either way.
 CREATE TABLE outbox (
     id                INTEGER PRIMARY KEY AUTOINCREMENT,
     event_id          TEXT NOT NULL REFERENCES events(id) ON DELETE CASCADE,
-    recipient_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    recipient_user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+    recipient_email   TEXT COLLATE NOCASE,
     method            TEXT NOT NULL DEFAULT 'REQUEST' CHECK (method = 'REQUEST'),
     status            TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'sent', 'failed')),
     attempts          INTEGER NOT NULL DEFAULT 0,
     next_attempt_at   TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     last_error        TEXT,
     created_at        TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    sent_at           TIMESTAMP
+    sent_at           TIMESTAMP,
+    CHECK ((recipient_user_id IS NULL) <> (recipient_email IS NULL))
 );
 
 CREATE INDEX idx_outbox_status_id ON outbox(status, id);

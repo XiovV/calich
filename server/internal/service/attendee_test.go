@@ -492,7 +492,7 @@ func TestEventService_ListAttendees_VisibleToAttendeeWithNoCalendarAccess(t *tes
 	if err != nil {
 		t.Fatalf("list attendees: %v", err)
 	}
-	if len(attendees) != 1 || attendees[0].UserID != memberID {
+	if len(attendees) != 1 || attendees[0].UserID == nil || *attendees[0].UserID != memberID {
 		t.Fatalf("expected [%d], got %+v", memberID, attendees)
 	}
 	if attendees[0].Name != "member" {

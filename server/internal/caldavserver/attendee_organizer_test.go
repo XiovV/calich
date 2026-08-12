@@ -157,8 +157,8 @@ func TestPutCalendarObject_InboundAttendeeChanges_Discarded(t *testing.T) {
 	if len(attendees) != 1 {
 		t.Fatalf("expected the stored guest list to be unchanged (one Attendee), got %d", len(attendees))
 	}
-	if attendees[0].UserID != guestID {
-		t.Fatalf("expected the original guest to still be the sole Attendee, got user id %d", attendees[0].UserID)
+	if attendees[0].UserID == nil || *attendees[0].UserID != guestID {
+		t.Fatalf("expected the original guest to still be the sole Attendee, got %+v", attendees[0])
 	}
 
 	// The next GET must reflect the server's own state, not the PUT's.

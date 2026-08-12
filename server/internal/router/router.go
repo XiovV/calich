@@ -135,10 +135,16 @@ func New(logger *slog.Logger, authHandler *handlers.AuthHandler, calendarHandler
 
 			// Attendees (#161, ADR-0046): invite/remove are Editor-gated by
 			// EventService itself, mirroring Calendar Shares; response is
-			// always the caller's own, so it needs no such gate.
+			// always the caller's own, so it needs no such gate. AddAttendee
+			// also serves a typed-address invite (#200, ADR-0058) — dispatched
+			// on the request body, not a separate route — and
+			// attendees/email/{email} is RemoveAttendee's email-shaped
+			// counterpart, since an email-shaped Attendee has no userId path
+			// segment to remove through.
 			r.Get("/{id}/attendees", eventHandler.ListAttendees)
 			r.Post("/{id}/attendees", eventHandler.AddAttendee)
 			r.Post("/{id}/attendees/group", eventHandler.AddGroupAttendee)
+			r.Delete("/{id}/attendees/email/{email}", eventHandler.RemoveAttendeeByEmail)
 			r.Delete("/{id}/attendees/{userId}", eventHandler.RemoveAttendee)
 			r.Put("/{id}/attendees/response", eventHandler.SetAttendeeResponse)
 		})

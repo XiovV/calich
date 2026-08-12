@@ -141,9 +141,35 @@ describe("addEvent", () => {
 
       void useEventsStore
         .getState()
-        .addEvent(standup, { attendeeUserIds: [], attendeeGroupIds: [] });
+        .addEvent(standup, { attendeeUserIds: [], attendeeGroupIds: [], attendeeEmails: [] });
 
       expect(useEventsStore.getState().events).toEqual([standup]);
+    });
+
+    // A typed address alone (#200, ADR-0058) is enough to take the awaited
+    // path — the same reason a Group id alone already does.
+    it("awaits the create when only attendeeEmails is staged", () => {
+      let resolveCreate: () => void = () => {};
+      vi.mocked(eventsApi.create).mockReturnValue(
+        new Promise((resolve) => {
+          resolveCreate = () => resolve(standup);
+        }),
+      );
+
+      const promise = useEventsStore
+        .getState()
+        .addEvent(standup, { attendeeEmails: ["guest@example.com"] });
+
+      expect(useEventsStore.getState().events).toEqual([]);
+      expect(eventsApi.create).toHaveBeenCalledWith("token-123", {
+        ...standup,
+        attendeeEmails: ["guest@example.com"],
+      });
+
+      resolveCreate();
+      return promise.then(() => {
+        expect(useEventsStore.getState().events).toEqual([standup]);
+      });
     });
   });
 });

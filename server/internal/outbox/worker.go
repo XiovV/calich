@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	"github.com/XiovV/calendar/server/internal/repository"
@@ -48,6 +49,18 @@ var backoffSchedule = []time.Duration{
 // scheduled for yet another retry — backoff cannot retry forever (ADR-0060).
 var maxAttempts = len(backoffSchedule) + 1
 
+// recipientKey identifies msg's recipient for Tick's per-recipient blocking
+// (#200, ADR-0058): a User-backed message keys on its RecipientUserID, an
+// email-shaped one — no RecipientUserID to key on — folds RecipientEmail to
+// lowercase first, mirroring the case-insensitive matching every other
+// email comparison in this app already does.
+func recipientKey(msg repository.OutboxMessage) string {
+	if msg.RecipientUserID != nil {
+		return fmt.Sprintf("u:%d", *msg.RecipientUserID)
+	}
+	return "e:" + strings.ToLower(*msg.RecipientEmail)
+}
+
 // Worker is the background ticker that drains the outbox (ADR-0060).
 type Worker struct {
 	store  Store
@@ -74,13 +87,14 @@ func (w *Worker) Tick(ctx context.Context) error {
 	}
 
 	now := w.now()
-	blocked := make(map[int64]bool)
+	blocked := make(map[string]bool)
 	for _, msg := range messages {
-		if blocked[msg.RecipientUserID] {
+		key := recipientKey(msg)
+		if blocked[key] {
 			continue
 		}
 		if msg.NextAttemptAt.After(now) {
-			blocked[msg.RecipientUserID] = true
+			blocked[key] = true
 			continue
 		}
 
@@ -96,7 +110,7 @@ func (w *Worker) Tick(ctx context.Context) error {
 			if merr := w.store.MarkRetry(ctx, msg.ID, attempts, next, err.Error()); merr != nil {
 				log.Printf("outbox: mark retry (id=%d): %v", msg.ID, merr)
 			}
-			blocked[msg.RecipientUserID] = true
+			blocked[key] = true
 			continue
 		}
 
