@@ -7,6 +7,7 @@ import {
   Bell,
   Calendar as CalendarIcon,
   Download,
+  Link,
   MapPin,
   Paperclip,
   Repeat as RepeatIcon,
@@ -112,6 +113,7 @@ interface InitialFormState {
   reminders: Reminder[];
   description: string;
   location: string;
+  url: string;
   /** This Event's own color override (ADR-0043) — undefined means inherited,
    * never the Calendar's resolved hex, so a later Reset has an absent value
    * to fall back to instead of copying whatever was already showing. */
@@ -148,6 +150,7 @@ function deriveInitialFormState(
       reminders: event.reminders ?? [],
       description: event.description ?? "",
       location: event.location ?? "",
+      url: event.url ?? "",
       color: event.color,
     };
   }
@@ -164,6 +167,7 @@ function deriveInitialFormState(
     reminders: [],
     description: "",
     location: "",
+    url: "",
     color: undefined,
   };
 }
@@ -176,7 +180,7 @@ const ICON_COLUMN_WIDTH = "size-5";
 const ICON_GUTTER_INDENT = "pl-[calc(1.25rem+0.625rem)]"; // icon width (size-5) + gap (gap-2.5)
 
 // The icon gutter for a field: once its label text is gone, the icon
-// carries its identity instead. Used for the six secondary fields
+// carries its identity instead. Used for the seven secondary fields
 // (Location through Attendees) and, with an icon replacing the word
 // "Calendar", the Calendar row too — one consistent left-edge column
 // regardless of which mode the field is in. "center" (the default) is for
@@ -340,6 +344,7 @@ export function EventModal(props: EventModalProps) {
     hasSecondaryEventFields({
       location: initial.location,
       description: initial.description,
+      url: initial.url,
       hasRrule: initial.repeat !== "none",
       reminderCount: initial.reminders.length,
       attachmentCount: master?.attachments?.length ?? 0,
@@ -390,6 +395,7 @@ export function EventModal(props: EventModalProps) {
   );
   const [description, setDescription] = useState(initial.description);
   const [location, setLocation] = useState(initial.location);
+  const [url, setUrl] = useState(initial.url);
   const [color, setColor] = useState<string | undefined>(initial.color);
   const [isCustomDialogOpen, setIsCustomDialogOpen] = useState(false);
   const [isCreateCalendarOpen, setIsCreateCalendarOpen] = useState(false);
@@ -647,6 +653,9 @@ export function EventModal(props: EventModalProps) {
       reminders: reminderChanges,
       description: description.trim(),
       location: location.trim(),
+      // Unlike description/location, never trimmed — trailing whitespace
+      // must round-trip byte-for-byte (ADR-0063).
+      url,
       color,
     };
 
@@ -768,6 +777,7 @@ export function EventModal(props: EventModalProps) {
         reminders: initial.reminders,
         description: initial.description,
         location: initial.location,
+        url: initial.url,
         color: initial.color,
       })
     ) {
@@ -1113,6 +1123,16 @@ export function EventModal(props: EventModalProps) {
                     value={location}
                     onChange={(event) => setLocation(event.target.value)}
                     placeholder="Add location"
+                    disabled={isReadOnlyEvent}
+                  />
+                </IconFieldRow>
+
+                <IconFieldRow icon={<Link className="size-4" />}>
+                  <Input
+                    aria-label="URL"
+                    value={url}
+                    onChange={(event) => setUrl(event.target.value)}
+                    placeholder="Add URL"
                     disabled={isReadOnlyEvent}
                   />
                 </IconFieldRow>

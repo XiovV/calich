@@ -10,6 +10,7 @@ import {
   resolveDescription,
   resolveLocation,
   resolveReminders,
+  resolveUrl,
   shouldDiscardChildren,
   splitFollowing,
   truncateSeriesBefore,
@@ -37,6 +38,7 @@ type MasterCoreFields = Pick<
   | "reminders"
   | "description"
   | "location"
+  | "url"
   | "color"
 >;
 
@@ -177,6 +179,7 @@ export function planEditOccurrence(
           reminders: resolveReminders(changes, master),
           description: resolveDescription(changes, master),
           location: resolveLocation(changes, master),
+          url: resolveUrl(changes, master),
           color: resolveColor(changes, master),
         },
         discardChildren: shouldDiscardChildren(master.rrule, rrule),
@@ -207,6 +210,7 @@ export function planEditOccurrence(
           reminders: master.reminders,
           description: master.description,
           location: master.location,
+          url: master.url,
           color: master.color,
         },
         truncatedRrule: truncatedMaster.rrule,
@@ -243,6 +247,7 @@ export function planEditOccurrence(
           reminders: resolveReminders(changes, occurrence.event),
           description: resolveDescription(changes, occurrence.event),
           location: resolveLocation(changes, occurrence.event),
+          url: resolveUrl(changes, occurrence.event),
           color: resolveColor(changes, occurrence.event),
         },
       },
@@ -267,6 +272,7 @@ export function planEditOccurrence(
         reminders: override.reminders,
         description: override.description,
         location: override.location,
+        url: override.url,
         color: override.color,
       },
     },
@@ -326,6 +332,7 @@ export function planDeleteOccurrence({
           reminders: master.reminders,
           description: master.description,
           location: master.location,
+          url: master.url,
           color: master.color,
         },
         truncatedRrule,

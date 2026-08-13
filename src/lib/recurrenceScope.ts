@@ -27,6 +27,7 @@ export interface EventFieldChanges {
   reminders?: Reminder[];
   description?: string;
   location?: string;
+  url?: string;
   // This Event's own color override (ADR-0043). Three states, distinct from
   // description/location because "untouched" and "explicit reset to
   // Calendar color" must both stay expressible: key absent means untouched
@@ -75,6 +76,14 @@ export function resolveLocation(
   return changes.location ?? reference.location;
 }
 
+/** `resolveDescription`'s counterpart for url. */
+export function resolveUrl(
+  changes: Pick<EventFieldChanges, "url">,
+  reference: Pick<Event, "url">,
+): string | undefined {
+  return changes.url ?? reference.url;
+}
+
 /** `changes`' color, falling back to `reference`'s own when the edit didn't
  * touch it — but unlike resolveDescription/resolveLocation, an explicit
  * `null` (a "Reset to Calendar color" action) must win and clear to absent
@@ -117,6 +126,7 @@ export function makeOverride(
     reminders: resolveReminders(changes, master),
     description: resolveDescription(changes, master),
     location: resolveLocation(changes, master),
+    url: resolveUrl(changes, master),
     // A fresh Override starts as a copy of the Master's color, same as
     // description/location/reminders — color is just another field the
     // compiler carries (ADR-0043).
@@ -213,6 +223,7 @@ export function splitFollowing(
       reminders: resolveReminders(changes, master),
       description: resolveDescription(changes, master),
       location: resolveLocation(changes, master),
+      url: resolveUrl(changes, master),
       color: resolveColor(changes, master),
     },
     reparentFromStart: splitStart,
@@ -272,6 +283,7 @@ export function hasFieldChanges(
     Boolean(changes.allDay) !== Boolean(original.allDay) ||
     (changes.description ?? "") !== (original.description ?? "") ||
     (changes.location ?? "") !== (original.location ?? "") ||
+    (changes.url ?? "") !== (original.url ?? "") ||
     resolveColor(changes, { color: undefined }) !== resolveColor(original, { color: undefined }) ||
     !remindersEqual(changes.reminders ?? [], original.reminders ?? []) ||
     (changes.rrule ?? "") !== (original.rrule ?? "")

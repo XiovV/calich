@@ -153,6 +153,9 @@ type eventResponse struct {
 	// Description and Location are free-text fields on an Event (#61).
 	Description string `json:"description,omitempty"`
 	Location    string `json:"location,omitempty"`
+	// URL is the Event's optional link (ADR-0063), stored exactly as
+	// submitted — never validated or rewritten.
+	URL string `json:"url,omitempty"`
 	// Color is this Event's own color override — absent means "inherit the
 	// Calendar's color" (ADR-0043).
 	Color *string `json:"color,omitempty"`
@@ -194,6 +197,7 @@ func toEventResponse(e repository.Event) eventResponse {
 		Reminders:     toReminderWire(e.Reminders),
 		Description:   e.Description,
 		Location:      e.Location,
+		URL:           e.URL,
 		Color:         e.Color,
 		CreatedBy:     e.CreatedBy,
 		CreatedByName: e.CreatedByName,
@@ -339,6 +343,9 @@ type createEventRequest struct {
 	Reminders    []reminderWire `json:"reminders,omitempty"`
 	Description  string         `json:"description,omitempty"`
 	Location     string         `json:"location,omitempty"`
+	// URL is the Event's optional link (ADR-0063), stored exactly as
+	// submitted — never validated or rewritten.
+	URL string `json:"url,omitempty"`
 	// Color is this Event's own color override — absent/null means "inherit
 	// the Calendar's color" (ADR-0043).
 	Color *string `json:"color,omitempty"`
@@ -406,6 +413,7 @@ func (h *EventHandler) Create(w http.ResponseWriter, r *http.Request) {
 		Reminders:        fromReminderWire(req.Reminders),
 		Description:      req.Description,
 		Location:         req.Location,
+		URL:              req.URL,
 		Color:            req.Color,
 		AttendeeUserIDs:  req.AttendeeUserIds,
 		AttendeeGroupIDs: req.AttendeeGroupIds,
@@ -451,6 +459,9 @@ type updateEventRequest struct {
 	Reminders   []reminderWire `json:"reminders,omitempty"`
 	Description string         `json:"description,omitempty"`
 	Location    string         `json:"location,omitempty"`
+	// URL is the Event's optional link (ADR-0063), stored exactly as
+	// submitted — never validated or rewritten.
+	URL string `json:"url,omitempty"`
 	// Color is this Event's own color override — absent/null means "inherit
 	// the Calendar's color" (ADR-0043).
 	Color *string `json:"color,omitempty"`
@@ -488,6 +499,7 @@ func (h *EventHandler) Update(w http.ResponseWriter, r *http.Request) {
 		Reminders:   fromReminderWire(req.Reminders),
 		Description: req.Description,
 		Location:    req.Location,
+		URL:         req.URL,
 		Color:       req.Color,
 	})
 	if respondError(w, err, updateEventErrors, "failed to update event") {

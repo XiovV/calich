@@ -22,6 +22,7 @@ interface EventWire {
   reminders?: Reminder[];
   description?: string;
   location?: string;
+  url?: string;
   // Absent means "inherit the Calendar's color" (ADR-0043).
   color?: string;
   // createdByName is absent when the creator's account has been
@@ -99,6 +100,7 @@ function fromWire(wire: EventWire): Event {
     reminders: wire.reminders,
     description: wire.description || undefined,
     location: wire.location || undefined,
+    url: wire.url || undefined,
     color: wire.color ?? undefined,
     createdByName: wire.createdByName || undefined,
     attachments: wire.attachments?.map(attachmentFromWire),
@@ -135,6 +137,7 @@ export const eventsApi = {
       reminders?: Reminder[];
       description?: string;
       location?: string;
+      url?: string;
       color?: string;
       // Attendees to invite as part of this create (#187, ADR-0055) — a
       // Group id expands to its current members server-side, inside the
@@ -164,6 +167,7 @@ export const eventsApi = {
         reminders: event.reminders,
         description: event.description,
         location: event.location,
+        url: event.url,
         color: event.color,
         attendeeUserIds: event.attendeeUserIds,
         attendeeGroupIds: event.attendeeGroupIds,
@@ -189,6 +193,7 @@ export const eventsApi = {
       reminders?: Reminder[];
       description?: string;
       location?: string;
+      url?: string;
       color?: string;
     },
   ): Promise<Event> {
@@ -207,6 +212,7 @@ export const eventsApi = {
         reminders: changes.reminders,
         description: changes.description,
         location: changes.location,
+        url: changes.url,
         color: changes.color,
       }),
     });

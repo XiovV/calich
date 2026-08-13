@@ -5,6 +5,7 @@ function signals(overrides: Partial<EventDisclosureSignals> = {}): EventDisclosu
   return {
     location: "",
     description: "",
+    url: "",
     hasRrule: false,
     reminderCount: 0,
     attachmentCount: 0,
@@ -18,9 +19,10 @@ describe("hasSecondaryEventFields", () => {
     expect(hasSecondaryEventFields(signals())).toBe(false);
   });
 
-  it("treats a whitespace-only location/description as empty", () => {
+  it("treats a whitespace-only location/description/url as empty", () => {
     expect(hasSecondaryEventFields(signals({ location: "   " }))).toBe(false);
     expect(hasSecondaryEventFields(signals({ description: "\n\t" }))).toBe(false);
+    expect(hasSecondaryEventFields(signals({ url: "  " }))).toBe(false);
   });
 
   it("is true when location is populated", () => {
@@ -29,6 +31,10 @@ describe("hasSecondaryEventFields", () => {
 
   it("is true when description is populated", () => {
     expect(hasSecondaryEventFields(signals({ description: "Bring laptop" }))).toBe(true);
+  });
+
+  it("is true when url is populated — an event whose only extra content is a link still auto-expands", () => {
+    expect(hasSecondaryEventFields(signals({ url: "https://example.com/ticket" }))).toBe(true);
   });
 
   it("is true when the event recurs", () => {

@@ -1,7 +1,7 @@
 // The Event modal's progressive-disclosure rule (#193, ADR-0056): whether
 // the modal opens showing only its primary fields (Title, All day,
 // Start/End, Calendar) or also its secondary ones (Location, Description,
-// Repeat, Reminders, Attachments, Attendees).
+// URL, Repeat, Reminders, Attachments, Attendees).
 //
 // "auto-expand if populated" — a pure function recomputed on every open,
 // never remembered in shellStore/localStorage/a Preference, so two people
@@ -14,6 +14,7 @@
 export interface EventDisclosureSignals {
   location: string;
   description: string;
+  url: string;
   hasRrule: boolean;
   reminderCount: number;
   attachmentCount: number;
@@ -24,6 +25,7 @@ export function hasSecondaryEventFields(signals: EventDisclosureSignals): boolea
   return (
     signals.location.trim() !== "" ||
     signals.description.trim() !== "" ||
+    signals.url.trim() !== "" ||
     signals.hasRrule ||
     signals.reminderCount > 0 ||
     signals.attachmentCount > 0 ||

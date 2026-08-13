@@ -51,6 +51,27 @@ describe("makeOverride", () => {
     expect(makeOverride(coloredMaster, occurrenceStart, changes).color).toBe("#12809CFF");
   });
 
+  it("starts a fresh Override's URL as a copy of the master's, independent once set (ADR-0063)", () => {
+    const linkedMaster: Event = { ...master, url: "https://master.example/link" };
+    const occurrenceStart = new Date(2026, 0, 3, 9, 0);
+    const changes = {
+      calendarId: "cal-1",
+      title: "Standup",
+      start: occurrenceStart,
+      end: new Date(2026, 0, 3, 9, 30),
+    };
+
+    expect(makeOverride(linkedMaster, occurrenceStart, changes).url).toBe(
+      "https://master.example/link",
+    );
+    expect(
+      makeOverride(linkedMaster, occurrenceStart, {
+        ...changes,
+        url: "https://override.example/link",
+      }).url,
+    ).toBe("https://override.example/link");
+  });
+
   it("keys the override to the parent and the replaced Occurrence's start", () => {
     const occurrenceStart = new Date(2026, 0, 3, 9, 0);
     const changes = {
@@ -357,6 +378,7 @@ describe("hasFieldChanges", () => {
     reminders: [{ offsetMinutes: 10, channel: "notification" as const }],
     description: "Daily sync",
     location: "Room 1",
+    url: "https://example.com/ticket",
   };
 
   it("is false when nothing differs (#141)", () => {
@@ -406,10 +428,24 @@ describe("hasFieldChanges", () => {
     ).toBe(true);
   });
 
-  it("treats undefined and empty string description/location as unchanged", () => {
-    const withoutOptional = { ...original, description: undefined, location: undefined };
-    expect(hasFieldChanges({ ...original, description: "", location: "" }, withoutOptional)).toBe(
-      false,
+  it("treats undefined and empty string description/location/url as unchanged", () => {
+    const withoutOptional = {
+      ...original,
+      description: undefined,
+      location: undefined,
+      url: undefined,
+    };
+    expect(
+      hasFieldChanges(
+        { ...original, description: "", location: "", url: "" },
+        withoutOptional,
+      ),
+    ).toBe(false);
+  });
+
+  it("is true when the url differs", () => {
+    expect(hasFieldChanges({ ...original, url: "https://example.com/other" }, original)).toBe(
+      true,
     );
   });
 

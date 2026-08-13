@@ -41,6 +41,7 @@ type decodedEvent struct {
 	Reminders     []reminderWire
 	Description   string
 	Location      string
+	URL           string
 	Color         *string
 	CreatedBy     *int64
 	CreatedByName string
@@ -74,6 +75,7 @@ func (d *decodedEvent) UnmarshalJSON(data []byte) error {
 		Reminders:     wire.Reminders,
 		Description:   wire.Description,
 		Location:      wire.Location,
+		URL:           wire.URL,
 		Color:         wire.Color,
 		CreatedBy:     wire.CreatedBy,
 		CreatedByName: wire.CreatedByName,
@@ -373,6 +375,63 @@ func TestEventHandler_RoundTripsDescriptionAndLocation(t *testing.T) {
 	json.NewDecoder(updateResp.Body).Decode(&updated)
 	if updated.Description != "Updated sync notes" || updated.Location != "Room 5" {
 		t.Fatalf("expected updated description/location to round-trip, got %+v", updated)
+	}
+}
+
+// TestEventHandler_RoundTripsURL is #205's REST-facing check: the URL is
+// stored and returned byte-for-byte, with no scheme validation or
+// normalization on either write path (ADR-0063) — a non-http scheme, a bare
+// word, and trailing whitespace all persist exactly as submitted.
+func TestEventHandler_RoundTripsURL(t *testing.T) {
+	baseURL, accessToken, calendarID := newEventTestServer(t)
+
+	const raw = "message://<abc123@mail.example.com> not-a-url http://trailing.example/  "
+
+	createResp := postJSON(t, baseURL, accessToken, "/api/events/", createEventRequest{
+		ID:         "22222222-2222-2222-2222-222222222222",
+		CalendarID: calendarID,
+		Title:      "Standup",
+		Start:      "2026-01-01T09:00:00Z",
+		End:        "2026-01-01T10:00:00Z",
+		URL:        raw,
+	})
+	var created decodedEvent
+	json.NewDecoder(createResp.Body).Decode(&created)
+	if created.URL != raw {
+		t.Fatalf("expected created url to round-trip byte-for-byte, got %q", created.URL)
+	}
+
+	getResp, err := authenticatedGet(baseURL+"/api/events/"+created.ID, accessToken)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	defer getResp.Body.Close()
+	var fetched decodedEvent
+	json.NewDecoder(getResp.Body).Decode(&fetched)
+	if fetched.URL != raw {
+		t.Fatalf("expected fetched url to round-trip byte-for-byte, got %q", fetched.URL)
+	}
+
+	const updatedRaw = "javascript:alert(1)"
+	updateBody, _ := json.Marshal(updateEventRequest{
+		CalendarID: calendarID,
+		Title:      "Standup",
+		Start:      "2026-01-01T09:00:00Z",
+		End:        "2026-01-01T10:00:00Z",
+		URL:        updatedRaw,
+	})
+	updateReq, _ := http.NewRequest(http.MethodPatch, baseURL+"/api/events/"+created.ID, bytes.NewReader(updateBody))
+	updateReq.Header.Set("Content-Type", "application/json")
+	updateReq.Header.Set("Authorization", "Bearer "+accessToken)
+	updateResp, err := http.DefaultClient.Do(updateReq)
+	if err != nil {
+		t.Fatalf("patch: %v", err)
+	}
+	defer updateResp.Body.Close()
+	var updated decodedEvent
+	json.NewDecoder(updateResp.Body).Decode(&updated)
+	if updated.URL != updatedRaw {
+		t.Fatalf("expected updated url to round-trip byte-for-byte and not be rejected, got %q", updated.URL)
 	}
 }
 

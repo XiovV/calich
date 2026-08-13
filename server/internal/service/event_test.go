@@ -470,6 +470,38 @@ func TestEventService_CreateOverride(t *testing.T) {
 	}
 }
 
+// TestEventService_CreateOverride_URLIndependentOfMaster is #205's
+// Override-carries-its-own-URL check (ADR-0063): editing a single Occurrence
+// produces an Override whose URL is independent of its Master's.
+func TestEventService_CreateOverride_URLIndependentOfMaster(t *testing.T) {
+	svc, userID, calendarID := newTestEventService(t)
+	ctx := context.Background()
+	start := time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC)
+	end := time.Date(2026, 1, 1, 9, 30, 0, 0, time.UTC)
+
+	master, err := svc.Create(ctx, userID, "master", EventWrite{CalendarID: calendarID, Title: "Standup", Start: start, End: end, Rrule: "FREQ=DAILY", URL: "https://master.example/link"})
+	if err != nil {
+		t.Fatalf("create master: %v", err)
+	}
+
+	recurrenceID := time.Date(2026, 1, 2, 9, 0, 0, 0, time.UTC)
+	override, err := svc.Create(ctx, userID, "override", EventWrite{CalendarID: calendarID, Title: "Standup (moved)", Start: time.Date(2026, 1, 2, 10, 0, 0, 0, time.UTC), End: time.Date(2026, 1, 2, 10, 30, 0, 0, time.UTC), ParentID: &master.ID, RecurrenceID: &recurrenceID, URL: "https://override.example/link"})
+	if err != nil {
+		t.Fatalf("create override: %v", err)
+	}
+	if override.URL != "https://override.example/link" {
+		t.Fatalf("expected override to carry its own url, got %+v", override)
+	}
+
+	refetchedMaster, err := svc.Get(ctx, userID, master.ID)
+	if err != nil {
+		t.Fatalf("get master: %v", err)
+	}
+	if refetchedMaster.URL != "https://master.example/link" {
+		t.Fatalf("expected master's url to be untouched by the override, got %+v", refetchedMaster)
+	}
+}
+
 func TestEventService_CreateOverride_RejectsOwnRrule(t *testing.T) {
 	svc, userID, calendarID := newTestEventService(t)
 	ctx := context.Background()

@@ -55,6 +55,11 @@ export interface Event {
   // Free-text description and location, both optional.
   description?: string;
   location?: string;
+  // This Event's optional link — one per Event, stored exactly as
+  // submitted and never validated or rewritten, so a native client's
+  // non-web scheme still round-trips intact. See ADR-0063 and CONTEXT.md's
+  // Event URL.
+  url?: string;
   // This Event's own color override, in the same arbitrary-hex value space
   // as Calendar color. Absent means "inherit the Calendar's color" — wins
   // outright over it when set. Set by an Editor, seen identically by

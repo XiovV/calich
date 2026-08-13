@@ -291,6 +291,10 @@ CREATE TABLE calendar_user_colors (
 -- (ADR-0033), stored alongside the Event rather than as its id so the row id
 -- stays a minted UUID.
 --
+-- url is the Event's optional link (iCalendar URL, RFC 5545), stored exactly
+-- as written and never validated or normalized here — safety is enforced
+-- once at render, not at this boundary (ADR-0063).
+--
 -- created_by is attribution only — who created the Event — and is
 -- deliberately never consulted for authorization, so it can never be
 -- mistaken for an access concept. SET NULL rather than CASCADE: a departing
@@ -322,6 +326,7 @@ CREATE TABLE events (
     tzid TEXT,
     description TEXT,
     location TEXT,
+    url TEXT,
     change_seq INTEGER NOT NULL DEFAULT 0,
     external_uid TEXT,
     created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,

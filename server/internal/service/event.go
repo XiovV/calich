@@ -466,6 +466,10 @@ type EventWrite struct {
 	Reminders    []repository.Reminder
 	Description  string
 	Location     string
+	// URL is this Event's optional link (ADR-0063), stored exactly as
+	// submitted alongside Description/Location — never validated or
+	// rewritten here.
+	URL string
 	// Color is this Event's own color override — same Editor Access rule as
 	// title or time (ADR-0034), nullable to mean "inherit the Calendar's
 	// color" (ADR-0043). A caller resetting to the Calendar's color passes
@@ -501,6 +505,7 @@ func (w EventWrite) fields() repository.EventFields {
 		Tzid:         w.Tzid,
 		Description:  w.Description,
 		Location:     w.Location,
+		URL:          w.URL,
 		Color:        w.Color,
 	}
 }
@@ -1148,7 +1153,7 @@ func (s *EventService) Update(ctx context.Context, userID int64, id string, writ
 	if material {
 		newSequence++
 	}
-	contentChanged := material || existing.Title != write.Title || existing.Description != write.Description || existing.Location != write.Location || !colorEqual(existing.Color, write.Color)
+	contentChanged := material || existing.Title != write.Title || existing.Description != write.Description || existing.Location != write.Location || existing.URL != write.URL || !colorEqual(existing.Color, write.Color)
 
 	var updated repository.Event
 	err = s.withTx(ctx, func(repos txRepos) error {
