@@ -7,6 +7,7 @@ import {
   Bell,
   Calendar as CalendarIcon,
   Download,
+  ExternalLink,
   Link,
   MapPin,
   Paperclip,
@@ -17,6 +18,7 @@ import {
 import type { DraftBlock } from "../lib/gridTime";
 import type { Attachment, Event, Reminder } from "../lib/event";
 import { hasSecondaryEventFields } from "../lib/eventDisclosure";
+import { followableUrl } from "../lib/followableUrl";
 import { attachmentsApi } from "../lib/attachmentsApi";
 import { downloadBlob } from "../lib/downloadBlob";
 import { errorMessage } from "../lib/errorMessage";
@@ -396,6 +398,10 @@ export function EventModal(props: EventModalProps) {
   const [description, setDescription] = useState(initial.description);
   const [location, setLocation] = useState(initial.location);
   const [url, setUrl] = useState(initial.url);
+  // Followability is derived from the live value on every render (ADR-0063)
+  // — never stored, never a second flag — so the open control tracks
+  // whatever's currently typed, not just what was last saved.
+  const openableUrl = followableUrl(url);
   const [color, setColor] = useState<string | undefined>(initial.color);
   const [isCustomDialogOpen, setIsCustomDialogOpen] = useState(false);
   const [isCreateCalendarOpen, setIsCreateCalendarOpen] = useState(false);
@@ -1128,13 +1134,33 @@ export function EventModal(props: EventModalProps) {
                 </IconFieldRow>
 
                 <IconFieldRow icon={<Link className="size-4" />}>
-                  <Input
-                    aria-label="URL"
-                    value={url}
-                    onChange={(event) => setUrl(event.target.value)}
-                    placeholder="Add URL"
-                    disabled={isReadOnlyEvent}
-                  />
+                  <div className="flex items-center gap-2">
+                    <Input
+                      aria-label="URL"
+                      value={url}
+                      onChange={(event) => setUrl(event.target.value)}
+                      placeholder="Add URL"
+                      disabled={isReadOnlyEvent}
+                      className="flex-1"
+                    />
+                    {/* Stays enabled on a read-only Event (ADR-0063): a
+                        disabled Input can't reliably be selected/copied, so
+                        without this a Subscribed/Attendee-only/Viewer Event's
+                        link would show with no way to reach it. Rendered only
+                        when the value itself gates open (http/https) — never
+                        a control that does nothing. */}
+                    {openableUrl && (
+                      <a
+                        href={openableUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        aria-label="Open URL in new tab"
+                        className={iconButtonClasses()}
+                      >
+                        <ExternalLink className="size-4" />
+                      </a>
+                    )}
+                  </div>
                 </IconFieldRow>
 
                 <IconFieldRow icon={<AlignLeft className="size-4" />} align="start">
