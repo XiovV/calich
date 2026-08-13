@@ -34,7 +34,7 @@ func newTestRouter(t *testing.T) http.Handler {
 	calendarRepo := repository.NewCalendarRepository(sqlDB)
 	shareRepo := repository.NewCalendarShareRepository(sqlDB)
 	calendarService := service.NewCalendarService(calendarRepo, shareRepo, users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo, repository.NewCalendarGroupShareRepository(sqlDB), repository.NewGroupRepository(sqlDB))
-	authService := service.NewAuthService(users, sessions, workspaceService, repository.NewWorkspaceInviteRepository(sqlDB), calendarService, []byte("test-secret"), "admin", "admin@example.com", "admin", false)
+	authService := service.NewAuthService(users, sessions, workspaceService, repository.NewWorkspaceInviteRepository(sqlDB), calendarService, repository.NewAttendeeRepository(sqlDB), []byte("test-secret"), "admin", "admin@example.com", "admin", false)
 	if _, _, err := authService.Bootstrap(context.Background()); err != nil {
 		t.Fatalf("bootstrap: %v", err)
 	}

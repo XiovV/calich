@@ -47,7 +47,7 @@ func newAccountTestHarness(t *testing.T) *accountTestHarness {
 	workspaceInviteRepo := repository.NewWorkspaceInviteRepository(sqlDB)
 	workspaces := NewWorkspaceService(sqlDB, workspaceRepo, workspaceInviteRepo, repository.NewCalendarRepository(sqlDB), repository.NewCalendarShareRepository(sqlDB))
 	calendars := NewCalendarService(calendarRepo, shareRepo, users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo, repository.NewCalendarGroupShareRepository(sqlDB), repository.NewGroupRepository(sqlDB))
-	auth := NewAuthService(users, sessions, workspaces, workspaceInviteRepo, calendars, []byte("test-secret"), "", "", "", true)
+	auth := NewAuthService(users, sessions, workspaces, workspaceInviteRepo, calendars, repository.NewAttendeeRepository(sqlDB), []byte("test-secret"), "", "", "", true)
 	accounts := NewAccountService(sqlDB, users, sessions, calendarRepo, shareRepo, workspaceRepo, workspaces)
 
 	return &accountTestHarness{db: sqlDB, accounts: accounts, auth: auth, calendars: calendars, workspaces: workspaces, users: users}

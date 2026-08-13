@@ -45,7 +45,7 @@ func newGroupHandlerTestServer(t *testing.T) *groupHandlerTestServer {
 	inviteRepo := repository.NewWorkspaceInviteRepository(sqlDB)
 	workspaces := service.NewWorkspaceService(sqlDB, workspaceRepo, inviteRepo, calendarRepo, shareRepo)
 	calendars := service.NewCalendarService(calendarRepo, shareRepo, users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo, repository.NewCalendarGroupShareRepository(sqlDB), repository.NewGroupRepository(sqlDB))
-	auth := service.NewAuthService(users, sessions, workspaces, inviteRepo, calendars, []byte("test-secret"), "", "", "", true)
+	auth := service.NewAuthService(users, sessions, workspaces, inviteRepo, calendars, repository.NewAttendeeRepository(sqlDB), []byte("test-secret"), "", "", "", true)
 	groups := service.NewGroupService(repository.NewGroupRepository(sqlDB), workspaceRepo)
 
 	authHandler := NewAuthHandler(auth, false, false)

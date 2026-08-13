@@ -165,6 +165,7 @@ type AuthService struct {
 	workspaces       *WorkspaceService
 	workspaceInvites *repository.WorkspaceInviteRepository
 	calendars        *CalendarService
+	attendees        *repository.AttendeeRepository
 	jwtSecret        []byte
 	initialName      string
 	initialEmail     string
@@ -172,13 +173,14 @@ type AuthService struct {
 	enableSignups    bool
 }
 
-func NewAuthService(users *repository.UserRepository, sessions *repository.SessionRepository, workspaces *WorkspaceService, workspaceInvites *repository.WorkspaceInviteRepository, calendars *CalendarService, jwtSecret []byte, initialName, initialEmail, initialPassword string, enableSignups bool) *AuthService {
+func NewAuthService(users *repository.UserRepository, sessions *repository.SessionRepository, workspaces *WorkspaceService, workspaceInvites *repository.WorkspaceInviteRepository, calendars *CalendarService, attendees *repository.AttendeeRepository, jwtSecret []byte, initialName, initialEmail, initialPassword string, enableSignups bool) *AuthService {
 	return &AuthService{
 		users:            users,
 		sessions:         sessions,
 		workspaces:       workspaces,
 		workspaceInvites: workspaceInvites,
 		calendars:        calendars,
+		attendees:        attendees,
 		jwtSecret:        jwtSecret,
 		initialName:      initialName,
 		initialEmail:     initialEmail,
@@ -576,6 +578,15 @@ func (s *AuthService) AcceptWorkspaceInviteNewAccount(ctx context.Context, token
 			return fmt.Errorf("add workspace member: %w", err)
 		}
 
+		// Sweeps any outstanding email-shaped Attendee rows for this address
+		// onto newUser (ADR-0058, #203) — the fallback we wrote because we
+		// couldn't find their account has no reason to outlive the account
+		// appearing. Bound to this same tx so the conversion and the
+		// Membership write succeed or fail together.
+		if err := s.attendees.WithTx(tx).ConvertEmailAttendeesToUser(ctx, liveInvite.WorkspaceID, liveInvite.Email, newUser.ID); err != nil {
+			return fmt.Errorf("convert email attendees: %w", err)
+		}
+
 		if err := txInvites.Delete(ctx, liveInvite.ID); err != nil {
 			return fmt.Errorf("consume workspace invite: %w", err)
 		}
@@ -647,6 +658,15 @@ func (s *AuthService) AcceptWorkspaceInviteExisting(ctx context.Context, userID 
 				return ErrAlreadyWorkspaceMember
 			}
 			return fmt.Errorf("add workspace member: %w", err)
+		}
+
+		// Sweeps any outstanding email-shaped Attendee rows for this address
+		// onto userID (ADR-0058, #203) — the fallback we wrote because we
+		// couldn't find their account has no reason to outlive the account
+		// appearing. Bound to this same tx so the conversion and the
+		// Membership write succeed or fail together.
+		if err := s.attendees.WithTx(tx).ConvertEmailAttendeesToUser(ctx, liveInvite.WorkspaceID, liveInvite.Email, userID); err != nil {
+			return fmt.Errorf("convert email attendees: %w", err)
 		}
 
 		if err := txInvites.Delete(ctx, liveInvite.ID); err != nil {

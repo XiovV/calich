@@ -86,10 +86,10 @@ func main() {
 	groupRepo := repository.NewGroupRepository(sqlDB)
 	groupService := service.NewGroupService(groupRepo, workspaceRepo)
 	calendarService := service.NewCalendarService(calendarRepo, shareRepo, users, reminderOverrideRepo, colorOverrideRepo, workspaceRepo, groupShareRepo, groupRepo)
-	authService := service.NewAuthService(users, sessions, workspaceService, workspaceInviteRepo, calendarService, jwtSecret, cfg.InitialName, cfg.InitialEmail, cfg.InitialPassword, cfg.EnableSignups)
+	attendeeRepo := repository.NewAttendeeRepository(sqlDB)
+	authService := service.NewAuthService(users, sessions, workspaceService, workspaceInviteRepo, calendarService, attendeeRepo, jwtSecret, cfg.InitialName, cfg.InitialEmail, cfg.InitialPassword, cfg.EnableSignups)
 	attachmentRepo := repository.NewAttachmentRepository(sqlDB)
 	eventRepo := repository.NewEventRepository(sqlDB)
-	attendeeRepo := repository.NewAttendeeRepository(sqlDB)
 	notificationRepo := repository.NewNotificationRepository(sqlDB)
 	// smtpMailer serves Reminder email delivery (ADR-0021) and Invitation
 	// delivery (ADR-0059) alike — nil when this deployment has no SMTP

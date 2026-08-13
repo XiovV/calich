@@ -46,7 +46,7 @@ func newTestAuthServiceWithSignups(t *testing.T, initialUsername, initialPasswor
 	workspaces := NewWorkspaceService(sqlDB, workspaceRepo, repository.NewWorkspaceInviteRepository(sqlDB), calendarRepo, shareRepo)
 	calendars := NewCalendarService(calendarRepo, shareRepo, users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo, repository.NewCalendarGroupShareRepository(sqlDB), repository.NewGroupRepository(sqlDB))
 
-	return NewAuthService(users, sessions, workspaces, repository.NewWorkspaceInviteRepository(sqlDB), calendars, []byte("test-secret"), initialUsername, initialEmail, initialPassword, enableSignups)
+	return NewAuthService(users, sessions, workspaces, repository.NewWorkspaceInviteRepository(sqlDB), calendars, repository.NewAttendeeRepository(sqlDB), []byte("test-secret"), initialUsername, initialEmail, initialPassword, enableSignups)
 }
 
 // mustSeedUserRequiringPasswordChange inserts a User directly via the
@@ -170,7 +170,7 @@ func TestBootstrap_FoldsInitialEmailCase(t *testing.T) {
 	shareRepo := repository.NewCalendarShareRepository(sqlDB)
 	workspaces := NewWorkspaceService(sqlDB, workspaceRepo, repository.NewWorkspaceInviteRepository(sqlDB), calendarRepo, shareRepo)
 	calendars := NewCalendarService(calendarRepo, shareRepo, users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo, repository.NewCalendarGroupShareRepository(sqlDB), repository.NewGroupRepository(sqlDB))
-	svc := NewAuthService(users, sessions, workspaces, repository.NewWorkspaceInviteRepository(sqlDB), calendars, []byte("test-secret"), "Admin", "Admin@Example.com", "hunter2", false)
+	svc := NewAuthService(users, sessions, workspaces, repository.NewWorkspaceInviteRepository(sqlDB), calendars, repository.NewAttendeeRepository(sqlDB), []byte("test-secret"), "Admin", "Admin@Example.com", "hunter2", false)
 
 	ctx := context.Background()
 	user, _, err := svc.Bootstrap(ctx)
@@ -601,7 +601,7 @@ func TestAuthenticate_RejectsWrongSigningSecret(t *testing.T) {
 	svc := newTestAuthService(t, "admin", "admin")
 	ctx := context.Background()
 
-	other := NewAuthService(svc.users, svc.sessions, svc.workspaces, svc.workspaceInvites, svc.calendars, []byte("a-different-secret"), "admin", "admin@example.com", "admin", false)
+	other := NewAuthService(svc.users, svc.sessions, svc.workspaces, svc.workspaceInvites, svc.calendars, svc.attendees, []byte("a-different-secret"), "admin", "admin@example.com", "admin", false)
 	if _, _, err := other.Bootstrap(ctx); err != nil {
 		t.Fatalf("bootstrap: %v", err)
 	}

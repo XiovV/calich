@@ -187,6 +187,72 @@ func (r *AttendeeRepository) RemoveEmail(ctx context.Context, eventID, email str
 	return requireAffected(res)
 }
 
+// ConvertEmailAttendeesToUser sweeps every email-shaped Attendee row
+// matching email, on Events belonging to workspaceID's Calendars, onto
+// userID — the write side of accepting a Workspace Invite (ADR-0058, #203).
+// email is expected already normalized (trimmed, lowercased) by the caller,
+// matching AddEmail; the column's own COLLATE NOCASE makes the match
+// case-insensitive regardless.
+//
+// Where an Event carries only the email row, it is converted in place. Where
+// it carries both shapes (invited by email, then invited again from the
+// member picker once they joined), the User-backed row survives and the
+// email row is deleted — except that if the User-backed row is still
+// needs-action while the email row carries a real answer, that answer moves
+// onto the surviving row first. Answering once counts.
+func (r *AttendeeRepository) ConvertEmailAttendeesToUser(ctx context.Context, workspaceID int64, email string, userID int64) error {
+	const inWorkspaceEvents = `(SELECT e.id FROM events e JOIN calendars c ON c.id = e.calendar_id WHERE c.workspace_id = ?)`
+
+	// Carry the email row's answer onto a still-needs-action User-backed row
+	// before the email row is deleted below.
+	if _, err := r.db.ExecContext(ctx,
+		`UPDATE attendees
+		 SET response = (
+		     SELECT er.response FROM attendees er
+		     WHERE er.event_id = attendees.event_id AND er.email = ?
+		 )
+		 WHERE attendees.user_id = ?
+		   AND attendees.response = 'needs-action'
+		   AND attendees.event_id IN `+inWorkspaceEvents+`
+		   AND EXISTS (
+		       SELECT 1 FROM attendees er
+		       WHERE er.event_id = attendees.event_id AND er.email = ? AND er.response != 'needs-action'
+		   )`,
+		email, userID, workspaceID, email,
+	); err != nil {
+		return fmt.Errorf("carry over email attendee response: %w", err)
+	}
+
+	// Where a User-backed row already exists for the same Event, it survives
+	// and the email row is dropped.
+	if _, err := r.db.ExecContext(ctx,
+		`DELETE FROM attendees
+		 WHERE email = ?
+		   AND event_id IN `+inWorkspaceEvents+`
+		   AND EXISTS (
+		       SELECT 1 FROM attendees ur
+		       WHERE ur.event_id = attendees.event_id AND ur.user_id = ?
+		   )`,
+		email, workspaceID, userID,
+	); err != nil {
+		return fmt.Errorf("delete merged email attendee: %w", err)
+	}
+
+	// Every remaining email row on an Event in this Workspace has no
+	// User-backed counterpart — convert it in place, keeping its Response.
+	if _, err := r.db.ExecContext(ctx,
+		`UPDATE attendees
+		 SET user_id = ?, email = NULL
+		 WHERE email = ?
+		   AND event_id IN `+inWorkspaceEvents,
+		userID, email, workspaceID,
+	); err != nil {
+		return fmt.Errorf("convert email attendee: %w", err)
+	}
+
+	return nil
+}
+
 // ListUserIDsByEventIDs returns every User-backed Attendee's user_id on any
 // of eventIDs, keyed by event id — the reminder fan-out's batched read path
 // (ADR-0021, ADR-0046), unioned onto RecipientUserIDs alongside each Event's

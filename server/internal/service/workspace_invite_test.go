@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/XiovV/calendar/server/internal/db"
 	"github.com/XiovV/calendar/server/internal/repository"
@@ -15,6 +16,16 @@ import (
 // different services (mirroring AccountService/AuthService's split for the
 // account-level Invite this replaces), but exercise the same rows.
 func newTestWorkspaceInviteHarness(t *testing.T) (*WorkspaceService, *AuthService, *repository.UserRepository) {
+	workspaces, auth, users, _, _, _ := newTestWorkspaceInviteHarnessWithAttendees(t)
+	return workspaces, auth, users
+}
+
+// newTestWorkspaceInviteHarnessWithAttendees extends
+// newTestWorkspaceInviteHarness with the Calendar/Event/Attendee
+// repositories a conversion test (#203, ADR-0058) needs to seed an
+// email-shaped Attendee row on an Event ahead of accepting the Workspace
+// Invite that should sweep it up.
+func newTestWorkspaceInviteHarnessWithAttendees(t *testing.T) (*WorkspaceService, *AuthService, *repository.UserRepository, *repository.CalendarRepository, *repository.EventRepository, *repository.AttendeeRepository) {
 	t.Helper()
 
 	sqlDB, err := db.OpenInMemory()
@@ -31,9 +42,11 @@ func newTestWorkspaceInviteHarness(t *testing.T) (*WorkspaceService, *AuthServic
 	shareRepo := repository.NewCalendarShareRepository(sqlDB)
 	workspaces := NewWorkspaceService(sqlDB, workspaceRepo, inviteRepo, calendarRepo, shareRepo)
 	calendars := NewCalendarService(calendarRepo, shareRepo, users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo, repository.NewCalendarGroupShareRepository(sqlDB), repository.NewGroupRepository(sqlDB))
-	auth := NewAuthService(users, sessions, workspaces, inviteRepo, calendars, []byte("test-secret"), "", "", "", false)
+	attendeeRepo := repository.NewAttendeeRepository(sqlDB)
+	auth := NewAuthService(users, sessions, workspaces, inviteRepo, calendars, attendeeRepo, []byte("test-secret"), "", "", "", false)
+	eventRepo := repository.NewEventRepository(sqlDB)
 
-	return workspaces, auth, users
+	return workspaces, auth, users, calendarRepo, eventRepo, attendeeRepo
 }
 
 func TestWorkspaceService_CreateInvite_RequiresOwnerOrAdmin(t *testing.T) {
@@ -559,5 +572,186 @@ func TestAuthService_PreviewWorkspaceInvite_ReportsWhetherUserExists(t *testing.
 	}
 	if !preview.UserExists {
 		t.Fatalf("expected UserExists true for an email with an existing account")
+	}
+}
+
+// mustCreateWorkspaceInviteTestEvent creates a Calendar owned by ownerID in
+// workspaceID and one Event on it — the fixture #203's conversion tests need
+// to hang an email-shaped Attendee off.
+func mustCreateWorkspaceInviteTestEvent(t *testing.T, calendars *repository.CalendarRepository, events *repository.EventRepository, ownerID, workspaceID int64, calendarID, eventID string) {
+	t.Helper()
+	ctx := context.Background()
+
+	if _, err := calendars.Create(ctx, ownerID, workspaceID, calendarID, repository.CalendarFields{Name: "Personal", Color: "peacock"}); err != nil {
+		t.Fatalf("create calendar %q: %v", calendarID, err)
+	}
+	start, err := time.Parse(time.RFC3339, "2026-01-01T09:00:00Z")
+	if err != nil {
+		t.Fatalf("parse start: %v", err)
+	}
+	end, err := time.Parse(time.RFC3339, "2026-01-01T10:00:00Z")
+	if err != nil {
+		t.Fatalf("parse end: %v", err)
+	}
+	if _, err := events.Create(ctx, eventID, &ownerID, repository.EventFields{CalendarID: calendarID, Title: eventID, Start: start, End: end}, 0); err != nil {
+		t.Fatalf("create event %q: %v", eventID, err)
+	}
+}
+
+// TestAuthService_AcceptWorkspaceInviteExisting_ConvertsEmailAttendees covers
+// #203's core acceptance criterion: accepting a Workspace Invite converts an
+// outstanding email-shaped Attendee row for that address, on an Event in the
+// inviting Workspace, onto the accepting User — carrying its Response
+// across.
+func TestAuthService_AcceptWorkspaceInviteExisting_ConvertsEmailAttendees(t *testing.T) {
+	workspaces, auth, users, calendarRepo, eventRepo, attendeeRepo := newTestWorkspaceInviteHarnessWithAttendees(t)
+	ctx := context.Background()
+
+	owner, err := users.Create(ctx, "alice", "alice@example.com", "hash", false)
+	if err != nil {
+		t.Fatalf("create owner: %v", err)
+	}
+	workspace, err := workspaces.CreateForOwner(ctx, owner.ID, "Alice's Workspace")
+	if err != nil {
+		t.Fatalf("create workspace: %v", err)
+	}
+	mustCreateWorkspaceInviteTestEvent(t, calendarRepo, eventRepo, owner.ID, workspace.ID, "cal-1", "evt-1")
+
+	if _, err := attendeeRepo.AddEmail(ctx, "evt-1", "bob@example.com"); err != nil {
+		t.Fatalf("add email attendee: %v", err)
+	}
+	if _, err := attendeeRepo.SetResponseByEmail(ctx, "evt-1", "bob@example.com", repository.ResponseAccepted); err != nil {
+		t.Fatalf("set email attendee response: %v", err)
+	}
+
+	bob, err := users.Create(ctx, "bob", "bob@example.com", "hash", false)
+	if err != nil {
+		t.Fatalf("create bob: %v", err)
+	}
+
+	invite, err := workspaces.CreateInvite(ctx, owner.ID, workspace.ID, "bob@example.com")
+	if err != nil {
+		t.Fatalf("create invite: %v", err)
+	}
+	if _, err := auth.AcceptWorkspaceInviteExisting(ctx, bob.ID, invite.Token); err != nil {
+		t.Fatalf("accept invite: %v", err)
+	}
+
+	converted, err := attendeeRepo.Get(ctx, "evt-1", bob.ID)
+	if err != nil {
+		t.Fatalf("expected a User-backed Attendee row for bob, got: %v", err)
+	}
+	if converted.Response != repository.ResponseAccepted {
+		t.Fatalf("expected the carried-over response %q, got %q", repository.ResponseAccepted, converted.Response)
+	}
+
+	attendees, err := attendeeRepo.ListByEventID(ctx, "evt-1")
+	if err != nil {
+		t.Fatalf("list attendees: %v", err)
+	}
+	if len(attendees) != 1 || attendees[0].Name != "bob" {
+		t.Fatalf("expected the sole Attendee to render by Name, got %+v", attendees)
+	}
+}
+
+// TestAuthService_AcceptWorkspaceInviteNewAccount_ConvertsEmailAttendees
+// covers #203's other accept path: the brand-new account AcceptWorkspaceInviteNewAccount
+// creates is what the email-shaped rows convert onto.
+func TestAuthService_AcceptWorkspaceInviteNewAccount_ConvertsEmailAttendees(t *testing.T) {
+	workspaces, auth, users, calendarRepo, eventRepo, attendeeRepo := newTestWorkspaceInviteHarnessWithAttendees(t)
+	ctx := context.Background()
+
+	owner, err := users.Create(ctx, "alice", "alice@example.com", "hash", false)
+	if err != nil {
+		t.Fatalf("create owner: %v", err)
+	}
+	workspace, err := workspaces.CreateForOwner(ctx, owner.ID, "Alice's Workspace")
+	if err != nil {
+		t.Fatalf("create workspace: %v", err)
+	}
+	mustCreateWorkspaceInviteTestEvent(t, calendarRepo, eventRepo, owner.ID, workspace.ID, "cal-1", "evt-1")
+
+	if _, err := attendeeRepo.AddEmail(ctx, "evt-1", "bob@example.com"); err != nil {
+		t.Fatalf("add email attendee: %v", err)
+	}
+	if _, err := attendeeRepo.SetResponseByEmail(ctx, "evt-1", "bob@example.com", repository.ResponseTentative); err != nil {
+		t.Fatalf("set email attendee response: %v", err)
+	}
+
+	invite, err := workspaces.CreateInvite(ctx, owner.ID, workspace.ID, "bob@example.com")
+	if err != nil {
+		t.Fatalf("create invite: %v", err)
+	}
+	if _, err := auth.AcceptWorkspaceInviteNewAccount(ctx, invite.Token, "bob", "hunter2"); err != nil {
+		t.Fatalf("accept invite: %v", err)
+	}
+
+	newUser, err := users.GetByEmail(ctx, "bob@example.com")
+	if err != nil {
+		t.Fatalf("get new user: %v", err)
+	}
+
+	converted, err := attendeeRepo.Get(ctx, "evt-1", newUser.ID)
+	if err != nil {
+		t.Fatalf("expected a User-backed Attendee row for the new account, got: %v", err)
+	}
+	if converted.Response != repository.ResponseTentative {
+		t.Fatalf("expected the carried-over response %q, got %q", repository.ResponseTentative, converted.Response)
+	}
+}
+
+// TestAuthService_AcceptWorkspaceInviteExisting_ConversionOnlyTouchesInvitingWorkspace
+// covers #203's "Attendee rows on Events in other Workspaces are untouched"
+// acceptance criterion at the service layer: accepting an invite into
+// workspace A must not sweep an email-shaped row bob also holds on an Event
+// in workspace B.
+func TestAuthService_AcceptWorkspaceInviteExisting_ConversionOnlyTouchesInvitingWorkspace(t *testing.T) {
+	workspaces, auth, users, calendarRepo, eventRepo, attendeeRepo := newTestWorkspaceInviteHarnessWithAttendees(t)
+	ctx := context.Background()
+
+	owner, err := users.Create(ctx, "alice", "alice@example.com", "hash", false)
+	if err != nil {
+		t.Fatalf("create owner: %v", err)
+	}
+	workspaceA, err := workspaces.CreateForOwner(ctx, owner.ID, "Workspace A")
+	if err != nil {
+		t.Fatalf("create workspace a: %v", err)
+	}
+	workspaceB, err := workspaces.CreateForOwner(ctx, owner.ID, "Workspace B")
+	if err != nil {
+		t.Fatalf("create workspace b: %v", err)
+	}
+	mustCreateWorkspaceInviteTestEvent(t, calendarRepo, eventRepo, owner.ID, workspaceA.ID, "cal-a", "evt-a")
+	mustCreateWorkspaceInviteTestEvent(t, calendarRepo, eventRepo, owner.ID, workspaceB.ID, "cal-b", "evt-b")
+
+	if _, err := attendeeRepo.AddEmail(ctx, "evt-a", "bob@example.com"); err != nil {
+		t.Fatalf("add email attendee in workspace a: %v", err)
+	}
+	if _, err := attendeeRepo.AddEmail(ctx, "evt-b", "bob@example.com"); err != nil {
+		t.Fatalf("add email attendee in workspace b: %v", err)
+	}
+
+	bob, err := users.Create(ctx, "bob", "bob@example.com", "hash", false)
+	if err != nil {
+		t.Fatalf("create bob: %v", err)
+	}
+
+	invite, err := workspaces.CreateInvite(ctx, owner.ID, workspaceA.ID, "bob@example.com")
+	if err != nil {
+		t.Fatalf("create invite: %v", err)
+	}
+	if _, err := auth.AcceptWorkspaceInviteExisting(ctx, bob.ID, invite.Token); err != nil {
+		t.Fatalf("accept invite: %v", err)
+	}
+
+	if _, err := attendeeRepo.Get(ctx, "evt-a", bob.ID); err != nil {
+		t.Fatalf("expected workspace a's row converted, got: %v", err)
+	}
+	attendees, err := attendeeRepo.ListByEventID(ctx, "evt-b")
+	if err != nil {
+		t.Fatalf("list workspace b attendees: %v", err)
+	}
+	if len(attendees) != 1 || attendees[0].UserID != nil || attendees[0].Email != "bob@example.com" {
+		t.Fatalf("expected workspace b's email-shaped row untouched, got %+v", attendees)
 	}
 }
