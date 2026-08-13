@@ -1,6 +1,6 @@
 # Reminders fan out to everyone with Access; per-User overrides are a delivery preference
 
-Status: accepted
+Status: superseded by ADR-0064 — a Reminder now belongs to a (User, Event) pair, so there is no fan-out to override. Kept for the reasoning behind the fan-out itself, which ADR-0064 answers from the other side with per-Calendar defaults rather than abandoning.
 
 A Reminder on an Event in a shared Calendar fires for **every User with Access to that Calendar** (ADR-0034), not just the Owner or the author. Bin day on the Family calendar should nag everyone it belongs to — a shared calendar that only notifies one person is a display surface, not a coordination tool.
 
