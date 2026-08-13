@@ -13,6 +13,17 @@ import (
 func newTestEventReminderRepository(t *testing.T) (repo *EventRepository, reminders *EventReminderRepository, userID int64, calendarID string) {
 	t.Helper()
 
+	repo, reminders, userID, _, calendarID = newTestEventReminderRepositoryWithSecondUser(t)
+	return repo, reminders, userID, calendarID
+}
+
+// newTestEventReminderRepositoryWithSecondUser is
+// newTestEventReminderRepository's sibling for tests that need a second real
+// User id — event_reminders.user_id is a foreign key, so a scoping
+// assertion needs an id that actually satisfies it, not an arbitrary int64.
+func newTestEventReminderRepositoryWithSecondUser(t *testing.T) (repo *EventRepository, reminders *EventReminderRepository, userID, otherUserID int64, calendarID string) {
+	t.Helper()
+
 	sqlDB, err := db.OpenInMemory()
 	if err != nil {
 		t.Fatalf("open in-memory db: %v", err)
@@ -23,6 +34,10 @@ func newTestEventReminderRepository(t *testing.T) (repo *EventRepository, remind
 	user, err := users.Create(context.Background(), "user-a", "user-a@example.com", "hash", false)
 	if err != nil {
 		t.Fatalf("create user: %v", err)
+	}
+	otherUser, err := users.Create(context.Background(), "user-b", "user-b@example.com", "hash", false)
+	if err != nil {
+		t.Fatalf("create other user: %v", err)
 	}
 
 	workspaces := NewWorkspaceRepository(sqlDB)
@@ -40,7 +55,7 @@ func newTestEventReminderRepository(t *testing.T) (repo *EventRepository, remind
 		t.Fatalf("create calendar: %v", err)
 	}
 
-	return NewEventRepository(sqlDB), NewEventReminderRepository(sqlDB), user.ID, cal.ID
+	return NewEventRepository(sqlDB), NewEventReminderRepository(sqlDB), user.ID, otherUser.ID, cal.ID
 }
 
 func TestEventReminderRepository_ReplaceByEventIDAndListByEventIDs(t *testing.T) {
@@ -53,11 +68,11 @@ func TestEventReminderRepository_ReplaceByEventIDAndListByEventIDs(t *testing.T)
 		{OffsetMinutes: 10, Channel: "notification"},
 		{OffsetMinutes: 60, Channel: "email"},
 	}
-	if err := reminders.ReplaceByEventID(ctx, "evt-1", want); err != nil {
+	if err := reminders.ReplaceByEventID(ctx, userID, "evt-1", want); err != nil {
 		t.Fatalf("replace by event id: %v", err)
 	}
 
-	byEvent, err := reminders.ListByEventIDs(ctx, []string{"evt-1"})
+	byEvent, err := reminders.ListByEventIDs(ctx, userID, []string{"evt-1"})
 	if err != nil {
 		t.Fatalf("list by event ids: %v", err)
 	}
@@ -73,14 +88,14 @@ func TestEventReminderRepository_ListByEventIDs_PopulatesDistinctIDs(t *testing.
 	ctx := context.Background()
 
 	mustCreateEvent(t, repo, "evt-1", userID, calendarID, "2026-01-01T09:00:00Z", "2026-01-01T10:00:00Z")
-	if err := reminders.ReplaceByEventID(ctx, "evt-1", []Reminder{
+	if err := reminders.ReplaceByEventID(ctx, userID, "evt-1", []Reminder{
 		{OffsetMinutes: 10, Channel: "notification"},
 		{OffsetMinutes: 60, Channel: "email"},
 	}); err != nil {
 		t.Fatalf("replace by event id: %v", err)
 	}
 
-	byEvent, err := reminders.ListByEventIDs(ctx, []string{"evt-1"})
+	byEvent, err := reminders.ListByEventIDs(ctx, userID, []string{"evt-1"})
 	if err != nil {
 		t.Fatalf("list by event ids: %v", err)
 	}
@@ -97,9 +112,9 @@ func TestEventReminderRepository_ListByEventIDs_PopulatesDistinctIDs(t *testing.
 }
 
 func TestEventReminderRepository_ListByEventIDs_EmptyInput(t *testing.T) {
-	_, reminders, _, _ := newTestEventReminderRepository(t)
+	_, reminders, userID, _ := newTestEventReminderRepository(t)
 
-	byEvent, err := reminders.ListByEventIDs(context.Background(), nil)
+	byEvent, err := reminders.ListByEventIDs(context.Background(), userID, nil)
 	if err != nil {
 		t.Fatalf("list by event ids: %v", err)
 	}
@@ -116,14 +131,14 @@ func TestEventReminderRepository_ReplaceByEventID_ReplacesWholesale(t *testing.T
 
 	mustCreateEvent(t, repo, "evt-1", userID, calendarID, "2026-01-01T09:00:00Z", "2026-01-01T10:00:00Z")
 
-	if err := reminders.ReplaceByEventID(ctx, "evt-1", []Reminder{{OffsetMinutes: 10, Channel: "notification"}}); err != nil {
+	if err := reminders.ReplaceByEventID(ctx, userID, "evt-1", []Reminder{{OffsetMinutes: 10, Channel: "notification"}}); err != nil {
 		t.Fatalf("replace by event id: %v", err)
 	}
-	if err := reminders.ReplaceByEventID(ctx, "evt-1", []Reminder{{OffsetMinutes: 30, Channel: "email"}}); err != nil {
+	if err := reminders.ReplaceByEventID(ctx, userID, "evt-1", []Reminder{{OffsetMinutes: 30, Channel: "email"}}); err != nil {
 		t.Fatalf("replace by event id: %v", err)
 	}
 
-	byEvent, err := reminders.ListByEventIDs(ctx, []string{"evt-1"})
+	byEvent, err := reminders.ListByEventIDs(ctx, userID, []string{"evt-1"})
 	if err != nil {
 		t.Fatalf("list by event ids: %v", err)
 	}
@@ -139,14 +154,14 @@ func TestEventReminderRepository_ReplaceByEventID_EmptyClears(t *testing.T) {
 
 	mustCreateEvent(t, repo, "evt-1", userID, calendarID, "2026-01-01T09:00:00Z", "2026-01-01T10:00:00Z")
 
-	if err := reminders.ReplaceByEventID(ctx, "evt-1", []Reminder{{OffsetMinutes: 10, Channel: "notification"}}); err != nil {
+	if err := reminders.ReplaceByEventID(ctx, userID, "evt-1", []Reminder{{OffsetMinutes: 10, Channel: "notification"}}); err != nil {
 		t.Fatalf("replace by event id: %v", err)
 	}
-	if err := reminders.ReplaceByEventID(ctx, "evt-1", nil); err != nil {
+	if err := reminders.ReplaceByEventID(ctx, userID, "evt-1", nil); err != nil {
 		t.Fatalf("replace by event id: %v", err)
 	}
 
-	byEvent, err := reminders.ListByEventIDs(ctx, []string{"evt-1"})
+	byEvent, err := reminders.ListByEventIDs(ctx, userID, []string{"evt-1"})
 	if err != nil {
 		t.Fatalf("list by event ids: %v", err)
 	}
@@ -160,7 +175,7 @@ func TestEventReminderRepository_CascadeDeletesWhenEventDeleted(t *testing.T) {
 	ctx := context.Background()
 
 	mustCreateEvent(t, repo, "evt-1", userID, calendarID, "2026-01-01T09:00:00Z", "2026-01-01T10:00:00Z")
-	if err := reminders.ReplaceByEventID(ctx, "evt-1", []Reminder{{OffsetMinutes: 10, Channel: "notification"}}); err != nil {
+	if err := reminders.ReplaceByEventID(ctx, userID, "evt-1", []Reminder{{OffsetMinutes: 10, Channel: "notification"}}); err != nil {
 		t.Fatalf("replace by event id: %v", err)
 	}
 
@@ -168,11 +183,56 @@ func TestEventReminderRepository_CascadeDeletesWhenEventDeleted(t *testing.T) {
 		t.Fatalf("delete event: %v", err)
 	}
 
-	byEvent, err := reminders.ListByEventIDs(ctx, []string{"evt-1"})
+	byEvent, err := reminders.ListByEventIDs(ctx, userID, []string{"evt-1"})
 	if err != nil {
 		t.Fatalf("list by event ids: %v", err)
 	}
 	if len(byEvent["evt-1"]) != 0 {
 		t.Fatalf("expected reminders to be cascade-deleted with their event, got %+v", byEvent["evt-1"])
+	}
+}
+
+// ListByEventIDs scopes to userID: a Reminder written for one User is
+// invisible when another User's id is asked for, even on the same Event
+// (ADR-0064).
+func TestEventReminderRepository_ListByEventIDs_ScopedToUser(t *testing.T) {
+	repo, reminders, userID, otherUserID, calendarID := newTestEventReminderRepositoryWithSecondUser(t)
+	ctx := context.Background()
+
+	mustCreateEvent(t, repo, "evt-1", userID, calendarID, "2026-01-01T09:00:00Z", "2026-01-01T10:00:00Z")
+	if err := reminders.ReplaceByEventID(ctx, userID, "evt-1", []Reminder{{OffsetMinutes: 10, Channel: "notification"}}); err != nil {
+		t.Fatalf("replace by event id: %v", err)
+	}
+
+	byEvent, err := reminders.ListByEventIDs(ctx, otherUserID, []string{"evt-1"})
+	if err != nil {
+		t.Fatalf("list by event ids: %v", err)
+	}
+	if len(byEvent["evt-1"]) != 0 {
+		t.Fatalf("expected no reminders visible to another user, got %+v", byEvent["evt-1"])
+	}
+}
+
+// ReplaceByEventID only discards userID's own rows on eventID, leaving
+// another User's rows on the same Event untouched (ADR-0064).
+func TestEventReminderRepository_ReplaceByEventID_ScopedToUser(t *testing.T) {
+	repo, reminders, userID, otherUserID, calendarID := newTestEventReminderRepositoryWithSecondUser(t)
+	ctx := context.Background()
+
+	mustCreateEvent(t, repo, "evt-1", userID, calendarID, "2026-01-01T09:00:00Z", "2026-01-01T10:00:00Z")
+
+	if err := reminders.ReplaceByEventID(ctx, otherUserID, "evt-1", []Reminder{{OffsetMinutes: 45, Channel: "email"}}); err != nil {
+		t.Fatalf("replace by event id (other user): %v", err)
+	}
+	if err := reminders.ReplaceByEventID(ctx, userID, "evt-1", []Reminder{{OffsetMinutes: 10, Channel: "notification"}}); err != nil {
+		t.Fatalf("replace by event id: %v", err)
+	}
+
+	otherByEvent, err := reminders.ListByEventIDs(ctx, otherUserID, []string{"evt-1"})
+	if err != nil {
+		t.Fatalf("list by event ids (other user): %v", err)
+	}
+	if len(otherByEvent["evt-1"]) != 1 || otherByEvent["evt-1"][0].OffsetMinutes != 45 {
+		t.Fatalf("expected the other user's own reminder untouched, got %+v", otherByEvent["evt-1"])
 	}
 }

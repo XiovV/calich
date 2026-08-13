@@ -127,6 +127,50 @@ func TestEventService_Editor_CanCreateUpdateDelete(t *testing.T) {
 	}
 }
 
+// TestEventService_Editor_RemindersAttributedToOwner is #208's core case
+// (ADR-0064 step one): an Editor creating Reminders on the Owner's shared
+// Calendar writes rows scoped to the Owner, not to themselves — and every
+// viewer with Access, Editor included, reads back the same Owner-scoped set,
+// exactly as the pre-#208 Event-scoped table behaved.
+func TestEventService_Editor_RemindersAttributedToOwner(t *testing.T) {
+	f := newEventShareFixture(t)
+	ctx := context.Background()
+
+	reminders := []repository.Reminder{{OffsetMinutes: 10, Channel: "notification"}}
+	event, err := f.events.Create(ctx, f.editorID, "evt-1", EventWrite{CalendarID: f.calendarID, Title: "Standup", Start: shareTestStart, End: shareTestEnd, Reminders: reminders})
+	if err != nil {
+		t.Fatalf("editor create: %v", err)
+	}
+	if len(event.Reminders) != 1 {
+		t.Fatalf("expected 1 reminder on create response, got %+v", event.Reminders)
+	}
+
+	ownerRows, err := f.events.reminders.ListByEventIDs(ctx, f.ownerID, []string{event.ID})
+	if err != nil {
+		t.Fatalf("list owner-scoped reminders: %v", err)
+	}
+	if len(ownerRows[event.ID]) != 1 {
+		t.Fatalf("expected the Editor's write to land under the Owner, got %+v", ownerRows[event.ID])
+	}
+	editorRows, err := f.events.reminders.ListByEventIDs(ctx, f.editorID, []string{event.ID})
+	if err != nil {
+		t.Fatalf("list editor-scoped reminders: %v", err)
+	}
+	if len(editorRows[event.ID]) != 0 {
+		t.Fatalf("expected no rows scoped to the Editor, got %+v", editorRows[event.ID])
+	}
+
+	for name, viewerID := range map[string]int64{"owner": f.ownerID, "editor": f.editorID, "viewer": f.viewerID} {
+		got, err := f.events.Get(ctx, viewerID, event.ID)
+		if err != nil {
+			t.Fatalf("%s get: %v", name, err)
+		}
+		if len(got.Reminders) != 1 || got.Reminders[0].OffsetMinutes != 10 {
+			t.Fatalf("%s: expected the Owner's reminder to be visible, got %+v", name, got.Reminders)
+		}
+	}
+}
+
 // TestEventService_CreatorAttribution_ShowsWhoeverCreatedIt is #118's basic
 // case: an Editor's Event carries their id and username even when a
 // different User (the Owner) reads it — attribution follows whoever wrote

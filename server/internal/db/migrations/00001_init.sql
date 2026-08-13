@@ -357,18 +357,28 @@ CREATE TABLE event_exceptions (
 );
 
 -- A Reminder is a trigger offset (minutes before Occurrence start) plus a
--- delivery channel, projecting an iCalendar VALARM (ADR-0020). Lives in a
--- child table rather than a JSON blob so the scheduler (ADR-0021) can query
--- it. Many per Event, unconstrained: no cap, no dedupe, so no unique
--- constraint on (event_id, offset_minutes, channel).
+-- delivery channel, projecting an iCalendar VALARM — belonging to one User
+-- on one Event, never to the Event itself (ADR-0064). Lives in a child table
+-- rather than a JSON blob so the scheduler (ADR-0021) can query it. Many per
+-- (User, Event), unconstrained: no cap, no dedupe, so no unique constraint
+-- on (user_id, event_id, offset_minutes, channel).
+--
+-- user_id is ADR-0064's step-one addition (#208): every current reader and
+-- writer names the Calendar's Owner, so the rows this table has ever held
+-- are all the Owner's, and behaviour is unchanged from the Event-scoped
+-- table it replaces — the firing engine still fans the Owner's rows out to
+-- every recipient (ADR-0036), and CalDAV still serves them to every
+-- principal byte for byte. A Reminder personal to a non-Owner User is a
+-- later ticket's addition, not this one's.
 CREATE TABLE event_reminders (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     event_id TEXT NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     offset_minutes INTEGER NOT NULL,
     channel TEXT NOT NULL
 );
 
-CREATE INDEX idx_event_reminders_event_id ON event_reminders(event_id);
+CREATE INDEX idx_event_reminders_event_id ON event_reminders(event_id, user_id);
 
 -- user_event_reminders is the Reminder override (ADR-0036): one User's
 -- personal replacement for an Event's Reminders — a different offset, a

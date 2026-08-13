@@ -683,10 +683,10 @@ func TestEventRepository_ListAllWithReminders(t *testing.T) {
 	mustCreateEvent(t, repo, "without-reminder", userA.ID, calA.ID, "2026-01-02T09:00:00Z", "2026-01-02T10:00:00Z")
 	mustCreateEvent(t, repo, "other-users-reminder", userB.ID, calB.ID, "2026-01-03T09:00:00Z", "2026-01-03T10:00:00Z")
 
-	if err := reminders.ReplaceByEventID(ctx, "with-reminder", []Reminder{{OffsetMinutes: 10, Channel: "notification"}}); err != nil {
+	if err := reminders.ReplaceByEventID(ctx, userA.ID, "with-reminder", []Reminder{{OffsetMinutes: 10, Channel: "notification"}}); err != nil {
 		t.Fatalf("replace by event id: %v", err)
 	}
-	if err := reminders.ReplaceByEventID(ctx, "other-users-reminder", []Reminder{{OffsetMinutes: 10, Channel: "notification"}}); err != nil {
+	if err := reminders.ReplaceByEventID(ctx, userB.ID, "other-users-reminder", []Reminder{{OffsetMinutes: 10, Channel: "notification"}}); err != nil {
 		t.Fatalf("replace by event id: %v", err)
 	}
 
@@ -781,10 +781,10 @@ func TestEventRepository_ListAllWithReminders_RecipientUserIDsIncludeOwnerAndEve
 	reminders := NewEventReminderRepository(sqlDB)
 	mustCreateEvent(t, repo, "shared-event", owner.ID, shared.ID, "2026-01-01T09:00:00Z", "2026-01-01T10:00:00Z")
 	mustCreateEvent(t, repo, "solo-event", solo.ID, unshared.ID, "2026-01-02T09:00:00Z", "2026-01-02T10:00:00Z")
-	if err := reminders.ReplaceByEventID(ctx, "shared-event", []Reminder{{OffsetMinutes: 10, Channel: "notification"}}); err != nil {
+	if err := reminders.ReplaceByEventID(ctx, owner.ID, "shared-event", []Reminder{{OffsetMinutes: 10, Channel: "notification"}}); err != nil {
 		t.Fatalf("replace by event id: %v", err)
 	}
-	if err := reminders.ReplaceByEventID(ctx, "solo-event", []Reminder{{OffsetMinutes: 10, Channel: "notification"}}); err != nil {
+	if err := reminders.ReplaceByEventID(ctx, solo.ID, "solo-event", []Reminder{{OffsetMinutes: 10, Channel: "notification"}}); err != nil {
 		t.Fatalf("replace by event id: %v", err)
 	}
 
@@ -853,7 +853,7 @@ func TestEventRepository_ListAllWithReminders_RecipientUserIDsIncludeAttendeesWi
 	repo := NewEventRepository(sqlDB)
 	reminders := NewEventReminderRepository(sqlDB)
 	mustCreateEvent(t, repo, "attendee-event", owner.ID, cal.ID, "2026-01-01T09:00:00Z", "2026-01-01T10:00:00Z")
-	if err := reminders.ReplaceByEventID(ctx, "attendee-event", []Reminder{{OffsetMinutes: 10, Channel: "notification"}}); err != nil {
+	if err := reminders.ReplaceByEventID(ctx, owner.ID, "attendee-event", []Reminder{{OffsetMinutes: 10, Channel: "notification"}}); err != nil {
 		t.Fatalf("replace by event id: %v", err)
 	}
 
@@ -925,7 +925,7 @@ func TestEventRepository_ListAllWithReminders_RecipientUserIDsDedupesAccessHolde
 	repo := NewEventRepository(sqlDB)
 	reminders := NewEventReminderRepository(sqlDB)
 	mustCreateEvent(t, repo, "both-event", owner.ID, cal.ID, "2026-01-01T09:00:00Z", "2026-01-01T10:00:00Z")
-	if err := reminders.ReplaceByEventID(ctx, "both-event", []Reminder{{OffsetMinutes: 10, Channel: "notification"}}); err != nil {
+	if err := reminders.ReplaceByEventID(ctx, owner.ID, "both-event", []Reminder{{OffsetMinutes: 10, Channel: "notification"}}); err != nil {
 		t.Fatalf("replace by event id: %v", err)
 	}
 

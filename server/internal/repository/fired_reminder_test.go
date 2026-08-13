@@ -52,10 +52,10 @@ func newTestFiredReminderRepositoryWithUsers(t *testing.T) (ledger *FiredReminde
 	mustCreateEvent(t, events, "evt-1", user.ID, cal.ID, "2026-01-01T09:00:00Z", "2026-01-01T10:00:00Z")
 
 	remindersRepo := NewEventReminderRepository(sqlDB)
-	if err := remindersRepo.ReplaceByEventID(ctx, "evt-1", []Reminder{{OffsetMinutes: 10, Channel: "notification"}}); err != nil {
+	if err := remindersRepo.ReplaceByEventID(ctx, user.ID, "evt-1", []Reminder{{OffsetMinutes: 10, Channel: "notification"}}); err != nil {
 		t.Fatalf("replace by event id: %v", err)
 	}
-	byEvent, err := remindersRepo.ListByEventIDs(ctx, []string{"evt-1"})
+	byEvent, err := remindersRepo.ListByEventIDs(ctx, user.ID, []string{"evt-1"})
 	if err != nil {
 		t.Fatalf("list by event ids: %v", err)
 	}

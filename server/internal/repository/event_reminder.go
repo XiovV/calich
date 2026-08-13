@@ -21,8 +21,8 @@ type Reminder struct {
 	Channel       string
 }
 
-// EventReminderRepository stores Reminders (ADR-0020) — many per Event,
-// unconstrained, replaced wholesale on Event update.
+// EventReminderRepository stores Reminders (ADR-0020) — many per (User,
+// Event), unconstrained, replaced wholesale on Event update.
 type EventReminderRepository struct {
 	db DBTX
 }
@@ -37,18 +37,21 @@ func (r *EventReminderRepository) WithTx(tx *sql.Tx) *EventReminderRepository {
 	return &EventReminderRepository{db: tx}
 }
 
-// ReplaceByEventID discards eventID's existing Reminders and inserts
-// reminders in their place — an Event update replaces its Reminders set
-// wholesale (ADR-0020).
-func (r *EventReminderRepository) ReplaceByEventID(ctx context.Context, eventID string, reminders []Reminder) error {
-	if _, err := r.db.ExecContext(ctx, `DELETE FROM event_reminders WHERE event_id = ?`, eventID); err != nil {
+// ReplaceByEventID discards userID's existing Reminders on eventID and
+// inserts reminders in their place — an Event update replaces its Reminders
+// set wholesale (ADR-0020), scoped to one User's rows rather than every row
+// on the Event (ADR-0064). Every current caller passes the Calendar's Owner
+// (#208); a personal Reminder for a non-Owner User is a later ticket's
+// addition.
+func (r *EventReminderRepository) ReplaceByEventID(ctx context.Context, userID int64, eventID string, reminders []Reminder) error {
+	if _, err := r.db.ExecContext(ctx, `DELETE FROM event_reminders WHERE event_id = ? AND user_id = ?`, eventID, userID); err != nil {
 		return fmt.Errorf("delete reminders: %w", err)
 	}
 
 	for _, reminder := range reminders {
 		if _, err := r.db.ExecContext(ctx,
-			`INSERT INTO event_reminders (event_id, offset_minutes, channel) VALUES (?, ?, ?)`,
-			eventID, reminder.OffsetMinutes, reminder.Channel,
+			`INSERT INTO event_reminders (event_id, user_id, offset_minutes, channel) VALUES (?, ?, ?, ?)`,
+			eventID, userID, reminder.OffsetMinutes, reminder.Channel,
 		); err != nil {
 			return fmt.Errorf("insert reminder: %w", err)
 		}
@@ -56,18 +59,21 @@ func (r *EventReminderRepository) ReplaceByEventID(ctx context.Context, eventID 
 	return nil
 }
 
-// ListByEventIDs returns each event's Reminders, keyed by event_id. Events
-// with no Reminders are simply absent from the map.
-func (r *EventReminderRepository) ListByEventIDs(ctx context.Context, eventIDs []string) (map[string][]Reminder, error) {
+// ListByEventIDs returns each event's Reminders belonging to userID, keyed
+// by event_id (ADR-0064). Events with no Reminders for userID are simply
+// absent from the map. Every current caller passes the Calendar's Owner
+// (#208).
+func (r *EventReminderRepository) ListByEventIDs(ctx context.Context, userID int64, eventIDs []string) (map[string][]Reminder, error) {
 	result := make(map[string][]Reminder)
 	if len(eventIDs) == 0 {
 		return result, nil
 	}
 
-	query := `SELECT id, event_id, offset_minutes, channel FROM event_reminders WHERE event_id IN (` + placeholders(len(eventIDs)) + `)`
-	args := make([]any, len(eventIDs))
-	for i, id := range eventIDs {
-		args[i] = id
+	query := `SELECT id, event_id, offset_minutes, channel FROM event_reminders WHERE user_id = ? AND event_id IN (` + placeholders(len(eventIDs)) + `)`
+	args := make([]any, 0, len(eventIDs)+1)
+	args = append(args, userID)
+	for _, id := range eventIDs {
+		args = append(args, id)
 	}
 
 	rows, err := r.db.QueryContext(ctx, query, args...)

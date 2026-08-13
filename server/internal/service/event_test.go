@@ -1028,7 +1028,7 @@ func TestEventService_Delete_CascadesReminders(t *testing.T) {
 		t.Fatalf("delete: %v", err)
 	}
 
-	byEvent, err := svc.reminders.ListByEventIDs(ctx, []string{"evt-1"})
+	byEvent, err := svc.reminders.ListByEventIDs(ctx, userID, []string{"evt-1"})
 	if err != nil {
 		t.Fatalf("list by event ids: %v", err)
 	}

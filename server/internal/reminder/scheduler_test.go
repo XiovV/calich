@@ -68,10 +68,10 @@ func newTestLedger(t *testing.T) (ledger *repository.FiredReminderRepository, re
 	}
 
 	remindersRepo := repository.NewEventReminderRepository(sqlDB)
-	if err := remindersRepo.ReplaceByEventID(ctx, "evt-1", []repository.Reminder{{OffsetMinutes: 10, Channel: "notification"}}); err != nil {
+	if err := remindersRepo.ReplaceByEventID(ctx, user.ID, "evt-1", []repository.Reminder{{OffsetMinutes: 10, Channel: "notification"}}); err != nil {
 		t.Fatalf("replace by event id: %v", err)
 	}
-	byEvent, err := remindersRepo.ListByEventIDs(ctx, []string{"evt-1"})
+	byEvent, err := remindersRepo.ListByEventIDs(ctx, user.ID, []string{"evt-1"})
 	if err != nil {
 		t.Fatalf("list by event ids: %v", err)
 	}
@@ -124,10 +124,10 @@ func newTestLedgerWithSecondUser(t *testing.T) (ledger *repository.FiredReminder
 	}
 
 	remindersRepo := repository.NewEventReminderRepository(sqlDB)
-	if err := remindersRepo.ReplaceByEventID(ctx, "evt-1", []repository.Reminder{{OffsetMinutes: 10, Channel: "notification"}}); err != nil {
+	if err := remindersRepo.ReplaceByEventID(ctx, owner.ID, "evt-1", []repository.Reminder{{OffsetMinutes: 10, Channel: "notification"}}); err != nil {
 		t.Fatalf("replace by event id: %v", err)
 	}
-	byEvent, err := remindersRepo.ListByEventIDs(ctx, []string{"evt-1"})
+	byEvent, err := remindersRepo.ListByEventIDs(ctx, owner.ID, []string{"evt-1"})
 	if err != nil {
 		t.Fatalf("list by event ids: %v", err)
 	}
