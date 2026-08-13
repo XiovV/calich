@@ -31,6 +31,24 @@ function groupTargetKey(groupId: number): TargetKey {
   return `group:${groupId}`;
 }
 
+// computePickableUsers is the invite picker's User pool: every Member of
+// the Workspace minus whoever's already an Attendee (invited or staged) and
+// minus the signed-in caller — an Organizer or Attendee can't invite
+// themselves, they're already on the Event.
+export function computePickableUsers(
+  availableUsers: WorkspaceMember[],
+  invitedUserIds: Set<number | null>,
+  stagedUserIds: Set<number>,
+  currentUserId: number | undefined,
+): WorkspaceMember[] {
+  return availableUsers.filter(
+    (user) =>
+      user.userId !== currentUserId &&
+      !invitedUserIds.has(user.userId) &&
+      !stagedUserIds.has(user.userId),
+  );
+}
+
 // StagedAttendeeTarget is a create-mode invite that hasn't been sent yet
 // (#187, ADR-0055): the create POST carries the whole list at once, so
 // there is nothing to commit until Save. A staged Group renders as a
@@ -182,9 +200,7 @@ export function EventAttendeesSection({
   );
 
   const invitedUserIds = new Set((attendees ?? []).map((a) => a.userId));
-  const pickableUsers = availableUsers.filter(
-    (user) => !invitedUserIds.has(user.userId) && !stagedUserIds.has(user.userId),
-  );
+  const pickableUsers = computePickableUsers(availableUsers, invitedUserIds, stagedUserIds, currentUserId);
   const pickableGroups = availableGroups.filter((group) => !stagedGroupIds.has(group.id));
 
   // Dedupe checked client-side purely to skip a pointless round trip — the

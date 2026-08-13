@@ -593,7 +593,7 @@ func (h *EventHandler) Reparent(w http.ResponseWriter, r *http.Request) {
 // ADR-0058) — a client renders it by Email instead, marked as not a Member,
 // since there's no account behind it.
 type attendeeWire struct {
-	UserID   *int64 `json:"userId,omitempty"`
+	UserID   *int64 `json:"userId"`
 	Name     string `json:"name,omitempty"`
 	Email    string `json:"email,omitempty"`
 	Response string `json:"response"`

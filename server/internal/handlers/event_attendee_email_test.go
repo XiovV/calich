@@ -210,6 +210,37 @@ func TestEventHandler_AddAttendee_WithEmailBody_InvitesByAddress(t *testing.T) {
 	}
 }
 
+// TestEventHandler_AddAttendee_WithEmailBody_UserIdIsExplicitNullOnWire
+// covers the wire contract attendeeWire's own doc comment promises: an
+// email-shaped Attendee's userId is explicit JSON null, not an absent key —
+// a client tells "no account" (render by Email) apart from "key I don't
+// know about yet" this way. attendeeWire can't observe the difference
+// itself (json.Unmarshal maps both null and an absent key to a nil
+// pointer), so this decodes into a raw map instead.
+func TestEventHandler_AddAttendee_WithEmailBody_UserIdIsExplicitNullOnWire(t *testing.T) {
+	f := newEmailAttendeeHandlerFixture(t)
+	createResp := f.createEvent(t, "22222222-2222-2222-2222-222222222222", nil)
+	createResp.Body.Close()
+
+	resp := f.postJSON(t, "/api/events/22222222-2222-2222-2222-222222222222/attendees", map[string]any{"email": "guest@example.com"})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("expected 201, got %d", resp.StatusCode)
+	}
+
+	var raw map[string]json.RawMessage
+	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	userID, present := raw["userId"]
+	if !present {
+		t.Fatalf("expected a \"userId\" key on the wire, got none: %+v", raw)
+	}
+	if string(userID) != "null" {
+		t.Fatalf("expected userId to be JSON null, got %s", userID)
+	}
+}
+
 // TestEventHandler_AddAttendee_BothUserIdAndEmail_Rejects400 covers the
 // mutually-exclusive request-body contract.
 func TestEventHandler_AddAttendee_BothUserIdAndEmail_Rejects400(t *testing.T) {

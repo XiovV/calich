@@ -5,6 +5,8 @@ import (
 	"os"
 	"strconv"
 	"time"
+
+	"github.com/joho/godotenv"
 )
 
 // defaultSubscriptionRefreshInterval is how often a Subscription is
@@ -76,7 +78,15 @@ type Config struct {
 	EnableSignups bool
 }
 
+// devEnvFile is the local-dev environment file loaded by Load, sitting one
+// level up from server/ (the working directory `go run ./cmd/server`
+// executes in). Silently skipped when absent, which is the normal case in
+// Docker/prod deployments that set real environment variables instead.
+const devEnvFile = "../.env"
+
 func Load() Config {
+	_ = godotenv.Load(devEnvFile)
+
 	return Config{
 		Port:                        getEnv("PORT", "8080"),
 		DataDir:                     getEnv("DATA_DIR", "/data"),
