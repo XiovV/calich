@@ -86,7 +86,63 @@ var (
 	// not a degraded invite, it's a row that means nothing, so it's refused
 	// rather than written.
 	ErrAttendeeEmailInvitesUnavailable = errors.New("email invitations are not available on this instance")
+	// ErrInviteRateLimitExceeded is InviteRateLimitError's sentinel, for call
+	// sites that only need to recognize the failure by identity rather than
+	// name the configured ceiling (#204, ADR-0058).
+	ErrInviteRateLimitExceeded = errors.New("invitation rate limit exceeded")
 )
+
+// InviteRateLimitError wraps ErrInviteRateLimitExceeded with the actor's own
+// configured hourly ceiling (#204, ADR-0058), so the error names the limit
+// that was hit rather than a generic refusal — an organizer must never
+// believe an invitation went out when it did not, and "try again, some of
+// this silently didn't happen" is the failure mode the outbox itself
+// (ADR-0060) exists to rule out. Returned by inviteUser/inviteEmail/
+// expandGroupMembers alone — the three paths that invite someone not
+// already an Attendee — never by a re-send or a cancellation, both of which
+// are lifecycle mail for an Event already invited to and stay uncapped.
+type InviteRateLimitError struct {
+	LimitPerHour int
+}
+
+func (e *InviteRateLimitError) Error() string {
+	return fmt.Sprintf("invitation rate limit exceeded: at most %d invitations per hour", e.LimitPerHour)
+}
+
+func (e *InviteRateLimitError) Unwrap() error {
+	return ErrInviteRateLimitExceeded
+}
+
+// chargeInviteRateLimit enforces actorUserID's own hourly ceiling on
+// brand-new Invitations (#204, ADR-0058) before inviteUser/inviteEmail/
+// expandGroupMembers queue one more — counting only what
+// OutboxRepository.EnqueueWithActor/EnqueueEmailWithActor wrote them, never
+// a re-send or a CANCEL (repository.OutboxMessage.ActorUserID's own
+// contract), so lifecycle mail for an Event already invited to never trips
+// it. Runs inside the same transaction as the write it's guarding, so
+// hitting the ceiling partway through a multi-target invite (a Create
+// carrying several targets, or a large Group expansion) fails the whole
+// write via withTx's rollback rather than leaving some recipients invited
+// and others silently not.
+//
+// This is a deliberate exception to ADR-0018's general "reads happen
+// outside the transaction" convention, on the same grounds
+// expandGroupMembers' own caller (AddGroupAttendee) already carries for
+// reading Group membership inside its transaction: a count-then-charge read
+// outside the write it gates is a TOCTOU gap — two concurrent invites could
+// each read the same count and both proceed, both landing past the
+// ceiling. Reading and writing the charge together, inside one transaction,
+// is what makes the check exact rather than advisory.
+func chargeInviteRateLimit(ctx context.Context, outbox *repository.OutboxRepository, actorUserID int64, limitPerHour int) error {
+	count, err := outbox.CountByActorSince(ctx, actorUserID, time.Now().Add(-time.Hour))
+	if err != nil {
+		return fmt.Errorf("count invitations for rate limit: %w", err)
+	}
+	if count >= limitPerHour {
+		return &InviteRateLimitError{LimitPerHour: limitPerHour}
+	}
+	return nil
+}
 
 // isValidReminderChannel reports whether channel is one of the Channels
 // ADR-0020 defines. AUDIO and other iCalendar VALARM actions are out of
@@ -159,10 +215,15 @@ type EventService struct {
 	// governs who can be invited at all; this is the same posture applied to
 	// the write path).
 	outbox *repository.OutboxRepository
+	// inviteRateLimitPerHour is the per-User hourly ceiling on brand-new
+	// Invitations chargeInviteRateLimit enforces (#204, ADR-0058) —
+	// INVITE_RATE_LIMIT_PER_HOUR, or its default, resolved once at startup
+	// (config.Config).
+	inviteRateLimitPerHour int
 }
 
-func NewEventService(db *sql.DB, events *repository.EventRepository, exceptions *repository.EventExceptionRepository, reminders *repository.EventReminderRepository, reminderOverrides *repository.ReminderOverrideRepository, sync *repository.SyncRepository, calendars *CalendarService, users *repository.UserRepository, attachments *repository.AttachmentRepository, attendees *repository.AttendeeRepository, workspaces *repository.WorkspaceRepository, groups *repository.GroupRepository, notifications *repository.NotificationRepository, outbox *repository.OutboxRepository) *EventService {
-	return &EventService{db: db, events: events, exceptions: exceptions, reminders: reminders, reminderOverrides: reminderOverrides, sync: sync, calendars: calendars, users: users, attachments: attachments, attendees: attendees, workspaces: workspaces, groups: groups, notifications: notifications, outbox: outbox}
+func NewEventService(db *sql.DB, events *repository.EventRepository, exceptions *repository.EventExceptionRepository, reminders *repository.EventReminderRepository, reminderOverrides *repository.ReminderOverrideRepository, sync *repository.SyncRepository, calendars *CalendarService, users *repository.UserRepository, attachments *repository.AttachmentRepository, attendees *repository.AttendeeRepository, workspaces *repository.WorkspaceRepository, groups *repository.GroupRepository, notifications *repository.NotificationRepository, outbox *repository.OutboxRepository, inviteRateLimitPerHour int) *EventService {
+	return &EventService{db: db, events: events, exceptions: exceptions, reminders: reminders, reminderOverrides: reminderOverrides, sync: sync, calendars: calendars, users: users, attachments: attachments, attendees: attendees, workspaces: workspaces, groups: groups, notifications: notifications, outbox: outbox, inviteRateLimitPerHour: inviteRateLimitPerHour}
 }
 
 // calendarByID resolves calendarID via s.calendars.Get, translating
@@ -508,7 +569,7 @@ func (s *EventService) Create(ctx context.Context, userID int64, id string, writ
 		if err := repos.reminders.ReplaceByEventID(ctx, e.ID, write.Reminders); err != nil {
 			return fmt.Errorf("persist reminders: %w", err)
 		}
-		if err := s.addCreateAttendees(ctx, repos, e, workspaceID, write.AttendeeUserIDs, write.AttendeeGroupIDs, write.AttendeeEmails); err != nil {
+		if err := s.addCreateAttendees(ctx, repos, e, workspaceID, write.AttendeeUserIDs, write.AttendeeGroupIDs, write.AttendeeEmails, userID); err != nil {
 			return err
 		}
 		// Creating an Override changes its Master's calendar object (a new
@@ -559,10 +620,12 @@ func (s *EventService) Create(ctx context.Context, userID int64, id string, writ
 // same as AddGroupAttendee already tolerates re-inviting someone. emails are
 // explicit and strict too, matching inviteEmail's own checks (ADR-0058,
 // #200): malformed, naming the Organizer, or naming a Disabled Member all
-// fail the create.
-func (s *EventService) addCreateAttendees(ctx context.Context, repos txRepos, event repository.Event, workspaceID int64, userIDs, groupIDs []int64, emails []string) error {
+// fail the create. actorUserID is the creating User — every Attendee this
+// call queues an Invitation for is charged against their own hourly
+// ceiling (#204, ADR-0058).
+func (s *EventService) addCreateAttendees(ctx context.Context, repos txRepos, event repository.Event, workspaceID int64, userIDs, groupIDs []int64, emails []string, actorUserID int64) error {
 	for _, targetUserID := range userIDs {
-		if _, err := inviteUser(ctx, repos.users, repos.workspaces, repos.attendees, repos.notifications, repos.outbox, event, workspaceID, targetUserID); err != nil {
+		if _, err := inviteUser(ctx, repos.users, repos.workspaces, repos.attendees, repos.notifications, repos.outbox, event, workspaceID, targetUserID, actorUserID, s.inviteRateLimitPerHour); err != nil {
 			return err
 		}
 	}
@@ -579,13 +642,13 @@ func (s *EventService) addCreateAttendees(ctx context.Context, repos txRepos, ev
 			return ErrAttendeeTargetNotInWorkspace
 		}
 
-		if _, err := expandGroupMembers(ctx, repos.groups, repos.users, repos.attendees, repos.notifications, repos.outbox, event, group.ID); err != nil {
+		if _, err := expandGroupMembers(ctx, repos.groups, repos.users, repos.attendees, repos.notifications, repos.outbox, event, group.ID, actorUserID, s.inviteRateLimitPerHour); err != nil {
 			return err
 		}
 	}
 
 	for _, email := range emails {
-		if _, err := inviteEmail(ctx, repos.users, repos.workspaces, repos.attendees, repos.notifications, repos.outbox, event, workspaceID, email); err != nil {
+		if _, err := inviteEmail(ctx, repos.users, repos.workspaces, repos.attendees, repos.notifications, repos.outbox, event, workspaceID, email, actorUserID, s.inviteRateLimitPerHour); err != nil {
 			return err
 		}
 	}
@@ -2651,8 +2714,10 @@ func (s *EventService) enqueueCancellationsForRow(ctx context.Context, repos txR
 // attendees row it belongs to, so a failed send never loses the Attendee
 // and a rolled-back invite queues nothing. outbox is nil when this
 // deployment has no SMTP transport configured (EventService.outbox), in
-// which case nothing is queued and the invite still succeeds.
-func inviteUser(ctx context.Context, users *repository.UserRepository, workspaces *repository.WorkspaceRepository, attendees *repository.AttendeeRepository, notifications *repository.NotificationRepository, outbox *repository.OutboxRepository, event repository.Event, workspaceID, targetUserID int64) (repository.Attendee, error) {
+// which case nothing is queued and the invite still succeeds — and nothing
+// is charged against actorUserID's rate limit either (#204, ADR-0058),
+// since chargeInviteRateLimit only runs alongside an actual enqueue.
+func inviteUser(ctx context.Context, users *repository.UserRepository, workspaces *repository.WorkspaceRepository, attendees *repository.AttendeeRepository, notifications *repository.NotificationRepository, outbox *repository.OutboxRepository, event repository.Event, workspaceID, targetUserID, actorUserID int64, inviteRateLimitPerHour int) (repository.Attendee, error) {
 	target, err := users.GetByID(ctx, targetUserID)
 	if err != nil {
 		if errors.Is(err, repository.ErrNotFound) {
@@ -2679,7 +2744,10 @@ func inviteUser(ctx context.Context, users *repository.UserRepository, workspace
 		return repository.Attendee{}, fmt.Errorf("insert invite notification: %w", err)
 	}
 	if outbox != nil {
-		if _, err := outbox.Enqueue(ctx, event.ID, targetUserID); err != nil {
+		if err := chargeInviteRateLimit(ctx, outbox, actorUserID, inviteRateLimitPerHour); err != nil {
+			return repository.Attendee{}, err
+		}
+		if _, err := outbox.EnqueueWithActor(ctx, event.ID, targetUserID, actorUserID); err != nil {
 			return repository.Attendee{}, fmt.Errorf("enqueue invitation: %w", err)
 		}
 	}
@@ -2706,8 +2774,11 @@ func inviteUser(ctx context.Context, users *repository.UserRepository, workspace
 // Organizer who declined their own meeting (ADR-0055). Takes the User,
 // Workspace, Attendee, and Notification repositories directly, same reason
 // as inviteUser: the identical check must run against both the pooled repos
-// (AddAttendeeByEmail) and the transaction-bound ones (Create).
-func inviteEmail(ctx context.Context, users *repository.UserRepository, workspaces *repository.WorkspaceRepository, attendees *repository.AttendeeRepository, notifications *repository.NotificationRepository, outbox *repository.OutboxRepository, event repository.Event, workspaceID int64, rawEmail string) (repository.AttendeeWithName, error) {
+// (AddAttendeeByEmail) and the transaction-bound ones (Create). actorUserID
+// and inviteRateLimitPerHour are inviteUser's own rate-limit params (#204,
+// ADR-0058), threaded through to the inviteUser delegation below and
+// applied directly to the email-shaped write.
+func inviteEmail(ctx context.Context, users *repository.UserRepository, workspaces *repository.WorkspaceRepository, attendees *repository.AttendeeRepository, notifications *repository.NotificationRepository, outbox *repository.OutboxRepository, event repository.Event, workspaceID int64, rawEmail string, actorUserID int64, inviteRateLimitPerHour int) (repository.AttendeeWithName, error) {
 	email, err := validateEmail(rawEmail)
 	if err != nil {
 		return repository.AttendeeWithName{}, ErrInvalidEmail
@@ -2729,7 +2800,7 @@ func inviteEmail(ctx context.Context, users *repository.UserRepository, workspac
 	}
 	if err == nil {
 		if _, memErr := workspaces.GetMember(ctx, workspaceID, target.ID); memErr == nil {
-			attendee, err := inviteUser(ctx, users, workspaces, attendees, notifications, outbox, event, workspaceID, target.ID)
+			attendee, err := inviteUser(ctx, users, workspaces, attendees, notifications, outbox, event, workspaceID, target.ID, actorUserID, inviteRateLimitPerHour)
 			if err != nil {
 				return repository.AttendeeWithName{}, err
 			}
@@ -2751,7 +2822,10 @@ func inviteEmail(ctx context.Context, users *repository.UserRepository, workspac
 	if err != nil {
 		return repository.AttendeeWithName{}, err
 	}
-	if _, err := outbox.EnqueueEmail(ctx, event.ID, email); err != nil {
+	if err := chargeInviteRateLimit(ctx, outbox, actorUserID, inviteRateLimitPerHour); err != nil {
+		return repository.AttendeeWithName{}, err
+	}
+	if _, err := outbox.EnqueueEmailWithActor(ctx, event.ID, email, actorUserID); err != nil {
 		return repository.AttendeeWithName{}, fmt.Errorf("enqueue invitation: %w", err)
 	}
 	return added, nil
@@ -2773,8 +2847,12 @@ func inviteEmail(ctx context.Context, users *repository.UserRepository, workspac
 // added, same as inviteUser (ADR-0061) — a member already an Attendee is
 // skipped and gets no second Notification. Enqueues one Invitation per
 // Attendee row actually added too, same as inviteUser, when outbox is
-// non-nil (ADR-0059, ADR-0060).
-func expandGroupMembers(ctx context.Context, groups *repository.GroupRepository, users *repository.UserRepository, attendees *repository.AttendeeRepository, notifications *repository.NotificationRepository, outbox *repository.OutboxRepository, event repository.Event, groupID int64) ([]repository.Attendee, error) {
+// non-nil (ADR-0059, ADR-0060) — each one charged against actorUserID's own
+// hourly ceiling (#204, ADR-0058), same as an individual invite; a large
+// Group hitting the ceiling partway through fails the whole expansion via
+// the caller's transaction rollback rather than inviting some members and
+// silently not others.
+func expandGroupMembers(ctx context.Context, groups *repository.GroupRepository, users *repository.UserRepository, attendees *repository.AttendeeRepository, notifications *repository.NotificationRepository, outbox *repository.OutboxRepository, event repository.Event, groupID, actorUserID int64, inviteRateLimitPerHour int) ([]repository.Attendee, error) {
 	members, err := groups.ListMembers(ctx, groupID)
 	if err != nil {
 		return nil, fmt.Errorf("list group members: %w", err)
@@ -2801,7 +2879,10 @@ func expandGroupMembers(ctx context.Context, groups *repository.GroupRepository,
 			return nil, fmt.Errorf("insert invite notification: %w", err)
 		}
 		if outbox != nil {
-			if _, err := outbox.Enqueue(ctx, event.ID, member.UserID); err != nil {
+			if err := chargeInviteRateLimit(ctx, outbox, actorUserID, inviteRateLimitPerHour); err != nil {
+				return nil, err
+			}
+			if _, err := outbox.EnqueueWithActor(ctx, event.ID, member.UserID, actorUserID); err != nil {
 				return nil, fmt.Errorf("enqueue invitation: %w", err)
 			}
 		}
@@ -2830,7 +2911,7 @@ func (s *EventService) AddAttendee(ctx context.Context, actorUserID int64, event
 	var attendee repository.Attendee
 	err = s.withTx(ctx, func(repos txRepos) error {
 		var err error
-		attendee, err = inviteUser(ctx, repos.users, repos.workspaces, repos.attendees, repos.notifications, repos.outbox, event, calendar.WorkspaceID, targetUserID)
+		attendee, err = inviteUser(ctx, repos.users, repos.workspaces, repos.attendees, repos.notifications, repos.outbox, event, calendar.WorkspaceID, targetUserID, actorUserID, s.inviteRateLimitPerHour)
 		if err != nil {
 			return err
 		}
@@ -2859,7 +2940,7 @@ func (s *EventService) AddAttendeeByEmail(ctx context.Context, actorUserID int64
 	var attendee repository.AttendeeWithName
 	err = s.withTx(ctx, func(repos txRepos) error {
 		var err error
-		attendee, err = inviteEmail(ctx, repos.users, repos.workspaces, repos.attendees, repos.notifications, repos.outbox, event, calendar.WorkspaceID, rawEmail)
+		attendee, err = inviteEmail(ctx, repos.users, repos.workspaces, repos.attendees, repos.notifications, repos.outbox, event, calendar.WorkspaceID, rawEmail, actorUserID, s.inviteRateLimitPerHour)
 		if err != nil {
 			return err
 		}
@@ -2912,7 +2993,7 @@ func (s *EventService) AddGroupAttendee(ctx context.Context, actorUserID int64, 
 		// land between "read members" and "write attendees" and end up
 		// reflected in neither snapshot.
 		var err error
-		added, err = expandGroupMembers(ctx, repos.groups, repos.users, repos.attendees, repos.notifications, repos.outbox, event, group.ID)
+		added, err = expandGroupMembers(ctx, repos.groups, repos.users, repos.attendees, repos.notifications, repos.outbox, event, group.ID, actorUserID, s.inviteRateLimitPerHour)
 		if err != nil {
 			return err
 		}

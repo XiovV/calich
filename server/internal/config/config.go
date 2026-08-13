@@ -22,6 +22,15 @@ const (
 	defaultMaxAttachmentsPerEvent       = 10
 )
 
+// defaultInviteRateLimitPerHour is the per-User hourly ceiling on queued
+// Invitations (#204, ADR-0058) when INVITE_RATE_LIMIT_PER_HOUR is unset. Any
+// Editor can type an arbitrary address (ADR-0058), so the cap protects this
+// instance's SMTP credentials and sending reputation from one User's
+// mistake or abuse rather than gating who can invite at all. High enough
+// that a single large Group expansion in one Event — ordinary use — never
+// trips it, while still bounding a runaway script.
+const defaultInviteRateLimitPerHour = 100
+
 type Config struct {
 	Port        string
 	DataDir     string
@@ -35,6 +44,9 @@ type Config struct {
 	// (#132, ADR-0040).
 	MaxAttachmentSize      int64
 	MaxAttachmentsPerEvent int
+	// InviteRateLimitPerHour is the per-User hourly ceiling on queued
+	// Invitations (#204, ADR-0058).
+	InviteRateLimitPerHour int
 	// SMTP transport for Email-Channel Reminders (ADR-0021). Email delivery
 	// is only wired up when every one of these is set.
 	SMTPHost string
@@ -83,6 +95,7 @@ func Load() Config {
 		SubscriptionRefreshInterval: getEnvDuration("SUBSCRIPTION_REFRESH_INTERVAL", defaultSubscriptionRefreshInterval),
 		MaxAttachmentSize:           getEnvInt64("MAX_ATTACHMENT_SIZE", defaultMaxAttachmentSize),
 		MaxAttachmentsPerEvent:      getEnvInt("MAX_ATTACHMENTS_PER_EVENT", defaultMaxAttachmentsPerEvent),
+		InviteRateLimitPerHour:      getEnvInt("INVITE_RATE_LIMIT_PER_HOUR", defaultInviteRateLimitPerHour),
 		EnableSignups:               getEnvBool("ENABLE_SIGNUPS", false),
 	}
 }

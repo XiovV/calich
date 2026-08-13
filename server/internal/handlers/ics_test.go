@@ -83,7 +83,7 @@ func newICSTestEnv(t *testing.T) icsTestEnv {
 	}
 
 	attachmentRepo := repository.NewAttachmentRepository(sqlDB)
-	events := service.NewEventService(sqlDB, repository.NewEventRepository(sqlDB), repository.NewEventExceptionRepository(sqlDB), repository.NewEventReminderRepository(sqlDB), repository.NewReminderOverrideRepository(sqlDB), repository.NewSyncRepository(sqlDB), calendars, users, attachmentRepo, repository.NewAttendeeRepository(sqlDB), workspaceRepo, repository.NewGroupRepository(sqlDB), repository.NewNotificationRepository(sqlDB), nil)
+	events := service.NewEventService(sqlDB, repository.NewEventRepository(sqlDB), repository.NewEventExceptionRepository(sqlDB), repository.NewEventReminderRepository(sqlDB), repository.NewReminderOverrideRepository(sqlDB), repository.NewSyncRepository(sqlDB), calendars, users, attachmentRepo, repository.NewAttendeeRepository(sqlDB), workspaceRepo, repository.NewGroupRepository(sqlDB), repository.NewNotificationRepository(sqlDB), nil, 1000)
 	attachmentStore := attachmentstore.New(t.TempDir())
 	attachments := service.NewAttachmentService(attachmentRepo, repository.NewEventRepository(sqlDB), calendars, events, attachmentStore, 10)
 	eventHandler := NewEventHandler(events, attachmentStore)

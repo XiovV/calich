@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -236,6 +237,25 @@ var createEventErrors = alsoHandling(eventWriteErrors,
 	errorCase{service.ErrAttendeeEmailInvitesUnavailable, badRequest("email invitations are not available on this instance")},
 )
 
+// respondInviteRateLimitError renders a *service.InviteRateLimitError as a
+// 429 naming the actor's own configured hourly ceiling — err.Error()
+// already includes it (service/event.go), same reason
+// respondSoleWorkspaceOwnerError in account.go can't use a fixed table of
+// precomputed response bodies. Checked before createEventErrors/
+// addAttendeeErrors/addGroupAttendeeErrors at every entry point that can
+// queue a brand-new Invitation (#204, ADR-0058) — Create, AddAttendee (both
+// the userId and email branches, via addAttendeeErrors' shared caller), and
+// AddGroupAttendee. Never returned by RemoveAttendee or Update, which only
+// ever queue lifecycle mail (a re-send or a CANCEL), uncapped by design.
+func respondInviteRateLimitError(w http.ResponseWriter, err error) bool {
+	var rateLimitErr *service.InviteRateLimitError
+	if !errors.As(err, &rateLimitErr) {
+		return false
+	}
+	httpresponse.Error(w, http.StatusTooManyRequests, "invite_rate_limit_exceeded", rateLimitErr.Error())
+	return true
+}
+
 var updateEventErrors = alsoHandling(eventWriteErrors,
 	errorCase{service.ErrInvalidOverride, badRequest("an override must not have its own recurrence rule")},
 	errorCase{repository.ErrNotFound, notFound("event not found")},
@@ -391,6 +411,9 @@ func (h *EventHandler) Create(w http.ResponseWriter, r *http.Request) {
 		AttendeeGroupIDs: req.AttendeeGroupIds,
 		AttendeeEmails:   req.AttendeeEmails,
 	})
+	if respondInviteRateLimitError(w, err) {
+		return
+	}
 	if respondError(w, err, createEventErrors, "failed to create event") {
 		return
 	}
@@ -661,6 +684,9 @@ func (h *EventHandler) AddAttendee(w http.ResponseWriter, r *http.Request) {
 
 	if req.Email != nil {
 		attendee, err := h.events.AddAttendeeByEmail(r.Context(), userID, id, *req.Email)
+		if respondInviteRateLimitError(w, err) {
+			return
+		}
 		if respondError(w, err, addAttendeeErrors, "failed to add attendee") {
 			return
 		}
@@ -669,6 +695,9 @@ func (h *EventHandler) AddAttendee(w http.ResponseWriter, r *http.Request) {
 	}
 
 	attendee, err := h.events.AddAttendee(r.Context(), userID, id, *req.UserID)
+	if respondInviteRateLimitError(w, err) {
+		return
+	}
 	if respondError(w, err, addAttendeeErrors, "failed to add attendee") {
 		return
 	}
@@ -708,6 +737,9 @@ func (h *EventHandler) AddGroupAttendee(w http.ResponseWriter, r *http.Request) 
 	}
 
 	attendees, err := h.events.AddGroupAttendee(r.Context(), userID, id, req.GroupID)
+	if respondInviteRateLimitError(w, err) {
+		return
+	}
 	if respondError(w, err, addGroupAttendeeErrors, "failed to add group attendees") {
 		return
 	}

@@ -111,6 +111,170 @@ func TestOutboxRepository_EnqueueEmailDefaultsToPendingRequest(t *testing.T) {
 	}
 }
 
+// TestOutboxRepository_EnqueueLeavesActorUserIDNil covers the lifecycle-mail
+// half of #204's split: a plain Enqueue (Update's re-issue, AddAttendee's
+// re-send to everyone else) charges nobody's rate limit, which is only true
+// if it leaves actor_user_id unset.
+func TestOutboxRepository_EnqueueLeavesActorUserIDNil(t *testing.T) {
+	repo, _, userID, eventID := newTestOutboxRepository(t)
+	ctx := context.Background()
+
+	msg, err := repo.Enqueue(ctx, eventID, userID)
+	if err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+	if msg.ActorUserID != nil {
+		t.Fatalf("expected a nil ActorUserID on a plain Enqueue, got %v", *msg.ActorUserID)
+	}
+}
+
+// TestOutboxRepository_EnqueueWithActorRecordsActor covers #204's charged
+// half: a brand-new invite (inviteUser/inviteEmail/expandGroupMembers)
+// names who queued it, so CountByActorSince can attribute it to their
+// hourly ceiling.
+func TestOutboxRepository_EnqueueWithActorRecordsActor(t *testing.T) {
+	repo, sqlDB, userID, eventID := newTestOutboxRepository(t)
+	ctx := context.Background()
+
+	users := NewUserRepository(sqlDB)
+	actor, err := users.Create(ctx, "actor", "actor@example.com", "hash", false)
+	if err != nil {
+		t.Fatalf("create actor: %v", err)
+	}
+
+	msg, err := repo.EnqueueWithActor(ctx, eventID, userID, actor.ID)
+	if err != nil {
+		t.Fatalf("enqueue with actor: %v", err)
+	}
+	if msg.ActorUserID == nil || *msg.ActorUserID != actor.ID {
+		t.Fatalf("expected ActorUserID %d, got %+v", actor.ID, msg.ActorUserID)
+	}
+	if msg.RecipientUserID == nil || *msg.RecipientUserID != userID {
+		t.Fatalf("expected RecipientUserID %d, got %+v", userID, msg.RecipientUserID)
+	}
+
+	fetched, err := repo.Get(ctx, msg.ID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if fetched.ActorUserID == nil || *fetched.ActorUserID != actor.ID {
+		t.Fatalf("expected Get to round-trip ActorUserID, got %+v", fetched.ActorUserID)
+	}
+}
+
+// TestOutboxRepository_EnqueueEmailWithActorRecordsActor is
+// EnqueueWithActor's email-shaped counterpart (ADR-0058, #204).
+func TestOutboxRepository_EnqueueEmailWithActorRecordsActor(t *testing.T) {
+	repo, sqlDB, _, eventID := newTestOutboxRepository(t)
+	ctx := context.Background()
+
+	users := NewUserRepository(sqlDB)
+	actor, err := users.Create(ctx, "actor", "actor@example.com", "hash", false)
+	if err != nil {
+		t.Fatalf("create actor: %v", err)
+	}
+
+	msg, err := repo.EnqueueEmailWithActor(ctx, eventID, "guest@example.com", actor.ID)
+	if err != nil {
+		t.Fatalf("enqueue email with actor: %v", err)
+	}
+	if msg.ActorUserID == nil || *msg.ActorUserID != actor.ID {
+		t.Fatalf("expected ActorUserID %d, got %+v", actor.ID, msg.ActorUserID)
+	}
+	if msg.RecipientEmail == nil || *msg.RecipientEmail != "guest@example.com" {
+		t.Fatalf("expected RecipientEmail %q, got %+v", "guest@example.com", msg)
+	}
+}
+
+// TestOutboxRepository_CountByActorSinceCountsOnlyThatActorWithinWindow
+// covers CountByActorSince's own contract (#204): it counts only
+// actor_user_id-charged rows for the given actor, created at or after
+// since, excluding another actor's rows, uncharged (nil-actor) rows, and
+// rows older than the window.
+func TestOutboxRepository_CountByActorSinceCountsOnlyThatActorWithinWindow(t *testing.T) {
+	repo, sqlDB, userID, eventID := newTestOutboxRepository(t)
+	ctx := context.Background()
+
+	users := NewUserRepository(sqlDB)
+	actor, err := users.Create(ctx, "actor", "actor@example.com", "hash", false)
+	if err != nil {
+		t.Fatalf("create actor: %v", err)
+	}
+	otherActor, err := users.Create(ctx, "other-actor", "other-actor@example.com", "hash", false)
+	if err != nil {
+		t.Fatalf("create other actor: %v", err)
+	}
+
+	since := time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC)
+
+	// Within the window, for actor: counts.
+	inWindow, err := repo.EnqueueWithActor(ctx, eventID, userID, actor.ID)
+	if err != nil {
+		t.Fatalf("enqueue in window: %v", err)
+	}
+	if _, err := sqlDB.ExecContext(ctx, `UPDATE outbox SET created_at = ? WHERE id = ?`, since.Add(time.Minute), inWindow.ID); err != nil {
+		t.Fatalf("backdate in-window row: %v", err)
+	}
+
+	// Before the window, for actor: does not count.
+	beforeWindow, err := repo.EnqueueWithActor(ctx, eventID, userID, actor.ID)
+	if err != nil {
+		t.Fatalf("enqueue before window: %v", err)
+	}
+	if _, err := sqlDB.ExecContext(ctx, `UPDATE outbox SET created_at = ? WHERE id = ?`, since.Add(-time.Minute), beforeWindow.ID); err != nil {
+		t.Fatalf("backdate before-window row: %v", err)
+	}
+
+	// Within the window, for a different actor: does not count.
+	if _, err := repo.EnqueueWithActor(ctx, eventID, userID, otherActor.ID); err != nil {
+		t.Fatalf("enqueue for other actor: %v", err)
+	}
+
+	// Within the window, uncharged (lifecycle re-send): does not count.
+	if _, err := repo.Enqueue(ctx, eventID, userID); err != nil {
+		t.Fatalf("enqueue uncharged: %v", err)
+	}
+
+	count, err := repo.CountByActorSince(ctx, actor.ID, since)
+	if err != nil {
+		t.Fatalf("count by actor since: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("expected exactly the one in-window charged row for actor, got %d", count)
+	}
+}
+
+// TestOutboxRepository_CountByActorSinceHandlesLocalTimeSince is a
+// regression test for #204's own rolling-window call pattern:
+// chargeInviteRateLimit always passes time.Now().Add(-time.Hour), which
+// carries the process's local zone, not UTC. created_at's CURRENT_TIMESTAMP
+// default has no offset suffix, so a since bound as-is once compared as a
+// lexically wrong value against every row regardless of how recent — this
+// pins CountByActorSince's own UTC normalization rather than relying on
+// every caller to remember it.
+func TestOutboxRepository_CountByActorSinceHandlesLocalTimeSince(t *testing.T) {
+	repo, sqlDB, userID, eventID := newTestOutboxRepository(t)
+	ctx := context.Background()
+
+	users := NewUserRepository(sqlDB)
+	actor, err := users.Create(ctx, "actor", "actor@example.com", "hash", false)
+	if err != nil {
+		t.Fatalf("create actor: %v", err)
+	}
+
+	if _, err := repo.EnqueueWithActor(ctx, eventID, userID, actor.ID); err != nil {
+		t.Fatalf("enqueue with actor: %v", err)
+	}
+
+	count, err := repo.CountByActorSince(ctx, actor.ID, time.Now().Add(-time.Hour))
+	if err != nil {
+		t.Fatalf("count by actor since: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("expected the just-enqueued row to count against a since bound one hour in the past, got %d", count)
+	}
+}
+
 func TestOutboxRepository_ListPendingOrdersOldestFirstAndExcludesResolved(t *testing.T) {
 	repo, _, userID, eventID := newTestOutboxRepository(t)
 	ctx := context.Background()

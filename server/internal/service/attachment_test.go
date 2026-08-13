@@ -88,7 +88,7 @@ func newAttachmentTestFixture(t *testing.T, maxPerEvent int) attachmentTestFixtu
 
 	attachmentsRepo := repository.NewAttachmentRepository(sqlDB)
 	eventsRepo := repository.NewEventRepository(sqlDB)
-	events := NewEventService(sqlDB, eventsRepo, repository.NewEventExceptionRepository(sqlDB), repository.NewEventReminderRepository(sqlDB), repository.NewReminderOverrideRepository(sqlDB), repository.NewSyncRepository(sqlDB), calendars, users, attachmentsRepo, repository.NewAttendeeRepository(sqlDB), workspaceRepo, repository.NewGroupRepository(sqlDB), repository.NewNotificationRepository(sqlDB), nil)
+	events := NewEventService(sqlDB, eventsRepo, repository.NewEventExceptionRepository(sqlDB), repository.NewEventReminderRepository(sqlDB), repository.NewReminderOverrideRepository(sqlDB), repository.NewSyncRepository(sqlDB), calendars, users, attachmentsRepo, repository.NewAttendeeRepository(sqlDB), workspaceRepo, repository.NewGroupRepository(sqlDB), repository.NewNotificationRepository(sqlDB), nil, 1000)
 
 	start := time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC)
 	end := time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC)
@@ -314,7 +314,7 @@ func TestAttachmentService_Upload_SubscribedCalendarRefused(t *testing.T) {
 	calendars := NewCalendarService(calendarRepo, repository.NewCalendarShareRepository(sqlDB), users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo, repository.NewCalendarGroupShareRepository(sqlDB), repository.NewGroupRepository(sqlDB))
 	attachmentsRepo := repository.NewAttachmentRepository(sqlDB)
 	eventsRepo := repository.NewEventRepository(sqlDB)
-	events := NewEventService(sqlDB, eventsRepo, repository.NewEventExceptionRepository(sqlDB), repository.NewEventReminderRepository(sqlDB), repository.NewReminderOverrideRepository(sqlDB), repository.NewSyncRepository(sqlDB), calendars, users, attachmentsRepo, repository.NewAttendeeRepository(sqlDB), workspaceRepo, repository.NewGroupRepository(sqlDB), repository.NewNotificationRepository(sqlDB), nil)
+	events := NewEventService(sqlDB, eventsRepo, repository.NewEventExceptionRepository(sqlDB), repository.NewEventReminderRepository(sqlDB), repository.NewReminderOverrideRepository(sqlDB), repository.NewSyncRepository(sqlDB), calendars, users, attachmentsRepo, repository.NewAttendeeRepository(sqlDB), workspaceRepo, repository.NewGroupRepository(sqlDB), repository.NewNotificationRepository(sqlDB), nil, 1000)
 
 	// ImportSubscribedSeries is the only writer a Subscribed Calendar's
 	// Events go through (ADR-0032) — reach past the write guard the same

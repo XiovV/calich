@@ -74,14 +74,19 @@ type OutboxMessage struct {
 	EventID         string
 	RecipientUserID *int64
 	RecipientEmail  *string
-	Method          string
-	Snapshot        *OutboxCancelSnapshot
-	Status          string
-	Attempts        int
-	NextAttemptAt   time.Time
-	LastError       string
-	CreatedAt       time.Time
-	SentAt          *time.Time
+	// ActorUserID names who queued a brand-new Invitation (#204, ADR-0058) —
+	// set only by EnqueueWithActor/EnqueueEmailWithActor, the two brand-new-
+	// invite entry points; nil on every re-send and every CANCEL, which
+	// never charge anyone's hourly ceiling.
+	ActorUserID   *int64
+	Method        string
+	Snapshot      *OutboxCancelSnapshot
+	Status        string
+	Attempts      int
+	NextAttemptAt time.Time
+	LastError     string
+	CreatedAt     time.Time
+	SentAt        *time.Time
 }
 
 // OutboxRepository stores queued Invitation emails, drained by the
@@ -145,6 +150,69 @@ func (r *OutboxRepository) EnqueueEmail(ctx context.Context, eventID string, rec
 	return r.Get(ctx, id)
 }
 
+// EnqueueWithActor is Enqueue's charged counterpart (#204, ADR-0058):
+// inviteUser's own brand-new invite, naming actorUserID so
+// CountByActorSince can attribute it to their hourly ceiling. Every other
+// caller of Enqueue — a re-send to an Event's existing Attendees — is
+// lifecycle mail, not a new invite, and stays uncharged.
+func (r *OutboxRepository) EnqueueWithActor(ctx context.Context, eventID string, recipientUserID, actorUserID int64) (OutboxMessage, error) {
+	res, err := r.db.ExecContext(ctx,
+		`INSERT INTO outbox (event_id, recipient_user_id, actor_user_id, method) VALUES (?, ?, ?, ?)`,
+		eventID, recipientUserID, actorUserID, OutboxMethodRequest,
+	)
+	if err != nil {
+		return OutboxMessage{}, fmt.Errorf("insert outbox message: %w", err)
+	}
+
+	id, err := res.LastInsertId()
+	if err != nil {
+		return OutboxMessage{}, fmt.Errorf("get last insert id: %w", err)
+	}
+
+	return r.Get(ctx, id)
+}
+
+// EnqueueEmailWithActor is EnqueueWithActor's email-shaped counterpart
+// (#204, ADR-0058), mirroring EnqueueEmail's relationship to Enqueue.
+func (r *OutboxRepository) EnqueueEmailWithActor(ctx context.Context, eventID string, recipientEmail string, actorUserID int64) (OutboxMessage, error) {
+	res, err := r.db.ExecContext(ctx,
+		`INSERT INTO outbox (event_id, recipient_email, actor_user_id, method) VALUES (?, ?, ?, ?)`,
+		eventID, recipientEmail, actorUserID, OutboxMethodRequest,
+	)
+	if err != nil {
+		return OutboxMessage{}, fmt.Errorf("insert outbox message: %w", err)
+	}
+
+	id, err := res.LastInsertId()
+	if err != nil {
+		return OutboxMessage{}, fmt.Errorf("get last insert id: %w", err)
+	}
+
+	return r.Get(ctx, id)
+}
+
+// CountByActorSince counts actorUserID's own charged Invitations (rows
+// EnqueueWithActor/EnqueueEmailWithActor wrote) created at or after since,
+// regardless of status — a message counts against the ceiling the moment
+// it's queued, not once it's actually sent (#204, ADR-0058). The caller
+// (chargeInviteRateLimit) is expected to pass since = time.Now().Add(-time.Hour)
+// for the rolling hourly window. since is normalized to UTC before binding:
+// created_at's CURRENT_TIMESTAMP default is always UTC with no offset
+// suffix, and a local-zone time.Time bound as-is serializes with one,
+// silently breaking every row out of the lexical comparison SQLite is
+// doing against that TEXT column — this is not a comparison SQL can get
+// wrong by construction, so the normalization has to happen here.
+func (r *OutboxRepository) CountByActorSince(ctx context.Context, actorUserID int64, since time.Time) (int, error) {
+	var count int
+	if err := r.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM outbox WHERE actor_user_id = ? AND created_at >= ?`,
+		actorUserID, since.UTC(),
+	).Scan(&count); err != nil {
+		return 0, fmt.Errorf("count outbox messages by actor: %w", err)
+	}
+	return count, nil
+}
+
 // EnqueueCancel writes a pending CANCEL OutboxMessage for recipientUserID on
 // eventID, carrying snapshot — everything InvitationSender needs to render
 // it, since the row (or Attendee row) it withdraws may be gone by send time
@@ -184,7 +252,7 @@ func (r *OutboxRepository) enqueueCancel(ctx context.Context, eventID string, re
 // Get returns one OutboxMessage by id, or ErrNotFound.
 func (r *OutboxRepository) Get(ctx context.Context, id int64) (OutboxMessage, error) {
 	row := r.db.QueryRowContext(ctx,
-		`SELECT id, event_id, recipient_user_id, recipient_email, method, snapshot, status, attempts, next_attempt_at, last_error, created_at, sent_at
+		`SELECT id, event_id, recipient_user_id, recipient_email, actor_user_id, method, snapshot, status, attempts, next_attempt_at, last_error, created_at, sent_at
 		 FROM outbox WHERE id = ?`,
 		id,
 	)
@@ -204,10 +272,11 @@ func scanOutboxMessage(row rowScanner) (OutboxMessage, error) {
 	var m OutboxMessage
 	var recipientUserID sql.NullInt64
 	var recipientEmail sql.NullString
+	var actorUserID sql.NullInt64
 	var snapshot sql.NullString
 	var lastError sql.NullString
 	var sentAt sql.NullTime
-	if err := row.Scan(&m.ID, &m.EventID, &recipientUserID, &recipientEmail, &m.Method, &snapshot, &m.Status, &m.Attempts, &m.NextAttemptAt, &lastError, &m.CreatedAt, &sentAt); err != nil {
+	if err := row.Scan(&m.ID, &m.EventID, &recipientUserID, &recipientEmail, &actorUserID, &m.Method, &snapshot, &m.Status, &m.Attempts, &m.NextAttemptAt, &lastError, &m.CreatedAt, &sentAt); err != nil {
 		return OutboxMessage{}, err
 	}
 	if recipientUserID.Valid {
@@ -217,6 +286,10 @@ func scanOutboxMessage(row rowScanner) (OutboxMessage, error) {
 	if recipientEmail.Valid {
 		email := recipientEmail.String
 		m.RecipientEmail = &email
+	}
+	if actorUserID.Valid {
+		id := actorUserID.Int64
+		m.ActorUserID = &id
 	}
 	if snapshot.Valid {
 		var s OutboxCancelSnapshot
@@ -239,7 +312,7 @@ func scanOutboxMessage(row rowScanner) (OutboxMessage, error) {
 // past them to a later message for someone else.
 func (r *OutboxRepository) ListPending(ctx context.Context, limit int) ([]OutboxMessage, error) {
 	rows, err := r.db.QueryContext(ctx,
-		`SELECT id, event_id, recipient_user_id, recipient_email, method, snapshot, status, attempts, next_attempt_at, last_error, created_at, sent_at
+		`SELECT id, event_id, recipient_user_id, recipient_email, actor_user_id, method, snapshot, status, attempts, next_attempt_at, last_error, created_at, sent_at
 		 FROM outbox WHERE status = ? ORDER BY id ASC LIMIT ?`,
 		OutboxStatusPending, limit,
 	)

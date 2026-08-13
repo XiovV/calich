@@ -529,11 +529,22 @@ CREATE INDEX idx_deleted_objects_calendar_change_seq ON deleted_objects(calendar
 -- InvitationSender needs to render a METHOD:CANCEL, captured while the row
 -- it withdraws still exists — NULL on a REQUEST, which always renders from
 -- live state instead (InvitationSender.Send's own contract).
+--
+-- actor_user_id names who queued a brand-new Invitation (#204, ADR-0058) —
+-- set only by inviteUser/inviteEmail/expandGroupMembers, the three paths
+-- that invite someone not previously an Attendee. It is left NULL on every
+-- re-send (Update's material-change re-issue, AddAttendee/AddGroupAttendee/
+-- RemoveAttendee's re-send to everyone else) and every CANCEL, so a per-User
+-- hourly count of non-NULL rows counts exactly "Invitations this User
+-- caused to be sent to someone new" — lifecycle mail for an Event already
+-- invited never counts against it. ON DELETE SET NULL rather than CASCADE:
+-- the actor's own account going away must not erase the queued mail itself.
 CREATE TABLE outbox (
     id                INTEGER PRIMARY KEY AUTOINCREMENT,
     event_id          TEXT NOT NULL,
     recipient_user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
     recipient_email   TEXT COLLATE NOCASE,
+    actor_user_id     INTEGER REFERENCES users(id) ON DELETE SET NULL,
     method            TEXT NOT NULL DEFAULT 'REQUEST' CHECK (method IN ('REQUEST', 'CANCEL')),
     snapshot          TEXT,
     status            TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'sent', 'failed')),
@@ -546,6 +557,7 @@ CREATE TABLE outbox (
 );
 
 CREATE INDEX idx_outbox_status_id ON outbox(status, id);
+CREATE INDEX idx_outbox_actor_created ON outbox(actor_user_id, created_at);
 
 -- +goose Down
 DROP TABLE outbox;

@@ -102,7 +102,7 @@ func main() {
 		smtpMailer = mailer.NewSMTPMailer(cfg.SMTPHost, cfg.SMTPPort, cfg.SMTPUser, cfg.SMTPPass, cfg.SMTPFrom)
 		eventOutbox = repository.NewOutboxRepository(sqlDB)
 	}
-	eventService := service.NewEventService(sqlDB, eventRepo, repository.NewEventExceptionRepository(sqlDB), repository.NewEventReminderRepository(sqlDB), reminderOverrideRepo, repository.NewSyncRepository(sqlDB), calendarService, users, attachmentRepo, attendeeRepo, workspaceRepo, groupRepo, notificationRepo, eventOutbox)
+	eventService := service.NewEventService(sqlDB, eventRepo, repository.NewEventExceptionRepository(sqlDB), repository.NewEventReminderRepository(sqlDB), reminderOverrideRepo, repository.NewSyncRepository(sqlDB), calendarService, users, attachmentRepo, attendeeRepo, workspaceRepo, groupRepo, notificationRepo, eventOutbox, cfg.InviteRateLimitPerHour)
 	attachmentStore := attachmentstore.New(cfg.DataDir)
 	attachmentService := service.NewAttachmentService(attachmentRepo, eventRepo, calendarService, eventService, attachmentStore, cfg.MaxAttachmentsPerEvent)
 	notificationService := service.NewNotificationService(notificationRepo)
