@@ -414,6 +414,62 @@ describe("planEditOccurrence", () => {
     ]);
   });
 
+  it('scope "following": also updates the boundary Occurrence\'s own Override row when it is already one, so the clicked Occurrence picks up the change too, not just the ones after it', () => {
+    const splitStart = new Date("2026-01-03T09:00:00Z");
+    const override = {
+      id: "override-1",
+      calendarId: "cal-1",
+      title: "Standup",
+      start: splitStart,
+      end: new Date("2026-01-03T09:30:00Z"),
+      parentId: "master-1",
+      recurrenceId: splitStart,
+      color: "#00FF00FF",
+    };
+
+    const ops = planEditOccurrence(
+      {
+        master: recurringMaster,
+        occurrence: occurrenceOf(override as never, override.start),
+        isOverride: true,
+        originalStart: override.recurrenceId,
+        scope: "following",
+        changes: {
+          calendarId: "cal-1",
+          title: "Standup",
+          start: override.start,
+          end: override.end,
+          color: "#808080FF",
+        },
+      },
+      nextId,
+    );
+
+    expect(ops).toEqual([
+      expect.objectContaining({ kind: "reanchorSeries", newMasterId: "generated-id" }),
+      {
+        kind: "overrideOccurrence",
+        id: "override-1",
+        isNew: false,
+        parentId: "generated-id",
+        recurrenceId: splitStart,
+        fields: {
+          calendarId: "cal-1",
+          title: "Standup",
+          start: override.start,
+          end: override.end,
+          allDay: undefined,
+          tzid: undefined,
+          reminders: undefined,
+          description: undefined,
+          location: undefined,
+          url: undefined,
+          color: "#808080FF",
+        },
+      },
+    ]);
+  });
+
   it('scope "following": preserves the old master\'s own Reminders and carries them into the new master (ADR-0020)', () => {
     const remindedMaster = {
       ...recurringMaster,

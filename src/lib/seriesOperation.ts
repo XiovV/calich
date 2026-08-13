@@ -197,28 +197,57 @@ export function planEditOccurrence(
       master.exdates ?? [],
       reparentFromStart,
     );
+    const newMasterId = newId();
+    const reanchorOp: SeriesOp = {
+      kind: "reanchorSeries",
+      oldMasterId: master.id,
+      oldMasterFields: {
+        calendarId: master.calendarId,
+        title: master.title,
+        start: master.start,
+        end: master.end,
+        tzid: master.tzid,
+        reminders: master.reminders,
+        description: master.description,
+        location: master.location,
+        url: master.url,
+        color: master.color,
+      },
+      truncatedRrule: truncatedMaster.rrule,
+      keptExdates,
+      newMasterId,
+      newMaster,
+      movedExdates,
+      reparentFromStart,
+    };
+
+    if (!isOverride) return [reanchorOp];
+
+    // The clicked Occurrence is itself an Override sitting exactly at the
+    // split boundary — reanchorSeries only reparents it onto the new master,
+    // it doesn't touch its fields, so without this it would keep rendering
+    // its pre-edit fields forever under the new master.
     return [
+      reanchorOp,
       {
-        kind: "reanchorSeries",
-        oldMasterId: master.id,
-        oldMasterFields: {
-          calendarId: master.calendarId,
-          title: master.title,
-          start: master.start,
-          end: master.end,
-          tzid: master.tzid,
-          reminders: master.reminders,
-          description: master.description,
-          location: master.location,
-          url: master.url,
-          color: master.color,
+        kind: "overrideOccurrence",
+        id: occurrence.event.id,
+        isNew: false,
+        parentId: newMasterId,
+        recurrenceId: occurrence.event.recurrenceId!,
+        fields: {
+          calendarId: changes.calendarId,
+          title: changes.title,
+          start: changes.start,
+          end: changes.end,
+          allDay: resolveAllDay(changes, master),
+          tzid: occurrence.event.tzid,
+          reminders: resolveReminders(changes, occurrence.event),
+          description: resolveDescription(changes, occurrence.event),
+          location: resolveLocation(changes, occurrence.event),
+          url: resolveUrl(changes, occurrence.event),
+          color: resolveColor(changes, occurrence.event),
         },
-        truncatedRrule: truncatedMaster.rrule,
-        keptExdates,
-        newMasterId: newId(),
-        newMaster,
-        movedExdates,
-        reparentFromStart,
       },
     ];
   }
