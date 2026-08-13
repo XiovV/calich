@@ -20,13 +20,13 @@ import (
 // *different* Workspace — ADR-0058's "treated as an outsider" case, which
 // newTestAttendeeService's own outsider (no Workspace at all) doesn't cover.
 type emailAttendeeFixture struct {
-	events            *EventService
-	outboxRepo        *repository.OutboxRepository
-	ownerID           int64
-	memberID          int64
-	disabledMemberID  int64
-	otherWorkspaceID  int64
-	calendarID        string
+	events           *EventService
+	outboxRepo       *repository.OutboxRepository
+	ownerID          int64
+	memberID         int64
+	disabledMemberID int64
+	otherWorkspaceID int64
+	calendarID       string
 }
 
 func newEmailAttendeeFixture(t *testing.T, withOutbox bool) emailAttendeeFixture {
@@ -90,8 +90,8 @@ func newEmailAttendeeFixture(t *testing.T, withOutbox bool) emailAttendeeFixture
 		outboxRepo = repository.NewOutboxRepository(sqlDB)
 	}
 
-	calendarService := NewCalendarService(calendarRepo, repository.NewCalendarShareRepository(sqlDB), users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo, repository.NewCalendarGroupShareRepository(sqlDB), repository.NewGroupRepository(sqlDB))
-	eventService := NewEventService(sqlDB, repository.NewEventRepository(sqlDB), repository.NewEventExceptionRepository(sqlDB), repository.NewEventReminderRepository(sqlDB), repository.NewReminderOverrideRepository(sqlDB), repository.NewSyncRepository(sqlDB), calendarService, users, repository.NewAttachmentRepository(sqlDB), repository.NewAttendeeRepository(sqlDB), workspaceRepo, repository.NewGroupRepository(sqlDB), repository.NewNotificationRepository(sqlDB), outboxRepo, 1000)
+	calendarService := NewCalendarService(calendarRepo, repository.NewCalendarShareRepository(sqlDB), users, repository.NewEventReminderRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo, repository.NewCalendarGroupShareRepository(sqlDB), repository.NewGroupRepository(sqlDB))
+	eventService := NewEventService(sqlDB, repository.NewEventRepository(sqlDB), repository.NewEventExceptionRepository(sqlDB), repository.NewEventReminderRepository(sqlDB), repository.NewSyncRepository(sqlDB), calendarService, users, repository.NewAttachmentRepository(sqlDB), repository.NewAttendeeRepository(sqlDB), workspaceRepo, repository.NewGroupRepository(sqlDB), repository.NewNotificationRepository(sqlDB), outboxRepo, 1000)
 
 	return emailAttendeeFixture{
 		events: eventService, outboxRepo: outboxRepo,

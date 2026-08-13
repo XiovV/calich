@@ -52,7 +52,7 @@ func newICSTestEnv(t *testing.T) icsTestEnv {
 	workspaceRepo := repository.NewWorkspaceRepository(sqlDB)
 	workspaces := service.NewWorkspaceService(sqlDB, workspaceRepo, repository.NewWorkspaceInviteRepository(sqlDB), repository.NewCalendarRepository(sqlDB), repository.NewCalendarShareRepository(sqlDB))
 	calendarRepo := repository.NewCalendarRepository(sqlDB)
-	calendars := service.NewCalendarService(calendarRepo, repository.NewCalendarShareRepository(sqlDB), users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo, repository.NewCalendarGroupShareRepository(sqlDB), repository.NewGroupRepository(sqlDB))
+	calendars := service.NewCalendarService(calendarRepo, repository.NewCalendarShareRepository(sqlDB), users, repository.NewEventReminderRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo, repository.NewCalendarGroupShareRepository(sqlDB), repository.NewGroupRepository(sqlDB))
 	auth := service.NewAuthService(users, sessions, workspaces, repository.NewWorkspaceInviteRepository(sqlDB), calendars, repository.NewAttendeeRepository(sqlDB), []byte("test-secret"), "alice", "alice@example.com", "hunter2", false)
 	bootstrapUser, _, err := auth.Bootstrap(context.Background())
 	if err != nil {
@@ -83,7 +83,7 @@ func newICSTestEnv(t *testing.T) icsTestEnv {
 	}
 
 	attachmentRepo := repository.NewAttachmentRepository(sqlDB)
-	events := service.NewEventService(sqlDB, repository.NewEventRepository(sqlDB), repository.NewEventExceptionRepository(sqlDB), repository.NewEventReminderRepository(sqlDB), repository.NewReminderOverrideRepository(sqlDB), repository.NewSyncRepository(sqlDB), calendars, users, attachmentRepo, repository.NewAttendeeRepository(sqlDB), workspaceRepo, repository.NewGroupRepository(sqlDB), repository.NewNotificationRepository(sqlDB), nil, 1000)
+	events := service.NewEventService(sqlDB, repository.NewEventRepository(sqlDB), repository.NewEventExceptionRepository(sqlDB), repository.NewEventReminderRepository(sqlDB), repository.NewSyncRepository(sqlDB), calendars, users, attachmentRepo, repository.NewAttendeeRepository(sqlDB), workspaceRepo, repository.NewGroupRepository(sqlDB), repository.NewNotificationRepository(sqlDB), nil, 1000)
 	attachmentStore := attachmentstore.New(t.TempDir())
 	attachments := service.NewAttachmentService(attachmentRepo, repository.NewEventRepository(sqlDB), calendars, events, attachmentStore, 10)
 	eventHandler := NewEventHandler(events, attachmentStore)

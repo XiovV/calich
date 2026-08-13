@@ -236,3 +236,125 @@ func TestEventReminderRepository_ReplaceByEventID_ScopedToUser(t *testing.T) {
 		t.Fatalf("expected the other user's own reminder untouched, got %+v", otherByEvent["evt-1"])
 	}
 }
+
+// CopyByEventID copies every User's Reminder rows from one Event onto
+// another — an Override creation's copy of its Master's whole Reminder set
+// (AC6, ADR-0064), and creates nothing for a User who had none.
+func TestEventReminderRepository_CopyByEventID_CopiesEveryUsersRows(t *testing.T) {
+	repo, reminders, userID, otherUserID, calendarID := newTestEventReminderRepositoryWithSecondUser(t)
+	ctx := context.Background()
+
+	mustCreateEvent(t, repo, "master-1", userID, calendarID, "2026-01-01T09:00:00Z", "2026-01-01T10:00:00Z")
+	mustCreateEvent(t, repo, "override-1", userID, calendarID, "2026-01-08T09:00:00Z", "2026-01-08T10:00:00Z")
+
+	if err := reminders.ReplaceByEventID(ctx, userID, "master-1", []Reminder{
+		{OffsetMinutes: 10, Channel: "notification"},
+		{OffsetMinutes: 1440, Channel: "email"},
+	}); err != nil {
+		t.Fatalf("replace by event id (owner): %v", err)
+	}
+	if err := reminders.ReplaceByEventID(ctx, otherUserID, "master-1", []Reminder{
+		{OffsetMinutes: 30, Channel: "email"},
+	}); err != nil {
+		t.Fatalf("replace by event id (other user): %v", err)
+	}
+
+	if err := reminders.CopyByEventID(ctx, "master-1", "override-1"); err != nil {
+		t.Fatalf("copy by event id: %v", err)
+	}
+
+	ownerCopied, err := reminders.ListByEventIDs(ctx, userID, []string{"override-1"})
+	if err != nil {
+		t.Fatalf("list by event ids (owner): %v", err)
+	}
+	if len(ownerCopied["override-1"]) != 2 {
+		t.Fatalf("expected the owner's 2 reminders copied onto the override, got %+v", ownerCopied["override-1"])
+	}
+
+	otherCopied, err := reminders.ListByEventIDs(ctx, otherUserID, []string{"override-1"})
+	if err != nil {
+		t.Fatalf("list by event ids (other user): %v", err)
+	}
+	if len(otherCopied["override-1"]) != 1 || otherCopied["override-1"][0].OffsetMinutes != 30 {
+		t.Fatalf("expected the other user's 1 reminder copied onto the override, got %+v", otherCopied["override-1"])
+	}
+
+	// The copy mints new rows — it doesn't touch the Master's own.
+	masterStillHas, err := reminders.ListByEventIDs(ctx, userID, []string{"master-1"})
+	if err != nil {
+		t.Fatalf("list by event ids (master): %v", err)
+	}
+	if len(masterStillHas["master-1"]) != 2 {
+		t.Fatalf("expected the master's own reminders untouched, got %+v", masterStillHas["master-1"])
+	}
+}
+
+// CopyByEventID creates nothing for a User who had no Reminders on the
+// source Event (AC6).
+func TestEventReminderRepository_CopyByEventID_CreatesNoneForUserWithNone(t *testing.T) {
+	repo, reminders, userID, otherUserID, calendarID := newTestEventReminderRepositoryWithSecondUser(t)
+	ctx := context.Background()
+
+	mustCreateEvent(t, repo, "master-1", userID, calendarID, "2026-01-01T09:00:00Z", "2026-01-01T10:00:00Z")
+	mustCreateEvent(t, repo, "override-1", userID, calendarID, "2026-01-08T09:00:00Z", "2026-01-08T10:00:00Z")
+
+	if err := reminders.ReplaceByEventID(ctx, userID, "master-1", []Reminder{
+		{OffsetMinutes: 10, Channel: "notification"},
+	}); err != nil {
+		t.Fatalf("replace by event id: %v", err)
+	}
+	// otherUserID has no Reminders on master-1 at all.
+
+	if err := reminders.CopyByEventID(ctx, "master-1", "override-1"); err != nil {
+		t.Fatalf("copy by event id: %v", err)
+	}
+
+	otherCopied, err := reminders.ListByEventIDs(ctx, otherUserID, []string{"override-1"})
+	if err != nil {
+		t.Fatalf("list by event ids (other user): %v", err)
+	}
+	if len(otherCopied["override-1"]) != 0 {
+		t.Fatalf("expected no reminders created for a user who had none, got %+v", otherCopied["override-1"])
+	}
+}
+
+// DeleteByUserAndCalendar clears userID's Reminders across every Event on
+// calendarID, leaving another User's untouched — RevokeShare/LeaveShare's
+// cleanup (ADR-0064).
+func TestEventReminderRepository_DeleteByUserAndCalendar(t *testing.T) {
+	repo, reminders, userID, otherUserID, calendarID := newTestEventReminderRepositoryWithSecondUser(t)
+	ctx := context.Background()
+
+	mustCreateEvent(t, repo, "evt-1", userID, calendarID, "2026-01-01T09:00:00Z", "2026-01-01T10:00:00Z")
+	mustCreateEvent(t, repo, "evt-2", userID, calendarID, "2026-01-02T09:00:00Z", "2026-01-02T10:00:00Z")
+
+	if err := reminders.ReplaceByEventID(ctx, userID, "evt-1", []Reminder{{OffsetMinutes: 10, Channel: "notification"}}); err != nil {
+		t.Fatalf("replace by event id (evt-1, target user): %v", err)
+	}
+	if err := reminders.ReplaceByEventID(ctx, userID, "evt-2", []Reminder{{OffsetMinutes: 5, Channel: "email"}}); err != nil {
+		t.Fatalf("replace by event id (evt-2, target user): %v", err)
+	}
+	if err := reminders.ReplaceByEventID(ctx, otherUserID, "evt-1", []Reminder{{OffsetMinutes: 20, Channel: "notification"}}); err != nil {
+		t.Fatalf("replace by event id (evt-1, other user): %v", err)
+	}
+
+	if err := reminders.DeleteByUserAndCalendar(ctx, userID, calendarID); err != nil {
+		t.Fatalf("delete by user and calendar: %v", err)
+	}
+
+	targetUserByEvent, err := reminders.ListByEventIDs(ctx, userID, []string{"evt-1", "evt-2"})
+	if err != nil {
+		t.Fatalf("list by event ids (target user): %v", err)
+	}
+	if len(targetUserByEvent["evt-1"]) != 0 || len(targetUserByEvent["evt-2"]) != 0 {
+		t.Fatalf("expected the target user's reminders cleared across the calendar, got %+v", targetUserByEvent)
+	}
+
+	otherUserByEvent, err := reminders.ListByEventIDs(ctx, otherUserID, []string{"evt-1"})
+	if err != nil {
+		t.Fatalf("list by event ids (other user): %v", err)
+	}
+	if len(otherUserByEvent["evt-1"]) != 1 {
+		t.Fatalf("expected the other user's own reminder untouched, got %+v", otherUserByEvent["evt-1"])
+	}
+}

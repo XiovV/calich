@@ -309,39 +309,28 @@ func filterRecurringByWindow(events []Event, from, to time.Time) ([]Event, error
 	return filtered, nil
 }
 
-// EventWithOwner pairs an Event with its Calendar's Owner, every other User
-// with Access to that Calendar, and every Attendee of the Event itself — the
-// reminder firing engine's recipients (ADR-0021, ADR-0036, ADR-0046): a
-// Reminder fans out to the Owner, every Editor and Viewer alike, and every
-// invited Attendee, regardless of whether that Attendee has Calendar Access.
-// Not a repository.Event field: an Event has no owner of its own (ADR-0034),
-// this is purely ListAllWithReminders' join result.
+// EventWithOwner pairs an Event with every User's own Reminders on it — the
+// firing engine's read path (ADR-0021, ADR-0064). Not a repository.Event
+// field: this is purely ListAllWithReminders' join result. The name is
+// historical (ADR-0036's Owner-fan-out); kept rather than churned across
+// every caller for what's now just "an Event plus its Reminders".
 type EventWithOwner struct {
 	Event
-	CalendarOwnerID int64
-	// RecipientUserIDs is every User a Reminder on this Event fires for: the
-	// Calendar's Owner, every Shared Editor and Viewer, and every Attendee of
-	// the Event — a deduplicated union, so a User who is both an
-	// Access-holder and an Attendee of the same Event appears once (ADR-0046).
-	// Always includes CalendarOwnerID.
-	RecipientUserIDs []int64
-	// Overrides is this Event's Reminder overrides (ADR-0036), keyed by the
-	// User who set them — a recipient absent from this map gets the
-	// Event's own Reminders unchanged. Populated alongside
-	// RecipientUserIDs by ListAllWithReminders.
-	Overrides map[int64]ReminderOverride
+	// RemindersByUser is every User who has at least one Reminder on this
+	// Event, each keyed to their own rows — a User with none is simply
+	// absent, never substituted or fanned out to (ADR-0064).
+	RemindersByUser map[int64][]Reminder
 }
 
 // ListAllWithReminders returns every Event across every Calendar that
-// carries at least one Reminder, alongside its Calendar's Owner and every
-// other User with Access via a Share — the firing engine's read path
-// (ADR-0021, ADR-0036), which runs as a single background process serving
-// every account, unlike ListByCalendarIDs' per-caller scoping.
+// carries at least one Reminder, each paired with every User's own Reminder
+// rows on it — the firing engine's read path (ADR-0021, ADR-0064), which
+// runs as a single background process serving every account, unlike
+// ListByCalendarIDs' per-caller scoping.
 func (r *EventRepository) ListAllWithReminders(ctx context.Context) ([]EventWithOwner, error) {
 	rows, err := r.db.QueryContext(ctx,
-		`SELECT events.id, events.calendar_id, events.title, events."start", events."end", events.all_day, events.rrule, events.parent_id, events.recurrence_id, events.tzid, events.description, events.location, events.url, events.color, events.external_uid, events.created_by, events.created_at, events.change_seq, events.sequence, calendars.user_id
+		`SELECT id, calendar_id, title, "start", "end", all_day, rrule, parent_id, recurrence_id, tzid, description, location, url, color, external_uid, created_by, created_at, change_seq, sequence
 		 FROM events
-		 JOIN calendars ON calendars.id = events.calendar_id
 		 WHERE EXISTS (SELECT 1 FROM event_reminders WHERE event_reminders.event_id = events.id)
 		 ORDER BY events.id`,
 	)
@@ -353,7 +342,7 @@ func (r *EventRepository) ListAllWithReminders(ctx context.Context) ([]EventWith
 	events := []EventWithOwner{}
 	for rows.Next() {
 		var e EventWithOwner
-		if err := scanEventWithOwner(rows, &e); err != nil {
+		if err := scanEventRow(rows, &e.Event); err != nil {
 			return nil, fmt.Errorf("scan event: %w", err)
 		}
 		events = append(events, e)
@@ -362,94 +351,20 @@ func (r *EventRepository) ListAllWithReminders(ctx context.Context) ([]EventWith
 		return nil, fmt.Errorf("iterate events: %w", err)
 	}
 
-	sharedByCalendar, err := r.sharedUserIDsByCalendar(ctx, events)
-	if err != nil {
-		return nil, err
-	}
-
 	ids := make([]string, len(events))
 	for i, e := range events {
 		ids[i] = e.ID
 	}
-	overridesByEvent, err := bindReminderOverrideRepository(r.db).ListByEventIDs(ctx, ids)
+	remindersByEvent, err := bindEventReminderRepository(r.db).ListAllByEventIDs(ctx, ids)
 	if err != nil {
-		return nil, fmt.Errorf("list reminder overrides: %w", err)
-	}
-
-	attendeesByEvent, err := bindAttendeeRepository(r.db).ListUserIDsByEventIDs(ctx, ids)
-	if err != nil {
-		return nil, fmt.Errorf("list attendee user ids: %w", err)
+		return nil, fmt.Errorf("list reminders: %w", err)
 	}
 
 	for i := range events {
-		recipients := append([]int64{events[i].CalendarOwnerID}, sharedByCalendar[events[i].CalendarID]...)
-		recipients = append(recipients, attendeesByEvent[events[i].ID]...)
-		events[i].RecipientUserIDs = dedupeInt64s(recipients)
-		events[i].Overrides = overridesByEvent[events[i].ID]
+		events[i].RemindersByUser = remindersByEvent[events[i].ID]
 	}
 
 	return events, nil
-}
-
-// sharedUserIDsByCalendar returns, for every distinct Calendar among
-// events, the User ids holding a Share on it (Editor or Viewer alike) —
-// ListAllWithReminders' fan-out beyond the Owner (ADR-0036).
-func (r *EventRepository) sharedUserIDsByCalendar(ctx context.Context, events []EventWithOwner) (map[string][]int64, error) {
-	result := map[string][]int64{}
-
-	seen := map[string]bool{}
-	calendarIDs := make([]string, 0, len(events))
-	for _, e := range events {
-		if !seen[e.CalendarID] {
-			seen[e.CalendarID] = true
-			calendarIDs = append(calendarIDs, e.CalendarID)
-		}
-	}
-	if len(calendarIDs) == 0 {
-		return result, nil
-	}
-
-	args := make([]any, len(calendarIDs))
-	for i, id := range calendarIDs {
-		args[i] = id
-	}
-	rows, err := r.db.QueryContext(ctx,
-		`SELECT calendar_id, user_id FROM calendar_shares WHERE calendar_id IN (`+placeholders(len(calendarIDs))+`)`,
-		args...,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("list calendar shares: %w", err)
-	}
-	defer rows.Close()
-
-	for rows.Next() {
-		var calendarID string
-		var userID int64
-		if err := rows.Scan(&calendarID, &userID); err != nil {
-			return nil, fmt.Errorf("scan calendar share: %w", err)
-		}
-		result[calendarID] = append(result[calendarID], userID)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate calendar shares: %w", err)
-	}
-
-	return result, nil
-}
-
-// dedupeInt64s returns ids with duplicates removed, keeping each id's first
-// occurrence order — ListAllWithReminders' union of Access-holders and
-// Attendees can name the same User twice (ADR-0046).
-func dedupeInt64s(ids []int64) []int64 {
-	seen := make(map[int64]bool, len(ids))
-	out := make([]int64, 0, len(ids))
-	for _, id := range ids {
-		if !seen[id] {
-			seen[id] = true
-			out = append(out, id)
-		}
-	}
-	return out
 }
 
 // Update rewrites id's columns from f. f.ParentID and f.RecurrenceID are
@@ -625,11 +540,8 @@ type scanner interface {
 	Scan(dest ...any) error
 }
 
-// scanEventRow scans an Event's columns into e, plus any extraDest appended
-// after them — ListAllWithReminders' join uses this to also capture
-// calendars.user_id into EventWithOwner.CalendarOwnerID without duplicating
-// every column and its null-handling a second time.
-func scanEventRow(row scanner, e *Event, extraDest ...any) error {
+// scanEventRow scans an Event's columns into e.
+func scanEventRow(row scanner, e *Event) error {
 	var parentID sql.NullString
 	var recurrenceID sql.NullTime
 	var tzid sql.NullString
@@ -639,8 +551,7 @@ func scanEventRow(row scanner, e *Event, extraDest ...any) error {
 	var color sql.NullString
 	var externalUID sql.NullString
 	var createdBy sql.NullInt64
-	dest := append([]any{&e.ID, &e.CalendarID, &e.Title, &e.Start, &e.End, &e.AllDay, &e.Rrule, &parentID, &recurrenceID, &tzid, &description, &location, &url, &color, &externalUID, &createdBy, &e.CreatedAt, &e.ChangeSeq, &e.Sequence}, extraDest...)
-	if err := row.Scan(dest...); err != nil {
+	if err := row.Scan(&e.ID, &e.CalendarID, &e.Title, &e.Start, &e.End, &e.AllDay, &e.Rrule, &parentID, &recurrenceID, &tzid, &description, &location, &url, &color, &externalUID, &createdBy, &e.CreatedAt, &e.ChangeSeq, &e.Sequence); err != nil {
 		return err
 	}
 	if externalUID.Valid {
@@ -677,8 +588,4 @@ func scanEvent(row scanner) (Event, error) {
 		return Event{}, fmt.Errorf("scan event: %w", err)
 	}
 	return e, nil
-}
-
-func scanEventWithOwner(row scanner, e *EventWithOwner) error {
-	return scanEventRow(row, &e.Event, &e.CalendarOwnerID)
 }

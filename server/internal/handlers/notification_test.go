@@ -31,7 +31,7 @@ func newNotificationTestServer(t *testing.T) (baseURL, accessToken string, userI
 	calendarRepo := repository.NewCalendarRepository(sqlDB)
 	shareRepo := repository.NewCalendarShareRepository(sqlDB)
 	workspaceSvc := service.NewWorkspaceService(sqlDB, workspaceRepo, repository.NewWorkspaceInviteRepository(sqlDB), calendarRepo, shareRepo)
-	calendarService := service.NewCalendarService(calendarRepo, shareRepo, users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo, repository.NewCalendarGroupShareRepository(sqlDB), repository.NewGroupRepository(sqlDB))
+	calendarService := service.NewCalendarService(calendarRepo, shareRepo, users, repository.NewEventReminderRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo, repository.NewCalendarGroupShareRepository(sqlDB), repository.NewGroupRepository(sqlDB))
 	auth := service.NewAuthService(users, sessions, workspaceSvc, repository.NewWorkspaceInviteRepository(sqlDB), calendarService, repository.NewAttendeeRepository(sqlDB), []byte("test-secret"), "alice", "alice@example.com", "hunter2", false)
 	user, _, err := auth.Bootstrap(context.Background())
 	if err != nil {

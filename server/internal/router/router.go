@@ -119,13 +119,12 @@ func New(logger *slog.Logger, authHandler *handlers.AuthHandler, calendarHandler
 			r.Get("/{id}/ics", eventHandler.ICS)
 			r.Get("/{id}/ics/oversized-attachments", eventHandler.ICSOversizedAttachments)
 
-			// Per-User Reminder overrides (#105, ADR-0036): a personal
-			// delivery preference, open to any Access level (Viewer
-			// included), not gated by the write guard the rest of this
-			// group's mutating routes enforce.
-			r.Get("/{id}/reminder-override", eventHandler.GetReminderOverride)
-			r.Put("/{id}/reminder-override", eventHandler.SetReminderOverride)
-			r.Delete("/{id}/reminder-override", eventHandler.ClearReminderOverride)
+			// Reminders (ADR-0064): personal to the caller, on their own
+			// write path rather than the Event create/update payload.
+			// SetReminders enforces Editor Access itself (still
+			// Editors-only at this stage — Viewers/Attendees are #211).
+			r.Get("/{id}/reminders", eventHandler.GetReminders)
+			r.Put("/{id}/reminders", eventHandler.SetReminders)
 
 			// Attachments (#132, ADR-0040): list rides along on the Event
 			// itself (eventResponse.Attachments) rather than its own route.

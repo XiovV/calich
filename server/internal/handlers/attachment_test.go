@@ -49,7 +49,7 @@ func newAttachmentTestServer(t *testing.T, maxAttachmentSize int64, maxAttachmen
 	workspaces := service.NewWorkspaceService(sqlDB, workspaceRepo, repository.NewWorkspaceInviteRepository(sqlDB), repository.NewCalendarRepository(sqlDB), repository.NewCalendarShareRepository(sqlDB))
 	calendarRepo := repository.NewCalendarRepository(sqlDB)
 	shareRepo := repository.NewCalendarShareRepository(sqlDB)
-	calendars := service.NewCalendarService(calendarRepo, shareRepo, users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo, repository.NewCalendarGroupShareRepository(sqlDB), repository.NewGroupRepository(sqlDB))
+	calendars := service.NewCalendarService(calendarRepo, shareRepo, users, repository.NewEventReminderRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo, repository.NewCalendarGroupShareRepository(sqlDB), repository.NewGroupRepository(sqlDB))
 	auth := service.NewAuthService(users, sessions, workspaces, repository.NewWorkspaceInviteRepository(sqlDB), calendars, repository.NewAttendeeRepository(sqlDB), []byte("test-secret"), "owner", "owner@example.com", "hunter2", true)
 	bootstrapUser, _, err := auth.Bootstrap(ctx)
 	if err != nil {
@@ -126,7 +126,7 @@ func newAttachmentTestServer(t *testing.T, maxAttachmentSize int64, maxAttachmen
 	}
 
 	attachmentRepo := repository.NewAttachmentRepository(sqlDB)
-	events := service.NewEventService(sqlDB, repository.NewEventRepository(sqlDB), repository.NewEventExceptionRepository(sqlDB), repository.NewEventReminderRepository(sqlDB), repository.NewReminderOverrideRepository(sqlDB), repository.NewSyncRepository(sqlDB), calendars, users, attachmentRepo, repository.NewAttendeeRepository(sqlDB), workspaceRepo, repository.NewGroupRepository(sqlDB), repository.NewNotificationRepository(sqlDB), nil, 1000)
+	events := service.NewEventService(sqlDB, repository.NewEventRepository(sqlDB), repository.NewEventExceptionRepository(sqlDB), repository.NewEventReminderRepository(sqlDB), repository.NewSyncRepository(sqlDB), calendars, users, attachmentRepo, repository.NewAttendeeRepository(sqlDB), workspaceRepo, repository.NewGroupRepository(sqlDB), repository.NewNotificationRepository(sqlDB), nil, 1000)
 	master, err := events.Create(ctx, ownerID, "evt-1", service.EventWrite{CalendarID: cal.ID, Title: "Standup", Rrule: "FREQ=WEEKLY", Start: mustParseTestTime(t, "2026-01-01T09:00:00Z"), End: mustParseTestTime(t, "2026-01-01T10:00:00Z")})
 	if err != nil {
 		t.Fatalf("create master event: %v", err)

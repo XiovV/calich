@@ -501,8 +501,7 @@ func TestPropPatch_OwnedCalendarMultiPropertyRename_StillWorks(t *testing.T) {
 // A Viewer — read-only, per ADR-0034/ADR-0035 — may still PROPPATCH their
 // own colour override (ADR-0038): the property is a personal display
 // preference, not a write to the Calendar's Events or the Calendar itself,
-// so it's open to any Access level that clears CanRead, same as
-// SetReminderOverride's gate.
+// so it's open to any Access level that clears CanRead.
 func TestPropPatch_ViewerSetsOwnColorOverride_Returns200(t *testing.T) {
 	env := newTestCalDAVEnv(t)
 	viewerID, viewerSecret := env.addSharedUser(t, "viewer", repository.RoleViewer)

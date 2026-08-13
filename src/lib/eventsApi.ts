@@ -18,7 +18,9 @@ interface EventWire {
   exdates?: string[];
   // Absent/null for a Floating Event (ADR-0019).
   tzid?: string | null;
-  // Absent/empty means no Reminders (ADR-0020).
+  // The viewing User's own Reminders (ADR-0064) — read-only here; absent
+  // from create/update bodies, which never carry Reminders at all. Absent
+  // means none.
   reminders?: Reminder[];
   description?: string;
   location?: string;
@@ -134,11 +136,17 @@ export const eventsApi = {
       parentId?: string;
       recurrenceId?: Date;
       tzid?: string;
-      reminders?: Reminder[];
       description?: string;
       location?: string;
       url?: string;
       color?: string;
+      // Copies every User's Reminder rows from that Event onto this one,
+      // server-side (ADR-0064) — used only by the "This and following"
+      // split's new Master, naming the old Master's id. An Override
+      // (parentId set) always copies from its own parent instead; this is
+      // for the one create that mints a standalone Master with no parent
+      // relationship of its own to infer it from.
+      copyRemindersFrom?: string;
       // Attendees to invite as part of this create (#187, ADR-0055) — a
       // Group id expands to its current members server-side, inside the
       // same transaction as the Event row itself. attendeeEmails are typed
@@ -164,11 +172,11 @@ export const eventsApi = {
         parentId: event.parentId,
         recurrenceId: event.recurrenceId?.toISOString(),
         tzid: event.tzid,
-        reminders: event.reminders,
         description: event.description,
         location: event.location,
         url: event.url,
         color: event.color,
+        copyRemindersFrom: event.copyRemindersFrom,
         attendeeUserIds: event.attendeeUserIds,
         attendeeGroupIds: event.attendeeGroupIds,
         attendeeEmails: event.attendeeEmails,
@@ -190,7 +198,6 @@ export const eventsApi = {
       allDay?: boolean;
       rrule?: string;
       tzid?: string;
-      reminders?: Reminder[];
       description?: string;
       location?: string;
       url?: string;
@@ -209,7 +216,6 @@ export const eventsApi = {
         allDay: changes.allDay ?? false,
         rrule: changes.rrule ?? "",
         tzid: changes.tzid,
-        reminders: changes.reminders,
         description: changes.description,
         location: changes.location,
         url: changes.url,
@@ -238,12 +244,18 @@ export const eventsApi = {
     parentId: string,
     occurrenceStart: Date,
   ): Promise<void> {
-    const response = await authedFetch(accessToken, `/api/events/${parentId}/exceptions`, {
-      method: "POST",
-      credentials: "include",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ occurrenceStart: occurrenceStart.toISOString() }),
-    });
+    const response = await authedFetch(
+      accessToken,
+      `/api/events/${parentId}/exceptions`,
+      {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          occurrenceStart: occurrenceStart.toISOString(),
+        }),
+      },
+    );
     if (!response.ok) throw await errorFromResponse(response);
   },
 
@@ -258,15 +270,44 @@ export const eventsApi = {
     newParentId: string,
     fromStart: Date,
   ): Promise<void> {
-    const response = await authedFetch(accessToken, `/api/events/${oldParentId}/reparent`, {
-      method: "POST",
-      credentials: "include",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        newParentId,
-        fromStart: fromStart.toISOString(),
-      }),
-    });
+    const response = await authedFetch(
+      accessToken,
+      `/api/events/${oldParentId}/reparent`,
+      {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          newParentId,
+          fromStart: fromStart.toISOString(),
+        }),
+      },
+    );
     if (!response.ok) throw await errorFromResponse(response);
+  },
+
+  /**
+   * Replaces the caller's own Reminders on eventId wholesale — Reminders'
+   * own write path, never part of the Event create/update payload
+   * (ADR-0064). Never touches any other User's Reminders on the same Event.
+   */
+  async setReminders(
+    accessToken: string,
+    eventId: string,
+    reminders: Reminder[],
+  ): Promise<Reminder[]> {
+    const response = await authedFetch(
+      accessToken,
+      `/api/events/${eventId}/reminders`,
+      {
+        method: "PUT",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reminders }),
+      },
+    );
+    if (!response.ok) throw await errorFromResponse(response);
+
+    return ((await response.json()) as Reminder[] | null) ?? [];
   },
 };

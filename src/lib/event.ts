@@ -50,7 +50,10 @@ export interface Event {
   // undefined for a Floating Event, which renders/expands in the Viewer
   // zone. See ADR-0019 and CONTEXT.md's Anchor zone/Floating Event.
   tzid?: string;
-  // This Event's Reminders. Undefined/empty means none. See ADR-0020.
+  // The viewing User's own Reminders on this Event — never anyone else's,
+  // and never written as part of the create/update payload (their own
+  // write path is eventsApi.setReminders). Undefined/empty means none. See
+  // ADR-0020, ADR-0064.
   reminders?: Reminder[];
   // Free-text description and location, both optional.
   description?: string;

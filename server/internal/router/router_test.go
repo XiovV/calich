@@ -33,14 +33,14 @@ func newTestRouter(t *testing.T) http.Handler {
 	workspaceService := service.NewWorkspaceService(sqlDB, workspaceRepo, repository.NewWorkspaceInviteRepository(sqlDB), repository.NewCalendarRepository(sqlDB), repository.NewCalendarShareRepository(sqlDB))
 	calendarRepo := repository.NewCalendarRepository(sqlDB)
 	shareRepo := repository.NewCalendarShareRepository(sqlDB)
-	calendarService := service.NewCalendarService(calendarRepo, shareRepo, users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo, repository.NewCalendarGroupShareRepository(sqlDB), repository.NewGroupRepository(sqlDB))
+	calendarService := service.NewCalendarService(calendarRepo, shareRepo, users, repository.NewEventReminderRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo, repository.NewCalendarGroupShareRepository(sqlDB), repository.NewGroupRepository(sqlDB))
 	authService := service.NewAuthService(users, sessions, workspaceService, repository.NewWorkspaceInviteRepository(sqlDB), calendarService, repository.NewAttendeeRepository(sqlDB), []byte("test-secret"), "admin", "admin@example.com", "admin", false)
 	if _, _, err := authService.Bootstrap(context.Background()); err != nil {
 		t.Fatalf("bootstrap: %v", err)
 	}
 	authHandler := handlers.NewAuthHandler(authService, false, false)
 	workspaceHandler := handlers.NewWorkspaceHandler(workspaceService)
-	eventService := service.NewEventService(sqlDB, repository.NewEventRepository(sqlDB), repository.NewEventExceptionRepository(sqlDB), repository.NewEventReminderRepository(sqlDB), repository.NewReminderOverrideRepository(sqlDB), repository.NewSyncRepository(sqlDB), calendarService, users, repository.NewAttachmentRepository(sqlDB), repository.NewAttendeeRepository(sqlDB), workspaceRepo, repository.NewGroupRepository(sqlDB), repository.NewNotificationRepository(sqlDB), nil, 1000)
+	eventService := service.NewEventService(sqlDB, repository.NewEventRepository(sqlDB), repository.NewEventExceptionRepository(sqlDB), repository.NewEventReminderRepository(sqlDB), repository.NewSyncRepository(sqlDB), calendarService, users, repository.NewAttachmentRepository(sqlDB), repository.NewAttendeeRepository(sqlDB), workspaceRepo, repository.NewGroupRepository(sqlDB), repository.NewNotificationRepository(sqlDB), nil, 1000)
 	attachmentStore := attachmentstore.New(t.TempDir())
 	calendarHandler := handlers.NewCalendarHandler(calendarService, eventService, service.NewImportService(eventService, calendarService, attachmentStore, 25<<20, 10), service.NewSubscribeService(eventService, calendarService, 0), attachmentStore)
 	eventHandler := handlers.NewEventHandler(eventService, attachmentStore)

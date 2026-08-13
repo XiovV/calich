@@ -254,12 +254,9 @@ func (r *AttendeeRepository) ConvertEmailAttendeesToUser(ctx context.Context, wo
 }
 
 // ListUserIDsByEventIDs returns every User-backed Attendee's user_id on any
-// of eventIDs, keyed by event id — the reminder fan-out's batched read path
-// (ADR-0021, ADR-0046), unioned onto RecipientUserIDs alongside each Event's
-// Calendar Access-holders rather than replacing them. An email-shaped
-// Attendee (ADR-0058, #200) has no user_id and is filtered out here rather
-// than in the caller: they get no Reminders on any Channel, since they hold
-// the Invitation in their own calendar and their own client reminds them.
+// of eventIDs, keyed by event id — attachAttendeeCounts' batched read path
+// (ADR-0046). An email-shaped Attendee (ADR-0058, #200) has no user_id and
+// is filtered out here rather than in the caller.
 func (r *AttendeeRepository) ListUserIDsByEventIDs(ctx context.Context, eventIDs []string) (map[string][]int64, error) {
 	result := make(map[string][]int64)
 	if len(eventIDs) == 0 {

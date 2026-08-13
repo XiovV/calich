@@ -37,7 +37,7 @@ beforeEach(() => {
 describe("planEditOccurrence", () => {
   it('scope "this": plans a new override for an un-overridden Occurrence', () => {
     const occurrenceStart = new Date("2026-01-03T09:00:00Z");
-    const ops = planEditOccurrence(
+    const { ops } = planEditOccurrence(
       {
         master: recurringMaster,
         occurrence: occurrenceOf(recurringMaster, occurrenceStart),
@@ -86,7 +86,7 @@ describe("planEditOccurrence", () => {
       recurrenceId: new Date("2026-01-03T09:00:00Z"),
     };
 
-    const ops = planEditOccurrence({
+    const { ops } = planEditOccurrence({
       master: recurringMaster,
       occurrence: occurrenceOf(override as never, override.start),
       isOverride: true,
@@ -122,7 +122,7 @@ describe("planEditOccurrence", () => {
   it('scope "this": a fresh override inherits the master\'s color when untouched (ADR-0043)', () => {
     const coloredMaster = { ...recurringMaster, color: "#12809CFF" };
     const occurrenceStart = new Date("2026-01-03T09:00:00Z");
-    const ops = planEditOccurrence(
+    const { ops } = planEditOccurrence(
       {
         master: coloredMaster,
         occurrence: occurrenceOf(coloredMaster, occurrenceStart),
@@ -143,7 +143,7 @@ describe("planEditOccurrence", () => {
   });
 
   it('scope "all": keeps the rule and does not discard children when the rule is unchanged', () => {
-    const ops = planEditOccurrence({
+    const { ops } = planEditOccurrence({
       master: recurringMaster,
       occurrence: occurrenceOf(recurringMaster, recurringMaster.start),
       isOverride: false,
@@ -175,7 +175,7 @@ describe("planEditOccurrence", () => {
   });
 
   it('scope "all": discards children when the rule\'s pattern changes', () => {
-    const ops = planEditOccurrence({
+    const { ops } = planEditOccurrence({
       master: recurringMaster,
       occurrence: occurrenceOf(recurringMaster, recurringMaster.start),
       isOverride: false,
@@ -200,7 +200,7 @@ describe("planEditOccurrence", () => {
   });
 
   it('scope "all": an explicit undefined rrule ("Does not repeat") wins over the reanchored rule', () => {
-    const ops = planEditOccurrence({
+    const { ops } = planEditOccurrence({
       master: recurringMaster,
       occurrence: occurrenceOf(recurringMaster, recurringMaster.start),
       isOverride: false,
@@ -226,7 +226,7 @@ describe("planEditOccurrence", () => {
 
   it('scope "all": editing from a later Occurrence keeps the master anchored on its own date', () => {
     const openedOccurrenceStart = new Date("2026-01-05T09:00:00Z");
-    const ops = planEditOccurrence({
+    const { ops } = planEditOccurrence({
       master: recurringMaster,
       occurrence: occurrenceOf(recurringMaster, openedOccurrenceStart),
       isOverride: false,
@@ -250,13 +250,17 @@ describe("planEditOccurrence", () => {
     ]);
   });
 
-  it('scope "this" (new override): starts the Override\'s Reminders as a copy of the master\'s (ADR-0020)', () => {
+  // A new Override's Reminders are copied from the Master server-side
+  // (ADR-0064) — planEditOccurrence never puts Reminders in an op's fields
+  // at all, and instead names the new Override as reminderTargetEventId, so
+  // the caller knows where the acting User's own edit (if any) should land.
+  it('scope "this" (new override): never carries reminders in fields, and targets the new Override for a Reminders write', () => {
     const remindedMaster = {
       ...recurringMaster,
       reminders: [{ offsetMinutes: 10, channel: "notification" as const }],
     };
     const occurrenceStart = new Date("2026-01-03T09:00:00Z");
-    const ops = planEditOccurrence(
+    const { ops, reminderTargetEventId } = planEditOccurrence(
       {
         master: remindedMaster,
         occurrence: occurrenceOf(remindedMaster, occurrenceStart),
@@ -273,10 +277,11 @@ describe("planEditOccurrence", () => {
       nextId,
     );
 
-    expect(ops[0]).toMatchObject({ fields: { reminders: remindedMaster.reminders } });
+    expect(ops[0]).not.toHaveProperty("fields.reminders");
+    expect(reminderTargetEventId).toBe("generated-id");
   });
 
-  it('scope "this" (in-place Override update): applies the authored Reminders to only that Override\'s row', () => {
+  it('scope "this" (in-place Override update): targets only that Override\'s row for a Reminders write', () => {
     const remindedMaster = {
       ...recurringMaster,
       reminders: [{ offsetMinutes: 10, channel: "notification" as const }],
@@ -291,9 +296,8 @@ describe("planEditOccurrence", () => {
       recurrenceId: new Date("2026-01-03T09:00:00Z"),
       reminders: [{ offsetMinutes: 5, channel: "email" as const }],
     };
-    const authoredReminders = [{ offsetMinutes: 30, channel: "email" as const }];
 
-    const ops = planEditOccurrence({
+    const { ops, reminderTargetEventId } = planEditOccurrence({
       master: remindedMaster,
       occurrence: occurrenceOf(override as never, override.start),
       isOverride: true,
@@ -304,16 +308,15 @@ describe("planEditOccurrence", () => {
         title: "Renamed again",
         start: override.start,
         end: override.end,
-        reminders: authoredReminders,
       },
     });
 
-    expect(ops[0]).toMatchObject({ fields: { reminders: authoredReminders } });
+    expect(ops[0]).not.toHaveProperty("fields.reminders");
+    expect(reminderTargetEventId).toBe("override-1");
   });
 
-  it('scope "all": carries the authored Reminders onto the master', () => {
-    const authoredReminders = [{ offsetMinutes: 15, channel: "notification" as const }];
-    const ops = planEditOccurrence({
+  it('scope "all": targets the master for a Reminders write, never carries reminders in fields', () => {
+    const { ops, reminderTargetEventId } = planEditOccurrence({
       master: recurringMaster,
       occurrence: occurrenceOf(recurringMaster, recurringMaster.start),
       isOverride: false,
@@ -324,15 +327,15 @@ describe("planEditOccurrence", () => {
         title: "Renamed",
         start: recurringMaster.start,
         end: recurringMaster.end,
-        reminders: authoredReminders,
       },
     });
 
-    expect(ops[0]).toMatchObject({ fields: { reminders: authoredReminders } });
+    expect(ops[0]).not.toHaveProperty("fields.reminders");
+    expect(reminderTargetEventId).toBe(recurringMaster.id);
   });
 
   it('scope "all": carries an authored color onto the master (ADR-0043)', () => {
-    const ops = planEditOccurrence({
+    const { ops } = planEditOccurrence({
       master: recurringMaster,
       occurrence: occurrenceOf(recurringMaster, recurringMaster.start),
       isOverride: false,
@@ -352,7 +355,7 @@ describe("planEditOccurrence", () => {
 
   it('scope "all": an explicit color reset clears the master to absent (ADR-0043)', () => {
     const coloredMaster = { ...recurringMaster, color: "#12809CFF" };
-    const ops = planEditOccurrence({
+    const { ops } = planEditOccurrence({
       master: coloredMaster,
       occurrence: occurrenceOf(coloredMaster, coloredMaster.start),
       isOverride: false,
@@ -377,7 +380,7 @@ describe("planEditOccurrence", () => {
       exdates: [new Date("2026-01-02T09:00:00Z"), new Date("2026-01-04T09:00:00Z")],
     };
 
-    const ops = planEditOccurrence(
+    const { ops } = planEditOccurrence(
       {
         master: masterWithExdates,
         occurrence: occurrenceOf(masterWithExdates, splitStart),
@@ -427,7 +430,7 @@ describe("planEditOccurrence", () => {
       color: "#00FF00FF",
     };
 
-    const ops = planEditOccurrence(
+    const { ops } = planEditOccurrence(
       {
         master: recurringMaster,
         occurrence: occurrenceOf(override as never, override.start),
@@ -470,14 +473,18 @@ describe("planEditOccurrence", () => {
     ]);
   });
 
-  it('scope "following": preserves the old master\'s own Reminders and carries them into the new master (ADR-0020)', () => {
+  // The new Master's Reminders are copied from the old Master server-side
+  // (ADR-0064) — planEditOccurrence itself never carries them, and names
+  // the new Master as reminderTargetEventId for any additional acting-User
+  // write.
+  it('scope "following": never carries reminders in oldMasterFields/newMaster, and targets the new master for a Reminders write', () => {
     const remindedMaster = {
       ...recurringMaster,
       reminders: [{ offsetMinutes: 10, channel: "notification" as const }],
     };
     const splitStart = new Date("2026-01-03T09:00:00Z");
 
-    const ops = planEditOccurrence(
+    const { ops, reminderTargetEventId } = planEditOccurrence(
       {
         master: remindedMaster,
         occurrence: occurrenceOf(remindedMaster, splitStart),
@@ -494,10 +501,9 @@ describe("planEditOccurrence", () => {
       nextId,
     );
 
-    expect(ops[0]).toMatchObject({
-      oldMasterFields: { reminders: remindedMaster.reminders },
-      newMaster: { reminders: remindedMaster.reminders },
-    });
+    expect(ops[0]).not.toHaveProperty("oldMasterFields.reminders");
+    expect(ops[0]).not.toHaveProperty("newMaster.reminders");
+    expect(reminderTargetEventId).toBe("generated-id");
   });
 });
 
@@ -506,7 +512,7 @@ describe("planEditOccurrence preserves the Anchor zone (ADR-0019)", () => {
 
   it('scope "this" (new override): carries the master\'s tzid unchanged', () => {
     const occurrenceStart = new Date("2026-01-03T09:00:00Z");
-    const ops = planEditOccurrence(
+    const { ops } = planEditOccurrence(
       {
         master: zonedMaster,
         occurrence: occurrenceOf(zonedMaster, occurrenceStart),
@@ -538,7 +544,7 @@ describe("planEditOccurrence preserves the Anchor zone (ADR-0019)", () => {
       tzid: "Europe/Berlin",
     };
 
-    const ops = planEditOccurrence({
+    const { ops } = planEditOccurrence({
       master: zonedMaster,
       occurrence: occurrenceOf(override as never, override.start),
       isOverride: true,
@@ -556,7 +562,7 @@ describe("planEditOccurrence preserves the Anchor zone (ADR-0019)", () => {
   });
 
   it('scope "all": keeps the master\'s tzid unchanged', () => {
-    const ops = planEditOccurrence({
+    const { ops } = planEditOccurrence({
       master: zonedMaster,
       occurrence: occurrenceOf(zonedMaster, zonedMaster.start),
       isOverride: false,
@@ -575,7 +581,7 @@ describe("planEditOccurrence preserves the Anchor zone (ADR-0019)", () => {
 
   it('scope "following": both the truncated old master and the new master keep the tzid unchanged', () => {
     const splitStart = new Date("2026-01-03T09:00:00Z");
-    const ops = planEditOccurrence(
+    const { ops } = planEditOccurrence(
       {
         master: zonedMaster,
         occurrence: occurrenceOf(zonedMaster, splitStart),
@@ -749,10 +755,16 @@ describe("applySeriesOps", () => {
     expect(events.find((e) => e.id === "override-after")?.parentId).toBe("new-master-1");
   });
 
-  it("carries Reminders through for overrideOccurrence, putEvent, and reanchorSeries ops (ADR-0020)", () => {
+  // Reminders never travel through an op's fields any more (ADR-0064) — the
+  // cache projection instead locally mirrors what the backend copies
+  // server-side: a new Override or a reanchor's new Master inherits its
+  // Parent/old Master's current cached Reminders; putEvent and an in-place
+  // Override update leave Reminders untouched, whatever they already were.
+  it("mirrors the backend's Reminders copy locally for overrideOccurrence and reanchorSeries, and leaves putEvent's untouched", () => {
     const reminders = [{ offsetMinutes: 10, channel: "notification" as const }];
+    const remindedMaster = { ...recurringMaster, reminders };
 
-    const overridden = applySeriesOps([recurringMaster], [
+    const overridden = applySeriesOps([remindedMaster], [
       {
         kind: "overrideOccurrence",
         id: "override-1",
@@ -764,13 +776,12 @@ describe("applySeriesOps", () => {
           title: "Standup (moved)",
           start: new Date("2026-01-03T10:00:00Z"),
           end: new Date("2026-01-03T10:30:00Z"),
-          reminders,
         },
       },
     ]);
     expect(overridden.find((e) => e.id === "override-1")?.reminders).toEqual(reminders);
 
-    const put = applySeriesOps([recurringMaster], [
+    const put = applySeriesOps([remindedMaster], [
       {
         kind: "putEvent",
         id: "master-1",
@@ -779,18 +790,12 @@ describe("applySeriesOps", () => {
           title: "Renamed",
           start: recurringMaster.start,
           end: recurringMaster.end,
-          reminders,
         },
         discardChildren: false,
       },
     ]);
     expect(put.find((e) => e.id === "master-1")?.reminders).toEqual(reminders);
 
-    // The old master's cache row keeps its own reminders unchanged (it
-    // already has `reminders` here) — oldMasterFields only exists to keep
-    // them off the wire's omitted-field wipe (ADR-0020), not to drive the
-    // cache projection.
-    const remindedMaster = { ...recurringMaster, reminders };
     const reanchored = applySeriesOps([remindedMaster], [
       {
         kind: "reanchorSeries",
@@ -800,7 +805,6 @@ describe("applySeriesOps", () => {
           title: "Standup",
           start: recurringMaster.start,
           end: recurringMaster.end,
-          reminders,
         },
         truncatedRrule: "FREQ=DAILY;UNTIL=20260102T090000Z",
         keptExdates: [],
@@ -811,7 +815,6 @@ describe("applySeriesOps", () => {
           start: new Date("2026-01-03T10:00:00Z"),
           end: new Date("2026-01-03T10:30:00Z"),
           rrule: "FREQ=DAILY",
-          reminders,
         },
         movedExdates: [],
         reparentFromStart: new Date("2026-01-03T09:00:00Z"),
@@ -970,6 +973,7 @@ describe("dispatchSeriesOps", () => {
       start: new Date("2026-01-03T10:00:00Z"),
       end: new Date("2026-01-03T10:30:00Z"),
       rrule: "FREQ=DAILY",
+      copyRemindersFrom: "master-1",
     });
     expect(eventsApi.reparentSeries).toHaveBeenCalledWith(
       "token-123",
@@ -1006,15 +1010,13 @@ describe("dispatchSeriesOps", () => {
     });
   });
 
-  it("sends the old master's own Reminders on a reanchorSeries update, so a 'following' edit never wipes them (ADR-0020)", async () => {
-    // The update API replaces Reminders wholesale on any omitted field
-    // (ADR-0020) — the old master's own reminders must ride along even
-    // though nothing about them changed, or the split would silently clear
-    // them.
+  // A reanchorSeries dispatch never sends Reminders on the wire at all —
+  // the new Master's Reminders are copied from the old Master server-side,
+  // named via copyRemindersFrom (ADR-0064).
+  it("copies the old master's Reminders onto the new one via copyRemindersFrom, never on the wire directly", async () => {
     vi.mocked(eventsApi.update).mockResolvedValue({} as never);
     vi.mocked(eventsApi.create).mockResolvedValue({} as never);
     vi.mocked(eventsApi.reparentSeries).mockResolvedValue(undefined);
-    const reminders = [{ offsetMinutes: 10, channel: "notification" as const }];
 
     await dispatchSeriesOps("token-123", [
       {
@@ -1025,7 +1027,6 @@ describe("dispatchSeriesOps", () => {
           title: "Standup",
           start: recurringMaster.start,
           end: recurringMaster.end,
-          reminders,
         },
         truncatedRrule: "FREQ=DAILY;UNTIL=20260102T090000Z",
         keptExdates: [],
@@ -1036,21 +1037,17 @@ describe("dispatchSeriesOps", () => {
           start: new Date("2026-01-03T10:00:00Z"),
           end: new Date("2026-01-03T10:30:00Z"),
           rrule: "FREQ=DAILY",
-          reminders,
         },
         movedExdates: [],
         reparentFromStart: new Date("2026-01-03T09:00:00Z"),
       },
     ]);
 
-    expect(eventsApi.update).toHaveBeenCalledWith(
-      "token-123",
-      "master-1",
-      expect.objectContaining({ reminders }),
-    );
+    const updateBody = vi.mocked(eventsApi.update).mock.calls[0][2];
+    expect(updateBody).not.toHaveProperty("reminders");
     expect(eventsApi.create).toHaveBeenCalledWith(
       "token-123",
-      expect.objectContaining({ reminders }),
+      expect.objectContaining({ copyRemindersFrom: "master-1" }),
     );
   });
 });
@@ -1157,7 +1154,10 @@ describe("planDeleteOccurrence", () => {
     ]);
   });
 
-  it('scope "following": preserves the master\'s own Reminders in the truncated master (ADR-0020)', () => {
+  // masterFields never carries Reminders — the update API doesn't touch
+  // them at all any more, so there's nothing for a "following" delete to
+  // preserve or wipe (ADR-0064).
+  it('scope "following": never carries reminders in masterFields', () => {
     const remindedMaster = {
       ...recurringMaster,
       reminders: [{ offsetMinutes: 10, channel: "notification" as const }],
@@ -1173,7 +1173,7 @@ describe("planDeleteOccurrence", () => {
       scope: "following",
     });
 
-    expect(ops[0]).toMatchObject({ masterFields: { reminders: remindedMaster.reminders } });
+    expect(ops[0]).not.toHaveProperty("masterFields.reminders");
   });
 });
 
@@ -1346,10 +1346,12 @@ describe("dispatchSeriesOps (delete ops)", () => {
     expect(eventsApi.remove).toHaveBeenNthCalledWith(2, "token-123", "override-later");
   });
 
-  it("sends the master's own Reminders on a truncateSeries update, so a 'following' delete never wipes them (ADR-0020)", async () => {
+  // A truncateSeries update never carries a reminders field — the update
+  // API never touches Reminders at all (ADR-0064), so a "following" delete
+  // can't wipe the master's own Reminders no matter what.
+  it("never sends a reminders field on a truncateSeries update", async () => {
     vi.mocked(eventsApi.update).mockResolvedValue({} as never);
     vi.mocked(eventsApi.remove).mockResolvedValue(undefined);
-    const reminders = [{ offsetMinutes: 10, channel: "notification" as const }];
 
     await dispatchSeriesOps("token-123", [
       {
@@ -1360,7 +1362,6 @@ describe("dispatchSeriesOps (delete ops)", () => {
           title: "Standup",
           start: recurringMaster.start,
           end: recurringMaster.end,
-          reminders,
         },
         truncatedRrule: "FREQ=DAILY;UNTIL=20260102T090000Z",
         keptExdates: [],
@@ -1368,10 +1369,7 @@ describe("dispatchSeriesOps (delete ops)", () => {
       },
     ]);
 
-    expect(eventsApi.update).toHaveBeenCalledWith(
-      "token-123",
-      "master-1",
-      expect.objectContaining({ reminders }),
-    );
+    const updateBody = vi.mocked(eventsApi.update).mock.calls[0][2];
+    expect(updateBody).not.toHaveProperty("reminders");
   });
 });

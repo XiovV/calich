@@ -57,7 +57,7 @@ func newTestCalDAVEnv(t *testing.T) testCalDAVEnv {
 	sessions := repository.NewSessionRepository(sqlDB)
 	workspaceRepo := repository.NewWorkspaceRepository(sqlDB)
 	workspaces := service.NewWorkspaceService(sqlDB, workspaceRepo, repository.NewWorkspaceInviteRepository(sqlDB), repository.NewCalendarRepository(sqlDB), repository.NewCalendarShareRepository(sqlDB))
-	calendarService := service.NewCalendarService(repository.NewCalendarRepository(sqlDB), repository.NewCalendarShareRepository(sqlDB), users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo, repository.NewCalendarGroupShareRepository(sqlDB), repository.NewGroupRepository(sqlDB))
+	calendarService := service.NewCalendarService(repository.NewCalendarRepository(sqlDB), repository.NewCalendarShareRepository(sqlDB), users, repository.NewEventReminderRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo, repository.NewCalendarGroupShareRepository(sqlDB), repository.NewGroupRepository(sqlDB))
 	authService := service.NewAuthService(users, sessions, workspaces, repository.NewWorkspaceInviteRepository(sqlDB), calendarService, repository.NewAttendeeRepository(sqlDB), []byte("test-secret"), "admin", "admin@example.com", "admin", false)
 	user, _, err := authService.Bootstrap(context.Background())
 	if err != nil {
@@ -78,7 +78,7 @@ func newTestCalDAVEnv(t *testing.T) testCalDAVEnv {
 	}
 
 	attachmentRepo := repository.NewAttachmentRepository(sqlDB)
-	eventService := service.NewEventService(sqlDB, repository.NewEventRepository(sqlDB), repository.NewEventExceptionRepository(sqlDB), repository.NewEventReminderRepository(sqlDB), repository.NewReminderOverrideRepository(sqlDB), repository.NewSyncRepository(sqlDB), calendarService, users, attachmentRepo, repository.NewAttendeeRepository(sqlDB), workspaceRepo, repository.NewGroupRepository(sqlDB), repository.NewNotificationRepository(sqlDB), nil, 1000)
+	eventService := service.NewEventService(sqlDB, repository.NewEventRepository(sqlDB), repository.NewEventExceptionRepository(sqlDB), repository.NewEventReminderRepository(sqlDB), repository.NewSyncRepository(sqlDB), calendarService, users, attachmentRepo, repository.NewAttendeeRepository(sqlDB), workspaceRepo, repository.NewGroupRepository(sqlDB), repository.NewNotificationRepository(sqlDB), nil, 1000)
 	attachmentService := service.NewAttachmentService(attachmentRepo, repository.NewEventRepository(sqlDB), calendarService, eventService, attachmentstore.New(t.TempDir()), testMaxAttachmentsPerEvent)
 
 	appPasswordService := service.NewAppPasswordService(repository.NewAppPasswordRepository(sqlDB), users)

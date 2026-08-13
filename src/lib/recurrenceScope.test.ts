@@ -7,8 +7,8 @@ import {
   hasFieldChanges,
   makeException,
   makeOverride,
+  remindersEqual,
   resolveColor,
-  resolveReminders,
   shouldDiscardChildren,
   splitFollowing,
 } from "./recurrenceScope";
@@ -105,7 +105,11 @@ describe("makeOverride", () => {
     expect(override).not.toHaveProperty("rrule");
   });
 
-  it("starts a fresh Override's Reminders as a copy of the master's (ADR-0020)", () => {
+  // Reminders no longer flow through makeOverride at all (ADR-0064): the
+  // backend copies every User's rows from the Master onto a fresh Override
+  // server-side, and the acting User's own edit, if any, travels through
+  // eventsApi.setReminders instead of this pure field compiler.
+  it("never carries a reminders field", () => {
     const remindedMaster: Event = {
       ...master,
       reminders: [{ offsetMinutes: 10, channel: "notification" }],
@@ -118,41 +122,9 @@ describe("makeOverride", () => {
       end: new Date(2026, 0, 3, 10, 30),
     };
 
-    expect(makeOverride(remindedMaster, occurrenceStart, changes).reminders).toEqual(
-      remindedMaster.reminders,
+    expect(makeOverride(remindedMaster, occurrenceStart, changes)).not.toHaveProperty(
+      "reminders",
     );
-  });
-
-  it("uses the caller's authored Reminders over the master's when both are present", () => {
-    const remindedMaster: Event = {
-      ...master,
-      reminders: [{ offsetMinutes: 10, channel: "notification" }],
-    };
-    const occurrenceStart = new Date(2026, 0, 3, 9, 0);
-    const authoredReminders = [{ offsetMinutes: 30, channel: "email" as const }];
-    const changes = {
-      calendarId: "cal-1",
-      title: "Standup (moved)",
-      start: new Date(2026, 0, 3, 10, 0),
-      end: new Date(2026, 0, 3, 10, 30),
-      reminders: authoredReminders,
-    };
-
-    expect(makeOverride(remindedMaster, occurrenceStart, changes).reminders).toEqual(
-      authoredReminders,
-    );
-  });
-});
-
-describe("resolveReminders", () => {
-  it("falls back to the reference's own Reminders when changes didn't touch them", () => {
-    const reference = { reminders: [{ offsetMinutes: 10, channel: "notification" as const }] };
-    expect(resolveReminders({}, reference)).toEqual(reference.reminders);
-  });
-
-  it("uses the changes' Reminders when present, even an empty array", () => {
-    const reference = { reminders: [{ offsetMinutes: 10, channel: "notification" as const }] };
-    expect(resolveReminders({ reminders: [] }, reference)).toEqual([]);
   });
 });
 
@@ -281,7 +253,10 @@ describe("splitFollowing", () => {
     expect(result.newMaster.rrule).toBe("FREQ=WEEKLY;BYDAY=TU,TH");
   });
 
-  it("carries the master's Reminders into the new master when changes didn't touch them", () => {
+  // The new Master's Reminders are copied from the old Master server-side
+  // (ADR-0064, via copyRemindersFrom) — splitFollowing itself never touches
+  // them.
+  it("never carries a reminders field on the new master", () => {
     const remindedMaster: Event = {
       ...master,
       reminders: [{ offsetMinutes: 10, channel: "notification" }],
@@ -296,27 +271,7 @@ describe("splitFollowing", () => {
 
     const result = splitFollowing(remindedMaster, splitStart, changes);
 
-    expect(result.newMaster.reminders).toEqual(remindedMaster.reminders);
-  });
-
-  it("carries the caller's authored Reminders into the new master over the master's own", () => {
-    const remindedMaster: Event = {
-      ...master,
-      reminders: [{ offsetMinutes: 10, channel: "notification" }],
-    };
-    const splitStart = new Date(2026, 0, 3, 9, 0);
-    const authoredReminders = [{ offsetMinutes: 30, channel: "email" as const }];
-    const changes = {
-      calendarId: "cal-1",
-      title: "Standup",
-      start: splitStart,
-      end: new Date(2026, 0, 3, 9, 30),
-      reminders: authoredReminders,
-    };
-
-    const result = splitFollowing(remindedMaster, splitStart, changes);
-
-    expect(result.newMaster.reminders).toEqual(authoredReminders);
+    expect(result.newMaster).not.toHaveProperty("reminders");
   });
 });
 
@@ -375,48 +330,54 @@ describe("hasFieldChanges", () => {
     end: new Date(2026, 0, 1, 9, 30),
     allDay: false,
     rrule: "FREQ=DAILY",
-    reminders: [{ offsetMinutes: 10, channel: "notification" as const }],
     description: "Daily sync",
     location: "Room 1",
     url: "https://example.com/ticket",
   };
+  const originalReminders = [{ offsetMinutes: 10, channel: "notification" as const }];
 
   it("is false when nothing differs (#141)", () => {
-    expect(hasFieldChanges({ ...original }, original)).toBe(false);
+    expect(hasFieldChanges({ ...original }, original, originalReminders, originalReminders)).toBe(
+      false,
+    );
   });
 
   it("ignores Reminders order (a reorder isn't a change)", () => {
-    const changes = {
-      ...original,
-      reminders: [
-        { offsetMinutes: 5, channel: "notification" as const },
-        { offsetMinutes: 10, channel: "notification" as const },
-      ],
-    };
-    const reordered = {
-      ...original,
-      reminders: [
-        { offsetMinutes: 10, channel: "notification" as const },
-        { offsetMinutes: 5, channel: "notification" as const },
-      ],
-    };
-    expect(hasFieldChanges(changes, reordered)).toBe(false);
+    const changesReminders = [
+      { offsetMinutes: 5, channel: "notification" as const },
+      { offsetMinutes: 10, channel: "notification" as const },
+    ];
+    const reorderedReminders = [
+      { offsetMinutes: 10, channel: "notification" as const },
+      { offsetMinutes: 5, channel: "notification" as const },
+    ];
+    expect(hasFieldChanges(original, original, changesReminders, reorderedReminders)).toBe(false);
   });
 
   it("is true when the title differs", () => {
-    expect(hasFieldChanges({ ...original, title: "Standup (renamed)" }, original)).toBe(
-      true,
-    );
+    expect(
+      hasFieldChanges(
+        { ...original, title: "Standup (renamed)" },
+        original,
+        originalReminders,
+        originalReminders,
+      ),
+    ).toBe(true);
   });
 
   it("is true when the start or end time differs", () => {
     expect(
-      hasFieldChanges({ ...original, start: new Date(2026, 0, 1, 10, 0) }, original),
+      hasFieldChanges(
+        { ...original, start: new Date(2026, 0, 1, 10, 0) },
+        original,
+        originalReminders,
+        originalReminders,
+      ),
     ).toBe(true);
   });
 
   it("is true when Reminders are actually added or removed", () => {
-    expect(hasFieldChanges({ ...original, reminders: [] }, original)).toBe(true);
+    expect(hasFieldChanges(original, original, [], originalReminders)).toBe(true);
   });
 
   it("is true when the rrule's end condition changes, even though shouldDiscardChildren ignores it", () => {
@@ -424,6 +385,8 @@ describe("hasFieldChanges", () => {
       hasFieldChanges(
         { ...original, rrule: "FREQ=DAILY;COUNT=5" },
         original,
+        originalReminders,
+        originalReminders,
       ),
     ).toBe(true);
   });
@@ -439,26 +402,72 @@ describe("hasFieldChanges", () => {
       hasFieldChanges(
         { ...original, description: "", location: "", url: "" },
         withoutOptional,
+        originalReminders,
+        originalReminders,
       ),
     ).toBe(false);
   });
 
   it("is true when the url differs", () => {
-    expect(hasFieldChanges({ ...original, url: "https://example.com/other" }, original)).toBe(
-      true,
-    );
+    expect(
+      hasFieldChanges(
+        { ...original, url: "https://example.com/other" },
+        original,
+        originalReminders,
+        originalReminders,
+      ),
+    ).toBe(true);
   });
 
   it("is true when a color is set", () => {
-    expect(hasFieldChanges({ ...original, color: "#FF6B35FF" }, original)).toBe(true);
+    expect(
+      hasFieldChanges(
+        { ...original, color: "#FF6B35FF" },
+        original,
+        originalReminders,
+        originalReminders,
+      ),
+    ).toBe(true);
   });
 
   it("is true when a color is explicitly reset to inherit", () => {
     const withColor = { ...original, color: "#FF6B35FF" };
-    expect(hasFieldChanges({ ...withColor, color: null }, withColor)).toBe(true);
+    expect(
+      hasFieldChanges(
+        { ...withColor, color: null },
+        withColor,
+        originalReminders,
+        originalReminders,
+      ),
+    ).toBe(true);
   });
 
   it("treats an absent color key as unchanged from another absent color key", () => {
-    expect(hasFieldChanges({ ...original }, original)).toBe(false);
+    expect(hasFieldChanges({ ...original }, original, originalReminders, originalReminders)).toBe(
+      false,
+    );
+  });
+});
+
+describe("remindersEqual", () => {
+  it("is order-independent", () => {
+    const a = [
+      { offsetMinutes: 5, channel: "notification" as const },
+      { offsetMinutes: 10, channel: "notification" as const },
+    ];
+    const b = [
+      { offsetMinutes: 10, channel: "notification" as const },
+      { offsetMinutes: 5, channel: "notification" as const },
+    ];
+    expect(remindersEqual(a, b)).toBe(true);
+  });
+
+  it("is false when the sets differ", () => {
+    expect(
+      remindersEqual(
+        [{ offsetMinutes: 10, channel: "notification" }],
+        [{ offsetMinutes: 30, channel: "email" }],
+      ),
+    ).toBe(false);
   });
 });

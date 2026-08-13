@@ -117,12 +117,12 @@ export function calendarReadOnlyReason(
   return "viewer";
 }
 
-// calendarHasOtherRecipients reports whether more than one person would be
-// notified by calendar's Reminders — the personal Reminder override control
-// (#117, ADR-0036) renders only then, so a single-user instance never sees a
-// setting that cannot mean anything. True either because the caller isn't
-// this Calendar's Owner (so someone else's Reminders already reach them) or
-// because the Owner has granted at least one Share. Uses canManageCalendar,
+// calendarHasOtherRecipients reports whether more than one person has
+// Access to calendar — the Attachment uploader (#132, ADR-0040) renders only
+// then, so a single-user Calendar never sees an uploader with nobody else to
+// share the file with. True either because the caller isn't this Calendar's
+// Owner (so someone else already has Access) or because the Owner has
+// granted at least one Share. Uses canManageCalendar,
 // not access, for the same reason canManageCalendar itself does: a
 // Subscribed Calendar's Owner reads "viewer" in access but is still its only
 // Owner. Accepts undefined the same way canWriteCalendarEvents does, and

@@ -330,25 +330,31 @@ func parseOptionalTimeParam(w http.ResponseWriter, r *http.Request, name string)
 // so their format can branch on AllDay (ADR-0017) — parseEventTimes turns them
 // into instants once the body has decoded.
 type createEventRequest struct {
-	ID           string         `json:"id"`
-	CalendarID   string         `json:"calendarId"`
-	Title        string         `json:"title"`
-	Start        string         `json:"start"`
-	End          string         `json:"end"`
-	AllDay       bool           `json:"allDay,omitempty"`
-	Rrule        string         `json:"rrule"`
-	ParentID     *string        `json:"parentId,omitempty"`
-	RecurrenceID *time.Time     `json:"recurrenceId,omitempty"`
-	Tzid         *string        `json:"tzid,omitempty"`
-	Reminders    []reminderWire `json:"reminders,omitempty"`
-	Description  string         `json:"description,omitempty"`
-	Location     string         `json:"location,omitempty"`
+	ID           string     `json:"id"`
+	CalendarID   string     `json:"calendarId"`
+	Title        string     `json:"title"`
+	Start        string     `json:"start"`
+	End          string     `json:"end"`
+	AllDay       bool       `json:"allDay,omitempty"`
+	Rrule        string     `json:"rrule"`
+	ParentID     *string    `json:"parentId,omitempty"`
+	RecurrenceID *time.Time `json:"recurrenceId,omitempty"`
+	Tzid         *string    `json:"tzid,omitempty"`
+	Description  string     `json:"description,omitempty"`
+	Location     string     `json:"location,omitempty"`
 	// URL is the Event's optional link (ADR-0063), stored exactly as
 	// submitted — never validated or rewritten.
 	URL string `json:"url,omitempty"`
 	// Color is this Event's own color override — absent/null means "inherit
 	// the Calendar's color" (ADR-0043).
 	Color *string `json:"color,omitempty"`
+	// CopyRemindersFrom, when set, copies every User's Reminder rows from
+	// that Event onto the one this create mints (ADR-0064) — used only by
+	// the "This and following" split's new Master, naming the old Master's
+	// id. An Override (ParentID set) always copies from its own Parent
+	// instead; this field is for the one create that mints a standalone
+	// Master with no Parent relationship of its own to infer it from.
+	CopyRemindersFrom *string `json:"copyRemindersFrom,omitempty"`
 	// AttendeeUserIds, AttendeeGroupIds, and AttendeeEmails name Attendees to
 	// invite as part of this create (#187, ADR-0055, #200/ADR-0058) —
 	// createEventRequest's alone; update carries no Attendee fields of its
@@ -401,23 +407,23 @@ func (h *EventHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 
 	event, err := h.events.Create(r.Context(), userID, req.ID, service.EventWrite{
-		CalendarID:       req.CalendarID,
-		Title:            req.Title,
-		Start:            start,
-		End:              end,
-		AllDay:           req.AllDay,
-		Rrule:            req.Rrule,
-		ParentID:         req.ParentID,
-		RecurrenceID:     req.RecurrenceID,
-		Tzid:             req.Tzid,
-		Reminders:        fromReminderWire(req.Reminders),
-		Description:      req.Description,
-		Location:         req.Location,
-		URL:              req.URL,
-		Color:            req.Color,
-		AttendeeUserIDs:  req.AttendeeUserIds,
-		AttendeeGroupIDs: req.AttendeeGroupIds,
-		AttendeeEmails:   req.AttendeeEmails,
+		CalendarID:        req.CalendarID,
+		Title:             req.Title,
+		Start:             start,
+		End:               end,
+		AllDay:            req.AllDay,
+		Rrule:             req.Rrule,
+		ParentID:          req.ParentID,
+		RecurrenceID:      req.RecurrenceID,
+		Tzid:              req.Tzid,
+		Description:       req.Description,
+		Location:          req.Location,
+		URL:               req.URL,
+		Color:             req.Color,
+		CopyRemindersFrom: req.CopyRemindersFrom,
+		AttendeeUserIDs:   req.AttendeeUserIds,
+		AttendeeGroupIDs:  req.AttendeeGroupIds,
+		AttendeeEmails:    req.AttendeeEmails,
 	})
 	if respondInviteRateLimitError(w, err) {
 		return
@@ -449,16 +455,15 @@ func (h *EventHandler) Get(w http.ResponseWriter, r *http.Request) {
 // updateEventRequest is the PATCH /api/events/{id} body. Start and End are
 // strings for the same reason as createEventRequest's (ADR-0017).
 type updateEventRequest struct {
-	CalendarID  string         `json:"calendarId"`
-	Title       string         `json:"title"`
-	Start       string         `json:"start"`
-	End         string         `json:"end"`
-	AllDay      bool           `json:"allDay,omitempty"`
-	Rrule       string         `json:"rrule"`
-	Tzid        *string        `json:"tzid,omitempty"`
-	Reminders   []reminderWire `json:"reminders,omitempty"`
-	Description string         `json:"description,omitempty"`
-	Location    string         `json:"location,omitempty"`
+	CalendarID  string  `json:"calendarId"`
+	Title       string  `json:"title"`
+	Start       string  `json:"start"`
+	End         string  `json:"end"`
+	AllDay      bool    `json:"allDay,omitempty"`
+	Rrule       string  `json:"rrule"`
+	Tzid        *string `json:"tzid,omitempty"`
+	Description string  `json:"description,omitempty"`
+	Location    string  `json:"location,omitempty"`
 	// URL is the Event's optional link (ADR-0063), stored exactly as
 	// submitted — never validated or rewritten.
 	URL string `json:"url,omitempty"`
@@ -496,7 +501,6 @@ func (h *EventHandler) Update(w http.ResponseWriter, r *http.Request) {
 		AllDay:      req.AllDay,
 		Rrule:       req.Rrule,
 		Tzid:        req.Tzid,
-		Reminders:   fromReminderWire(req.Reminders),
 		Description: req.Description,
 		Location:    req.Location,
 		URL:         req.URL,

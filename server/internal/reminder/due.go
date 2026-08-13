@@ -21,9 +21,9 @@ type DueReminder struct {
 	// record without a second lookup (ADR-0021).
 	Title string
 	// ReminderID identifies the fired Reminder's own row — the ledger's
-	// exactly-once key is (ReminderID, UserID, OccurrenceStart), since a
-	// shared Calendar's Reminder fires independently per recipient
-	// (ADR-0021, ADR-0036).
+	// exactly-once key is (ReminderID, OccurrenceStart): a Reminder id
+	// already implies its own User, so no two Users can ever share one
+	// (ADR-0064).
 	ReminderID      int64
 	OccurrenceStart time.Time
 	OffsetMinutes   int
@@ -49,78 +49,25 @@ func anchor(event repository.Event, occurrenceStart time.Time) time.Time {
 // below, so this only needs to be wide enough to not miss a candidate.
 const occurrenceSearchPad = 24 * time.Hour
 
-// representativeReminder is the single Reminder an offset override replaces
-// an Event's whole Reminder set with (ADR-0036): "remind me two hours before
-// this" is a statement about the Event, not a transformation applied to each
-// of its Reminders, so an offset override must collapse to one trigger
-// rather than one per underlying Reminder. Its id becomes that recipient's
-// ledger key for the Event, so the choice must be stable across ticks and
-// restarts regardless of query ordering — lowest id is arbitrary but fixed.
-// It is not stable across an Event edit, which is fine: ADR-0020
-// wholesale-replaces event_reminders on every edit anyway, so an edited
-// Event's fired history restarts for everyone, override or not.
-func representativeReminder(reminders []repository.Reminder) repository.Reminder {
-	best := reminders[0]
-	for _, r := range reminders[1:] {
-		if r.ID < best.ID {
-			best = r
-		}
-	}
-	return best
-}
-
-// Due returns the due Reminders on event for each recipient whose trigger —
-// an Occurrence's anchor, minus the effective offset — falls in the
-// half-open window (from, to], matching the scheduler's "just-elapsed tick"
-// semantics (ADR-0021). A recurring Event's RRULE is expanded (skipping any
-// Exdated Occurrence); a non-recurring Event is checked as a series of one.
-// Every User in event.RecipientUserIDs — the Calendar's Owner, every Shared
-// Editor and Viewer, and every Attendee of the Event itself — is considered
-// independently, so a Reminder fans out to everyone with Access to the
-// Calendar unioned with everyone invited to the Event, regardless of Access
-// (ADR-0036, ADR-0046). event.RecipientUserIDs is already deduplicated by
-// its caller, so a User who is both an Access-holder and an Attendee is only
-// considered once.
+// Due returns the due Reminders on event for each User with at least one of
+// their own, whose trigger — an Occurrence's anchor, minus the Reminder's
+// own offset — falls in the half-open window (from, to], matching the
+// scheduler's "just-elapsed tick" semantics (ADR-0021). A recurring Event's
+// RRULE is expanded (skipping any Exdated Occurrence); a non-recurring Event
+// is checked as a series of one.
 //
-// A recipient's own entry in event.Overrides (ADR-0036) changes what they
-// receive: a muted override drops them from every Reminder on this Event
-// entirely. An offset override replaces the Event's whole Reminder set with
-// one trigger at the override's offset — so a recipient with such an
-// override gets exactly one DueReminder per Occurrence regardless of how
-// many Reminders the Event carries — substituting the override's Channel too
-// if it also sets one. A Channel-only override (no offset) instead
-// re-channels every Reminder without collapsing their offsets, since nothing
-// about the recipient's timing has changed. Because the effective offset can
-// differ per recipient, the trigger window and its Occurrence search are
-// computed once per (Reminder, recipient) pair rather than once per
-// Reminder.
+// Every User in event.RemindersByUser fires their own rows only, at their
+// own stored offset and Channel — no fan-out to anyone else with Access or
+// Invited, no substitution, no collapse rule (ADR-0064): a User absent from
+// the map is simply never considered. Because each User's Reminders are
+// independent, the trigger window and its Occurrence search are computed
+// once per (Reminder, User) pair.
 func Due(event repository.EventWithOwner, from, to time.Time) ([]DueReminder, error) {
 	var due []DueReminder
 
-	for _, userID := range event.RecipientUserIDs {
-		override, hasOverride := event.Overrides[userID]
-		if hasOverride && override.Muted {
-			continue
-		}
-
-		reminders := event.Reminders
-		if hasOverride && override.OffsetMinutes != nil && len(event.Reminders) > 0 {
-			reminders = []repository.Reminder{representativeReminder(event.Reminders)}
-		}
-
+	for userID, reminders := range event.RemindersByUser {
 		for _, reminder := range reminders {
-			offsetMinutes := reminder.OffsetMinutes
-			channel := reminder.Channel
-			if hasOverride {
-				if override.OffsetMinutes != nil {
-					offsetMinutes = *override.OffsetMinutes
-				}
-				if override.Channel != nil {
-					channel = *override.Channel
-				}
-			}
-
-			offset := time.Duration(offsetMinutes) * time.Minute
+			offset := time.Duration(reminder.OffsetMinutes) * time.Minute
 			triggerFrom := from.Add(offset)
 			triggerTo := to.Add(offset)
 
@@ -142,8 +89,8 @@ func Due(event repository.EventWithOwner, from, to time.Time) ([]DueReminder, er
 						Title:           event.Title,
 						ReminderID:      reminder.ID,
 						OccurrenceStart: start,
-						OffsetMinutes:   offsetMinutes,
-						Channel:         channel,
+						OffsetMinutes:   reminder.OffsetMinutes,
+						Channel:         reminder.Channel,
 					})
 				}
 			}

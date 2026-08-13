@@ -68,9 +68,9 @@ func newTestOutboxAttendeeService(t *testing.T) (svc *EventService, outboxRepo *
 		t.Fatalf("create calendar: %v", err)
 	}
 
-	calendarService := NewCalendarService(calendarRepo, repository.NewCalendarShareRepository(sqlDB), users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo, repository.NewCalendarGroupShareRepository(sqlDB), groupRepo)
+	calendarService := NewCalendarService(calendarRepo, repository.NewCalendarShareRepository(sqlDB), users, repository.NewEventReminderRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo, repository.NewCalendarGroupShareRepository(sqlDB), groupRepo)
 	outboxRepo = repository.NewOutboxRepository(sqlDB)
-	svc = NewEventService(sqlDB, repository.NewEventRepository(sqlDB), repository.NewEventExceptionRepository(sqlDB), repository.NewEventReminderRepository(sqlDB), repository.NewReminderOverrideRepository(sqlDB), repository.NewSyncRepository(sqlDB), calendarService, users, repository.NewAttachmentRepository(sqlDB), repository.NewAttendeeRepository(sqlDB), workspaceRepo, groupRepo, repository.NewNotificationRepository(sqlDB), outboxRepo, 1000)
+	svc = NewEventService(sqlDB, repository.NewEventRepository(sqlDB), repository.NewEventExceptionRepository(sqlDB), repository.NewEventReminderRepository(sqlDB), repository.NewSyncRepository(sqlDB), calendarService, users, repository.NewAttachmentRepository(sqlDB), repository.NewAttendeeRepository(sqlDB), workspaceRepo, groupRepo, repository.NewNotificationRepository(sqlDB), outboxRepo, 1000)
 
 	return svc, outboxRepo, owner.ID, member.ID, otherMember.ID, workspace.ID, cal.ID
 }
@@ -538,10 +538,12 @@ func TestEventService_Update_NonMaterialChange_ResendsWithoutBumpingSequence(t *
 	}
 }
 
-// TestEventService_Update_UnrelatedFieldChange_QueuesNothing covers the
-// negative space: changing something an Invitation never renders (here,
-// Reminders — ADR-0059 explicitly excludes VALARM) queues no re-send at all.
-func TestEventService_Update_UnrelatedFieldChange_QueuesNothing(t *testing.T) {
+// TestEventService_SetReminders_QueuesNothing covers the negative space:
+// a Reminder change is never an Event write at all any more (ADR-0064), and
+// an Invitation never rendered VALARM in the first place (ADR-0059) — so
+// SetReminders queues no re-send, exactly as an Update that never touched
+// Reminders wouldn't have.
+func TestEventService_SetReminders_QueuesNothing(t *testing.T) {
 	svc, outboxRepo, ownerID, memberID, _, _, calendarID := newTestOutboxAttendeeService(t)
 	ctx := context.Background()
 	event := createTestEvent(t, svc, ownerID, calendarID, "evt-1")
@@ -550,10 +552,8 @@ func TestEventService_Update_UnrelatedFieldChange_QueuesNothing(t *testing.T) {
 	}
 	drainOutbox(t, outboxRepo)
 
-	write := baseEventWrite(calendarID)
-	write.Reminders = []repository.Reminder{{OffsetMinutes: 10, Channel: "notification"}}
-	if _, err := svc.Update(ctx, ownerID, event.ID, write); err != nil {
-		t.Fatalf("update: %v", err)
+	if _, err := svc.SetReminders(ctx, ownerID, event.ID, []repository.Reminder{{OffsetMinutes: 10, Channel: "notification"}}); err != nil {
+		t.Fatalf("set reminders: %v", err)
 	}
 
 	pending, err := outboxRepo.ListPending(ctx, 10)

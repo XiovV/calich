@@ -1,4 +1,10 @@
-import { useRef, useState, type DragEvent, type KeyboardEvent, type ReactNode } from "react";
+import {
+  useRef,
+  useState,
+  type DragEvent,
+  type KeyboardEvent,
+  type ReactNode,
+} from "react";
 import { addDays, format, setHours, setMinutes, startOfDay } from "date-fns";
 import { Dialog } from "@base-ui/react/dialog";
 import { Popover } from "@base-ui/react/popover";
@@ -22,10 +28,15 @@ import { followableUrl } from "../lib/followableUrl";
 import { attachmentsApi } from "../lib/attachmentsApi";
 import { downloadBlob } from "../lib/downloadBlob";
 import { errorMessage } from "../lib/errorMessage";
-import { isRecurringOccurrence, resolveMaster, type Occurrence } from "../lib/occurrence";
+import {
+  isRecurringOccurrence,
+  resolveMaster,
+  type Occurrence,
+} from "../lib/occurrence";
 import { viewerZone } from "../lib/floatingTime";
 import {
   hasFieldChanges,
+  remindersEqual,
   shouldDiscardChildren,
   type EditScope,
   type EventFieldChanges,
@@ -76,9 +87,11 @@ import { CustomRecurrenceDialog } from "./CustomRecurrenceDialog";
 import { ScopePicker } from "./ScopePicker";
 import { DiscardRecurrenceWarning } from "./DiscardRecurrenceWarning";
 import { ReminderRow } from "./ReminderRow";
-import { ReminderOverrideControl } from "./ReminderOverrideControl";
 import { AttachmentRow, type AttachmentDraft } from "./AttachmentRow";
-import { EventAttendeesSection, type StagedAttendeeTarget } from "./EventAttendeesSection";
+import {
+  EventAttendeesSection,
+  type StagedAttendeeTarget,
+} from "./EventAttendeesSection";
 
 /** A Reminder plus a local id, so its row keeps stable identity across
  * add/remove/reorder in the Reminders section (Reminder itself has no id —
@@ -93,7 +106,8 @@ type RepeatChoice = RecurrencePreset | "custom";
 // CalendarPickerEmptyReason — one map instead of a branch per render site.
 const CALENDAR_EMPTY_STATE_COPY: Record<CalendarPickerEmptyReason, string> = {
   none: "You don't have any calendars yet.",
-  hidden: "Your calendars are all hidden. Show one in the sidebar to add events to it.",
+  hidden:
+    "Your calendars are all hidden. Show one in the sidebar to add events to it.",
   unwritable:
     "You don't have a calendar you can add events to — everything you can see is shared with view-only access.",
 };
@@ -210,7 +224,9 @@ function IconFieldRow({
   children: ReactNode;
 }) {
   return (
-    <div className={`${spacing} flex gap-2.5 ${align === "start" ? "items-start" : "items-center"}`}>
+    <div
+      className={`${spacing} flex gap-2.5 ${align === "start" ? "items-start" : "items-center"}`}
+    >
       <span
         className={`flex ${ICON_COLUMN_WIDTH} shrink-0 items-center justify-center text-ink-muted ${
           align === "start" ? startOffset : ""
@@ -241,7 +257,8 @@ export function EventModal(props: EventModalProps) {
   const accessToken = useAuthStore((state) => state.accessToken);
   const currentUserName = useAuthStore((state) => state.user?.name);
 
-  const isRecurring = mode === "edit" && isRecurringOccurrence(props.occurrence);
+  const isRecurring =
+    mode === "edit" && isRecurringOccurrence(props.occurrence);
   const master =
     mode === "edit"
       ? (resolveMaster(events, props.occurrence) ?? props.occurrence.event)
@@ -258,14 +275,20 @@ export function EventModal(props: EventModalProps) {
   // than Viewer Access to both never appear as Calendar picker options,
   // whether checked or not.
   const writableCalendars = calendars.filter((c) => canWriteCalendarEvents(c));
-  const checkedCalendars = getCheckedCalendars(writableCalendars, checkedCalendarIds);
+  const checkedCalendars = getCheckedCalendars(
+    writableCalendars,
+    checkedCalendarIds,
+  );
   // An event's calendar may have been unchecked (hidden) since it was created —
   // still include it as an option so its current selection isn't silently lost.
   const calendarOptions =
-    eventForOptions && !checkedCalendars.some((c) => c.id === eventForOptions.calendarId)
+    eventForOptions &&
+    !checkedCalendars.some((c) => c.id === eventForOptions.calendarId)
       ? [
           ...checkedCalendars,
-          ...writableCalendars.filter((c) => c.id === eventForOptions.calendarId),
+          ...writableCalendars.filter(
+            (c) => c.id === eventForOptions.calendarId,
+          ),
         ]
       : checkedCalendars;
 
@@ -282,7 +305,8 @@ export function EventModal(props: EventModalProps) {
   // created on a Calendar the picker already limited to writableCalendars
   // above, so editedCalendar (undefined in create mode) must never make
   // canWriteCalendarEvents' undefined-is-unwritable default apply here too.
-  const isReadOnlyEvent = mode === "edit" && !canWriteCalendarEvents(editedCalendar);
+  const isReadOnlyEvent =
+    mode === "edit" && !canWriteCalendarEvents(editedCalendar);
   const readOnlyReason = calendarReadOnlyReason(editedCalendar);
   // resolveOccurrenceColor's Calendar fallback for an Attendee-only Event
   // (ADR-0046):
@@ -293,11 +317,6 @@ export function EventModal(props: EventModalProps) {
     mode === "edit" && !editedCalendar && props.occurrence.event.calendarColor
       ? { color: props.occurrence.event.calendarColor }
       : undefined;
-  // The personal Reminder override control (#117) is only meaningful once
-  // there's someone else to distinguish "for everyone" from "for me" —
-  // absent on a Calendar nobody else can see. Only an existing Event has an
-  // id to key an override to.
-  const showReminderOverride = mode === "edit" && calendarHasOtherRecipients(editedCalendar);
   // Organizer row (ADR-0055): the signed-in caller in create mode — there's
   // no Event yet, so they're necessarily its creator-to-be — or the
   // Event's actual creator once known in edit mode. Undefined when there's
@@ -308,7 +327,8 @@ export function EventModal(props: EventModalProps) {
   // picker to show.
   const organizerName =
     mode === "edit" ? props.occurrence.event.createdByName : currentUserName;
-  const showAttachmentUploader = mode === "edit" && calendarHasOtherRecipients(editedCalendar);
+  const showAttachmentUploader =
+    mode === "edit" && calendarHasOtherRecipients(editedCalendar);
 
   // #174: when no Calendar is a valid write target, the picker's empty
   // state names why instead of rendering an empty dropdown next to a
@@ -341,17 +361,18 @@ export function EventModal(props: EventModalProps) {
   // carries every signal empty/zero, so this is trivially false for it.
   // "More options" (below) is the only way this flips true; there is no
   // "Fewer options" to flip it back for this modal session.
-  const [isExpanded, setIsExpanded] = useState(() =>
-    mode === "edit" &&
-    hasSecondaryEventFields({
-      location: initial.location,
-      description: initial.description,
-      url: initial.url,
-      hasRrule: initial.repeat !== "none",
-      reminderCount: initial.reminders.length,
-      attachmentCount: master?.attachments?.length ?? 0,
-      attendeeCount: master?.attendeeCount ?? 0,
-    }),
+  const [isExpanded, setIsExpanded] = useState(
+    () =>
+      mode === "edit" &&
+      hasSecondaryEventFields({
+        location: initial.location,
+        description: initial.description,
+        url: initial.url,
+        hasRrule: initial.repeat !== "none",
+        reminderCount: initial.reminders.length,
+        attachmentCount: master?.attachments?.length ?? 0,
+        attendeeCount: master?.attendeeCount ?? 0,
+      }),
   );
 
   // Attachments (#132, ADR-0040) belong to the Master, never an Override —
@@ -361,13 +382,15 @@ export function EventModal(props: EventModalProps) {
   // upload needs a row to reference; until then, a picked/dropped file just
   // sits in attachmentDrafts as "pending" (ADR-0040).
   const [createdEventId, setCreatedEventId] = useState<string | null>(null);
-  const attachmentEventId = mode === "edit" ? master?.id : (createdEventId ?? undefined);
-  const [attachmentDrafts, setAttachmentDrafts] = useState<AttachmentDraft[]>(() =>
-    (master?.attachments ?? []).map((attachment) => ({
-      draftId: attachment.id,
-      status: "uploaded" as const,
-      attachment,
-    })),
+  const attachmentEventId =
+    mode === "edit" ? master?.id : (createdEventId ?? undefined);
+  const [attachmentDrafts, setAttachmentDrafts] = useState<AttachmentDraft[]>(
+    () =>
+      (master?.attachments ?? []).map((attachment) => ({
+        draftId: attachment.id,
+        status: "uploaded" as const,
+        attachment,
+      })),
   );
   const [isDraggingOverModal, setIsDraggingOverModal] = useState(false);
   const attachmentInputRef = useRef<HTMLInputElement>(null);
@@ -378,10 +401,15 @@ export function EventModal(props: EventModalProps) {
   // attachmentEventId above: undefined until a brand-new Event's create
   // POST has succeeded, at which point the section switches from staging
   // to the same committed list an edited Event shows.
-  const [stagedAttendees, setStagedAttendees] = useState<StagedAttendeeTarget[]>([]);
-  const [attendeeCreateError, setAttendeeCreateError] = useState<string | null>(null);
+  const [stagedAttendees, setStagedAttendees] = useState<
+    StagedAttendeeTarget[]
+  >([]);
+  const [attendeeCreateError, setAttendeeCreateError] = useState<string | null>(
+    null,
+  );
   const [isSavingWithAttendees, setIsSavingWithAttendees] = useState(false);
-  const attendeeEventId = mode === "edit" ? master?.id : (createdEventId ?? undefined);
+  const attendeeEventId =
+    mode === "edit" ? master?.id : (createdEventId ?? undefined);
 
   const [title, setTitle] = useState(initial.title);
   const [startTime, setStartTime] = useState(initial.startTime);
@@ -393,7 +421,10 @@ export function EventModal(props: EventModalProps) {
     initial.customRule,
   );
   const [reminders, setReminders] = useState<ReminderDraft[]>(() =>
-    initial.reminders.map((reminder) => ({ ...reminder, draftId: crypto.randomUUID() })),
+    initial.reminders.map((reminder) => ({
+      ...reminder,
+      draftId: crypto.randomUUID(),
+    })),
   );
   const [description, setDescription] = useState(initial.description);
   const [location, setLocation] = useState(initial.location);
@@ -406,13 +437,20 @@ export function EventModal(props: EventModalProps) {
   const [isCustomDialogOpen, setIsCustomDialogOpen] = useState(false);
   const [isCreateCalendarOpen, setIsCreateCalendarOpen] = useState(false);
   const [isDeleteConfirmOpen, setIsDeleteConfirmOpen] = useState(false);
-  const [pendingEditChanges, setPendingEditChanges] = useState<
-    (EventFieldChanges & { rrule?: string }) | null
-  >(null);
+  // reminders is the acting User's own Reminders draft, present only when it
+  // differs from initial.reminders — undefined means "untouched", so the
+  // eventual editOccurrence call writes nothing rather than resetting
+  // fired-history for no reason (ADR-0064).
+  const [pendingEditChanges, setPendingEditChanges] = useState<{
+    changes: EventFieldChanges & { rrule?: string };
+    reminders: Reminder[] | undefined;
+  } | null>(null);
   const [isDiscardWarningOpen, setIsDiscardWarningOpen] = useState(false);
   const [isDeleteScopePickerOpen, setIsDeleteScopePickerOpen] = useState(false);
-  const [isDownloadScopePickerOpen, setIsDownloadScopePickerOpen] = useState(false);
-  const [pendingExportSummary, setPendingExportSummary] = useState<ExportSummary | null>(null);
+  const [isDownloadScopePickerOpen, setIsDownloadScopePickerOpen] =
+    useState(false);
+  const [pendingExportSummary, setPendingExportSummary] =
+    useState<ExportSummary | null>(null);
   const [isConfirmingExport, setIsConfirmingExport] = useState(false);
 
   // The Calendar row's swatch (#193): this Event's own color if it has one,
@@ -424,7 +462,9 @@ export function EventModal(props: EventModalProps) {
 
   // Preset labels are derived from the event's start date, so e.g. "Weekly on
   // Tuesday" tracks the day the event lives on.
-  const startForRule = allDay ? startOfDay(day) : timeStringToDate(day, startTime);
+  const startForRule = allDay
+    ? startOfDay(day)
+    : timeStringToDate(day, startTime);
   const repeatOptions = [
     ...RECURRENCE_PRESETS.map((preset) => ({
       value: preset as RepeatChoice,
@@ -467,7 +507,9 @@ export function EventModal(props: EventModalProps) {
 
   function handleReminderChange(draftId: string, reminder: Reminder) {
     setReminders((current) =>
-      current.map((r) => (r.draftId === draftId ? { ...reminder, draftId } : r)),
+      current.map((r) =>
+        r.draftId === draftId ? { ...reminder, draftId } : r,
+      ),
     );
   }
 
@@ -481,7 +523,11 @@ export function EventModal(props: EventModalProps) {
   // adding a new one. Every state update first checks the draft is still
   // present, since removing a row mid-upload doesn't cancel the request —
   // there is nothing to write the result onto if it finishes anyway.
-  function startAttachmentUpload(file: File, eventId: string, existingDraftId?: string) {
+  function startAttachmentUpload(
+    file: File,
+    eventId: string,
+    existingDraftId?: string,
+  ) {
     const draftId = existingDraftId ?? crypto.randomUUID();
     setAttachmentDrafts((current) => {
       const uploading: AttachmentDraft = {
@@ -493,7 +539,9 @@ export function EventModal(props: EventModalProps) {
       };
       const index = current.findIndex((draft) => draft.draftId === draftId);
       if (index === -1) return [...current, uploading];
-      return current.map((draft) => (draft.draftId === draftId ? uploading : draft));
+      return current.map((draft) =>
+        draft.draftId === draftId ? uploading : draft,
+      );
     });
 
     attachmentsApi
@@ -508,9 +556,12 @@ export function EventModal(props: EventModalProps) {
       })
       .then((attachment) => {
         setAttachmentDrafts((current) => {
-          if (!current.some((draft) => draft.draftId === draftId)) return current;
+          if (!current.some((draft) => draft.draftId === draftId))
+            return current;
           return current.map((draft) =>
-            draft.draftId === draftId ? { draftId, status: "uploaded", attachment } : draft,
+            draft.draftId === draftId
+              ? { draftId, status: "uploaded", attachment }
+              : draft,
           );
         });
         // Keeps the store's copy of the Event in sync, so reopening it later
@@ -520,7 +571,8 @@ export function EventModal(props: EventModalProps) {
       })
       .catch((err) => {
         setAttachmentDrafts((current) => {
-          if (!current.some((draft) => draft.draftId === draftId)) return current;
+          if (!current.some((draft) => draft.draftId === draftId))
+            return current;
           return current.map((draft) =>
             draft.draftId === draftId
               ? {
@@ -568,7 +620,9 @@ export function EventModal(props: EventModalProps) {
 
   // No confirmation dialog — inline remove, like ReminderRow (ADR-0040).
   function handleRemoveAttachment(draft: AttachmentDraft) {
-    setAttachmentDrafts((current) => current.filter((d) => d.draftId !== draft.draftId));
+    setAttachmentDrafts((current) =>
+      current.filter((d) => d.draftId !== draft.draftId),
+    );
     if (draft.status === "uploaded" && attachmentEventId && accessToken) {
       attachmentsApi
         .remove(accessToken, attachmentEventId, draft.attachment.id)
@@ -643,12 +697,19 @@ export function EventModal(props: EventModalProps) {
     // An all-day Event's start/end are whole dates: start is the day itself,
     // end is the exclusive next day (ADR-0017).
     const start = allDay ? startOfDay(day) : timeStringToDate(day, startTime);
-    const end = allDay ? addDays(startOfDay(day), 1) : timeStringToDate(day, endTime);
+    const end = allDay
+      ? addDays(startOfDay(day), 1)
+      : timeStringToDate(day, endTime);
     const rrule = repeat === "custom" ? customRule : buildRule(repeat, start);
-    const reminderChanges: Reminder[] = reminders.map((r) => ({
+    // The acting User's own Reminders draft. Reminders have their own write
+    // path (eventsApi.setReminders), never the Event create/update payload
+    // (ADR-0064) — remindersDraft travels separately from `changes` below,
+    // and only when it actually differs from what the modal opened with.
+    const remindersDraft: Reminder[] = reminders.map((r) => ({
       offsetMinutes: r.offsetMinutes,
       channel: r.channel,
     }));
+    const remindersChanged = !remindersEqual(remindersDraft, initial.reminders);
     const changes = {
       calendarId,
       title: title.trim(),
@@ -656,7 +717,6 @@ export function EventModal(props: EventModalProps) {
       end,
       allDay,
       rrule,
-      reminders: reminderChanges,
       description: description.trim(),
       location: location.trim(),
       // Unlike description/location, never trimmed — trailing whitespace
@@ -676,19 +736,30 @@ export function EventModal(props: EventModalProps) {
           draft.status === "pending",
       );
       const attendeeUserIds = stagedAttendees
-        .filter((t): t is Extract<StagedAttendeeTarget, { kind: "user" }> => t.kind === "user")
+        .filter(
+          (t): t is Extract<StagedAttendeeTarget, { kind: "user" }> =>
+            t.kind === "user",
+        )
         .map((t) => t.userId);
       const attendeeGroupIds = stagedAttendees
-        .filter((t): t is Extract<StagedAttendeeTarget, { kind: "group" }> => t.kind === "group")
+        .filter(
+          (t): t is Extract<StagedAttendeeTarget, { kind: "group" }> =>
+            t.kind === "group",
+        )
         .map((t) => t.groupId);
       const attendeeEmails = stagedAttendees
-        .filter((t): t is Extract<StagedAttendeeTarget, { kind: "email" }> => t.kind === "email")
+        .filter(
+          (t): t is Extract<StagedAttendeeTarget, { kind: "email" }> =>
+            t.kind === "email",
+        )
         .map((t) => t.email);
       const attendeesAreStaged =
-        attendeeUserIds.length > 0 || attendeeGroupIds.length > 0 || attendeeEmails.length > 0;
+        attendeeUserIds.length > 0 ||
+        attendeeGroupIds.length > 0 ||
+        attendeeEmails.length > 0;
 
       if (pendingFiles.length === 0 && !attendeesAreStaged) {
-        addEvent({ id, ...changes, tzid });
+        addEvent({ id, ...changes, tzid, reminders: remindersDraft });
         onClose();
         return;
       }
@@ -703,7 +774,10 @@ export function EventModal(props: EventModalProps) {
         setIsSavingWithAttendees(true);
         setAttendeeCreateError(null);
         try {
-          await addEvent({ id, ...changes, tzid }, { attendeeUserIds, attendeeGroupIds, attendeeEmails });
+          await addEvent(
+            { id, ...changes, tzid, reminders: remindersDraft },
+            { attendeeUserIds, attendeeGroupIds, attendeeEmails },
+          );
         } catch (err) {
           setAttendeeCreateError(errorMessage(err));
           return;
@@ -731,7 +805,7 @@ export function EventModal(props: EventModalProps) {
       // dialog stays open afterwards so per-file progress/retry has
       // somewhere to live; its footer switches to a single Done button
       // once createdEventId is set.
-      await addEvent({ id, ...changes, tzid });
+      await addEvent({ id, ...changes, tzid, reminders: remindersDraft });
       if (!useEventsStore.getState().events.some((event) => event.id === id)) {
         // addEvent already rolled back its optimistic add and toasted the
         // failure — the Event was never saved, so there's nothing to
@@ -747,7 +821,10 @@ export function EventModal(props: EventModalProps) {
     }
 
     if (!isRecurring) {
-      updateEvent(props.occurrence.event.id, changes);
+      updateEvent(props.occurrence.event.id, {
+        ...changes,
+        ...(remindersChanged ? { reminders: remindersDraft } : {}),
+      });
       onClose();
       return;
     }
@@ -756,11 +833,19 @@ export function EventModal(props: EventModalProps) {
       // A rule change is forced to "All events"; warn first only if there's
       // something to lose.
       if (masterHasChildren) {
-        setPendingEditChanges(changes);
+        setPendingEditChanges({
+          changes,
+          reminders: remindersChanged ? remindersDraft : undefined,
+        });
         setIsDiscardWarningOpen(true);
         return;
       }
-      editOccurrence(props.occurrence, "all", changes);
+      editOccurrence(
+        props.occurrence,
+        "all",
+        changes,
+        remindersChanged ? remindersDraft : undefined,
+      );
       onClose();
       return;
     }
@@ -773,29 +858,41 @@ export function EventModal(props: EventModalProps) {
     // for a scope that controls nothing (#141).
     if (
       master &&
-      !hasFieldChanges(changes, {
-        calendarId: initial.calendarId,
-        title: initial.title,
-        start: props.occurrence.start,
-        end: props.occurrence.end,
-        allDay: initial.allDay,
-        rrule: master.rrule,
-        reminders: initial.reminders,
-        description: initial.description,
-        location: initial.location,
-        url: initial.url,
-        color: initial.color,
-      })
+      !hasFieldChanges(
+        changes,
+        {
+          calendarId: initial.calendarId,
+          title: initial.title,
+          start: props.occurrence.start,
+          end: props.occurrence.end,
+          allDay: initial.allDay,
+          rrule: master.rrule,
+          description: initial.description,
+          location: initial.location,
+          url: initial.url,
+          color: initial.color,
+        },
+        remindersDraft,
+        initial.reminders,
+      )
     ) {
       onClose();
       return;
     }
-    setPendingEditChanges(changes);
+    setPendingEditChanges({
+      changes,
+      reminders: remindersChanged ? remindersDraft : undefined,
+    });
   }
 
   function handleConfirmDiscardWarning() {
     if (mode === "edit" && pendingEditChanges) {
-      editOccurrence(props.occurrence, "all", pendingEditChanges);
+      editOccurrence(
+        props.occurrence,
+        "all",
+        pendingEditChanges.changes,
+        pendingEditChanges.reminders,
+      );
     }
     setIsDiscardWarningOpen(false);
     setPendingEditChanges(null);
@@ -804,7 +901,12 @@ export function EventModal(props: EventModalProps) {
 
   function handleScopeConfirm(scope: EditScope) {
     if (mode === "edit" && pendingEditChanges) {
-      editOccurrence(props.occurrence, scope, pendingEditChanges);
+      editOccurrence(
+        props.occurrence,
+        scope,
+        pendingEditChanges.changes,
+        pendingEditChanges.reminders,
+      );
     }
     setPendingEditChanges(null);
     onClose();
@@ -859,7 +961,10 @@ export function EventModal(props: EventModalProps) {
       return;
     }
     try {
-      const summary = await icsApi.eventOversizedAttachments(accessToken, props.occurrence.event.id);
+      const summary = await icsApi.eventOversizedAttachments(
+        accessToken,
+        props.occurrence.event.id,
+      );
       if (summary.count === 0) {
         await downloadEvent("all");
       } else {
@@ -949,7 +1054,10 @@ export function EventModal(props: EventModalProps) {
                     <Download className="size-3.5" />
                   </IconButton>
                 )}
-                <Dialog.Close className={iconButtonClasses({ size: "tiny" })} aria-label="Close">
+                <Dialog.Close
+                  className={iconButtonClasses({ size: "tiny" })}
+                  aria-label="Close"
+                >
                   <X className="size-3.5" />
                 </Dialog.Close>
               </div>
@@ -961,366 +1069,384 @@ export function EventModal(props: EventModalProps) {
                 void handleSave();
               }}
             >
-            <Input
-              label="Title"
-              value={title}
-              onChange={(event) => setTitle(event.target.value)}
-              placeholder="Add title"
-              disabled={isReadOnlyEvent}
-              className="mt-4"
-            />
-
-            <label className="mt-4 inline-flex cursor-pointer items-center gap-2 text-label-sm text-ink">
-              <Checkbox
-                checked={allDay}
-                onCheckedChange={setAllDay}
-                aria-label="All day"
+              <Input
+                label="Title"
+                value={title}
+                onChange={(event) => setTitle(event.target.value)}
+                placeholder="Add title"
                 disabled={isReadOnlyEvent}
+                className="mt-4"
               />
-              All day
-            </label>
 
-            {!allDay && (
-              <>
-                <div className="mt-4 flex gap-3">
-                  <Input
-                    label="Start"
-                    type="time"
-                    value={startTime}
-                    onChange={(event) => setStartTime(event.target.value)}
-                    invalid={!isTimeRangeValid}
-                    disabled={isReadOnlyEvent}
-                    className="flex-1"
-                  />
-                  <Input
-                    label="End"
-                    type="time"
-                    value={endTime}
-                    onChange={(event) => setEndTime(event.target.value)}
-                    invalid={!isTimeRangeValid}
-                    disabled={isReadOnlyEvent}
-                    className="flex-1"
-                  />
-                </div>
-                {!isTimeRangeValid && (
-                  <p className="mt-1 text-label-sm text-danger">
-                    End time must be after start time.
-                  </p>
-                )}
-              </>
-            )}
+              <label className="mt-4 inline-flex cursor-pointer items-center gap-2 text-label-sm text-ink">
+                <Checkbox
+                  checked={allDay}
+                  onCheckedChange={setAllDay}
+                  aria-label="All day"
+                  disabled={isReadOnlyEvent}
+                />
+                All day
+              </label>
 
-            {/* An icon replaces the word "Calendar" (#193) — same gutter the
+              {!allDay && (
+                <>
+                  <div className="mt-4 flex gap-3">
+                    <Input
+                      label="Start"
+                      type="time"
+                      value={startTime}
+                      onChange={(event) => setStartTime(event.target.value)}
+                      invalid={!isTimeRangeValid}
+                      disabled={isReadOnlyEvent}
+                      className="flex-1"
+                    />
+                    <Input
+                      label="End"
+                      type="time"
+                      value={endTime}
+                      onChange={(event) => setEndTime(event.target.value)}
+                      invalid={!isTimeRangeValid}
+                      disabled={isReadOnlyEvent}
+                      className="flex-1"
+                    />
+                  </div>
+                  {!isTimeRangeValid && (
+                    <p className="mt-1 text-label-sm text-danger">
+                      End time must be after start time.
+                    </p>
+                  )}
+                </>
+              )}
+
+              {/* An icon replaces the word "Calendar" (#193) — same gutter the
                 secondary fields below use, so the Select and its swatch line
                 up on the same left edge as everything under "More options".
                 Both sit inside one items-center row so the swatch centers
                 against the Select trigger's own height, not a label above
                 it (there no longer is one) or the row's full width. */}
-            <IconFieldRow icon={<CalendarIcon className="size-4" />} spacing="mt-4">
-              <div className="flex items-center gap-2">
-                {isReadOnlyEvent && editedCalendar ? (
-                  <p className="min-w-0 flex-1 text-label-sm text-ink-muted">
-                    {readOnlyReason === "subscription"
-                      ? `Calendar: ${editedCalendar.name} (subscribed) — read-only; only Refresh can update it.`
-                      : `Calendar: ${editedCalendar.name} — read-only; you have Viewer access.`}
-                  </p>
-                ) : mode === "edit" && !editedCalendar ? (
-                  // editedCalendar is undefined: this Event's Calendar carries
-                  // no Access row for the caller at all — an Attendee-only
-                  // Event (ADR-0046), never reachable in create mode, where
-                  // the picker only ever offers writableCalendars. calendarName
-                  // is the wire's own fallback for exactly this case.
-                  <p className="min-w-0 flex-1 text-label-sm text-ink-muted">
-                    {`Calendar: ${props.occurrence.event.calendarName ?? "Unknown"} — you can see this event because you're invited as an Attendee.`}
-                  </p>
-                ) : calendarEmptyReason ? (
-                  <div className="min-w-0 flex-1">
-                    <p className="text-label-sm text-ink-muted">
-                      {CALENDAR_EMPTY_STATE_COPY[calendarEmptyReason]}
+              <IconFieldRow
+                icon={<CalendarIcon className="size-4" />}
+                spacing="mt-4"
+              >
+                <div className="flex items-center gap-2">
+                  {isReadOnlyEvent && editedCalendar ? (
+                    <p className="min-w-0 flex-1 text-label-sm text-ink-muted">
+                      {readOnlyReason === "subscription"
+                        ? `Calendar: ${editedCalendar.name} (subscribed) — read-only; only Refresh can update it.`
+                        : `Calendar: ${editedCalendar.name} — read-only; you have Viewer access.`}
                     </p>
-                    {calendarEmptyReason !== "hidden" && (
-                      <button
-                        type="button"
-                        onClick={() => setIsCreateCalendarOpen(true)}
-                        className="mt-1.5 cursor-pointer text-label-sm text-accent hover:underline"
-                      >
-                        Create a calendar
-                      </button>
-                    )}
-                  </div>
-                ) : (
-                  <Select
-                    aria-label="Calendar"
-                    value={calendarId}
-                    onValueChange={setCalendarId}
-                    options={calendarOptions.map((calendar) => ({
-                      value: calendar.id,
-                      label: calendarPickerLabel(calendar),
-                    }))}
-                  />
-                )}
+                  ) : mode === "edit" && !editedCalendar ? (
+                    // editedCalendar is undefined: this Event's Calendar carries
+                    // no Access row for the caller at all — an Attendee-only
+                    // Event (ADR-0046), never reachable in create mode, where
+                    // the picker only ever offers writableCalendars. calendarName
+                    // is the wire's own fallback for exactly this case.
+                    <p className="min-w-0 flex-1 text-label-sm text-ink-muted">
+                      {`Calendar: ${props.occurrence.event.calendarName ?? "Unknown"} — you can see this event because you're invited as an Attendee.`}
+                    </p>
+                  ) : calendarEmptyReason ? (
+                    <div className="min-w-0 flex-1">
+                      <p className="text-label-sm text-ink-muted">
+                        {CALENDAR_EMPTY_STATE_COPY[calendarEmptyReason]}
+                      </p>
+                      {calendarEmptyReason !== "hidden" && (
+                        <button
+                          type="button"
+                          onClick={() => setIsCreateCalendarOpen(true)}
+                          className="mt-1.5 cursor-pointer text-label-sm text-accent hover:underline"
+                        >
+                          Create a calendar
+                        </button>
+                      )}
+                    </div>
+                  ) : (
+                    <Select
+                      aria-label="Calendar"
+                      value={calendarId}
+                      onValueChange={setCalendarId}
+                      options={calendarOptions.map((calendar) => ({
+                        value: calendar.id,
+                        label: calendarPickerLabel(calendar),
+                      }))}
+                    />
+                  )}
 
-                {/* The Color swatch (ADR-0043) lives in the Calendar row
+                  {/* The Color swatch (ADR-0043) lives in the Calendar row
                     rather than its own block. A ring on the closed swatch is
                     the only signal — now that the picker sits behind a click
                     — that this Event overrides its Calendar's color at all
                     (#193). */}
-                {!isCalendarEmptyStateBranch &&
-                  (isReadOnlyEvent ? (
-                    // Read-only branches (subscribed, Viewer, Attendee-only)
-                    // still show their color, just as a static dot — never a
-                    // button, since there is nothing to open (#193).
-                    <span
-                      aria-hidden
-                      className={`size-5 shrink-0 rounded-shell-pill ${
-                        color !== undefined
-                          ? "ring-2 ring-accent ring-offset-2 ring-offset-surface"
-                          : ""
-                      }`}
-                      style={{ backgroundColor: toOpaqueHex(resolvedEventColor) }}
-                    />
-                  ) : (
-                    <Popover.Root>
-                      <Popover.Trigger
-                        aria-label="Event colour"
-                        className={`size-5 shrink-0 cursor-pointer rounded-shell-pill transition-shadow ${
+                  {!isCalendarEmptyStateBranch &&
+                    (isReadOnlyEvent ? (
+                      // Read-only branches (subscribed, Viewer, Attendee-only)
+                      // still show their color, just as a static dot — never a
+                      // button, since there is nothing to open (#193).
+                      <span
+                        aria-hidden
+                        className={`size-5 shrink-0 rounded-shell-pill ${
                           color !== undefined
                             ? "ring-2 ring-accent ring-offset-2 ring-offset-surface"
-                            : "ring-1 ring-border"
+                            : ""
                         }`}
-                        style={{ backgroundColor: toOpaqueHex(resolvedEventColor) }}
+                        style={{
+                          backgroundColor: toOpaqueHex(resolvedEventColor),
+                        }}
                       />
-                      <Popover.Portal>
-                        <Popover.Positioner sideOffset={4} align="end" className="z-[60]">
-                          <Popover.Popup className="rounded-shell-md border border-border bg-surface p-3 shadow-elevation-2">
-                            <ColorSwatchPicker value={resolvedEventColor} onValueChange={setColor} />
-                            {color !== undefined && (
-                              <button
-                                type="button"
-                                onClick={() => setColor(undefined)}
-                                className="mt-2 cursor-pointer text-label-sm text-accent hover:underline"
-                              >
-                                Use Calendar colour
-                              </button>
-                            )}
-                          </Popover.Popup>
-                        </Popover.Positioner>
-                      </Popover.Portal>
-                    </Popover.Root>
-                  ))}
-              </div>
-            </IconFieldRow>
+                    ) : (
+                      <Popover.Root>
+                        <Popover.Trigger
+                          aria-label="Event colour"
+                          className={`size-5 shrink-0 cursor-pointer rounded-shell-pill transition-shadow ${
+                            color !== undefined
+                              ? "ring-2 ring-accent ring-offset-2 ring-offset-surface"
+                              : "ring-1 ring-border"
+                          }`}
+                          style={{
+                            backgroundColor: toOpaqueHex(resolvedEventColor),
+                          }}
+                        />
+                        <Popover.Portal>
+                          <Popover.Positioner
+                            sideOffset={4}
+                            align="end"
+                            className="z-[60]"
+                          >
+                            <Popover.Popup className="rounded-shell-md border border-border bg-surface p-3 shadow-elevation-2">
+                              <ColorSwatchPicker
+                                value={resolvedEventColor}
+                                onValueChange={setColor}
+                              />
+                              {color !== undefined && (
+                                <button
+                                  type="button"
+                                  onClick={() => setColor(undefined)}
+                                  className="mt-2 cursor-pointer text-label-sm text-accent hover:underline"
+                                >
+                                  Use Calendar colour
+                                </button>
+                              )}
+                            </Popover.Popup>
+                          </Popover.Positioner>
+                        </Popover.Portal>
+                      </Popover.Root>
+                    ))}
+                </div>
+              </IconFieldRow>
 
-            {!isExpanded && (
-              <button
-                type="button"
-                onClick={() => setIsExpanded(true)}
-                className="mt-4 cursor-pointer text-label-sm text-accent hover:underline"
-              >
-                More options
-              </button>
-            )}
+              {!isExpanded && (
+                <button
+                  type="button"
+                  onClick={() => setIsExpanded(true)}
+                  className="mt-4 cursor-pointer text-label-sm text-accent hover:underline"
+                >
+                  More options
+                </button>
+              )}
 
-            {isExpanded && (
-              <>
-                <IconFieldRow icon={<MapPin className="size-4" />}>
-                  <Input
-                    aria-label="Location"
-                    value={location}
-                    onChange={(event) => setLocation(event.target.value)}
-                    placeholder="Add location"
-                    disabled={isReadOnlyEvent}
-                  />
-                </IconFieldRow>
-
-                <IconFieldRow icon={<Link className="size-4" />}>
-                  <div className="flex items-center gap-2">
+              {isExpanded && (
+                <>
+                  <IconFieldRow icon={<MapPin className="size-4" />}>
                     <Input
-                      aria-label="URL"
-                      value={url}
-                      onChange={(event) => setUrl(event.target.value)}
-                      placeholder="Add URL"
+                      aria-label="Location"
+                      value={location}
+                      onChange={(event) => setLocation(event.target.value)}
+                      placeholder="Add location"
                       disabled={isReadOnlyEvent}
-                      className="flex-1"
                     />
-                    {/* Stays enabled on a read-only Event (ADR-0063): a
+                  </IconFieldRow>
+
+                  <IconFieldRow icon={<Link className="size-4" />}>
+                    <div className="flex items-center gap-2">
+                      <Input
+                        aria-label="URL"
+                        value={url}
+                        onChange={(event) => setUrl(event.target.value)}
+                        placeholder="Add URL"
+                        disabled={isReadOnlyEvent}
+                        className="flex-1"
+                      />
+                      {/* Stays enabled on a read-only Event (ADR-0063): a
                         disabled Input can't reliably be selected/copied, so
                         without this a Subscribed/Attendee-only/Viewer Event's
                         link would show with no way to reach it. Rendered only
                         when the value itself gates open (http/https) — never
                         a control that does nothing. */}
-                    {openableUrl && (
-                      <a
-                        href={openableUrl}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        aria-label="Open URL in new tab"
-                        className={iconButtonClasses()}
-                      >
-                        <ExternalLink className="size-4" />
-                      </a>
-                    )}
-                  </div>
-                </IconFieldRow>
+                      {openableUrl && (
+                        <a
+                          href={openableUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          aria-label="Open URL in new tab"
+                          className={iconButtonClasses()}
+                        >
+                          <ExternalLink className="size-4" />
+                        </a>
+                      )}
+                    </div>
+                  </IconFieldRow>
 
-                <IconFieldRow icon={<AlignLeft className="size-4" />} align="start">
-                  <Textarea
-                    aria-label="Description"
-                    value={description}
-                    onChange={(event) => setDescription(event.target.value)}
-                    placeholder="Add description"
-                    disabled={isReadOnlyEvent}
-                  />
-                </IconFieldRow>
+                  <IconFieldRow
+                    icon={<AlignLeft className="size-4" />}
+                    align="start"
+                  >
+                    <Textarea
+                      aria-label="Description"
+                      value={description}
+                      onChange={(event) => setDescription(event.target.value)}
+                      placeholder="Add description"
+                      disabled={isReadOnlyEvent}
+                    />
+                  </IconFieldRow>
 
-                <IconFieldRow icon={<RepeatIcon className="size-4" />}>
-                  <Select
-                    aria-label="Repeat"
-                    value={repeat}
-                    onValueChange={handleRepeatChange}
-                    options={repeatOptions}
-                    disabled={isReadOnlyEvent}
-                  />
-                </IconFieldRow>
-                {/* Indented under the icon gutter rather than inside the row
+                  <IconFieldRow icon={<RepeatIcon className="size-4" />}>
+                    <Select
+                      aria-label="Repeat"
+                      value={repeat}
+                      onValueChange={handleRepeatChange}
+                      options={repeatOptions}
+                      disabled={isReadOnlyEvent}
+                    />
+                  </IconFieldRow>
+                  {/* Indented under the icon gutter rather than inside the row
                     above — keeping it out of that row's content is what lets
                     the row's own items-center align the icon against the
                     Select alone, not against Select-plus-link (#193). */}
-                {repeat === "custom" && !isReadOnlyEvent && (
-                  <button
-                    type="button"
-                    onClick={() => setIsCustomDialogOpen(true)}
-                    className={`mt-1.5 ${ICON_GUTTER_INDENT} cursor-pointer text-label-sm text-accent hover:underline`}
-                  >
-                    Edit custom recurrence
-                  </button>
-                )}
-
-                <IconFieldRow icon={<Bell className="size-4" />} align="start" startOffset="mt-1.5">
-                  {reminders.length > 0 && (
-                    <div className="flex flex-col gap-2">
-                      {reminders.map((reminder) => (
-                        <ReminderRow
-                          key={reminder.draftId}
-                          reminder={reminder}
-                          emailAvailable={emailAvailable}
-                          onChange={(next) => handleReminderChange(reminder.draftId, next)}
-                          onRemove={() => handleRemoveReminder(reminder.draftId)}
-                          disabled={isReadOnlyEvent}
-                        />
-                      ))}
-                    </div>
-                  )}
-                  {!isReadOnlyEvent && (
+                  {repeat === "custom" && !isReadOnlyEvent && (
                     <button
                       type="button"
-                      onClick={handleAddReminder}
-                      className="mt-1.5 cursor-pointer text-label-sm text-accent hover:underline"
+                      onClick={() => setIsCustomDialogOpen(true)}
+                      className={`mt-1.5 ${ICON_GUTTER_INDENT} cursor-pointer text-label-sm text-accent hover:underline`}
                     >
-                      Add reminder
+                      Edit custom recurrence
                     </button>
                   )}
-                </IconFieldRow>
-                {/* A distinct sub-section (its own "Your reminder" heading
-                    and divider), not one more line of the Reminders row —
-                    kept full-width and outside the icon-aligned row (#193). */}
-                {showReminderOverride && (
-                  <ReminderOverrideControl
-                    eventId={props.occurrence.event.id}
-                    emailAvailable={emailAvailable}
-                  />
-                )}
 
-                <IconFieldRow icon={<Paperclip className="size-4" />} align="start" startOffset="mt-1.5">
-                  {attachmentDrafts.length > 0 && (
-                    <div className="flex flex-col gap-2">
-                      {attachmentDrafts.map((draft) => (
-                        <AttachmentRow
-                          key={draft.draftId}
-                          draft={draft}
-                          showUploader={showAttachmentUploader}
-                          onDownload={() =>
-                            draft.status === "uploaded" &&
-                            handleDownloadAttachment(draft.attachment)
-                          }
-                          onRemove={() => handleRemoveAttachment(draft)}
-                          onRetry={() => handleRetryAttachment(draft)}
-                          disabled={isReadOnlyEvent}
-                        />
-                      ))}
-                    </div>
-                  )}
-                  {!isReadOnlyEvent && (
-                    <>
-                      <input
-                        ref={attachmentInputRef}
-                        type="file"
-                        multiple
-                        className="hidden"
-                        onChange={(event) => {
-                          if (event.target.files) handleAddAttachmentFiles(event.target.files);
-                          event.target.value = "";
-                        }}
-                      />
+                  <IconFieldRow
+                    icon={<Bell className="size-4" />}
+                    align="start"
+                    startOffset="mt-1.5"
+                  >
+                    {reminders.length > 0 && (
+                      <div className="flex flex-col gap-2">
+                        {reminders.map((reminder) => (
+                          <ReminderRow
+                            key={reminder.draftId}
+                            reminder={reminder}
+                            emailAvailable={emailAvailable}
+                            onChange={(next) =>
+                              handleReminderChange(reminder.draftId, next)
+                            }
+                            onRemove={() =>
+                              handleRemoveReminder(reminder.draftId)
+                            }
+                            disabled={isReadOnlyEvent}
+                          />
+                        ))}
+                      </div>
+                    )}
+                    {!isReadOnlyEvent && (
                       <button
                         type="button"
-                        onClick={() => attachmentInputRef.current?.click()}
+                        onClick={handleAddReminder}
                         className="mt-1.5 cursor-pointer text-label-sm text-accent hover:underline"
                       >
-                        Add attachment
+                        Add reminder
                       </button>
-                    </>
-                  )}
-                </IconFieldRow>
+                    )}
+                  </IconFieldRow>
 
-                <IconFieldRow icon={<UsersRound className="size-4" />} align="start" startOffset="mt-2">
-                  <EventAttendeesSection
-                    eventId={attendeeEventId}
-                    canManage={mode === "edit" ? !isReadOnlyEvent : calendarId !== ""}
-                    organizerName={organizerName}
-                    allowEmailInvite={emailAvailable}
-                    staging={
-                      mode === "edit" || attendeeEventId
-                        ? undefined
-                        : {
-                            targets: stagedAttendees,
-                            onChange: setStagedAttendees,
-                            error: attendeeCreateError,
-                          }
-                    }
-                  />
-                </IconFieldRow>
-              </>
-            )}
-
-            <div className="mt-5 flex items-center justify-between gap-2">
-              {mode === "edit" && !isReadOnlyEvent ? (
-                <Button
-                  variant="outline"
-                  color="danger"
-                  size="small"
-                  onClick={handleDeleteClick}
-                >
-                  Delete
-                </Button>
-              ) : (
-                <span />
-              )}
-              <div className="flex gap-2">
-                {mode !== "edit" && createdEventId ? (
-                  <Dialog.Close className={buttonClasses({ size: "small" })}>Done</Dialog.Close>
-                ) : isReadOnlyEvent ? (
-                  <Dialog.Close
-                    className={buttonClasses({
-                      variant: "outline",
-                      color: "secondary",
-                      size: "small",
-                    })}
+                  <IconFieldRow
+                    icon={<Paperclip className="size-4" />}
+                    align="start"
+                    startOffset="mt-1.5"
                   >
-                    Close
-                  </Dialog.Close>
+                    {attachmentDrafts.length > 0 && (
+                      <div className="flex flex-col gap-2">
+                        {attachmentDrafts.map((draft) => (
+                          <AttachmentRow
+                            key={draft.draftId}
+                            draft={draft}
+                            showUploader={showAttachmentUploader}
+                            onDownload={() =>
+                              draft.status === "uploaded" &&
+                              handleDownloadAttachment(draft.attachment)
+                            }
+                            onRemove={() => handleRemoveAttachment(draft)}
+                            onRetry={() => handleRetryAttachment(draft)}
+                            disabled={isReadOnlyEvent}
+                          />
+                        ))}
+                      </div>
+                    )}
+                    {!isReadOnlyEvent && (
+                      <>
+                        <input
+                          ref={attachmentInputRef}
+                          type="file"
+                          multiple
+                          className="hidden"
+                          onChange={(event) => {
+                            if (event.target.files)
+                              handleAddAttachmentFiles(event.target.files);
+                            event.target.value = "";
+                          }}
+                        />
+                        <button
+                          type="button"
+                          onClick={() => attachmentInputRef.current?.click()}
+                          className="mt-1.5 cursor-pointer text-label-sm text-accent hover:underline"
+                        >
+                          Add attachment
+                        </button>
+                      </>
+                    )}
+                  </IconFieldRow>
+
+                  <IconFieldRow
+                    icon={<UsersRound className="size-4" />}
+                    align="start"
+                    startOffset="mt-2"
+                  >
+                    <EventAttendeesSection
+                      eventId={attendeeEventId}
+                      canManage={
+                        mode === "edit" ? !isReadOnlyEvent : calendarId !== ""
+                      }
+                      organizerName={organizerName}
+                      allowEmailInvite={emailAvailable}
+                      staging={
+                        mode === "edit" || attendeeEventId
+                          ? undefined
+                          : {
+                              targets: stagedAttendees,
+                              onChange: setStagedAttendees,
+                              error: attendeeCreateError,
+                            }
+                      }
+                    />
+                  </IconFieldRow>
+                </>
+              )}
+
+              <div className="mt-5 flex items-center justify-between gap-2">
+                {mode === "edit" && !isReadOnlyEvent ? (
+                  <Button
+                    variant="outline"
+                    color="danger"
+                    size="small"
+                    onClick={handleDeleteClick}
+                  >
+                    Delete
+                  </Button>
                 ) : (
-                  <>
+                  <span />
+                )}
+                <div className="flex gap-2">
+                  {mode !== "edit" && createdEventId ? (
+                    <Dialog.Close className={buttonClasses({ size: "small" })}>
+                      Done
+                    </Dialog.Close>
+                  ) : isReadOnlyEvent ? (
                     <Dialog.Close
                       className={buttonClasses({
                         variant: "outline",
@@ -1328,26 +1454,40 @@ export function EventModal(props: EventModalProps) {
                         size: "small",
                       })}
                     >
-                      Cancel
+                      Close
                     </Dialog.Close>
-                    <Button
-                      type="submit"
-                      size="small"
-                      disabled={!canSave}
-                      loading={isSavingWithAttendees}
-                    >
-                      Save
-                    </Button>
-                  </>
-                )}
+                  ) : (
+                    <>
+                      <Dialog.Close
+                        className={buttonClasses({
+                          variant: "outline",
+                          color: "secondary",
+                          size: "small",
+                        })}
+                      >
+                        Cancel
+                      </Dialog.Close>
+                      <Button
+                        type="submit"
+                        size="small"
+                        disabled={!canSave}
+                        loading={isSavingWithAttendees}
+                      >
+                        Save
+                      </Button>
+                    </>
+                  )}
+                </div>
               </div>
-            </div>
             </form>
           </Dialog.Popup>
         </Dialog.Portal>
       </Dialog.Root>
       {isCreateCalendarOpen && (
-        <CalendarModal mode="create" onClose={() => setIsCreateCalendarOpen(false)} />
+        <CalendarModal
+          mode="create"
+          onClose={() => setIsCreateCalendarOpen(false)}
+        />
       )}
       {isCustomDialogOpen && (
         <CustomRecurrenceDialog

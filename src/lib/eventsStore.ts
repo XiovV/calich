@@ -2,7 +2,7 @@ import { create } from "zustand";
 import { ApiError } from "./apiClient";
 import { useAuthStore } from "./authStore";
 import { accessChangeMessage } from "./calendarsStore";
-import type { Event } from "./event";
+import type { Event, Reminder } from "./event";
 import { eventsApi } from "./eventsApi";
 import { resolveMaster, type Occurrence } from "./occurrence";
 import type { EditScope } from "./recurrenceScope";
@@ -28,11 +28,13 @@ export interface StagedCreateAttendees {
   attendeeEmails?: string[];
 }
 
-function hasStagedAttendees(attendees: StagedCreateAttendees | undefined): boolean {
+function hasStagedAttendees(
+  attendees: StagedCreateAttendees | undefined,
+): boolean {
   return Boolean(
     attendees?.attendeeUserIds?.length ||
-      attendees?.attendeeGroupIds?.length ||
-      attendees?.attendeeEmails?.length,
+    attendees?.attendeeGroupIds?.length ||
+    attendees?.attendeeEmails?.length,
   );
 }
 
@@ -52,8 +54,17 @@ interface EventsState {
   /** Applies a scoped edit (This event/This and following/All events) to a
    * recurring Occurrence (ADR-0016). `changes.rrule` only takes effect for
    * "all" — the backend then discards existing Overrides/Exceptions if the
-   * rule changed. */
-  editOccurrence: (occurrence: Occurrence, scope: EditScope, changes: MasterFieldChanges) => Promise<void>;
+   * rule changed. `reminders`, when present, is the acting User's own new
+   * Reminders draft for this Occurrence, written separately via
+   * eventsApi.setReminders once the series ops land (ADR-0064) — undefined
+   * means the User didn't touch Reminders in this save, so nothing is
+   * written and whatever rows already exist are left alone. */
+  editOccurrence: (
+    occurrence: Occurrence,
+    scope: EditScope,
+    changes: MasterFieldChanges,
+    reminders?: Reminder[],
+  ) => Promise<void>;
   /** Applies a scoped delete to a recurring Occurrence (ADR-0016). */
   deleteOccurrence: (occurrence: Occurrence, scope: EditScope) => Promise<void>;
 }
@@ -64,7 +75,9 @@ interface EventsState {
 // itself is gone (404 "not found") — as opposed to validation or network
 // failure, which stay a generic "failed to ..." toast (#116).
 function isAccessChangeError(error: unknown): boolean {
-  return error instanceof ApiError && (error.status === 403 || error.status === 404);
+  return (
+    error instanceof ApiError && (error.status === 403 || error.status === 404)
+  );
 }
 
 // handleWriteFailure is every write action's shared catch-block tail, after
@@ -106,8 +119,19 @@ function resolveEditContext(
   if (!master) return null;
 
   const isOverride = Boolean(occurrence.event.parentId);
-  const originalStart = isOverride ? occurrence.event.recurrenceId! : occurrence.start;
+  const originalStart = isOverride
+    ? occurrence.event.recurrenceId!
+    : occurrence.start;
   return { master, isOverride, originalStart };
+}
+
+// setInitialReminders writes a freshly created event's non-empty Reminders
+// draft via their own path — never the create payload (ADR-0064). A no-op
+// for a brand-new Event with none, since there's nothing yet to clear.
+async function setInitialReminders(accessToken: string, event: Event): Promise<void> {
+  if (event.reminders?.length) {
+    await eventsApi.setReminders(accessToken, event.id, event.reminders);
+  }
 }
 
 export const useEventsStore = create<EventsState>((set, get) => ({
@@ -124,11 +148,16 @@ export const useEventsStore = create<EventsState>((set, get) => ({
 
       try {
         await eventsApi.create(requireAccessToken(), event);
+        await setInitialReminders(requireAccessToken(), event);
       } catch (error) {
         set((state) => ({
           events: state.events.filter((e) => e.id !== event.id),
         }));
-        await handleWriteFailure(error, event.calendarId, `Failed to create event "${event.title}".`);
+        await handleWriteFailure(
+          error,
+          event.calendarId,
+          `Failed to create event "${event.title}".`,
+        );
       }
       return;
     }
@@ -140,6 +169,7 @@ export const useEventsStore = create<EventsState>((set, get) => ({
     // rejection is rethrown rather than toasted — EventModal shows its own
     // banner and keeps the dialog open.
     await eventsApi.create(requireAccessToken(), { ...event, ...attendees });
+    await setInitialReminders(requireAccessToken(), event);
     set((state) => ({ events: [...state.events, event] }));
   },
 
@@ -162,15 +192,29 @@ export const useEventsStore = create<EventsState>((set, get) => ({
         allDay: updated.allDay,
         rrule: updated.rrule,
         tzid: updated.tzid,
-        reminders: updated.reminders,
         description: updated.description,
         location: updated.location,
         url: updated.url,
         color: updated.color,
       });
+      // Reminders have their own write path, never the update payload
+      // (ADR-0064) — present in changes only when the caller actually
+      // touched them (EventModal gates this), so an untouched save never
+      // resets their fired-history for no reason.
+      if (changes.reminders !== undefined) {
+        await eventsApi.setReminders(
+          requireAccessToken(),
+          id,
+          changes.reminders,
+        );
+      }
     } catch (error) {
       set({ events: previousEvents });
-      await handleWriteFailure(error, updated.calendarId, "Failed to update event.");
+      await handleWriteFailure(
+        error,
+        updated.calendarId,
+        "Failed to update event.",
+      );
     }
   },
 
@@ -185,7 +229,11 @@ export const useEventsStore = create<EventsState>((set, get) => ({
       await eventsApi.remove(requireAccessToken(), id);
     } catch (error) {
       set({ events: previousEvents });
-      await handleWriteFailure(error, current?.calendarId, "Failed to delete event.");
+      await handleWriteFailure(
+        error,
+        current?.calendarId,
+        "Failed to delete event.",
+      );
     }
   },
 
@@ -194,14 +242,14 @@ export const useEventsStore = create<EventsState>((set, get) => ({
       events: state.events.filter((event) => event.calendarId !== calendarId),
     })),
 
-  editOccurrence: async (occurrence, scope, changes) => {
+  editOccurrence: async (occurrence, scope, changes, reminders) => {
     const previousEvents = get().events;
     const resolved = resolveEditContext(previousEvents, occurrence);
     if (!resolved) return;
     const { master, isOverride, originalStart } = resolved;
     const accessToken = requireAccessToken();
 
-    const ops = planEditOccurrence({
+    const { ops, reminderTargetEventId } = planEditOccurrence({
       master,
       occurrence,
       isOverride,
@@ -213,9 +261,30 @@ export const useEventsStore = create<EventsState>((set, get) => ({
 
     try {
       await dispatchSeriesOps(accessToken, ops);
+      // The acting User's own Reminders draft, if they touched it, lands on
+      // whichever row now represents this Occurrence for the chosen scope
+      // (ADR-0064) — never through the series ops themselves.
+      if (reminders !== undefined) {
+        await eventsApi.setReminders(
+          accessToken,
+          reminderTargetEventId,
+          reminders,
+        );
+        set((state) => ({
+          events: state.events.map((event) =>
+            event.id === reminderTargetEventId
+              ? { ...event, reminders }
+              : event,
+          ),
+        }));
+      }
     } catch (error) {
       set({ events: previousEvents });
-      await handleWriteFailure(error, master.calendarId, "Failed to update event.");
+      await handleWriteFailure(
+        error,
+        master.calendarId,
+        "Failed to update event.",
+      );
     }
   },
 
@@ -240,7 +309,11 @@ export const useEventsStore = create<EventsState>((set, get) => ({
       await dispatchSeriesOps(accessToken, ops);
     } catch (error) {
       set({ events: previousEvents });
-      await handleWriteFailure(error, master.calendarId, "Failed to delete event.");
+      await handleWriteFailure(
+        error,
+        master.calendarId,
+        "Failed to delete event.",
+      );
     }
   },
 }));

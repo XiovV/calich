@@ -146,7 +146,7 @@ func TestCalendarService_Access(t *testing.T) {
 		t.Fatalf("add workspace member: %v", err)
 	}
 
-	svc := NewCalendarService(repository.NewCalendarRepository(sqlDB), repository.NewCalendarShareRepository(sqlDB), users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo, repository.NewCalendarGroupShareRepository(sqlDB), repository.NewGroupRepository(sqlDB))
+	svc := NewCalendarService(repository.NewCalendarRepository(sqlDB), repository.NewCalendarShareRepository(sqlDB), users, repository.NewEventReminderRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo, repository.NewCalendarGroupShareRepository(sqlDB), repository.NewGroupRepository(sqlDB))
 	ctx := context.Background()
 	calendar, err := svc.Create(ctx, owner.ID, workspace.ID, "cal-1", CalendarWrite{Name: "Personal", Color: "#12809CFF"})
 	if err != nil {

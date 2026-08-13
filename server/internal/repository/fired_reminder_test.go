@@ -13,14 +13,16 @@ import (
 // foreign keys.
 func newTestFiredReminderRepository(t *testing.T) (ledger *FiredReminderRepository, reminderID, userID int64) {
 	t.Helper()
-	ledger, reminderID, userID, _ = newTestFiredReminderRepositoryWithUsers(t)
+	ledger, reminderID, userID, _, _, _ = newTestFiredReminderRepositoryWithUsers(t)
 	return ledger, reminderID, userID
 }
 
 // newTestFiredReminderRepositoryWithUsers is newTestFiredReminderRepository
-// plus the UserRepository itself, for tests that need to create a second
-// User to prove the ledger's per-User independence (ADR-0036).
-func newTestFiredReminderRepositoryWithUsers(t *testing.T) (ledger *FiredReminderRepository, reminderID, userID int64, users *UserRepository) {
+// plus the UserRepository and EventReminderRepository themselves, for tests
+// that need to create a second User with their own Reminder row to prove
+// the ledger's per-Reminder independence (ADR-0064): a Reminder id already
+// implies its own User, so no two Users ever share one.
+func newTestFiredReminderRepositoryWithUsers(t *testing.T) (ledger *FiredReminderRepository, reminderID, userID int64, users *UserRepository, remindersRepo *EventReminderRepository, eventID string) {
 	t.Helper()
 
 	sqlDB, err := db.OpenInMemory()
@@ -51,7 +53,7 @@ func newTestFiredReminderRepositoryWithUsers(t *testing.T) (ledger *FiredReminde
 	events := NewEventRepository(sqlDB)
 	mustCreateEvent(t, events, "evt-1", user.ID, cal.ID, "2026-01-01T09:00:00Z", "2026-01-01T10:00:00Z")
 
-	remindersRepo := NewEventReminderRepository(sqlDB)
+	remindersRepo = NewEventReminderRepository(sqlDB)
 	if err := remindersRepo.ReplaceByEventID(ctx, user.ID, "evt-1", []Reminder{{OffsetMinutes: 10, Channel: "notification"}}); err != nil {
 		t.Fatalf("replace by event id: %v", err)
 	}
@@ -63,7 +65,7 @@ func newTestFiredReminderRepositoryWithUsers(t *testing.T) (ledger *FiredReminde
 		t.Fatalf("expected 1 reminder, got %+v", byEvent["evt-1"])
 	}
 
-	return NewFiredReminderRepository(sqlDB), byEvent["evt-1"][0].ID, user.ID, users
+	return NewFiredReminderRepository(sqlDB), byEvent["evt-1"][0].ID, user.ID, users, remindersRepo, "evt-1"
 }
 
 func TestFiredReminderRepository_MarkFired_FirstCallReportsNew(t *testing.T) {
@@ -121,11 +123,12 @@ func TestFiredReminderRepository_MarkFired_DifferentOccurrenceIsIndependent(t *t
 	}
 }
 
-// A shared Calendar's Reminder must fire independently for each recipient —
-// the ledger's per-User dimension (ADR-0036) — so one User's fire does not
-// suppress another's for the same Reminder and Occurrence.
-func TestFiredReminderRepository_MarkFired_DifferentUserIsIndependent(t *testing.T) {
-	ledger, reminderID, ownerID, users := newTestFiredReminderRepositoryWithUsers(t)
+// Two Users' own Reminders on the same Event and Occurrence fire
+// independently — each is its own Reminder row, so each gets its own ledger
+// entry (ADR-0064: a Reminder id already implies its own User, which is why
+// the unique key no longer needs user_id at all).
+func TestFiredReminderRepository_MarkFired_DifferentUsersOwnReminderIsIndependent(t *testing.T) {
+	ledger, reminderID, ownerID, users, remindersRepo, eventID := newTestFiredReminderRepositoryWithUsers(t)
 	ctx := context.Background()
 	occurrenceStart := time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC)
 
@@ -137,12 +140,20 @@ func TestFiredReminderRepository_MarkFired_DifferentUserIsIndependent(t *testing
 	if err != nil {
 		t.Fatalf("create other user: %v", err)
 	}
-
-	isNew, err := ledger.MarkFired(ctx, reminderID, otherUser.ID, occurrenceStart, time.Now().UTC())
+	if err := remindersRepo.ReplaceByEventID(ctx, otherUser.ID, eventID, []Reminder{{OffsetMinutes: 10, Channel: "notification"}}); err != nil {
+		t.Fatalf("replace by event id (other user): %v", err)
+	}
+	otherByEvent, err := remindersRepo.ListByEventIDs(ctx, otherUser.ID, []string{eventID})
 	if err != nil {
-		t.Fatalf("mark fired for a different user: %v", err)
+		t.Fatalf("list by event ids (other user): %v", err)
+	}
+	otherReminderID := otherByEvent[eventID][0].ID
+
+	isNew, err := ledger.MarkFired(ctx, otherReminderID, otherUser.ID, occurrenceStart, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("mark fired for a different user's own reminder: %v", err)
 	}
 	if !isNew {
-		t.Fatal("expected a different User's fire of the same Reminder+Occurrence to report new")
+		t.Fatal("expected the other User's own Reminder to fire independently")
 	}
 }

@@ -11,17 +11,18 @@ func at(year int, month time.Month, day, hour, minute int) time.Time {
 	return time.Date(year, month, day, hour, minute, 0, 0, time.UTC)
 }
 
-// withOwner pairs event with an arbitrary Calendar Owner id and no other
-// recipients — Due itself doesn't care which User it is, only that
-// DueReminder carries it through (ADR-0034, ADR-0021).
+// withOwner pairs event with a single User's own Reminders — event.Reminders
+// (the Event struct's own field, unused by Due) becomes that User's rows in
+// RemindersByUser, the only thing Due actually reads (ADR-0064).
 func withOwner(event repository.Event) repository.EventWithOwner {
-	return repository.EventWithOwner{Event: event, CalendarOwnerID: 1, RecipientUserIDs: []int64{1}}
+	return withUser(event, 1)
 }
 
-// withRecipients pairs event with an explicit Calendar Owner id and a full
-// recipient list — the fan-out beyond a single Owner (ADR-0036).
-func withRecipients(event repository.Event, ownerID int64, recipientUserIDs ...int64) repository.EventWithOwner {
-	return repository.EventWithOwner{Event: event, CalendarOwnerID: ownerID, RecipientUserIDs: recipientUserIDs}
+// withUser is withOwner, naming an arbitrary userID rather than always 1.
+func withUser(event repository.Event, userID int64) repository.EventWithOwner {
+	reminders := event.Reminders
+	event.Reminders = nil
+	return repository.EventWithOwner{Event: event, RemindersByUser: map[int64][]repository.Reminder{userID: reminders}}
 }
 
 func withOwners(events []repository.Event) []repository.EventWithOwner {
@@ -221,375 +222,65 @@ func TestDue_MultipleRemindersOnOneEvent_EachEvaluatedIndependently(t *testing.T
 	}
 }
 
-// A due Reminder fans out to every recipient on the Event's Calendar — the
-// Owner and every Shared Editor and Viewer — as one DueReminder each
-// (ADR-0036).
-func TestDue_FansOutOneDueReminderPerRecipient(t *testing.T) {
-	event := repository.Event{
-		ID:    "evt-1",
-		Title: "Bin day",
-		Start: at(2026, 1, 1, 9, 0),
-		End:   at(2026, 1, 1, 9, 30),
-		Reminders: []repository.Reminder{
-			{ID: 100, OffsetMinutes: 10, Channel: "notification"},
+// Every User with their own Reminders on an Event fires independently, at
+// their own stored offset and Channel — no fan-out to a User who has none,
+// no substitution, no collapse rule (ADR-0064).
+func TestDue_MultipleUsersOnOneEvent_EachFiresTheirOwnRowsIndependently(t *testing.T) {
+	event := repository.EventWithOwner{
+		Event: repository.Event{
+			ID:    "evt-1",
+			Start: at(2026, 1, 1, 9, 0),
+			End:   at(2026, 1, 1, 9, 30),
+		},
+		RemindersByUser: map[int64][]repository.Reminder{
+			1: {{ID: 100, OffsetMinutes: 10, Channel: "notification"}},
+			2: {{ID: 200, OffsetMinutes: 120, Channel: "email"}},
 		},
 	}
 
-	due, err := Due(withRecipients(event, 1, 1, 2, 3), at(2026, 1, 1, 8, 45), at(2026, 1, 1, 8, 55))
+	// User 2's own 2-hour-before trigger (07:00) — user 1's 10-minute
+	// Reminder doesn't fire here.
+	due, err := Due(event, at(2026, 1, 1, 6, 55), at(2026, 1, 1, 7, 0))
 	if err != nil {
 		t.Fatalf("due: %v", err)
 	}
-	if len(due) != 3 {
-		t.Fatalf("expected 1 due reminder per recipient (3), got %+v", due)
-	}
-	gotUsers := map[int64]bool{}
-	for _, d := range due {
-		gotUsers[d.UserID] = true
-	}
-	for _, want := range []int64{1, 2, 3} {
-		if !gotUsers[want] {
-			t.Fatalf("expected a due reminder for recipient %d, got %+v", want, due)
-		}
-	}
-}
-
-// An Attendee-only recipient — invited to the Event but holding no Share on
-// its Calendar — still receives a DueReminder exactly like an Access-holder
-// would. Due itself doesn't distinguish an Attendee from an Access-holder;
-// it treats RecipientUserIDs as one deduplicated recipient set, so the
-// union of Access-holders and Attendees is entirely the repository layer's
-// responsibility (ListAllWithReminders, ADR-0046) — this documents that Due
-// fans out to such a recipient exactly the same as any other.
-func TestDue_AttendeeOnlyRecipient_FiresLikeAnyOtherRecipient(t *testing.T) {
-	event := repository.Event{
-		ID:    "evt-1",
-		Title: "Discuss tech stack",
-		Start: at(2026, 1, 1, 9, 0),
-		End:   at(2026, 1, 1, 9, 30),
-		Reminders: []repository.Reminder{
-			{ID: 100, OffsetMinutes: 10, Channel: "notification"},
-		},
+	if len(due) != 1 || due[0].UserID != 2 || due[0].ReminderID != 200 || due[0].Channel != "email" {
+		t.Fatalf("expected only user 2's own Reminder to fire here, got %+v", due)
 	}
 
-	// User 2 is an Attendee with no Calendar Access; user 1 is the Calendar
-	// Owner. Both appear in RecipientUserIDs, exactly as ListAllWithReminders
-	// would produce for their union (ADR-0046).
-	due, err := Due(withRecipients(event, 1, 1, 2), at(2026, 1, 1, 8, 45), at(2026, 1, 1, 8, 55))
+	// User 1's own 10-minute-before trigger (08:50) — user 2's Reminder
+	// doesn't fire here, and user 1's own row is entirely unaffected by user
+	// 2's different offset and Channel.
+	due, err = Due(event, at(2026, 1, 1, 8, 45), at(2026, 1, 1, 8, 55))
 	if err != nil {
 		t.Fatalf("due: %v", err)
 	}
-	if len(due) != 2 {
-		t.Fatalf("expected both the owner and the Attendee-only recipient to fire, got %+v", due)
-	}
-	gotUsers := map[int64]bool{}
-	for _, d := range due {
-		gotUsers[d.UserID] = true
-	}
-	if !gotUsers[1] || !gotUsers[2] {
-		t.Fatalf("expected a due reminder for both the owner and the Attendee-only recipient, got %+v", due)
+	if len(due) != 1 || due[0].UserID != 1 || due[0].ReminderID != 100 || due[0].Channel != "notification" {
+		t.Fatalf("expected only user 1's own Reminder to fire here, got %+v", due)
 	}
 }
 
-// An Attendee-only recipient's own muted override suppresses their
-// Attendee-sourced Reminders exactly as it does for an Access-holder
-// (ADR-0046) — Due resolves an override purely off the recipient's User id,
-// regardless of whether they hold Calendar Access.
-func TestDue_AttendeeOnlyRecipient_MutedOverrideStillApplies(t *testing.T) {
-	event := repository.Event{
-		ID:    "evt-1",
-		Start: at(2026, 1, 1, 9, 0),
-		End:   at(2026, 1, 1, 9, 30),
-		Reminders: []repository.Reminder{
-			{ID: 100, OffsetMinutes: 10, Channel: "notification"},
+// A User absent from RemindersByUser — someone else with Access to the
+// Calendar, or invited as an Attendee — is never considered: no fan-out, no
+// substitution (ADR-0064).
+func TestDue_UserWithNoReminders_NeverFires(t *testing.T) {
+	event := repository.EventWithOwner{
+		Event: repository.Event{
+			ID:    "evt-1",
+			Start: at(2026, 1, 1, 9, 0),
+			End:   at(2026, 1, 1, 9, 30),
+		},
+		RemindersByUser: map[int64][]repository.Reminder{
+			1: {{ID: 100, OffsetMinutes: 10, Channel: "notification"}},
 		},
 	}
 
-	// User 2 is an Attendee-only recipient with a muted override.
-	withOverride := withRecipients(event, 1, 1, 2)
-	withOverride.Overrides = map[int64]repository.ReminderOverride{2: {Muted: true}}
-
-	due, err := Due(withOverride, at(2026, 1, 1, 8, 45), at(2026, 1, 1, 8, 55))
+	due, err := Due(event, at(2026, 1, 1, 8, 45), at(2026, 1, 1, 8, 55))
 	if err != nil {
 		t.Fatalf("due: %v", err)
 	}
 	if len(due) != 1 || due[0].UserID != 1 {
-		t.Fatalf("expected the Attendee-only recipient's mute override to suppress their DueReminder, got %+v", due)
-	}
-}
-
-// An Attendee-only recipient's own offset override changes their trigger
-// exactly as it does for an Access-holder (ADR-0046).
-func TestDue_AttendeeOnlyRecipient_OffsetOverrideStillApplies(t *testing.T) {
-	event := repository.Event{
-		ID:    "evt-1",
-		Start: at(2026, 1, 1, 9, 0),
-		End:   at(2026, 1, 1, 9, 30),
-		Reminders: []repository.Reminder{
-			{ID: 100, OffsetMinutes: 10, Channel: "notification"},
-		},
-	}
-
-	// User 2 is an Attendee-only recipient with an offset override.
-	overriddenOffset := 120
-	withOverride := withRecipients(event, 1, 1, 2)
-	withOverride.Overrides = map[int64]repository.ReminderOverride{2: {OffsetMinutes: &overriddenOffset}}
-
-	due, err := Due(withOverride, at(2026, 1, 1, 6, 55), at(2026, 1, 1, 7, 0))
-	if err != nil {
-		t.Fatalf("due: %v", err)
-	}
-	if len(due) != 1 || due[0].UserID != 2 || due[0].OffsetMinutes != 120 {
-		t.Fatalf("expected the Attendee-only recipient's offset override to apply, got %+v", due)
-	}
-}
-
-// A muted override drops that recipient's DueReminder for the Event
-// entirely, while every other recipient still fires unchanged (ADR-0036).
-func TestDue_MutedOverride_SuppressesOnlyThatRecipient(t *testing.T) {
-	event := repository.Event{
-		ID:    "evt-1",
-		Start: at(2026, 1, 1, 9, 0),
-		End:   at(2026, 1, 1, 9, 30),
-		Reminders: []repository.Reminder{
-			{ID: 100, OffsetMinutes: 10, Channel: "notification"},
-		},
-	}
-
-	withOverride := withRecipients(event, 1, 1, 2)
-	withOverride.Overrides = map[int64]repository.ReminderOverride{2: {Muted: true}}
-
-	due, err := Due(withOverride, at(2026, 1, 1, 8, 45), at(2026, 1, 1, 8, 55))
-	if err != nil {
-		t.Fatalf("due: %v", err)
-	}
-	if len(due) != 1 || due[0].UserID != 1 {
-		t.Fatalf("expected only the unmuted recipient to fire, got %+v", due)
-	}
-}
-
-// A recipient's override offset shifts only their own trigger time; another
-// recipient with no override still fires at the Event's own offset
-// (ADR-0036).
-func TestDue_OffsetOverride_ChangesOnlyThatRecipientsTrigger(t *testing.T) {
-	event := repository.Event{
-		ID:    "evt-1",
-		Start: at(2026, 1, 1, 9, 0),
-		End:   at(2026, 1, 1, 9, 30),
-		Reminders: []repository.Reminder{
-			{ID: 100, OffsetMinutes: 10, Channel: "notification"},
-		},
-	}
-
-	overriddenOffset := 120
-	withOverride := withRecipients(event, 1, 1, 2)
-	withOverride.Overrides = map[int64]repository.ReminderOverride{2: {OffsetMinutes: &overriddenOffset}}
-
-	// 07:00 is 2 hours before the 09:00 start — only user 2's overridden
-	// offset triggers here, not user 1's own 10-minute-before Reminder.
-	due, err := Due(withOverride, at(2026, 1, 1, 6, 55), at(2026, 1, 1, 7, 0))
-	if err != nil {
-		t.Fatalf("due: %v", err)
-	}
-	if len(due) != 1 || due[0].UserID != 2 || due[0].OffsetMinutes != 120 {
-		t.Fatalf("expected only user 2's overridden offset to trigger here, got %+v", due)
-	}
-
-	// At the Event's own 08:50 trigger, only user 1 (no override) fires.
-	due, err = Due(withOverride, at(2026, 1, 1, 8, 45), at(2026, 1, 1, 8, 55))
-	if err != nil {
-		t.Fatalf("due: %v", err)
-	}
-	if len(due) != 1 || due[0].UserID != 1 || due[0].OffsetMinutes != 10 {
-		t.Fatalf("expected only user 1's own offset to trigger here, got %+v", due)
-	}
-}
-
-// A recipient's override Channel is substituted onto every DueReminder they
-// receive, without touching the Reminder's own stored Channel (ADR-0036).
-func TestDue_ChannelOverride_ChangesOnlyThatRecipientsChannel(t *testing.T) {
-	event := repository.Event{
-		ID:    "evt-1",
-		Start: at(2026, 1, 1, 9, 0),
-		End:   at(2026, 1, 1, 9, 30),
-		Reminders: []repository.Reminder{
-			{ID: 100, OffsetMinutes: 10, Channel: "notification"},
-		},
-	}
-
-	overriddenChannel := "email"
-	withOverride := withRecipients(event, 1, 1, 2)
-	withOverride.Overrides = map[int64]repository.ReminderOverride{2: {Channel: &overriddenChannel}}
-
-	due, err := Due(withOverride, at(2026, 1, 1, 8, 45), at(2026, 1, 1, 8, 55))
-	if err != nil {
-		t.Fatalf("due: %v", err)
-	}
-	if len(due) != 2 {
-		t.Fatalf("expected both recipients to fire, got %+v", due)
-	}
-	byUser := map[int64]string{}
-	for _, d := range due {
-		byUser[d.UserID] = d.Channel
-	}
-	if byUser[1] != "notification" || byUser[2] != "email" {
-		t.Fatalf("expected user 1's own channel and user 2's overridden channel, got %+v", byUser)
-	}
-}
-
-// An offset override replaces an Event's whole Reminder set with one trigger
-// at the overriding recipient's own offset — collapsing two Reminders that
-// would otherwise both substitute to the same instant into a single
-// DueReminder — while every other recipient still gets both Reminders at
-// their own distinct offsets (#110, ADR-0036).
-func TestDue_OffsetOverride_OnEventWithMultipleReminders_FiresOnce(t *testing.T) {
-	event := repository.Event{
-		ID:    "evt-1",
-		Start: at(2026, 1, 1, 9, 0),
-		End:   at(2026, 1, 1, 9, 30),
-		Reminders: []repository.Reminder{
-			{ID: 100, OffsetMinutes: 30, Channel: "notification"},
-			{ID: 101, OffsetMinutes: 1440, Channel: "email"},
-		},
-	}
-
-	overriddenOffset := 120
-	withOverride := withRecipients(event, 1, 1, 2)
-	withOverride.Overrides = map[int64]repository.ReminderOverride{2: {OffsetMinutes: &overriddenOffset}}
-
-	// 07:00 is 2 hours before the 09:00 start — user 2's single overridden
-	// trigger, not two collapsed copies of it.
-	due, err := Due(withOverride, at(2026, 1, 1, 6, 55), at(2026, 1, 1, 7, 0))
-	if err != nil {
-		t.Fatalf("due: %v", err)
-	}
-	if len(due) != 1 || due[0].UserID != 2 || due[0].OffsetMinutes != 120 {
-		t.Fatalf("expected exactly one due reminder for user 2's overridden offset, got %+v", due)
-	}
-
-	// User 1 (no override) still gets both of the Event's own Reminders, each
-	// at its own offset: the 30-minutes-before Reminder at 08:30...
-	due, err = Due(withOverride, at(2026, 1, 1, 8, 25), at(2026, 1, 1, 8, 30))
-	if err != nil {
-		t.Fatalf("due: %v", err)
-	}
-	if len(due) != 1 || due[0].UserID != 1 || due[0].ReminderID != 100 {
-		t.Fatalf("expected user 1's 30-minute Reminder to fire unchanged, got %+v", due)
-	}
-
-	// ...and the 1-day-before Reminder the morning before, unaffected by user
-	// 2's override.
-	due, err = Due(withOverride, at(2025, 12, 31, 8, 55), at(2025, 12, 31, 9, 0))
-	if err != nil {
-		t.Fatalf("due: %v", err)
-	}
-	if len(due) != 1 || due[0].UserID != 1 || due[0].ReminderID != 101 {
-		t.Fatalf("expected user 1's 1-day Reminder to fire unchanged, got %+v", due)
-	}
-}
-
-// A Channel-only override re-channels every Reminder on an Event without
-// collapsing their offsets — only an offset override replaces the Reminder
-// set (#110, ADR-0036).
-func TestDue_ChannelOnlyOverride_OnEventWithMultipleReminders_KeepsDistinctOffsets(t *testing.T) {
-	event := repository.Event{
-		ID:    "evt-1",
-		Start: at(2026, 1, 1, 9, 0),
-		End:   at(2026, 1, 1, 9, 30),
-		Reminders: []repository.Reminder{
-			{ID: 100, OffsetMinutes: 30, Channel: "notification"},
-			{ID: 101, OffsetMinutes: 1440, Channel: "email"},
-		},
-	}
-
-	overriddenChannel := "email"
-	withOverride := withRecipients(event, 1, 1, 2)
-	withOverride.Overrides = map[int64]repository.ReminderOverride{2: {Channel: &overriddenChannel}}
-
-	due, err := Due(withOverride, at(2026, 1, 1, 8, 25), at(2026, 1, 1, 8, 30))
-	if err != nil {
-		t.Fatalf("due: %v", err)
-	}
-	if len(due) != 2 {
-		t.Fatalf("expected both recipients' 30-minute Reminder to fire, got %+v", due)
-	}
-	byUser := map[int64]string{}
-	for _, d := range due {
-		byUser[d.UserID] = d.Channel
-	}
-	if byUser[1] != "notification" || byUser[2] != "email" {
-		t.Fatalf("expected user 1's own channel and user 2's re-channelled 30-minute Reminder, got %+v", byUser)
-	}
-
-	due, err = Due(withOverride, at(2025, 12, 31, 8, 55), at(2025, 12, 31, 9, 0))
-	if err != nil {
-		t.Fatalf("due: %v", err)
-	}
-	if len(due) != 2 {
-		t.Fatalf("expected both recipients' 1-day Reminder to fire, its offset unchanged by the channel override, got %+v", due)
-	}
-}
-
-// A muted override suppresses every one of an Event's Reminders for that
-// recipient alone, even when the Event carries more than one — the mute
-// check short-circuits before the offset-override collapse (#110, ADR-0036).
-func TestDue_MutedOverride_OnEventWithMultipleReminders_SuppressesOnlyThatRecipient(t *testing.T) {
-	event := repository.Event{
-		ID:    "evt-1",
-		Start: at(2026, 1, 1, 9, 0),
-		End:   at(2026, 1, 1, 9, 30),
-		Reminders: []repository.Reminder{
-			{ID: 100, OffsetMinutes: 30, Channel: "notification"},
-			{ID: 101, OffsetMinutes: 1440, Channel: "email"},
-		},
-	}
-
-	withOverride := withRecipients(event, 1, 1, 2)
-	withOverride.Overrides = map[int64]repository.ReminderOverride{2: {Muted: true}}
-
-	due, err := Due(withOverride, at(2026, 1, 1, 8, 25), at(2026, 1, 1, 8, 30))
-	if err != nil {
-		t.Fatalf("due: %v", err)
-	}
-	if len(due) != 1 || due[0].UserID != 1 {
-		t.Fatalf("expected only the unmuted recipient's 30-minute Reminder to fire, got %+v", due)
-	}
-
-	due, err = Due(withOverride, at(2025, 12, 31, 8, 55), at(2025, 12, 31, 9, 0))
-	if err != nil {
-		t.Fatalf("due: %v", err)
-	}
-	if len(due) != 1 || due[0].UserID != 1 {
-		t.Fatalf("expected only the unmuted recipient's 1-day Reminder to fire, got %+v", due)
-	}
-}
-
-// An override that sets both an offset and a Channel still collapses to one
-// DueReminder on a multi-Reminder Event, carrying both substituted values
-// (#110, ADR-0036).
-func TestDue_OffsetAndChannelOverride_OnEventWithMultipleReminders_FiresOnceWithBothSubstituted(t *testing.T) {
-	event := repository.Event{
-		ID:    "evt-1",
-		Start: at(2026, 1, 1, 9, 0),
-		End:   at(2026, 1, 1, 9, 30),
-		Reminders: []repository.Reminder{
-			{ID: 100, OffsetMinutes: 30, Channel: "notification"},
-			{ID: 101, OffsetMinutes: 1440, Channel: "email"},
-		},
-	}
-
-	overriddenOffset := 120
-	overriddenChannel := "email"
-	withOverride := withRecipients(event, 1, 1, 2)
-	withOverride.Overrides = map[int64]repository.ReminderOverride{
-		2: {OffsetMinutes: &overriddenOffset, Channel: &overriddenChannel},
-	}
-
-	due, err := Due(withOverride, at(2026, 1, 1, 6, 55), at(2026, 1, 1, 7, 0))
-	if err != nil {
-		t.Fatalf("due: %v", err)
-	}
-	if len(due) != 1 || due[0].UserID != 2 || due[0].OffsetMinutes != 120 || due[0].Channel != "email" {
-		t.Fatalf("expected exactly one due reminder for user 2 with both overrides applied, got %+v", due)
+		t.Fatalf("expected only user 1's own Reminder to fire, got %+v", due)
 	}
 }
 

@@ -68,7 +68,7 @@ func newEventShareFixture(t *testing.T) eventShareFixture {
 		t.Fatalf("add viewer as workspace member: %v", err)
 	}
 
-	calendars := NewCalendarService(repository.NewCalendarRepository(sqlDB), repository.NewCalendarShareRepository(sqlDB), users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo, repository.NewCalendarGroupShareRepository(sqlDB), repository.NewGroupRepository(sqlDB))
+	calendars := NewCalendarService(repository.NewCalendarRepository(sqlDB), repository.NewCalendarShareRepository(sqlDB), users, repository.NewEventReminderRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo, repository.NewCalendarGroupShareRepository(sqlDB), repository.NewGroupRepository(sqlDB))
 	cal, err := calendars.Create(ctx, owner.ID, workspace.ID, "cal-1", CalendarWrite{Name: "Family", Color: "#12809CFF"})
 	if err != nil {
 		t.Fatalf("create calendar: %v", err)
@@ -80,7 +80,7 @@ func newEventShareFixture(t *testing.T) eventShareFixture {
 		t.Fatalf("share viewer: %v", err)
 	}
 
-	events := NewEventService(sqlDB, repository.NewEventRepository(sqlDB), repository.NewEventExceptionRepository(sqlDB), repository.NewEventReminderRepository(sqlDB), repository.NewReminderOverrideRepository(sqlDB), repository.NewSyncRepository(sqlDB), calendars, users, repository.NewAttachmentRepository(sqlDB), repository.NewAttendeeRepository(sqlDB), workspaceRepo, repository.NewGroupRepository(sqlDB), repository.NewNotificationRepository(sqlDB), nil, 1000)
+	events := NewEventService(sqlDB, repository.NewEventRepository(sqlDB), repository.NewEventExceptionRepository(sqlDB), repository.NewEventReminderRepository(sqlDB), repository.NewSyncRepository(sqlDB), calendars, users, repository.NewAttachmentRepository(sqlDB), repository.NewAttendeeRepository(sqlDB), workspaceRepo, repository.NewGroupRepository(sqlDB), repository.NewNotificationRepository(sqlDB), nil, 1000)
 
 	return eventShareFixture{
 		events: events, calendars: calendars, users: users,
@@ -127,47 +127,157 @@ func TestEventService_Editor_CanCreateUpdateDelete(t *testing.T) {
 	}
 }
 
-// TestEventService_Editor_RemindersAttributedToOwner is #208's core case
-// (ADR-0064 step one): an Editor creating Reminders on the Owner's shared
-// Calendar writes rows scoped to the Owner, not to themselves — and every
-// viewer with Access, Editor included, reads back the same Owner-scoped set,
-// exactly as the pre-#208 Event-scoped table behaved.
-func TestEventService_Editor_RemindersAttributedToOwner(t *testing.T) {
+// TestEventService_Editor_RemindersAreTheirOwn is #209's core case
+// (ADR-0064): each User's own Reminders on an Event are theirs alone.
+// Reminders play no part in Create at all any more — an Editor sets their
+// own via SetReminders, the Owner sets theirs the same way, and neither can
+// read or write the other's.
+func TestEventService_Editor_RemindersAreTheirOwn(t *testing.T) {
 	f := newEventShareFixture(t)
 	ctx := context.Background()
 
-	reminders := []repository.Reminder{{OffsetMinutes: 10, Channel: "notification"}}
-	event, err := f.events.Create(ctx, f.editorID, "evt-1", EventWrite{CalendarID: f.calendarID, Title: "Standup", Start: shareTestStart, End: shareTestEnd, Reminders: reminders})
+	event, err := f.events.Create(ctx, f.editorID, "evt-1", EventWrite{CalendarID: f.calendarID, Title: "Standup", Start: shareTestStart, End: shareTestEnd})
 	if err != nil {
 		t.Fatalf("editor create: %v", err)
 	}
-	if len(event.Reminders) != 1 {
-		t.Fatalf("expected 1 reminder on create response, got %+v", event.Reminders)
+	if len(event.Reminders) != 0 {
+		t.Fatalf("expected no reminders on a plain create, got %+v", event.Reminders)
 	}
 
-	ownerRows, err := f.events.reminders.ListByEventIDs(ctx, f.ownerID, []string{event.ID})
-	if err != nil {
-		t.Fatalf("list owner-scoped reminders: %v", err)
+	editorReminders := []repository.Reminder{{OffsetMinutes: 10, Channel: "notification"}}
+	if _, err := f.events.SetReminders(ctx, f.editorID, event.ID, editorReminders); err != nil {
+		t.Fatalf("editor set reminders: %v", err)
 	}
-	if len(ownerRows[event.ID]) != 1 {
-		t.Fatalf("expected the Editor's write to land under the Owner, got %+v", ownerRows[event.ID])
-	}
-	editorRows, err := f.events.reminders.ListByEventIDs(ctx, f.editorID, []string{event.ID})
-	if err != nil {
-		t.Fatalf("list editor-scoped reminders: %v", err)
-	}
-	if len(editorRows[event.ID]) != 0 {
-		t.Fatalf("expected no rows scoped to the Editor, got %+v", editorRows[event.ID])
+	ownerReminders := []repository.Reminder{{OffsetMinutes: 30, Channel: "email"}}
+	if _, err := f.events.SetReminders(ctx, f.ownerID, event.ID, ownerReminders); err != nil {
+		t.Fatalf("owner set reminders: %v", err)
 	}
 
-	for name, viewerID := range map[string]int64{"owner": f.ownerID, "editor": f.editorID, "viewer": f.viewerID} {
-		got, err := f.events.Get(ctx, viewerID, event.ID)
-		if err != nil {
-			t.Fatalf("%s get: %v", name, err)
-		}
-		if len(got.Reminders) != 1 || got.Reminders[0].OffsetMinutes != 10 {
-			t.Fatalf("%s: expected the Owner's reminder to be visible, got %+v", name, got.Reminders)
-		}
+	editorGot, err := f.events.Get(ctx, f.editorID, event.ID)
+	if err != nil {
+		t.Fatalf("editor get: %v", err)
+	}
+	if len(editorGot.Reminders) != 1 || editorGot.Reminders[0].OffsetMinutes != 10 {
+		t.Fatalf("expected the editor to see only their own reminder, got %+v", editorGot.Reminders)
+	}
+
+	ownerGot, err := f.events.Get(ctx, f.ownerID, event.ID)
+	if err != nil {
+		t.Fatalf("owner get: %v", err)
+	}
+	if len(ownerGot.Reminders) != 1 || ownerGot.Reminders[0].OffsetMinutes != 30 {
+		t.Fatalf("expected the owner to see only their own reminder, got %+v", ownerGot.Reminders)
+	}
+
+	viewerGot, err := f.events.Get(ctx, f.viewerID, event.ID)
+	if err != nil {
+		t.Fatalf("viewer get: %v", err)
+	}
+	if len(viewerGot.Reminders) != 0 {
+		t.Fatalf("expected the viewer, who set none, to see none, got %+v", viewerGot.Reminders)
+	}
+}
+
+// TestEventService_Create_Override_CopiesEveryUsersRemindersFromMaster is
+// AC6: creating an Override of a recurring Occurrence copies every User's
+// Reminder rows from the Master, not just the acting User's, and creates
+// none for a User who had none (ADR-0064).
+func TestEventService_Create_Override_CopiesEveryUsersRemindersFromMaster(t *testing.T) {
+	f := newEventShareFixture(t)
+	ctx := context.Background()
+
+	master, err := f.events.Create(ctx, f.ownerID, "evt-1", EventWrite{CalendarID: f.calendarID, Title: "Standup", Start: shareTestStart, End: shareTestEnd, Rrule: "FREQ=WEEKLY;BYDAY=TU"})
+	if err != nil {
+		t.Fatalf("create master: %v", err)
+	}
+	if _, err := f.events.SetReminders(ctx, f.ownerID, master.ID, []repository.Reminder{{OffsetMinutes: 10, Channel: "notification"}}); err != nil {
+		t.Fatalf("owner set reminders: %v", err)
+	}
+	if _, err := f.events.SetReminders(ctx, f.editorID, master.ID, []repository.Reminder{{OffsetMinutes: 30, Channel: "email"}}); err != nil {
+		t.Fatalf("editor set reminders: %v", err)
+	}
+	// f.viewerID deliberately sets no Reminders on the master.
+
+	recurrenceID := shareTestStart.AddDate(0, 0, 7)
+	override, err := f.events.Create(ctx, f.editorID, "evt-1-override", EventWrite{
+		CalendarID: f.calendarID, Title: "Standup (moved)",
+		Start: recurrenceID.Add(time.Hour), End: recurrenceID.Add(90 * time.Minute),
+		ParentID: &master.ID, RecurrenceID: &recurrenceID,
+	})
+	if err != nil {
+		t.Fatalf("editor create override: %v", err)
+	}
+
+	ownerGot, err := f.events.Get(ctx, f.ownerID, override.ID)
+	if err != nil {
+		t.Fatalf("owner get override: %v", err)
+	}
+	if len(ownerGot.Reminders) != 1 || ownerGot.Reminders[0].OffsetMinutes != 10 {
+		t.Fatalf("expected the owner's reminder copied onto the override, got %+v", ownerGot.Reminders)
+	}
+
+	editorGot, err := f.events.Get(ctx, f.editorID, override.ID)
+	if err != nil {
+		t.Fatalf("editor get override: %v", err)
+	}
+	if len(editorGot.Reminders) != 1 || editorGot.Reminders[0].OffsetMinutes != 30 {
+		t.Fatalf("expected the editor's reminder copied onto the override, got %+v", editorGot.Reminders)
+	}
+
+	viewerGot, err := f.events.Get(ctx, f.viewerID, override.ID)
+	if err != nil {
+		t.Fatalf("viewer get override: %v", err)
+	}
+	if len(viewerGot.Reminders) != 0 {
+		t.Fatalf("expected no reminder created for the viewer, who had none, got %+v", viewerGot.Reminders)
+	}
+}
+
+// TestEventService_Create_CopyRemindersFrom_CopiesEveryUsersReminders covers
+// the "This and following" split's new Master, which names the old Master
+// explicitly via CopyRemindersFrom rather than ParentID (it is a standalone
+// Master, not an Override) — the same copy-every-User's-rows guarantee as
+// AC6, extended to this case (ADR-0064).
+func TestEventService_Create_CopyRemindersFrom_CopiesEveryUsersReminders(t *testing.T) {
+	f := newEventShareFixture(t)
+	ctx := context.Background()
+
+	oldMaster, err := f.events.Create(ctx, f.ownerID, "evt-1", EventWrite{CalendarID: f.calendarID, Title: "Standup", Start: shareTestStart, End: shareTestEnd, Rrule: "FREQ=WEEKLY;BYDAY=TU"})
+	if err != nil {
+		t.Fatalf("create old master: %v", err)
+	}
+	if _, err := f.events.SetReminders(ctx, f.ownerID, oldMaster.ID, []repository.Reminder{{OffsetMinutes: 10, Channel: "notification"}}); err != nil {
+		t.Fatalf("owner set reminders: %v", err)
+	}
+	if _, err := f.events.SetReminders(ctx, f.editorID, oldMaster.ID, []repository.Reminder{{OffsetMinutes: 30, Channel: "email"}}); err != nil {
+		t.Fatalf("editor set reminders: %v", err)
+	}
+
+	newMasterStart := shareTestStart.AddDate(0, 0, 14)
+	copyFrom := oldMaster.ID
+	newMaster, err := f.events.Create(ctx, f.ownerID, "evt-1-new-master", EventWrite{
+		CalendarID: f.calendarID, Title: "Standup (renamed)",
+		Start: newMasterStart, End: newMasterStart.Add(30 * time.Minute), Rrule: "FREQ=WEEKLY;BYDAY=TU",
+		CopyRemindersFrom: &copyFrom,
+	})
+	if err != nil {
+		t.Fatalf("create new master: %v", err)
+	}
+
+	ownerGot, err := f.events.Get(ctx, f.ownerID, newMaster.ID)
+	if err != nil {
+		t.Fatalf("owner get new master: %v", err)
+	}
+	if len(ownerGot.Reminders) != 1 || ownerGot.Reminders[0].OffsetMinutes != 10 {
+		t.Fatalf("expected the owner's reminder copied onto the new master, got %+v", ownerGot.Reminders)
+	}
+
+	editorGot, err := f.events.Get(ctx, f.editorID, newMaster.ID)
+	if err != nil {
+		t.Fatalf("editor get new master: %v", err)
+	}
+	if len(editorGot.Reminders) != 1 || editorGot.Reminders[0].OffsetMinutes != 30 {
+		t.Fatalf("expected the editor's reminder copied onto the new master, got %+v", editorGot.Reminders)
 	}
 }
 

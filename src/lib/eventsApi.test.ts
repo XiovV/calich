@@ -465,33 +465,26 @@ describe("eventsApi reminders", () => {
     expect(events[1].reminders).toBeUndefined();
   });
 
-  it("create sends reminders and maps them back", async () => {
-    const reminders = [
-      { offsetMinutes: 10, channel: "notification" as const },
-      { offsetMinutes: 1440, channel: "email" as const },
-    ];
-    const fetchMock = vi.fn().mockResolvedValue(
-      jsonResponse(201, { ...wireEvent, reminders }),
-    );
+  // Reminders are no longer part of the create/update payload — they have
+  // their own write path (ADR-0064).
+  it("create never sends a reminders field", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(201, wireEvent));
     vi.stubGlobal("fetch", fetchMock);
 
-    const created = await eventsApi.create("token-123", {
+    await eventsApi.create("token-123", {
       id: "evt-1",
       calendarId: "cal-1",
       title: "Standup",
       start: new Date("2026-01-01T09:00:00Z"),
       end: new Date("2026-01-01T10:00:00Z"),
-      reminders,
     });
 
-    expect(created.reminders).toEqual(reminders);
     const body = JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string);
-    expect(body.reminders).toEqual(reminders);
+    expect(body).not.toHaveProperty("reminders");
   });
 
-  it("update sends reminders", async () => {
-    const reminders = [{ offsetMinutes: 30, channel: "email" as const }];
-    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, { ...wireEvent, reminders }));
+  it("update never sends a reminders field", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, wireEvent));
     vi.stubGlobal("fetch", fetchMock);
 
     await eventsApi.update("token-123", "evt-1", {
@@ -499,11 +492,29 @@ describe("eventsApi reminders", () => {
       title: "Standup",
       start: new Date("2026-01-01T09:00:00Z"),
       end: new Date("2026-01-01T10:00:00Z"),
-      reminders,
     });
 
     const body = JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string);
-    expect(body.reminders).toEqual(reminders);
+    expect(body).not.toHaveProperty("reminders");
+  });
+
+  it("setReminders PUTs the caller's own reminders and returns the response", async () => {
+    const reminders = [
+      { offsetMinutes: 10, channel: "notification" as const },
+      { offsetMinutes: 1440, channel: "email" as const },
+    ];
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, reminders));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await eventsApi.setReminders("token-123", "evt-1", reminders);
+
+    expect(result).toEqual(reminders);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/events/evt-1/reminders",
+      expect.objectContaining({ method: "PUT", credentials: "include" }),
+    );
+    const body = JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string);
+    expect(body).toEqual({ reminders });
   });
 });
 

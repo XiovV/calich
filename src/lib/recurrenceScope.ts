@@ -22,9 +22,6 @@ export interface EventFieldChanges {
   // The Anchor zone: preserved from whatever Event this change derives from
   // — no picker exists to change it explicitly yet (ADR-0019).
   tzid?: string;
-  // Absent from a drag-only edit, like allDay above — the caller falls back
-  // to the reference Event's own Reminders in that case (ADR-0020).
-  reminders?: Reminder[];
   description?: string;
   location?: string;
   url?: string;
@@ -45,17 +42,6 @@ export function resolveAllDay(
   master: Event,
 ): boolean | undefined {
   return changes.allDay ?? master.allDay;
-}
-
-/** `changes`' Reminders, falling back to `reference`'s own when the edit
- * didn't touch them (a drag-only edit) — `reference` is the Master for a
- * fresh Override (so it starts as a copy of the Master's set, ADR-0020) or
- * the Occurrence's own Event when refining an edit already scoped to it. */
-export function resolveReminders(
-  changes: Pick<EventFieldChanges, "reminders">,
-  reference: Pick<Event, "reminders">,
-): Reminder[] | undefined {
-  return changes.reminders ?? reference.reminders;
 }
 
 /** `changes`' description, falling back to `reference`'s own when the edit
@@ -122,14 +108,15 @@ export function makeOverride(
     // An Override inherits its master's Anchor zone — only an explicit zone
     // choice would change it, and no picker exists yet (ADR-0019).
     tzid: master.tzid,
-    // A fresh Override starts as a copy of the Master's Reminders (ADR-0020).
-    reminders: resolveReminders(changes, master),
     description: resolveDescription(changes, master),
     location: resolveLocation(changes, master),
     url: resolveUrl(changes, master),
     // A fresh Override starts as a copy of the Master's color, same as
-    // description/location/reminders — color is just another field the
-    // compiler carries (ADR-0043).
+    // description/location — color is just another field the compiler
+    // carries (ADR-0043). Reminders are no longer among these fields: the
+    // backend copies every User's rows from the Master onto a new Override
+    // itself (ADR-0064), and the acting User's own edit, if any, travels
+    // through eventsApi.setReminders instead.
     color: resolveColor(changes, master),
   };
 }
@@ -183,7 +170,8 @@ export function truncateSeriesBefore(master: Event, splitStart: Date): string {
   const lastBeforeSplit = rule.before(toFloating(splitStart, zone), false);
   // No earlier Occurrence (the split lands on the very first one) — truncate
   // to just before the master's own start so it produces nothing.
-  const untilFloating = lastBeforeSplit ?? new Date(floatingStart.getTime() - 1000);
+  const untilFloating =
+    lastBeforeSplit ?? new Date(floatingStart.getTime() - 1000);
 
   return withUntil(master.rrule ?? "", untilFloating);
 }
@@ -220,7 +208,6 @@ export function splitFollowing(
       allDay: resolveAllDay(changes, master),
       rrule: master.rrule,
       tzid: master.tzid,
-      reminders: resolveReminders(changes, master),
       description: resolveDescription(changes, master),
       location: resolveLocation(changes, master),
       url: resolveUrl(changes, master),
@@ -250,12 +237,18 @@ export function shouldDiscardChildren(
   oldRrule: string | undefined,
   newRrule: string | undefined,
 ): boolean {
-  return stripEndCondition(oldRrule ?? "") !== stripEndCondition(newRrule ?? "");
+  return (
+    stripEndCondition(oldRrule ?? "") !== stripEndCondition(newRrule ?? "")
+  );
 }
 
 /** Order-independent equality: a reordered but otherwise identical set of
- * Reminders isn't a change worth surfacing. */
-function remindersEqual(a: Reminder[], b: Reminder[]): boolean {
+ * Reminders isn't a change worth surfacing. Exported for the event modal,
+ * which uses it to decide whether the acting User's own Reminders draft
+ * changed at all — Reminders no longer travel through EventFieldChanges, so
+ * this is the caller's own concern rather than something hasFieldChanges
+ * can resolve internally (ADR-0064). */
+export function remindersEqual(a: Reminder[], b: Reminder[]): boolean {
   if (a.length !== b.length) return false;
   const key = (r: Reminder) => `${r.offsetMinutes}:${r.channel}`;
   const sortedA = a.map(key).sort();
@@ -266,14 +259,18 @@ function remindersEqual(a: Reminder[], b: Reminder[]): boolean {
 /**
  * Whether `changes` actually differs from `original` in any field the Tier-3
  * scope picker (This event / This and following / All events) applies to
- * (#141). Used to skip the picker on a no-op save — e.g. one where only an
- * Attachment was added/removed, which applies to the Master immediately and
- * independently of Save (ADR-0040) and so isn't governed by any scope
- * choice.
+ * (#141), plus whether the acting User's own Reminders draft changed
+ * (`changesReminders`/`originalReminders`, passed separately since Reminders
+ * no longer live on EventFieldChanges, ADR-0064). Used to skip the picker on
+ * a no-op save — e.g. one where only an Attachment was added/removed, which
+ * applies to the Master immediately and independently of Save (ADR-0040)
+ * and so isn't governed by any scope choice.
  */
 export function hasFieldChanges(
   changes: EventFieldChanges & { rrule?: string },
   original: EventFieldChanges & { rrule?: string },
+  changesReminders: Reminder[],
+  originalReminders: Reminder[],
 ): boolean {
   return (
     changes.calendarId !== original.calendarId ||
@@ -284,8 +281,9 @@ export function hasFieldChanges(
     (changes.description ?? "") !== (original.description ?? "") ||
     (changes.location ?? "") !== (original.location ?? "") ||
     (changes.url ?? "") !== (original.url ?? "") ||
-    resolveColor(changes, { color: undefined }) !== resolveColor(original, { color: undefined }) ||
-    !remindersEqual(changes.reminders ?? [], original.reminders ?? []) ||
+    resolveColor(changes, { color: undefined }) !==
+      resolveColor(original, { color: undefined }) ||
+    !remindersEqual(changesReminders, originalReminders) ||
     (changes.rrule ?? "") !== (original.rrule ?? "")
   );
 }

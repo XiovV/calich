@@ -9,7 +9,6 @@ import {
   resolveColor,
   resolveDescription,
   resolveLocation,
-  resolveReminders,
   resolveUrl,
   shouldDiscardChildren,
   splitFollowing,
@@ -25,9 +24,8 @@ export type MasterFieldChanges = EventFieldChanges & { rrule?: string };
 /** A master's own identifying fields, kept unchanged while only its rule
  * moves — carried by ops that truncate a series without replacing it
  * (`reanchorSeries`, `truncateSeries`). Includes `tzid` so truncating never
- * silently clears the Anchor zone (ADR-0019), and `reminders` so it never
- * silently clears the master's own Reminders either (ADR-0020) — the update
- * API replaces Reminders wholesale, so an omitted field would wipe them. */
+ * silently clears the Anchor zone (ADR-0019). Reminders play no part here —
+ * they're not part of the Event write at all (ADR-0064). */
 type MasterCoreFields = Pick<
   Event,
   | "calendarId"
@@ -35,7 +33,6 @@ type MasterCoreFields = Pick<
   | "start"
   | "end"
   | "tzid"
-  | "reminders"
   | "description"
   | "location"
   | "url"
@@ -139,6 +136,17 @@ export interface PlanEditOccurrenceInput {
   changes: MasterFieldChanges;
 }
 
+/** `planEditOccurrence`'s result: the ordered Series ops to dispatch, plus
+ * which Event row the acting User's own Reminders draft — if they touched
+ * it — should be written onto via `eventsApi.setReminders` (ADR-0064).
+ * Reminders don't travel through `SeriesOp.fields` at all: an Override
+ * already gets every User's rows copied from its Master server-side on
+ * create, and a plain unchanged draft means nothing needs writing. */
+export interface PlanEditOccurrenceResult {
+  ops: SeriesOp[];
+  reminderTargetEventId: string;
+}
+
 /**
  * Pure planner: computes the ordered list of Series operations for a scoped
  * edit, across all three scopes — including the trivial "this event" edit of
@@ -150,41 +158,55 @@ export interface PlanEditOccurrenceInput {
  * to `crypto.randomUUID`; tests can inject a deterministic generator).
  */
 export function planEditOccurrence(
-  { master, occurrence, isOverride, originalStart, scope, changes }: PlanEditOccurrenceInput,
+  {
+    master,
+    occurrence,
+    isOverride,
+    originalStart,
+    scope,
+    changes,
+  }: PlanEditOccurrenceInput,
   newId: () => string = () => crypto.randomUUID(),
-): SeriesOp[] {
+): PlanEditOccurrenceResult {
   if (scope === "all") {
     // The whole series shifts by the delta `occurrence` moved by (see
     // seriesEditChanges) — this covers both a drag (an explicit new
     // date+time) and the modal (a time-only edit, so the delta has no day
     // component and the master's own date survives untouched).
-    const seriesChanges = seriesEditChanges(master, occurrence, changes.start, changes.end);
+    const seriesChanges = seriesEditChanges(
+      master,
+      occurrence,
+      changes.start,
+      changes.end,
+    );
     // "rrule" may be present-but-undefined (the user picked "Does not
     // repeat"), which must win over falling back to seriesChanges' own
     // reanchored rule — hence an `in` check rather than `??`.
     const rrule = "rrule" in changes ? changes.rrule : seriesChanges.rrule;
-    return [
-      {
-        kind: "putEvent",
-        id: master.id,
-        fields: {
-          calendarId: changes.calendarId,
-          title: changes.title,
-          start: seriesChanges.start,
-          end: seriesChanges.end,
-          allDay: resolveAllDay(changes, master),
-          rrule,
-          // Preserved unchanged — no picker exists to change it (ADR-0019).
-          tzid: master.tzid,
-          reminders: resolveReminders(changes, master),
-          description: resolveDescription(changes, master),
-          location: resolveLocation(changes, master),
-          url: resolveUrl(changes, master),
-          color: resolveColor(changes, master),
+    return {
+      ops: [
+        {
+          kind: "putEvent",
+          id: master.id,
+          fields: {
+            calendarId: changes.calendarId,
+            title: changes.title,
+            start: seriesChanges.start,
+            end: seriesChanges.end,
+            allDay: resolveAllDay(changes, master),
+            rrule,
+            // Preserved unchanged — no picker exists to change it (ADR-0019).
+            tzid: master.tzid,
+            description: resolveDescription(changes, master),
+            location: resolveLocation(changes, master),
+            url: resolveUrl(changes, master),
+            color: resolveColor(changes, master),
+          },
+          discardChildren: shouldDiscardChildren(master.rrule, rrule),
         },
-        discardChildren: shouldDiscardChildren(master.rrule, rrule),
-      },
-    ];
+      ],
+      reminderTargetEventId: master.id,
+    };
   }
 
   if (scope === "following") {
@@ -207,7 +229,6 @@ export function planEditOccurrence(
         start: master.start,
         end: master.end,
         tzid: master.tzid,
-        reminders: master.reminders,
         description: master.description,
         location: master.location,
         url: master.url,
@@ -221,91 +242,97 @@ export function planEditOccurrence(
       reparentFromStart,
     };
 
-    if (!isOverride) return [reanchorOp];
+    if (!isOverride)
+      return { ops: [reanchorOp], reminderTargetEventId: newMasterId };
 
     // The clicked Occurrence is itself an Override sitting exactly at the
     // split boundary — reanchorSeries only reparents it onto the new master,
     // it doesn't touch its fields, so without this it would keep rendering
     // its pre-edit fields forever under the new master.
-    return [
-      reanchorOp,
-      {
-        kind: "overrideOccurrence",
-        id: occurrence.event.id,
-        isNew: false,
-        parentId: newMasterId,
-        recurrenceId: occurrence.event.recurrenceId!,
-        fields: {
-          calendarId: changes.calendarId,
-          title: changes.title,
-          start: changes.start,
-          end: changes.end,
-          allDay: resolveAllDay(changes, master),
-          tzid: occurrence.event.tzid,
-          reminders: resolveReminders(changes, occurrence.event),
-          description: resolveDescription(changes, occurrence.event),
-          location: resolveLocation(changes, occurrence.event),
-          url: resolveUrl(changes, occurrence.event),
-          color: resolveColor(changes, occurrence.event),
+    return {
+      ops: [
+        reanchorOp,
+        {
+          kind: "overrideOccurrence",
+          id: occurrence.event.id,
+          isNew: false,
+          parentId: newMasterId,
+          recurrenceId: occurrence.event.recurrenceId!,
+          fields: {
+            calendarId: changes.calendarId,
+            title: changes.title,
+            start: changes.start,
+            end: changes.end,
+            allDay: resolveAllDay(changes, master),
+            tzid: occurrence.event.tzid,
+            description: resolveDescription(changes, occurrence.event),
+            location: resolveLocation(changes, occurrence.event),
+            url: resolveUrl(changes, occurrence.event),
+            color: resolveColor(changes, occurrence.event),
+          },
         },
-      },
-    ];
+      ],
+      reminderTargetEventId: occurrence.event.id,
+    };
   }
 
   // scope === "this"
   if (isOverride) {
-    return [
-      {
-        kind: "overrideOccurrence",
-        id: occurrence.event.id,
-        isNew: false,
-        parentId: master.id,
-        // occurrence.event is itself the Override; its recurrenceId is the
-        // Occurrence it replaces and never changes on a "this event" edit.
-        recurrenceId: occurrence.event.recurrenceId!,
-        fields: {
-          calendarId: changes.calendarId,
-          title: changes.title,
-          start: changes.start,
-          end: changes.end,
-          allDay: resolveAllDay(changes, master),
-          // Preserved unchanged — no picker exists to change it (ADR-0019).
-          tzid: occurrence.event.tzid,
-          // Editing an existing Override's Reminders only affects its own
-          // row, never the rest of the series (ADR-0020).
-          reminders: resolveReminders(changes, occurrence.event),
-          description: resolveDescription(changes, occurrence.event),
-          location: resolveLocation(changes, occurrence.event),
-          url: resolveUrl(changes, occurrence.event),
-          color: resolveColor(changes, occurrence.event),
+    return {
+      ops: [
+        {
+          kind: "overrideOccurrence",
+          id: occurrence.event.id,
+          isNew: false,
+          parentId: master.id,
+          // occurrence.event is itself the Override; its recurrenceId is the
+          // Occurrence it replaces and never changes on a "this event" edit.
+          recurrenceId: occurrence.event.recurrenceId!,
+          fields: {
+            calendarId: changes.calendarId,
+            title: changes.title,
+            start: changes.start,
+            end: changes.end,
+            allDay: resolveAllDay(changes, master),
+            // Preserved unchanged — no picker exists to change it (ADR-0019).
+            tzid: occurrence.event.tzid,
+            description: resolveDescription(changes, occurrence.event),
+            location: resolveLocation(changes, occurrence.event),
+            url: resolveUrl(changes, occurrence.event),
+            color: resolveColor(changes, occurrence.event),
+          },
         },
-      },
-    ];
+      ],
+      reminderTargetEventId: occurrence.event.id,
+    };
   }
 
   const override = makeOverride(master, originalStart, changes);
-  return [
-    {
-      kind: "overrideOccurrence",
-      id: newId(),
-      isNew: true,
-      parentId: override.parentId,
-      recurrenceId: override.recurrenceId,
-      fields: {
-        calendarId: override.calendarId,
-        title: override.title,
-        start: override.start,
-        end: override.end,
-        allDay: override.allDay,
-        tzid: override.tzid,
-        reminders: override.reminders,
-        description: override.description,
-        location: override.location,
-        url: override.url,
-        color: override.color,
+  const overrideId = newId();
+  return {
+    ops: [
+      {
+        kind: "overrideOccurrence",
+        id: overrideId,
+        isNew: true,
+        parentId: override.parentId,
+        recurrenceId: override.recurrenceId,
+        fields: {
+          calendarId: override.calendarId,
+          title: override.title,
+          start: override.start,
+          end: override.end,
+          allDay: override.allDay,
+          tzid: override.tzid,
+          description: override.description,
+          location: override.location,
+          url: override.url,
+          color: override.color,
+        },
       },
-    },
-  ];
+    ],
+    reminderTargetEventId: overrideId,
+  };
 }
 
 export interface PlanDeleteOccurrenceInput {
@@ -347,7 +374,10 @@ export function planDeleteOccurrence({
         event.recurrenceId &&
         event.recurrenceId >= originalStart,
     );
-    const [keptExdates] = partitionByBoundary(master.exdates ?? [], originalStart);
+    const [keptExdates] = partitionByBoundary(
+      master.exdates ?? [],
+      originalStart,
+    );
     return [
       {
         kind: "truncateSeries",
@@ -358,7 +388,6 @@ export function planDeleteOccurrence({
           start: master.start,
           end: master.end,
           tzid: master.tzid,
-          reminders: master.reminders,
           description: master.description,
           location: master.location,
           url: master.url,
@@ -395,10 +424,19 @@ export function applySeriesOps(events: Event[], ops: SeriesOp[]): Event[] {
 function applySeriesOp(events: Event[], op: SeriesOp): Event[] {
   switch (op.kind) {
     case "overrideOccurrence": {
+      // A brand-new Override's Reminders start as a local copy of its
+      // Parent's own — mirroring what the backend copies server-side
+      // (ADR-0064) — until the acting User's own draft, if changed,
+      // overwrites it via a separate setReminders patch. An in-place edit
+      // of an already-existing Override keeps whatever it already had.
+      const inheritedReminders = op.isNew
+        ? events.find((event) => event.id === op.parentId)?.reminders
+        : events.find((event) => event.id === op.id)?.reminders;
       const overrideEvent: Event = {
         id: op.id,
         parentId: op.parentId,
         recurrenceId: op.recurrenceId,
+        reminders: inheritedReminders,
         ...op.fields,
       };
       return op.isNew
@@ -408,13 +446,19 @@ function applySeriesOp(events: Event[], op: SeriesOp): Event[] {
 
     case "putEvent": {
       return events
-        .map((event) => (event.id === op.id ? { ...event, ...op.fields } : event))
+        .map((event) =>
+          event.id === op.id ? { ...event, ...op.fields } : event,
+        )
         .filter((event) => !op.discardChildren || event.parentId !== op.id);
     }
 
     case "reanchorSeries": {
+      // The new Master's Reminders start as a local copy of the old
+      // Master's own, mirroring the server-side copy (ADR-0064).
       const createdNewMaster: Event = {
         id: op.newMasterId,
+        reminders: events.find((event) => event.id === op.oldMasterId)
+          ?.reminders,
         ...op.newMaster,
         exdates: op.movedExdates,
       };
@@ -437,13 +481,18 @@ function applySeriesOp(events: Event[], op: SeriesOp): Event[] {
     case "cancelOccurrence": {
       return events.map((event) =>
         event.id === op.parentId
-          ? { ...event, exdates: [...(event.exdates ?? []), op.occurrenceStart] }
+          ? {
+              ...event,
+              exdates: [...(event.exdates ?? []), op.occurrenceStart],
+            }
           : event,
       );
     }
 
     case "removeSeries": {
-      return events.filter((event) => event.id !== op.id && event.parentId !== op.id);
+      return events.filter(
+        (event) => event.id !== op.id && event.parentId !== op.id,
+      );
     }
 
     case "truncateSeries": {
@@ -462,13 +511,19 @@ function applySeriesOp(events: Event[], op: SeriesOp): Event[] {
  * existing endpoints, in order (e.g. the following-split fires truncate →
  * create → reparent), relying on the backend `ON DELETE CASCADE` for
  * children (ADR-0016, issue #40). */
-export async function dispatchSeriesOps(accessToken: string, ops: SeriesOp[]): Promise<void> {
+export async function dispatchSeriesOps(
+  accessToken: string,
+  ops: SeriesOp[],
+): Promise<void> {
   for (const op of ops) {
     await dispatchSeriesOp(accessToken, op);
   }
 }
 
-async function dispatchSeriesOp(accessToken: string, op: SeriesOp): Promise<void> {
+async function dispatchSeriesOp(
+  accessToken: string,
+  op: SeriesOp,
+): Promise<void> {
   switch (op.kind) {
     case "overrideOccurrence": {
       if (op.isNew) {
@@ -480,7 +535,10 @@ async function dispatchSeriesOp(accessToken: string, op: SeriesOp): Promise<void
         });
       } else {
         // An Override never carries a rule of its own (ADR-0016).
-        await eventsApi.update(accessToken, op.id, { ...op.fields, rrule: undefined });
+        await eventsApi.update(accessToken, op.id, {
+          ...op.fields,
+          rrule: undefined,
+        });
       }
       return;
     }
@@ -495,7 +553,15 @@ async function dispatchSeriesOp(accessToken: string, op: SeriesOp): Promise<void
         ...op.oldMasterFields,
         rrule: op.truncatedRrule,
       });
-      await eventsApi.create(accessToken, { id: op.newMasterId, ...op.newMaster });
+      // The new Master starts as a copy of every User's Reminders on the
+      // old one — server-side, so a User whose Reminder applied to the old
+      // Master's future Occurrences doesn't silently lose it at the split
+      // (ADR-0064).
+      await eventsApi.create(accessToken, {
+        id: op.newMasterId,
+        ...op.newMaster,
+        copyRemindersFrom: op.oldMasterId,
+      });
       await eventsApi.reparentSeries(
         accessToken,
         op.oldMasterId,
@@ -506,7 +572,11 @@ async function dispatchSeriesOp(accessToken: string, op: SeriesOp): Promise<void
     }
 
     case "cancelOccurrence": {
-      await eventsApi.addException(accessToken, op.parentId, op.occurrenceStart);
+      await eventsApi.addException(
+        accessToken,
+        op.parentId,
+        op.occurrenceStart,
+      );
       return;
     }
 

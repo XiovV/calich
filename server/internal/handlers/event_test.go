@@ -107,7 +107,7 @@ func newEventTestServerWithServices(t *testing.T) (baseURL, accessToken, calenda
 	workspaceRepo := repository.NewWorkspaceRepository(sqlDB)
 	workspaces := service.NewWorkspaceService(sqlDB, workspaceRepo, repository.NewWorkspaceInviteRepository(sqlDB), repository.NewCalendarRepository(sqlDB), repository.NewCalendarShareRepository(sqlDB))
 	calendarRepo := repository.NewCalendarRepository(sqlDB)
-	calendars = service.NewCalendarService(calendarRepo, repository.NewCalendarShareRepository(sqlDB), users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo, repository.NewCalendarGroupShareRepository(sqlDB), repository.NewGroupRepository(sqlDB))
+	calendars = service.NewCalendarService(calendarRepo, repository.NewCalendarShareRepository(sqlDB), users, repository.NewEventReminderRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo, repository.NewCalendarGroupShareRepository(sqlDB), repository.NewGroupRepository(sqlDB))
 	auth := service.NewAuthService(users, sessions, workspaces, repository.NewWorkspaceInviteRepository(sqlDB), calendars, repository.NewAttendeeRepository(sqlDB), []byte("test-secret"), "alice", "alice@example.com", "hunter2", false)
 	bootstrapUser, _, err := auth.Bootstrap(context.Background())
 	if err != nil {
@@ -138,7 +138,7 @@ func newEventTestServerWithServices(t *testing.T) (baseURL, accessToken, calenda
 		t.Fatalf("create calendar: %v", err)
 	}
 
-	events = service.NewEventService(sqlDB, repository.NewEventRepository(sqlDB), repository.NewEventExceptionRepository(sqlDB), repository.NewEventReminderRepository(sqlDB), repository.NewReminderOverrideRepository(sqlDB), repository.NewSyncRepository(sqlDB), calendars, users, repository.NewAttachmentRepository(sqlDB), repository.NewAttendeeRepository(sqlDB), workspaceRepo, repository.NewGroupRepository(sqlDB), repository.NewNotificationRepository(sqlDB), nil, 1000)
+	events = service.NewEventService(sqlDB, repository.NewEventRepository(sqlDB), repository.NewEventExceptionRepository(sqlDB), repository.NewEventReminderRepository(sqlDB), repository.NewSyncRepository(sqlDB), calendars, users, repository.NewAttachmentRepository(sqlDB), repository.NewAttendeeRepository(sqlDB), workspaceRepo, repository.NewGroupRepository(sqlDB), repository.NewNotificationRepository(sqlDB), nil, 1000)
 	eventHandler := NewEventHandler(events, attachmentstore.New(t.TempDir()))
 
 	r := chi.NewRouter()
@@ -152,6 +152,8 @@ func newEventTestServerWithServices(t *testing.T) (baseURL, accessToken, calenda
 		r.Post("/{id}/exceptions", eventHandler.AddException)
 		r.Post("/{id}/reparent", eventHandler.Reparent)
 		r.Get("/{id}/ics", eventHandler.ICS)
+		r.Get("/{id}/reminders", eventHandler.GetReminders)
+		r.Put("/{id}/reminders", eventHandler.SetReminders)
 	})
 
 	srv := httptest.NewServer(r)
@@ -766,6 +768,28 @@ func postJSON(t *testing.T, baseURL, accessToken, path string, body any) *http.R
 	return resp
 }
 
+func putJSON(t *testing.T, baseURL, accessToken, path string, body any) *http.Response {
+	t.Helper()
+
+	encoded, err := json.Marshal(body)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	req, err := http.NewRequest(http.MethodPut, baseURL+path, bytes.NewReader(encoded))
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("put: %v", err)
+	}
+	return resp
+}
+
 func TestEventHandler_CreateOverride(t *testing.T) {
 	baseURL, accessToken, calendarID := newEventTestServer(t)
 
@@ -1038,32 +1062,37 @@ func mustParseRFC3339(t *testing.T, value string) time.Time {
 	return ts
 }
 
-// The event API nests a reminders array on create and list, round-tripping
-// the offset/channel pairs a client authored (ADR-0020).
-func TestEventHandler_Create_RoundTripsReminders(t *testing.T) {
+// Reminders are no longer part of the create/update payload — they have
+// their own write path (PUT /api/events/{id}/reminders), which round-trips
+// the offset/channel pairs a client authored and shows up on create, list,
+// and get alike (ADR-0064).
+func TestEventHandler_SetReminders_RoundTrips(t *testing.T) {
 	baseURL, accessToken, calendarID := newEventTestServer(t)
 
-	createResp := postJSON(t, baseURL, accessToken, "/api/events/", createEventRequest{
-		ID:         "22222222-2222-2222-2222-222222222222",
-		CalendarID: calendarID,
-		Title:      "Standup",
-		Start:      "2026-01-01T09:00:00Z",
-		End:        "2026-01-01T10:00:00Z",
+	createResp := createEvent(t, baseURL, accessToken, "22222222-2222-2222-2222-222222222222", calendarID, "Standup", "2026-01-01T09:00:00Z", "2026-01-01T10:00:00Z")
+	var created decodedEvent
+	if err := json.NewDecoder(createResp.Body).Decode(&created); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(created.Reminders) != 0 {
+		t.Fatalf("expected no reminders on a plain create, got %+v", created.Reminders)
+	}
+
+	setResp := putJSON(t, baseURL, accessToken, "/api/events/"+created.ID+"/reminders", setRemindersRequest{
 		Reminders: []reminderWire{
 			{OffsetMinutes: 10, Channel: "notification"},
 			{OffsetMinutes: 1440, Channel: "email"},
 		},
 	})
-	if createResp.StatusCode != http.StatusCreated {
-		t.Fatalf("expected 201, got %d", createResp.StatusCode)
+	if setResp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", setResp.StatusCode)
 	}
-
-	var created decodedEvent
-	if err := json.NewDecoder(createResp.Body).Decode(&created); err != nil {
+	var setReminders []reminderWire
+	if err := json.NewDecoder(setResp.Body).Decode(&setReminders); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if len(created.Reminders) != 2 {
-		t.Fatalf("expected 2 reminders on create response, got %+v", created.Reminders)
+	if len(setReminders) != 2 {
+		t.Fatalf("expected 2 reminders on the set response, got %+v", setReminders)
 	}
 
 	listResp, err := authenticatedGet(baseURL+"/api/events/", accessToken)
@@ -1081,8 +1110,9 @@ func TestEventHandler_Create_RoundTripsReminders(t *testing.T) {
 	}
 }
 
-// Absent reminders means no Reminders, and the field is omitted from the
-// response — not an empty array.
+// Absent reminders means no Reminders, and the field is omitted from a
+// create/get/list response — not an empty array. Reminders play no part in
+// create at all any more (ADR-0064).
 func TestEventHandler_Create_OmitsRemindersWhenAbsent(t *testing.T) {
 	baseURL, accessToken, calendarID := newEventTestServer(t)
 
@@ -1096,61 +1126,46 @@ func TestEventHandler_Create_OmitsRemindersWhenAbsent(t *testing.T) {
 	}
 }
 
-func TestEventHandler_Create_RejectsInvalidReminderChannel(t *testing.T) {
+func TestEventHandler_SetReminders_RejectsInvalidReminderChannel(t *testing.T) {
 	baseURL, accessToken, calendarID := newEventTestServer(t)
 
-	resp := postJSON(t, baseURL, accessToken, "/api/events/", createEventRequest{
-		ID:         "22222222-2222-2222-2222-222222222222",
-		CalendarID: calendarID,
-		Title:      "Standup",
-		Start:      "2026-01-01T09:00:00Z",
-		End:        "2026-01-01T10:00:00Z",
-		Reminders:  []reminderWire{{OffsetMinutes: 10, Channel: "sms"}},
+	createResp := createEvent(t, baseURL, accessToken, "22222222-2222-2222-2222-222222222222", calendarID, "Standup", "2026-01-01T09:00:00Z", "2026-01-01T10:00:00Z")
+	var created decodedEvent
+	json.NewDecoder(createResp.Body).Decode(&created)
+
+	resp := putJSON(t, baseURL, accessToken, "/api/events/"+created.ID+"/reminders", setRemindersRequest{
+		Reminders: []reminderWire{{OffsetMinutes: 10, Channel: "sms"}},
 	})
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d", resp.StatusCode)
 	}
 }
 
-// PATCH replaces an Event's reminders array wholesale, on the same
-// request/response contract as create (ADR-0020).
-func TestEventHandler_Update_ReplacesRemindersWholesale(t *testing.T) {
+// A second PUT replaces the caller's Reminders wholesale, on the same
+// request/response contract as the first (ADR-0020, ADR-0064).
+func TestEventHandler_SetReminders_ReplacesWholesale(t *testing.T) {
 	baseURL, accessToken, calendarID := newEventTestServer(t)
 
-	createResp := postJSON(t, baseURL, accessToken, "/api/events/", createEventRequest{
-		ID:         "22222222-2222-2222-2222-222222222222",
-		CalendarID: calendarID,
-		Title:      "Standup",
-		Start:      "2026-01-01T09:00:00Z",
-		End:        "2026-01-01T10:00:00Z",
-		Reminders:  []reminderWire{{OffsetMinutes: 10, Channel: "notification"}},
-	})
+	createResp := createEvent(t, baseURL, accessToken, "22222222-2222-2222-2222-222222222222", calendarID, "Standup", "2026-01-01T09:00:00Z", "2026-01-01T10:00:00Z")
 	var created decodedEvent
 	json.NewDecoder(createResp.Body).Decode(&created)
 
-	body, _ := json.Marshal(updateEventRequest{
-		CalendarID: calendarID,
-		Title:      "Standup",
-		Start:      "2026-01-01T09:00:00Z",
-		End:        "2026-01-01T10:00:00Z",
-		Reminders:  []reminderWire{{OffsetMinutes: 30, Channel: "email"}},
+	putJSON(t, baseURL, accessToken, "/api/events/"+created.ID+"/reminders", setRemindersRequest{
+		Reminders: []reminderWire{{OffsetMinutes: 10, Channel: "notification"}},
 	})
-	req, _ := http.NewRequest(http.MethodPatch, baseURL+"/api/events/"+created.ID, bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+accessToken)
-	updateResp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatalf("patch: %v", err)
-	}
+
+	updateResp := putJSON(t, baseURL, accessToken, "/api/events/"+created.ID+"/reminders", setRemindersRequest{
+		Reminders: []reminderWire{{OffsetMinutes: 30, Channel: "email"}},
+	})
 	if updateResp.StatusCode != http.StatusOK {
 		t.Fatalf("expected 200, got %d", updateResp.StatusCode)
 	}
 
-	var updated decodedEvent
+	var updated []reminderWire
 	if err := json.NewDecoder(updateResp.Body).Decode(&updated); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if len(updated.Reminders) != 1 || updated.Reminders[0].OffsetMinutes != 30 || updated.Reminders[0].Channel != "email" {
-		t.Fatalf("expected reminders replaced wholesale, got %+v", updated.Reminders)
+	if len(updated) != 1 || updated[0].OffsetMinutes != 30 || updated[0].Channel != "email" {
+		t.Fatalf("expected reminders replaced wholesale, got %+v", updated)
 	}
 }

@@ -37,7 +37,7 @@ func newTestCalendarService(t *testing.T) (svc *CalendarService, userID, workspa
 		t.Fatalf("add workspace member: %v", err)
 	}
 
-	return NewCalendarService(repository.NewCalendarRepository(sqlDB), repository.NewCalendarShareRepository(sqlDB), users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo, repository.NewCalendarGroupShareRepository(sqlDB), repository.NewGroupRepository(sqlDB)), user.ID, workspace.ID
+	return NewCalendarService(repository.NewCalendarRepository(sqlDB), repository.NewCalendarShareRepository(sqlDB), users, repository.NewEventReminderRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo, repository.NewCalendarGroupShareRepository(sqlDB), repository.NewGroupRepository(sqlDB)), user.ID, workspace.ID
 }
 
 func TestCalendarService_Create(t *testing.T) {

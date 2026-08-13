@@ -259,7 +259,7 @@ CREATE INDEX idx_calendar_group_shares_group_id ON calendar_group_shares(group_i
 -- ADR-0029): calendars.color stays the Owner's and the default every new
 -- Share inherits, but any User with Access may shadow it here with a colour
 -- that applies to them alone. Keyed directly on (calendar_id, user_id) —
--- unlike user_event_reminders there is no wholesale-replace to survive, so
+-- unlike event_reminders there is no wholesale-replace to survive, so
 -- the override needs no indirection through another table.
 CREATE TABLE calendar_user_colors (
     calendar_id TEXT NOT NULL REFERENCES calendars(id) ON DELETE CASCADE,
@@ -358,18 +358,13 @@ CREATE TABLE event_exceptions (
 
 -- A Reminder is a trigger offset (minutes before Occurrence start) plus a
 -- delivery channel, projecting an iCalendar VALARM — belonging to one User
--- on one Event, never to the Event itself (ADR-0064). Lives in a child table
--- rather than a JSON blob so the scheduler (ADR-0021) can query it. Many per
--- (User, Event), unconstrained: no cap, no dedupe, so no unique constraint
--- on (user_id, event_id, offset_minutes, channel).
---
--- user_id is ADR-0064's step-one addition (#208): every current reader and
--- writer names the Calendar's Owner, so the rows this table has ever held
--- are all the Owner's, and behaviour is unchanged from the Event-scoped
--- table it replaces — the firing engine still fans the Owner's rows out to
--- every recipient (ADR-0036), and CalDAV still serves them to every
--- principal byte for byte. A Reminder personal to a non-Owner User is a
--- later ticket's addition, not this one's.
+-- on one Event, never to the Event itself, and never fanned out to anyone
+-- else with Access (ADR-0064). Lives in a child table rather than a JSON
+-- blob so the scheduler (ADR-0021) can query it. Many per (User, Event),
+-- unconstrained: no cap, no dedupe, so no unique constraint on (user_id,
+-- event_id, offset_minutes, channel). Wholesale-replaced per (User, Event)
+-- on a Reminder write (ADR-0020) — an Editor's own Event edit never touches
+-- another User's rows.
 CREATE TABLE event_reminders (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     event_id TEXT NOT NULL REFERENCES events(id) ON DELETE CASCADE,
@@ -380,44 +375,19 @@ CREATE TABLE event_reminders (
 
 CREATE INDEX idx_event_reminders_event_id ON event_reminders(event_id, user_id);
 
--- user_event_reminders is the Reminder override (ADR-0036): one User's
--- personal replacement for an Event's Reminders — a different offset, a
--- different Channel, or muted entirely — applying to that User alone. Keyed
--- on (user_id, event_id) rather than the Reminder, because event_reminders is
--- wholesale-replaced on every Event update (ADR-0020); a Reminder-keyed
--- override would silently vanish on the next unrelated edit, an Event-keyed
--- one survives it.
---
--- offset_minutes and channel are independently nullable so a User can
--- override just one and keep the Event's value for the other; muted, when
--- set, mutes every Reminder on the Event for this User regardless of what
--- the other two hold.
---
--- Never projected into iCalendar (ADR-0036) — CalDAV keeps serving
--- event_reminders unchanged and byte-identical to every principal.
-CREATE TABLE user_event_reminders (
-    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    event_id TEXT NOT NULL REFERENCES events(id) ON DELETE CASCADE,
-    offset_minutes INTEGER,
-    channel TEXT CHECK (channel IS NULL OR channel IN ('notification', 'email')),
-    muted BOOLEAN NOT NULL DEFAULT 0,
-    PRIMARY KEY (user_id, event_id)
-);
-
 -- The firing engine's exactly-once ledger (ADR-0021): a Reminder+Occurrence
--- +User triple is recorded here the first time it fires, and never again —
--- the UNIQUE constraint is what makes a repeated tick or a process restart a
--- no-op for something already fired. user_id is part of the key because a
--- Reminder fans out to every User with Access to its Event's Calendar
--- (ADR-0036) and different Users can fire at different offsets for the same
--- Reminder and Occurrence.
+-- pair is recorded here the first time it fires, and never again — the
+-- UNIQUE constraint is what makes a repeated tick or a process restart a
+-- no-op for something already fired. user_id is not part of the key: a
+-- Reminder id already implies its own User (ADR-0064), so no two Users can
+-- ever share one — it is kept as an attribution column only, for dispatch.
 CREATE TABLE fired_reminders (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     reminder_id INTEGER NOT NULL REFERENCES event_reminders(id) ON DELETE CASCADE,
     user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     occurrence_start TIMESTAMP NOT NULL,
     fired_at TIMESTAMP NOT NULL,
-    UNIQUE (reminder_id, occurrence_start, user_id)
+    UNIQUE (reminder_id, occurrence_start)
 );
 
 -- A Notification is the persistent in-app record of something that
@@ -582,7 +552,6 @@ DROP TABLE event_attachments;
 DROP TABLE attendees;
 DROP TABLE notifications;
 DROP TABLE fired_reminders;
-DROP TABLE user_event_reminders;
 DROP TABLE event_reminders;
 DROP TABLE event_exceptions;
 DROP TABLE events;

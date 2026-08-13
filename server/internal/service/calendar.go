@@ -43,18 +43,18 @@ var (
 )
 
 type CalendarService struct {
-	calendars         *repository.CalendarRepository
-	shares            *repository.CalendarShareRepository
-	users             *repository.UserRepository
-	reminderOverrides *repository.ReminderOverrideRepository
-	colorOverrides    *repository.CalendarUserColorRepository
-	workspaces        *repository.WorkspaceRepository
-	groupShares       *repository.CalendarGroupShareRepository
-	groups            *repository.GroupRepository
+	calendars      *repository.CalendarRepository
+	shares         *repository.CalendarShareRepository
+	users          *repository.UserRepository
+	eventReminders *repository.EventReminderRepository
+	colorOverrides *repository.CalendarUserColorRepository
+	workspaces     *repository.WorkspaceRepository
+	groupShares    *repository.CalendarGroupShareRepository
+	groups         *repository.GroupRepository
 }
 
-func NewCalendarService(calendars *repository.CalendarRepository, shares *repository.CalendarShareRepository, users *repository.UserRepository, reminderOverrides *repository.ReminderOverrideRepository, colorOverrides *repository.CalendarUserColorRepository, workspaces *repository.WorkspaceRepository, groupShares *repository.CalendarGroupShareRepository, groups *repository.GroupRepository) *CalendarService {
-	return &CalendarService{calendars: calendars, shares: shares, users: users, reminderOverrides: reminderOverrides, colorOverrides: colorOverrides, workspaces: workspaces, groupShares: groupShares, groups: groups}
+func NewCalendarService(calendars *repository.CalendarRepository, shares *repository.CalendarShareRepository, users *repository.UserRepository, eventReminders *repository.EventReminderRepository, colorOverrides *repository.CalendarUserColorRepository, workspaces *repository.WorkspaceRepository, groupShares *repository.CalendarGroupShareRepository, groups *repository.GroupRepository) *CalendarService {
+	return &CalendarService{calendars: calendars, shares: shares, users: users, eventReminders: eventReminders, colorOverrides: colorOverrides, workspaces: workspaces, groupShares: groupShares, groups: groups}
 }
 
 // requireMember refuses userID unless they're a Member of workspaceID (#155,
@@ -404,10 +404,9 @@ func (s *CalendarService) requireRead(ctx context.Context, userID int64, calenda
 // SetColorOverride sets userID's personal colour override on calendarID
 // (ADR-0038): any User with at least Viewer Access may call this, since a
 // colour override is a personal display preference rather than a write to
-// the Calendar itself — mirroring EventService.SetReminderOverride's
-// CanRead gate, not requireOwner. Unlike Update, this never touches
-// calendars.color and so is unaffected by a Subscribed Calendar's
-// publisher-tracking (ADR-0032): the override wins for this User
+// the Calendar itself — a CanRead gate, not requireOwner. Unlike Update,
+// this never touches calendars.color and so is unaffected by a Subscribed
+// Calendar's publisher-tracking (ADR-0032): the override wins for this User
 // regardless of what the feed sends.
 func (s *CalendarService) SetColorOverride(ctx context.Context, userID int64, calendarID, color string) (string, error) {
 	if err := s.requireRead(ctx, userID, calendarID); err != nil {
@@ -610,10 +609,10 @@ func (s *CalendarService) Share(ctx context.Context, ownerID int64, calendarID, 
 }
 
 // RevokeShare removes targetUserID's Share on calendarID. Only calendarID's
-// Owner may call this. targetUserID's Reminder overrides on calendarID's
-// Events, and their colour override on calendarID itself, are cleared with
-// it — an override with no Access behind it would otherwise linger,
-// invisible, until targetUserID was ever shared with it again (ADR-0036's
+// Owner may call this. targetUserID's own Reminders on calendarID's Events,
+// and their colour override on calendarID itself, are cleared with it — a
+// Reminder or colour with no Access behind it would otherwise linger,
+// invisible, until targetUserID was ever shared with it again (ADR-0064's
 // and ADR-0038's acceptance criteria).
 func (s *CalendarService) RevokeShare(ctx context.Context, ownerID int64, calendarID string, targetUserID int64) error {
 	if _, err := s.requireOwner(ctx, ownerID, calendarID); err != nil {
@@ -622,8 +621,8 @@ func (s *CalendarService) RevokeShare(ctx context.Context, ownerID int64, calend
 	if err := s.shares.Delete(ctx, calendarID, targetUserID); err != nil {
 		return err
 	}
-	if err := s.reminderOverrides.DeleteByUserAndCalendar(ctx, targetUserID, calendarID); err != nil {
-		return fmt.Errorf("clear reminder overrides: %w", err)
+	if err := s.eventReminders.DeleteByUserAndCalendar(ctx, targetUserID, calendarID); err != nil {
+		return fmt.Errorf("clear reminders: %w", err)
 	}
 	if err := s.colorOverrides.Delete(ctx, targetUserID, calendarID); err != nil {
 		return fmt.Errorf("clear calendar color override: %w", err)
@@ -730,15 +729,15 @@ func (s *CalendarService) ShareTargets(ctx context.Context, ownerID int64, calen
 // this needs no ownership check: it only ever removes the caller's own
 // Share row, so there's nothing else to authorize. Returns
 // repository.ErrNotFound if userID holds no Share on calendarID (including
-// when userID is the Owner, who never has one). userID's Reminder overrides
-// on calendarID's Events, and their colour override on calendarID itself,
-// are cleared with it, mirroring RevokeShare (ADR-0036, ADR-0038).
+// when userID is the Owner, who never has one). userID's own Reminders on
+// calendarID's Events, and their colour override on calendarID itself, are
+// cleared with it, mirroring RevokeShare (ADR-0064, ADR-0038).
 func (s *CalendarService) LeaveShare(ctx context.Context, userID int64, calendarID string) error {
 	if err := s.shares.Delete(ctx, calendarID, userID); err != nil {
 		return err
 	}
-	if err := s.reminderOverrides.DeleteByUserAndCalendar(ctx, userID, calendarID); err != nil {
-		return fmt.Errorf("clear reminder overrides: %w", err)
+	if err := s.eventReminders.DeleteByUserAndCalendar(ctx, userID, calendarID); err != nil {
+		return fmt.Errorf("clear reminders: %w", err)
 	}
 	if err := s.colorOverrides.Delete(ctx, userID, calendarID); err != nil {
 		return fmt.Errorf("clear calendar color override: %w", err)

@@ -8,6 +8,7 @@ vi.mock("./eventsApi", () => ({
     remove: vi.fn(),
     addException: vi.fn(),
     reparentSeries: vi.fn(),
+    setReminders: vi.fn(),
   },
 }));
 
@@ -85,15 +86,28 @@ describe("addEvent", () => {
     expect(toast.error).toHaveBeenCalledWith('Failed to create event "Standup".');
   });
 
-  it("persists Reminders authored on a new event (ADR-0020)", async () => {
+  // Reminders have their own write path, never the create payload
+  // (ADR-0064): create carries none, and a non-empty draft is written
+  // separately once the create resolves.
+  it("persists Reminders authored on a new event via their own write path", async () => {
     const reminders = [{ offsetMinutes: 10, channel: "notification" as const }];
     const remindedStandup = { ...standup, reminders };
     vi.mocked(eventsApi.create).mockResolvedValue(remindedStandup);
+    vi.mocked(eventsApi.setReminders).mockResolvedValue(reminders);
 
     await useEventsStore.getState().addEvent(remindedStandup);
 
     expect(useEventsStore.getState().events[0].reminders).toEqual(reminders);
     expect(eventsApi.create).toHaveBeenCalledWith("token-123", remindedStandup);
+    expect(eventsApi.setReminders).toHaveBeenCalledWith("token-123", "evt-1", reminders);
+  });
+
+  it("does not call setReminders when a new event has no Reminders", async () => {
+    vi.mocked(eventsApi.create).mockResolvedValue(standup);
+
+    await useEventsStore.getState().addEvent(standup);
+
+    expect(eventsApi.setReminders).not.toHaveBeenCalled();
   });
 
   // Attendees staged at creation (#187, ADR-0055): the create is awaited
@@ -229,39 +243,37 @@ describe("updateEvent", () => {
     expect(eventsApi.update).not.toHaveBeenCalled();
   });
 
-  it("round-trips reminders through a local update (ADR-0020)", () => {
+  // Reminders are no longer part of the update payload, and a save that
+  // doesn't touch them writes nothing on their own path either (ADR-0064).
+  it("leaves an untouched event's own reminders alone and never calls setReminders", async () => {
     const reminders = [{ offsetMinutes: 10, channel: "notification" as const }];
     const remindedStandup = { ...standup, reminders };
     useEventsStore.setState({ events: [remindedStandup] });
     vi.mocked(eventsApi.update).mockResolvedValue(remindedStandup);
 
-    const promise = useEventsStore.getState().updateEvent("evt-1", { title: "Renamed" });
+    await useEventsStore.getState().updateEvent("evt-1", { title: "Renamed" });
 
-    expect(eventsApi.update).toHaveBeenCalledWith(
-      "token-123",
-      "evt-1",
-      expect.objectContaining({ reminders }),
-    );
-    return promise;
+    expect(useEventsStore.getState().events[0].reminders).toEqual(reminders);
+    const updateBody = vi.mocked(eventsApi.update).mock.calls[0][2];
+    expect(updateBody).not.toHaveProperty("reminders");
+    expect(eventsApi.setReminders).not.toHaveBeenCalled();
   });
 
-  it("persists Reminders newly authored on an existing event", () => {
+  it("persists Reminders newly authored on an existing event via their own write path", async () => {
     const reminders = [
       { offsetMinutes: 5, channel: "notification" as const },
       { offsetMinutes: 1440, channel: "email" as const },
     ];
     useEventsStore.setState({ events: [standup] });
-    vi.mocked(eventsApi.update).mockResolvedValue({ ...standup, reminders });
+    vi.mocked(eventsApi.update).mockResolvedValue(standup);
+    vi.mocked(eventsApi.setReminders).mockResolvedValue(reminders);
 
-    const promise = useEventsStore.getState().updateEvent("evt-1", { reminders });
+    await useEventsStore.getState().updateEvent("evt-1", { reminders });
 
     expect(useEventsStore.getState().events[0].reminders).toEqual(reminders);
-    expect(eventsApi.update).toHaveBeenCalledWith(
-      "token-123",
-      "evt-1",
-      expect.objectContaining({ reminders }),
-    );
-    return promise;
+    const updateBody = vi.mocked(eventsApi.update).mock.calls[0][2];
+    expect(updateBody).not.toHaveProperty("reminders");
+    expect(eventsApi.setReminders).toHaveBeenCalledWith("token-123", "evt-1", reminders);
   });
 });
 
@@ -377,7 +389,10 @@ describe("editOccurrence", () => {
     expect(toast.error).toHaveBeenCalledWith("Failed to update event.");
   });
 
-  it('scope "this": a new Override starts with a copy of the Master\'s Reminders (ADR-0020)', async () => {
+  // A new Override's Reminders are copied from the Master server-side
+  // (ADR-0064) — the frontend only mirrors that locally, in the cache
+  // projection, and never sends Reminders as part of the create call at all.
+  it('scope "this": a new Override starts with a local copy of the Master\'s Reminders, and the create carries none', async () => {
     const reminders = [{ offsetMinutes: 10, channel: "notification" as const }];
     const remindedMaster = { ...recurringMaster, reminders };
     useEventsStore.setState({ events: [remindedMaster] });
@@ -397,13 +412,12 @@ describe("editOccurrence", () => {
 
     const override = useEventsStore.getState().events.find((e) => e.parentId === "master-1");
     expect(override?.reminders).toEqual(reminders);
-    expect(eventsApi.create).toHaveBeenCalledWith(
-      "token-123",
-      expect.objectContaining({ reminders }),
-    );
+    const createBody = vi.mocked(eventsApi.create).mock.calls[0][1];
+    expect(createBody).not.toHaveProperty("reminders");
+    expect(eventsApi.setReminders).not.toHaveBeenCalled();
   });
 
-  it('scope "all": authored Reminders replace the Master\'s wholesale', async () => {
+  it('scope "all": authored Reminders are written to the Master via their own path, never the update payload', async () => {
     const remindedMaster = {
       ...recurringMaster,
       reminders: [{ offsetMinutes: 10, channel: "notification" as const }],
@@ -420,16 +434,14 @@ describe("editOccurrence", () => {
         title: "Standup",
         start: remindedMaster.start,
         end: remindedMaster.end,
-        reminders: authoredReminders,
       },
+      authoredReminders,
     );
 
     expect(useEventsStore.getState().events[0].reminders).toEqual(authoredReminders);
-    expect(eventsApi.update).toHaveBeenCalledWith(
-      "token-123",
-      "master-1",
-      expect.objectContaining({ reminders: authoredReminders }),
-    );
+    const updateBody = vi.mocked(eventsApi.update).mock.calls[0][2];
+    expect(updateBody).not.toHaveProperty("reminders");
+    expect(eventsApi.setReminders).toHaveBeenCalledWith("token-123", "master-1", authoredReminders);
   });
 
   it('scope "this" on an existing Override: authored Reminders touch only that row, not the Master (ADR-0020)', async () => {
@@ -457,16 +469,24 @@ describe("editOccurrence", () => {
         title: "Renamed again",
         start: override.start,
         end: override.end,
-        reminders: authoredReminders,
       },
+      authoredReminders,
     );
 
     const events = useEventsStore.getState().events;
     expect(events.find((e) => e.id === "override-1")?.reminders).toEqual(authoredReminders);
     expect(events.find((e) => e.id === "master-1")?.reminders).toEqual(masterReminders);
+    expect(eventsApi.setReminders).toHaveBeenCalledWith(
+      "token-123",
+      "override-1",
+      authoredReminders,
+    );
   });
 
-  it('scope "following": the new master carries the old master\'s Reminders forward', async () => {
+  // The new Master's Reminders are copied from the old Master server-side
+  // (ADR-0064, via copyRemindersFrom), mirrored locally the same way a fresh
+  // Override's are.
+  it('scope "following": the new master carries the old master\'s Reminders forward, via copyRemindersFrom', async () => {
     const reminders = [{ offsetMinutes: 10, channel: "notification" as const }];
     const remindedMaster = { ...recurringMaster, reminders };
     useEventsStore.setState({ events: [remindedMaster] });
@@ -490,13 +510,15 @@ describe("editOccurrence", () => {
       .getState()
       .events.find((e) => e.id !== "master-1" && e.rrule);
     expect(newMaster?.reminders).toEqual(reminders);
-    // The old (truncated) master's own Reminders are preserved on the wire too
-    // — the update API replaces Reminders wholesale on any omitted field.
-    expect(eventsApi.update).toHaveBeenCalledWith(
+    expect(eventsApi.create).toHaveBeenCalledWith(
       "token-123",
-      "master-1",
-      expect.objectContaining({ reminders }),
+      expect.objectContaining({ copyRemindersFrom: "master-1" }),
     );
+    // The old (truncated) master's update carries no Reminders field at all
+    // any more — Reminders never travel through the Event write path.
+    const updateBody = vi.mocked(eventsApi.update).mock.calls[0][2];
+    expect(updateBody).not.toHaveProperty("reminders");
+    expect(eventsApi.setReminders).not.toHaveBeenCalled();
   });
 });
 

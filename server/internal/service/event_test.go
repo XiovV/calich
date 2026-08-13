@@ -42,7 +42,7 @@ func newTestEventService(t *testing.T) (svc *EventService, userID int64, calenda
 		t.Fatalf("create calendar: %v", err)
 	}
 
-	return NewEventService(sqlDB, repository.NewEventRepository(sqlDB), repository.NewEventExceptionRepository(sqlDB), repository.NewEventReminderRepository(sqlDB), repository.NewReminderOverrideRepository(sqlDB), repository.NewSyncRepository(sqlDB), NewCalendarService(calendarRepo, repository.NewCalendarShareRepository(sqlDB), users, repository.NewReminderOverrideRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo, repository.NewCalendarGroupShareRepository(sqlDB), repository.NewGroupRepository(sqlDB)), users, repository.NewAttachmentRepository(sqlDB), repository.NewAttendeeRepository(sqlDB), workspaceRepo, repository.NewGroupRepository(sqlDB), repository.NewNotificationRepository(sqlDB), nil, 1000), user.ID, cal.ID
+	return NewEventService(sqlDB, repository.NewEventRepository(sqlDB), repository.NewEventExceptionRepository(sqlDB), repository.NewEventReminderRepository(sqlDB), repository.NewSyncRepository(sqlDB), NewCalendarService(calendarRepo, repository.NewCalendarShareRepository(sqlDB), users, repository.NewEventReminderRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo, repository.NewCalendarGroupShareRepository(sqlDB), repository.NewGroupRepository(sqlDB)), users, repository.NewAttachmentRepository(sqlDB), repository.NewAttendeeRepository(sqlDB), workspaceRepo, repository.NewGroupRepository(sqlDB), repository.NewNotificationRepository(sqlDB), nil, 1000), user.ID, cal.ID
 }
 
 func TestEventService_Create(t *testing.T) {
@@ -892,22 +892,26 @@ func TestEventService_ReparentFrom_NotFound(t *testing.T) {
 	}
 }
 
-func TestEventService_Create_PersistsAndRoundTripsReminders(t *testing.T) {
+func TestEventService_SetReminders_PersistsAndRoundTrips(t *testing.T) {
 	svc, userID, calendarID := newTestEventService(t)
 	ctx := context.Background()
 	start := time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC)
 	end := time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC)
 
+	created, err := svc.Create(ctx, userID, "evt-1", EventWrite{CalendarID: calendarID, Title: "Standup", Start: start, End: end})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if len(created.Reminders) != 0 {
+		t.Fatalf("expected no reminders on a plain create, got %+v", created.Reminders)
+	}
+
 	reminders := []repository.Reminder{
 		{OffsetMinutes: 10, Channel: "notification"},
 		{OffsetMinutes: 1440, Channel: "email"},
 	}
-	created, err := svc.Create(ctx, userID, "evt-1", EventWrite{CalendarID: calendarID, Title: "Standup", Start: start, End: end, Reminders: reminders})
-	if err != nil {
-		t.Fatalf("create: %v", err)
-	}
-	if len(created.Reminders) != 2 {
-		t.Fatalf("expected 2 reminders on create response, got %+v", created.Reminders)
+	if _, err := svc.SetReminders(ctx, userID, "evt-1", reminders); err != nil {
+		t.Fatalf("set reminders: %v", err)
 	}
 
 	fetched, err := svc.Get(ctx, userID, "evt-1")
@@ -942,61 +946,7 @@ func TestEventService_Create_NoReminders(t *testing.T) {
 	}
 }
 
-func TestEventService_Create_RejectsInvalidReminderChannel(t *testing.T) {
-	svc, userID, calendarID := newTestEventService(t)
-	start := time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC)
-	end := time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC)
-
-	_, err := svc.Create(context.Background(), userID, "evt-1", EventWrite{CalendarID: calendarID, Title: "Standup", Start: start, End: end, Reminders: []repository.Reminder{{OffsetMinutes: 10, Channel: "sms"}}})
-	if !errors.Is(err, ErrInvalidReminderChannel) {
-		t.Fatalf("expected ErrInvalidReminderChannel, got %v", err)
-	}
-}
-
-// Update replaces an Event's Reminders set wholesale — it doesn't merge into
-// the existing set (ADR-0020).
-func TestEventService_Update_ReplacesRemindersWholesale(t *testing.T) {
-	svc, userID, calendarID := newTestEventService(t)
-	ctx := context.Background()
-	start := time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC)
-	end := time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC)
-
-	_, err := svc.Create(ctx, userID, "evt-1", EventWrite{CalendarID: calendarID, Title: "Standup", Start: start, End: end, Reminders: []repository.Reminder{{OffsetMinutes: 10, Channel: "notification"}}})
-	if err != nil {
-		t.Fatalf("create: %v", err)
-	}
-
-	updated, err := svc.Update(ctx, userID, "evt-1", EventWrite{CalendarID: calendarID, Title: "Standup", Start: start, End: end, Reminders: []repository.Reminder{{OffsetMinutes: 30, Channel: "email"}}})
-	if err != nil {
-		t.Fatalf("update: %v", err)
-	}
-	if len(updated.Reminders) != 1 || updated.Reminders[0].OffsetMinutes != 30 || updated.Reminders[0].Channel != "email" {
-		t.Fatalf("expected reminders replaced wholesale, got %+v", updated.Reminders)
-	}
-}
-
-// Update with an empty Reminders slice clears an Event's Reminders.
-func TestEventService_Update_EmptyRemindersClears(t *testing.T) {
-	svc, userID, calendarID := newTestEventService(t)
-	ctx := context.Background()
-	start := time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC)
-	end := time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC)
-
-	_, err := svc.Create(ctx, userID, "evt-1", EventWrite{CalendarID: calendarID, Title: "Standup", Start: start, End: end, Reminders: []repository.Reminder{{OffsetMinutes: 10, Channel: "notification"}}})
-	if err != nil {
-		t.Fatalf("create: %v", err)
-	}
-
-	updated, err := svc.Update(ctx, userID, "evt-1", EventWrite{CalendarID: calendarID, Title: "Standup", Start: start, End: end})
-	if err != nil {
-		t.Fatalf("update: %v", err)
-	}
-	if len(updated.Reminders) != 0 {
-		t.Fatalf("expected reminders cleared, got %+v", updated.Reminders)
-	}
-}
-
-func TestEventService_Update_RejectsInvalidReminderChannel(t *testing.T) {
+func TestEventService_SetReminders_RejectsInvalidReminderChannel(t *testing.T) {
 	svc, userID, calendarID := newTestEventService(t)
 	ctx := context.Background()
 	start := time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC)
@@ -1006,9 +956,56 @@ func TestEventService_Update_RejectsInvalidReminderChannel(t *testing.T) {
 		t.Fatalf("create: %v", err)
 	}
 
-	_, err := svc.Update(ctx, userID, "evt-1", EventWrite{CalendarID: calendarID, Title: "Standup", Start: start, End: end, Reminders: []repository.Reminder{{OffsetMinutes: 10, Channel: "sms"}}})
+	_, err := svc.SetReminders(ctx, userID, "evt-1", []repository.Reminder{{OffsetMinutes: 10, Channel: "sms"}})
 	if !errors.Is(err, ErrInvalidReminderChannel) {
 		t.Fatalf("expected ErrInvalidReminderChannel, got %v", err)
+	}
+}
+
+// SetReminders replaces a User's Reminders set wholesale — it doesn't merge
+// into the existing set (ADR-0020).
+func TestEventService_SetReminders_ReplacesWholesale(t *testing.T) {
+	svc, userID, calendarID := newTestEventService(t)
+	ctx := context.Background()
+	start := time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC)
+	end := time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC)
+
+	if _, err := svc.Create(ctx, userID, "evt-1", EventWrite{CalendarID: calendarID, Title: "Standup", Start: start, End: end}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if _, err := svc.SetReminders(ctx, userID, "evt-1", []repository.Reminder{{OffsetMinutes: 10, Channel: "notification"}}); err != nil {
+		t.Fatalf("set reminders: %v", err)
+	}
+
+	updated, err := svc.SetReminders(ctx, userID, "evt-1", []repository.Reminder{{OffsetMinutes: 30, Channel: "email"}})
+	if err != nil {
+		t.Fatalf("set reminders again: %v", err)
+	}
+	if len(updated) != 1 || updated[0].OffsetMinutes != 30 || updated[0].Channel != "email" {
+		t.Fatalf("expected reminders replaced wholesale, got %+v", updated)
+	}
+}
+
+// Setting an empty Reminders slice clears a User's Reminders on the Event.
+func TestEventService_SetReminders_EmptyClears(t *testing.T) {
+	svc, userID, calendarID := newTestEventService(t)
+	ctx := context.Background()
+	start := time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC)
+	end := time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC)
+
+	if _, err := svc.Create(ctx, userID, "evt-1", EventWrite{CalendarID: calendarID, Title: "Standup", Start: start, End: end}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if _, err := svc.SetReminders(ctx, userID, "evt-1", []repository.Reminder{{OffsetMinutes: 10, Channel: "notification"}}); err != nil {
+		t.Fatalf("set reminders: %v", err)
+	}
+
+	updated, err := svc.SetReminders(ctx, userID, "evt-1", nil)
+	if err != nil {
+		t.Fatalf("clear reminders: %v", err)
+	}
+	if len(updated) != 0 {
+		t.Fatalf("expected reminders cleared, got %+v", updated)
 	}
 }
 
@@ -1019,9 +1016,11 @@ func TestEventService_Delete_CascadesReminders(t *testing.T) {
 	start := time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC)
 	end := time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC)
 
-	_, err := svc.Create(ctx, userID, "evt-1", EventWrite{CalendarID: calendarID, Title: "Standup", Start: start, End: end, Reminders: []repository.Reminder{{OffsetMinutes: 10, Channel: "notification"}}})
-	if err != nil {
+	if _, err := svc.Create(ctx, userID, "evt-1", EventWrite{CalendarID: calendarID, Title: "Standup", Start: start, End: end}); err != nil {
 		t.Fatalf("create: %v", err)
+	}
+	if _, err := svc.SetReminders(ctx, userID, "evt-1", []repository.Reminder{{OffsetMinutes: 10, Channel: "notification"}}); err != nil {
+		t.Fatalf("set reminders: %v", err)
 	}
 
 	if err := svc.Delete(ctx, userID, "evt-1"); err != nil {
@@ -1037,52 +1036,26 @@ func TestEventService_Delete_CascadesReminders(t *testing.T) {
 	}
 }
 
-// TestEventService_Update_ReminderReplaceIsAtomic asserts that when the
-// Reminders replace fails mid-transaction, the rest of the Update (the
-// Event's own field changes) is rolled back too (ADR-0018).
-func TestEventService_Update_ReminderReplaceIsAtomic(t *testing.T) {
-	svc, userID, calendarID := newTestEventService(t)
-	ctx := context.Background()
-	start := time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC)
-	end := time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC)
-
-	if _, err := svc.Create(ctx, userID, "evt-1", EventWrite{CalendarID: calendarID, Title: "Standup", Start: start, End: end}); err != nil {
-		t.Fatalf("create: %v", err)
-	}
-
-	if _, err := svc.db.ExecContext(ctx,
-		`CREATE TRIGGER poison_reminder_insert BEFORE INSERT ON event_reminders WHEN NEW.event_id = 'evt-1' BEGIN SELECT RAISE(ABORT, 'boom'); END`,
-	); err != nil {
-		t.Fatalf("install poison trigger: %v", err)
-	}
-
-	if _, err := svc.Update(ctx, userID, "evt-1", EventWrite{CalendarID: calendarID, Title: "Renamed", Start: start, End: end, Reminders: []repository.Reminder{{OffsetMinutes: 10, Channel: "notification"}}}); err == nil {
-		t.Fatalf("expected update to fail once the reminder insert is poisoned")
-	}
-
-	fetched, err := svc.Get(ctx, userID, "evt-1")
-	if err != nil {
-		t.Fatalf("get: %v", err)
-	}
-	if fetched.Title != "Standup" {
-		t.Fatalf("expected title to be rolled back, got %q", fetched.Title)
-	}
-}
-
 func TestEventService_GetSeries_MasterWithOverrideAndException(t *testing.T) {
 	svc, userID, calendarID := newTestEventService(t)
 	ctx := context.Background()
 	start := time.Date(2026, 6, 2, 9, 0, 0, 0, time.UTC)
 	end := time.Date(2026, 6, 2, 9, 30, 0, 0, time.UTC)
 
-	master, err := svc.Create(ctx, userID, "evt-1", EventWrite{CalendarID: calendarID, Title: "Standup", Start: start, End: end, Rrule: "FREQ=WEEKLY;BYDAY=TU", Reminders: []repository.Reminder{{OffsetMinutes: 10, Channel: "notification"}}})
+	master, err := svc.Create(ctx, userID, "evt-1", EventWrite{CalendarID: calendarID, Title: "Standup", Start: start, End: end, Rrule: "FREQ=WEEKLY;BYDAY=TU"})
 	if err != nil {
 		t.Fatalf("create master: %v", err)
 	}
+	if _, err := svc.SetReminders(ctx, userID, master.ID, []repository.Reminder{{OffsetMinutes: 10, Channel: "notification"}}); err != nil {
+		t.Fatalf("set master reminders: %v", err)
+	}
 
 	recurrenceID := start.AddDate(0, 0, 7)
-	if _, err := svc.Create(ctx, userID, "evt-1-override", EventWrite{CalendarID: calendarID, Title: "Standup (moved)", Start: recurrenceID.Add(2 * time.Hour), End: recurrenceID.Add(2*time.Hour + 30*time.Minute), ParentID: &master.ID, RecurrenceID: &recurrenceID, Reminders: []repository.Reminder{{OffsetMinutes: 5, Channel: "email"}}}); err != nil {
+	if _, err := svc.Create(ctx, userID, "evt-1-override", EventWrite{CalendarID: calendarID, Title: "Standup (moved)", Start: recurrenceID.Add(2 * time.Hour), End: recurrenceID.Add(2*time.Hour + 30*time.Minute), ParentID: &master.ID, RecurrenceID: &recurrenceID}); err != nil {
 		t.Fatalf("create override: %v", err)
+	}
+	if _, err := svc.SetReminders(ctx, userID, "evt-1-override", []repository.Reminder{{OffsetMinutes: 5, Channel: "email"}}); err != nil {
+		t.Fatalf("set override reminders: %v", err)
 	}
 
 	exdate := start.AddDate(0, 0, 14)
@@ -1190,11 +1163,13 @@ func TestEventService_SeriesReadPaths_AttachRemindersPerRow(t *testing.T) {
 	master, err := svc.Create(ctx, userID, "evt-master", EventWrite{
 		CalendarID: calendarID, Title: "Standup",
 		Start: masterStart, End: masterStart.Add(30 * time.Minute),
-		Rrule:     "FREQ=WEEKLY;BYDAY=TU",
-		Reminders: []repository.Reminder{{OffsetMinutes: 10, Channel: "notification"}},
+		Rrule: "FREQ=WEEKLY;BYDAY=TU",
 	})
 	if err != nil {
 		t.Fatalf("create master: %v", err)
+	}
+	if _, err := svc.SetReminders(ctx, userID, master.ID, []repository.Reminder{{OffsetMinutes: 10, Channel: "notification"}}); err != nil {
+		t.Fatalf("set master reminders: %v", err)
 	}
 
 	recurrenceID := masterStart.AddDate(0, 0, 7)
@@ -1202,9 +1177,11 @@ func TestEventService_SeriesReadPaths_AttachRemindersPerRow(t *testing.T) {
 		CalendarID: calendarID, Title: "Standup (moved)",
 		Start: recurrenceID.Add(time.Hour), End: recurrenceID.Add(90 * time.Minute),
 		ParentID: &master.ID, RecurrenceID: &recurrenceID,
-		Reminders: []repository.Reminder{{OffsetMinutes: 5, Channel: "email"}},
 	}); err != nil {
 		t.Fatalf("create override: %v", err)
+	}
+	if _, err := svc.SetReminders(ctx, userID, "evt-override", []repository.Reminder{{OffsetMinutes: 5, Channel: "email"}}); err != nil {
+		t.Fatalf("set override reminders: %v", err)
 	}
 
 	assertReminders := func(t *testing.T, masters []repository.Event, overridesByParent map[string][]repository.Event) {

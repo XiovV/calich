@@ -10,9 +10,9 @@ import (
 // CalendarUserColorRepository stores per-User colour overrides on a Calendar
 // (ADR-0038, CONTEXT.md's Calendar color entry): a User with Access may
 // shadow the Owner's colour with one that applies to them alone. Keyed
-// directly on (calendar_id, user_id) — unlike ReminderOverrideRepository's
-// (user_id, event_id), a colour override has no wholesale-replace-on-update
-// to survive, so there's no indirection to get wrong here.
+// directly on (calendar_id, user_id) — unlike event_reminders' (event_id,
+// user_id), a colour override has no wholesale-replace-on-update to
+// survive, so there's no indirection to get wrong here.
 type CalendarUserColorRepository struct {
 	db DBTX
 }
@@ -60,9 +60,8 @@ func (r *CalendarUserColorRepository) Get(ctx context.Context, userID int64, cal
 }
 
 // Delete clears userID's colour override on calendarID — the User falling
-// back to the Calendar's own colour. Like ReminderOverrideRepository.Delete,
-// a no-op (nothing to clear) is not an error: clearing an override that
-// isn't set is idempotent, not a failure.
+// back to the Calendar's own colour. A no-op (nothing to clear) is not an
+// error: clearing an override that isn't set is idempotent, not a failure.
 func (r *CalendarUserColorRepository) Delete(ctx context.Context, userID int64, calendarID string) error {
 	if _, err := r.db.ExecContext(ctx, `DELETE FROM calendar_user_colors WHERE calendar_id = ? AND user_id = ?`, calendarID, userID); err != nil {
 		return fmt.Errorf("delete calendar user color: %w", err)

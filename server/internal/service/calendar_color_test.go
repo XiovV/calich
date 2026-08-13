@@ -152,8 +152,7 @@ func TestCalendarService_ClearColorOverride_ReassignsAFreshColor(t *testing.T) {
 	}
 }
 
-// Clearing an override nobody set is a no-op, not an error — the same
-// idempotent-delete convention ReminderOverride's Clear already follows.
+// Clearing an override nobody set is a no-op, not an error.
 func TestCalendarService_ClearColorOverride_NoOverrideSet_IsNoOp(t *testing.T) {
 	svc, _, ownerID, otherID, calendarID := newTestShareService(t)
 	ctx := context.Background()
