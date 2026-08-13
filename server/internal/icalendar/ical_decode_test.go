@@ -1,6 +1,7 @@
 package icalendar
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -52,6 +53,119 @@ func TestParseCalendarObject_NonRecurring_RoundTrips(t *testing.T) {
 	}
 	if len(parsed.Overrides) != 0 {
 		t.Fatalf("expected no overrides, got %d", len(parsed.Overrides))
+	}
+}
+
+func TestParseCalendarObject_URL_RoundTrips(t *testing.T) {
+	master := repository.Event{
+		ID:        "evt-1",
+		Title:     "Standup",
+		URL:       "https://example.com/ticket/42",
+		Start:     time.Date(2026, 6, 1, 9, 0, 0, 0, time.UTC),
+		End:       time.Date(2026, 6, 1, 9, 30, 0, 0, time.UTC),
+		CreatedAt: time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC),
+	}
+
+	parsed := mustParse(t, master, nil)
+
+	if parsed.Master.URL != "https://example.com/ticket/42" {
+		t.Fatalf("expected URL to round-trip, got %q", parsed.Master.URL)
+	}
+}
+
+func TestParseCalendarObject_URLAbsent_RoundTripsEmpty(t *testing.T) {
+	master := repository.Event{
+		ID:        "evt-1",
+		Title:     "Standup",
+		Start:     time.Date(2026, 6, 1, 9, 0, 0, 0, time.UTC),
+		End:       time.Date(2026, 6, 1, 9, 30, 0, 0, time.UTC),
+		CreatedAt: time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC),
+	}
+
+	parsed := mustParse(t, master, nil)
+
+	if parsed.Master.URL != "" {
+		t.Fatalf("expected empty URL, got %q", parsed.Master.URL)
+	}
+}
+
+func TestParseCalendarObject_URLNonWebScheme_RoundTripsVerbatim(t *testing.T) {
+	master := repository.Event{
+		ID:        "evt-1",
+		Title:     "Standup",
+		URL:       "message://<abc123@mail.example.com>",
+		Start:     time.Date(2026, 6, 1, 9, 0, 0, 0, time.UTC),
+		End:       time.Date(2026, 6, 1, 9, 30, 0, 0, time.UTC),
+		CreatedAt: time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC),
+	}
+
+	parsed := mustParse(t, master, nil)
+
+	if parsed.Master.URL != "message://<abc123@mail.example.com>" {
+		t.Fatalf("expected non-web-scheme URL to survive verbatim, got %q", parsed.Master.URL)
+	}
+}
+
+// TestParseCalendarObject_URLBareWord_NeverRejected exercises #207's
+// acceptance criterion that a feed value that is not a usable web link is
+// stored as-is rather than rejected — a raw VEVENT crafted by hand (not via
+// mustParse's SeriesToICal round trip, since buildVEvent's writer side
+// wouldn't itself produce a bare word) to simulate what a decode-only path
+// (a feed's PUT/import/Refresh) actually receives.
+func TestParseCalendarObject_URLBareWord_NeverRejected(t *testing.T) {
+	ics := `BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//test//EN
+BEGIN:VEVENT
+UID:evt-1
+DTSTART:20260601T090000Z
+DTEND:20260601T093000Z
+SUMMARY:Standup
+URL:not a url at all
+END:VEVENT
+END:VCALENDAR
+`
+	cal, err := ical.NewDecoder(strings.NewReader(ics)).Decode()
+	if err != nil {
+		t.Fatalf("decode fixture: %v", err)
+	}
+	parsed, err := ParseCalendarObject(cal)
+	if err != nil {
+		t.Fatalf("expected a bare-word URL to be accepted rather than rejected, got error: %v", err)
+	}
+	if parsed.Master.URL != "not a url at all" {
+		t.Fatalf("expected the bare word to be stored verbatim, got %q", parsed.Master.URL)
+	}
+}
+
+func TestParseCalendarObject_OverrideURL_RoundTrips(t *testing.T) {
+	recurrenceID := time.Date(2026, 6, 9, 9, 0, 0, 0, time.UTC)
+	master := repository.Event{
+		ID:        "evt-1",
+		Title:     "Standup",
+		URL:       "https://example.com/master",
+		Start:     time.Date(2026, 6, 2, 9, 0, 0, 0, time.UTC),
+		End:       time.Date(2026, 6, 2, 9, 30, 0, 0, time.UTC),
+		Rrule:     "FREQ=WEEKLY;BYDAY=TU",
+		CreatedAt: time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC),
+	}
+	override := repository.Event{
+		ID:           "evt-1-override",
+		Title:        "Standup (moved)",
+		URL:          "https://example.com/override",
+		RecurrenceID: &recurrenceID,
+		Start:        time.Date(2026, 6, 9, 10, 0, 0, 0, time.UTC),
+		End:          time.Date(2026, 6, 9, 10, 30, 0, 0, time.UTC),
+		CreatedAt:    time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC),
+	}
+
+	parsed := mustParse(t, master, []repository.Event{override})
+
+	if parsed.Master.URL != "https://example.com/master" {
+		t.Fatalf("expected master URL to round-trip, got %q", parsed.Master.URL)
+	}
+	if len(parsed.Overrides) != 1 || parsed.Overrides[0].URL != "https://example.com/override" {
+		t.Fatalf("expected override URL to round-trip independently, got %+v", parsed.Overrides)
 	}
 }
 

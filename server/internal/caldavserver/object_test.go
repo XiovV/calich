@@ -316,6 +316,56 @@ func TestPutCalendarObject_CreatesNewEvent_PutThenGetRoundTrips(t *testing.T) {
 	}
 }
 
+// TestPutCalendarObject_URL_PutThenGetRoundTrips_NonWebScheme exercises
+// #207's acceptance criterion that a PUT carrying URL stores it and a
+// subsequent GET returns the same value byte for byte, including for a
+// non-http scheme (Apple Calendar's message:// links).
+func TestPutCalendarObject_URL_PutThenGetRoundTrips_NonWebScheme(t *testing.T) {
+	env := newTestCalDAVEnv(t)
+	ctx := context.Background()
+
+	newEvent := repository.Event{
+		ID:        "device-uid-1",
+		Title:     "Standup",
+		URL:       "message://<abc123@mail.example.com>",
+		Start:     time.Date(2026, 6, 1, 9, 0, 0, 0, time.UTC),
+		End:       time.Date(2026, 6, 1, 9, 30, 0, 0, time.UTC),
+		CreatedAt: time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC),
+	}
+	cal, err := icalendar.SeriesToICal(newEvent, nil, icalendar.CalDAVTarget(attachmentsBasePath))
+	if err != nil {
+		t.Fatalf("seriesToICal: %v", err)
+	}
+
+	client := newTestCalDAVClient(t, env)
+	path := calendarObjectPath(env.userID, env.calendarID, "device-uid-1")
+
+	if _, err := client.PutCalendarObject(ctx, path, cal); err != nil {
+		t.Fatalf("PutCalendarObject: %v", err)
+	}
+
+	got, err := client.GetCalendarObject(ctx, path)
+	if err != nil {
+		t.Fatalf("GetCalendarObject: %v", err)
+	}
+	events := got.Data.Events()
+	if len(events) != 1 {
+		t.Fatalf("expected exactly one VEVENT, got %d", len(events))
+	}
+	urlProp := events[0].Props.Get(ical.PropURL)
+	if urlProp == nil || urlProp.Value != "message://<abc123@mail.example.com>" {
+		t.Fatalf("expected the non-http URL to survive the round-trip unchanged, got %+v", urlProp)
+	}
+
+	stored, err := env.eventService.Get(ctx, env.userID, "device-uid-1")
+	if err != nil {
+		t.Fatalf("get stored event: %v", err)
+	}
+	if stored.URL != "message://<abc123@mail.example.com>" {
+		t.Fatalf("expected the stored event to carry the verbatim URL, got %q", stored.URL)
+	}
+}
+
 func TestPutCalendarObject_UpdatesExistingEvent(t *testing.T) {
 	env := newTestCalDAVEnv(t)
 	ctx := context.Background()

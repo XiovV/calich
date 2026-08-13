@@ -127,6 +127,41 @@ END:VCALENDAR
 	}
 }
 
+func TestParseImportFile_MasterAndOverrideURL_BothCarryTheirOwn(t *testing.T) {
+	ics := `BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//test//EN
+BEGIN:VEVENT
+UID:series-1
+DTSTART:20260601T090000Z
+DTEND:20260601T093000Z
+RRULE:FREQ=WEEKLY
+SUMMARY:Standup
+URL:https://example.com/master
+END:VEVENT
+BEGIN:VEVENT
+UID:series-1
+RECURRENCE-ID:20260608T090000Z
+DTSTART:20260608T100000Z
+DTEND:20260608T103000Z
+SUMMARY:Standup (moved)
+URL:https://example.com/override
+END:VEVENT
+END:VCALENDAR
+`
+	f := mustParseFile(t, ics)
+
+	if len(f.Series) != 1 {
+		t.Fatalf("expected 1 series, got %d", len(f.Series))
+	}
+	if f.Series[0].Master.URL != "https://example.com/master" {
+		t.Fatalf("expected master URL to carry through import, got %q", f.Series[0].Master.URL)
+	}
+	if len(f.Series[0].Overrides) != 1 || f.Series[0].Overrides[0].URL != "https://example.com/override" {
+		t.Fatalf("expected override URL to carry through import independently, got %+v", f.Series[0].Overrides)
+	}
+}
+
 func TestParseImportFile_OrphanRecurrenceID_Skipped(t *testing.T) {
 	ics := `BEGIN:VCALENDAR
 VERSION:2.0

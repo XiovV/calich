@@ -2,7 +2,7 @@
 
 Status: accepted
 
-When a client PUTs a `.ics` carrying iCalendar data we don't model — `CATEGORIES`, `ATTENDEE`/`ORGANIZER`, `STATUS`, `CLASS`, `URL`, `GEO`, custom `X-` properties, embedded `VTIMEZONE`, or `VALARM` triggers ADR-0020 deferred (end-relative, absolute-datetime) — **we normalize it away**. The decomposed columns (title, times, `tzid`, `rrule`, `description`, `location`, reminders, overrides, exceptions) are the single source of truth; `GetCalendarObject` reserializes purely from them. There is no sidecar store of unmodeled properties.
+When a client PUTs a `.ics` carrying iCalendar data we don't model — `CATEGORIES`, `ATTENDEE`/`ORGANIZER`, `STATUS`, `CLASS`, `GEO`, custom `X-` properties, embedded `VTIMEZONE`, or `VALARM` triggers ADR-0020 deferred (end-relative, absolute-datetime) — **we normalize it away**. `URL` is no longer one of these: ADR-0063 models it as a decomposed column like `description`/`location`, stored verbatim and round-tripped in full. The decomposed columns (title, times, `tzid`, `rrule`, `description`, `location`, `url`, reminders, overrides, exceptions) are the single source of truth; `GetCalendarObject` reserializes purely from them. There is no sidecar store of unmodeled properties.
 
 ## Why accept the loss
 

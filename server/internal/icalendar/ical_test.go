@@ -189,6 +189,56 @@ func TestSeriesToICal_DescriptionAndLocation(t *testing.T) {
 	}
 }
 
+func TestSeriesToICal_URLEmittedWhenSet(t *testing.T) {
+	master := repository.Event{
+		ID:        "evt-1",
+		Title:     "Meeting",
+		URL:       "https://example.com/ticket/42",
+		Start:     time.Date(2026, 7, 1, 15, 0, 0, 0, time.UTC),
+		End:       time.Date(2026, 7, 1, 16, 0, 0, 0, time.UTC),
+		CreatedAt: time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC),
+	}
+
+	body := mustEncode(t, master, nil)
+
+	if !strings.Contains(body, "URL:https://example.com/ticket/42") {
+		t.Fatalf("expected URL, got:\n%s", body)
+	}
+}
+
+func TestSeriesToICal_URLAbsentWhenEmpty(t *testing.T) {
+	master := repository.Event{
+		ID:        "evt-1",
+		Title:     "Meeting",
+		Start:     time.Date(2026, 7, 1, 15, 0, 0, 0, time.UTC),
+		End:       time.Date(2026, 7, 1, 16, 0, 0, 0, time.UTC),
+		CreatedAt: time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC),
+	}
+
+	body := mustEncode(t, master, nil)
+
+	if strings.Contains(body, "URL") {
+		t.Fatalf("expected no URL property on an Event without one, got:\n%s", body)
+	}
+}
+
+func TestSeriesToICal_URLNonWebSchemeSurvivesVerbatim(t *testing.T) {
+	master := repository.Event{
+		ID:        "evt-1",
+		Title:     "Meeting",
+		URL:       "message://<abc123@mail.example.com>",
+		Start:     time.Date(2026, 7, 1, 15, 0, 0, 0, time.UTC),
+		End:       time.Date(2026, 7, 1, 16, 0, 0, 0, time.UTC),
+		CreatedAt: time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC),
+	}
+
+	body := mustEncode(t, master, nil)
+
+	if !strings.Contains(body, "URL:message://<abc123@mail.example.com>") {
+		t.Fatalf("expected URL to survive unescaped, got:\n%s", body)
+	}
+}
+
 func TestSeriesToICal_ColorSnapsToNearestCSS3Keyword(t *testing.T) {
 	color := "#FF0000FF"
 	master := repository.Event{

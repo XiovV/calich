@@ -114,7 +114,7 @@ func ReconcileSeries(existing []ExistingSeries, incoming []IncomingSeries, unpar
 // a scheduled Refresh a conditional GET still short-circuits before this
 // runs, but a forced "Refresh now" always reaches it.
 func seriesContentEqual(a, b SeriesWrite) bool {
-	if a.Title != b.Title || a.Description != b.Description || a.Location != b.Location {
+	if a.Title != b.Title || a.Description != b.Description || a.Location != b.Location || a.URL != b.URL {
 		return false
 	}
 	if !a.Start.Equal(b.Start) || !a.End.Equal(b.End) {
@@ -187,7 +187,7 @@ func overrideSetEqual(a, b []OverrideWrite) bool {
 }
 
 func overrideContentEqual(a, b OverrideWrite) bool {
-	if a.Title != b.Title || a.Description != b.Description || a.Location != b.Location {
+	if a.Title != b.Title || a.Description != b.Description || a.Location != b.Location || a.URL != b.URL {
 		return false
 	}
 	if !a.Start.Equal(b.Start) || !a.End.Equal(b.End) {

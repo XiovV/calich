@@ -657,6 +657,59 @@ func TestSubscribeService_Refresh_ChangedSeriesUpdatedInPlaceUnchangedLeftAlone(
 	}
 }
 
+// TestSubscribeService_Refresh_URLChangeAloneUpdatesStoredEvent exercises
+// #207's acceptance criterion that a Refresh whose only upstream change is
+// a series' URL updates the stored Event rather than leaving it unchanged.
+func TestSubscribeService_Refresh_URLChangeAloneUpdatesStoredEvent(t *testing.T) {
+	svc, events, _, userID, workspaceID := newTestSubscribeService(t)
+	ctx := context.Background()
+
+	seriesWithURL := func(url string) string {
+		return "BEGIN:VCALENDAR\nVERSION:2.0\nPRODID:-//test//EN\n" +
+			"BEGIN:VEVENT\nUID:series-a\nDTSTART:20260601T090000Z\nDTEND:20260601T093000Z\nSUMMARY:Standup\nURL:" + url + "\nEND:VEVENT\n" +
+			"END:VCALENDAR\n"
+	}
+
+	body := seriesWithURL("https://example.com/before")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/calendar")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(crlfSub(body)))
+	}))
+	t.Cleanup(srv.Close)
+
+	cal, err := svc.Subscribe(ctx, userID, workspaceID, srv.URL+"/feed.ics", "Feed", "#8E44ADFF", false)
+	if err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+
+	masters, err := events.events.ListMastersByCalendar(ctx, cal.ID)
+	if err != nil {
+		t.Fatalf("list masters: %v", err)
+	}
+	if len(masters) != 1 || masters[0].URL != "https://example.com/before" {
+		t.Fatalf("expected the initial URL to be stored, got %+v", masters)
+	}
+	masterID := masters[0].ID
+
+	body = seriesWithURL("https://example.com/after")
+	result, err := svc.Refresh(ctx, userID, cal.ID, true)
+	if err != nil {
+		t.Fatalf("refresh: %v", err)
+	}
+	if result.Updated != 1 {
+		t.Fatalf("expected the URL-only change to be detected as an update, got %+v", result)
+	}
+
+	updated, err := events.events.GetByID(ctx, masterID)
+	if err != nil {
+		t.Fatalf("get updated master: %v", err)
+	}
+	if updated.URL != "https://example.com/after" {
+		t.Fatalf("expected the stored URL to follow the feed's change, got %q", updated.URL)
+	}
+}
+
 func TestSubscribeService_Refresh_AbsentSeriesTombstoned(t *testing.T) {
 	svc, events, _, userID, workspaceID := newTestSubscribeService(t)
 	ctx := context.Background()

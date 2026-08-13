@@ -171,6 +171,61 @@ func TestImportService_RealRun_NewCalendar_Writes(t *testing.T) {
 	}
 }
 
+const masterAndOverrideURLICS = `BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//test//EN
+BEGIN:VEVENT
+UID:series-1
+DTSTART:20260601T090000Z
+DTEND:20260601T093000Z
+RRULE:FREQ=WEEKLY
+SUMMARY:Standup
+URL:https://example.com/master
+END:VEVENT
+BEGIN:VEVENT
+UID:series-1
+RECURRENCE-ID:20260608T090000Z
+DTSTART:20260608T100000Z
+DTEND:20260608T103000Z
+SUMMARY:Standup (moved)
+URL:https://example.com/override
+END:VEVENT
+END:VCALENDAR
+`
+
+// TestImportService_RealRun_MasterAndOverrideURL_BothWritten exercises
+// #207's acceptance criterion that importing a Calendar file carries URL
+// onto created Events, for a Master and for its Overrides independently.
+func TestImportService_RealRun_MasterAndOverrideURL_BothWritten(t *testing.T) {
+	svc, events, _, _, userID, workspaceID, _ := newTestImportService(t)
+	ctx := context.Background()
+
+	_, err := svc.Import(ctx, userID, workspaceID, "invite.ics", []byte(crlf(masterAndOverrideURLICS)), []ImportTarget{
+		{Filename: "invite.ics", Action: ImportTargetNew},
+	}, false)
+	if err != nil {
+		t.Fatalf("import: %v", err)
+	}
+
+	all, err := events.List(ctx, userID, nil, nil)
+	if err != nil {
+		t.Fatalf("list events: %v", err)
+	}
+	if len(all) != 2 {
+		t.Fatalf("expected master + override, got %d events: %+v", len(all), all)
+	}
+	byTitle := make(map[string]string, len(all))
+	for _, e := range all {
+		byTitle[e.Title] = e.URL
+	}
+	if byTitle["Standup"] != "https://example.com/master" {
+		t.Fatalf("expected master URL to be written, got %+v", byTitle)
+	}
+	if byTitle["Standup (moved)"] != "https://example.com/override" {
+		t.Fatalf("expected override URL to be written independently, got %+v", byTitle)
+	}
+}
+
 func TestImportService_ExistingCalendar_WritesIntoIt(t *testing.T) {
 	svc, events, _, _, userID, workspaceID, existingCalendarID := newTestImportService(t)
 	ctx := context.Background()

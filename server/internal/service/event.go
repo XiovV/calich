@@ -1301,6 +1301,7 @@ func (s *EventService) writeSeries(ctx context.Context, userID int64, calendarID
 				Tzid:        w.Tzid,
 				Description: w.Description,
 				Location:    w.Location,
+				URL:         w.URL,
 				Color:       w.Color,
 				ExternalUID: nonEmptyPtr(w.ExternalUID),
 			}
@@ -1331,6 +1332,7 @@ func (s *EventService) writeSeries(ctx context.Context, userID int64, calendarID
 					Tzid:         o.Tzid,
 					Description:  o.Description,
 					Location:     o.Location,
+					URL:          o.URL,
 					Color:        o.Color,
 					ParentID:     &masterID,
 					RecurrenceID: &o.RecurrenceID,
@@ -1456,6 +1458,7 @@ func (s *EventService) createSubscribedSeries(ctx context.Context, repos txRepos
 		Tzid:        write.Tzid,
 		Description: write.Description,
 		Location:    write.Location,
+		URL:         write.URL,
 		ExternalUID: nonEmptyPtr(write.ExternalUID),
 	}
 	if _, err := repos.events.Create(ctx, masterID, &userID, master, seq); err != nil {
@@ -1480,6 +1483,7 @@ func (s *EventService) createSubscribedSeries(ctx context.Context, repos txRepos
 			Tzid:         o.Tzid,
 			Description:  o.Description,
 			Location:     o.Location,
+			URL:          o.URL,
 			ParentID:     &masterID,
 			RecurrenceID: &o.RecurrenceID,
 			ExternalUID:  nonEmptyPtr(o.ExternalUID),
@@ -1530,6 +1534,7 @@ func (s *EventService) updateSubscribedSeries(ctx context.Context, repos txRepos
 		Tzid:        write.Tzid,
 		Description: write.Description,
 		Location:    write.Location,
+		URL:         write.URL,
 	}
 	// A Subscription's Refresh reconcile carries no iTIP lifecycle of its own
 	// (a Subscribed Calendar's Events carry no Attendees, ADR-0032/ADR-0059)
@@ -1564,6 +1569,7 @@ func (s *EventService) updateSubscribedSeries(ctx context.Context, repos txRepos
 			Tzid:        o.Tzid,
 			Description: o.Description,
 			Location:    o.Location,
+			URL:         o.URL,
 		}
 
 		if existing, ok := existingByRecurrenceID[key]; ok {
@@ -2281,14 +2287,14 @@ func (s *EventService) ReparentFrom(ctx context.Context, userID int64, oldParent
 // SeriesWrite is a whole series' Master fields plus its Overrides and
 // Exdates, decomposed from an incoming CalDAV PUT (ADR-0025).
 type SeriesWrite struct {
-	Title, Description, Location string
-	Start, End                   time.Time
-	AllDay                       bool
-	Tzid                         *string
-	Rrule                        string
-	Reminders                    []repository.Reminder
-	Exdates                      []time.Time
-	Overrides                    []OverrideWrite
+	Title, Description, Location, URL string
+	Start, End                        time.Time
+	AllDay                            bool
+	Tzid                              *string
+	Rrule                             string
+	Reminders                         []repository.Reminder
+	Exdates                           []time.Time
+	Overrides                         []OverrideWrite
 	// Color mirrors EventWrite.Color — the Master's own color override, nil
 	// meaning "inherit the Calendar's color" (ADR-0043).
 	Color *string
@@ -2318,12 +2324,12 @@ type AttachmentWrite struct {
 // OverrideWrite is one Override VEVENT's fields, keyed by the Occurrence it
 // replaces (RecurrenceID).
 type OverrideWrite struct {
-	RecurrenceID                 time.Time
-	Title, Description, Location string
-	Start, End                   time.Time
-	AllDay                       bool
-	Tzid                         *string
-	Reminders                    []repository.Reminder
+	RecurrenceID                      time.Time
+	Title, Description, Location, URL string
+	Start, End                        time.Time
+	AllDay                            bool
+	Tzid                              *string
+	Reminders                         []repository.Reminder
 	// ExternalUID mirrors SeriesWrite.ExternalUID — an Override shares its
 	// Master's foreign UID (#83, ADR-0033).
 	ExternalUID string
@@ -2466,6 +2472,7 @@ func (s *EventService) PutSeries(ctx context.Context, userID int64, calendarID, 
 			Tzid:        write.Tzid,
 			Description: write.Description,
 			Location:    write.Location,
+			URL:         write.URL,
 			Color:       write.Color,
 		}
 		if masterExists {
@@ -2510,6 +2517,7 @@ func (s *EventService) PutSeries(ctx context.Context, userID int64, calendarID, 
 				Tzid:        o.Tzid,
 				Description: o.Description,
 				Location:    o.Location,
+				URL:         o.URL,
 				Color:       o.Color,
 			}
 

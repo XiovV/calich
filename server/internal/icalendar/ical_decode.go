@@ -24,11 +24,11 @@ import (
 // ParsedEvent is one decoded VEVENT — a Master or an Override — before it is
 // turned into a service.SeriesWrite/OverrideWrite.
 type ParsedEvent struct {
-	Title, Description, Location string
-	Start, End                   time.Time
-	AllDay                       bool
-	Tzid                         *string
-	Reminders                    []repository.Reminder
+	Title, Description, Location, URL string
+	Start, End                        time.Time
+	AllDay                            bool
+	Tzid                              *string
+	Reminders                         []repository.Reminder
 	// Color is the exact hex this VEVENT's COLOR keyword decodes to, nil if
 	// it carries none (ADR-0043) — lossless in this direction, since a CSS3
 	// keyword has an exact defined RGB.
@@ -158,6 +158,14 @@ func parseVEvent(v ical.Event, isOverride bool) (ParsedEvent, string, error) {
 	if err != nil {
 		return ParsedEvent{}, "", fmt.Errorf("parse location: %w", err)
 	}
+	// Not .Text(): URL's default value type is URI, not TEXT, and .Text()
+	// would reject a well-formed VALUE=URI prop. Reading .Value raw also
+	// keeps a non-URL string (a bare word, a message:// link) intact
+	// rather than erroring on it (ADR-0063).
+	var eventURL string
+	if p := v.Props.Get(ical.PropURL); p != nil {
+		eventURL = p.Value
+	}
 
 	var rrule string
 	if !isOverride {
@@ -175,6 +183,7 @@ func parseVEvent(v ical.Event, isOverride bool) (ParsedEvent, string, error) {
 		Title:       title,
 		Description: description,
 		Location:    location,
+		URL:         eventURL,
 		Start:       start,
 		End:         end,
 		AllDay:      allDay,

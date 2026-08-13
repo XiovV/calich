@@ -271,6 +271,14 @@ func buildVEvent(e repository.Event, uid string, recurrenceID *time.Time, recurr
 	if e.Location != "" {
 		v.Props.SetText(ical.PropLocation, e.Location)
 	}
+	if e.URL != "" {
+		// Not SetText: it marks the prop VALUE=TEXT and backslash-escapes
+		// characters a URL may legally contain, un-verbatim-ing it
+		// (ADR-0063 requires byte-for-byte storage).
+		urlProp := ical.NewProp(ical.PropURL)
+		urlProp.Value = e.URL
+		v.Props.Set(urlProp)
+	}
 	if e.Color != nil {
 		r, g, b, err := parseHexRGB(*e.Color)
 		if err != nil {

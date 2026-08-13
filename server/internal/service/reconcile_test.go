@@ -206,6 +206,26 @@ func TestReconcileSeries_OverrideContentChangeMakesSeriesAnUpsert(t *testing.T) 
 	}
 }
 
+func TestReconcileSeries_OverrideURLChangeAloneMakesSeriesAnUpsert(t *testing.T) {
+	rec := mustTime(t, "2026-01-08T10:00:00Z")
+
+	before := basicWrite(t, "Standup")
+	before.Rrule = "FREQ=WEEKLY"
+	before.Overrides = []OverrideWrite{{RecurrenceID: rec, Title: "Standup (moved)", Start: rec, End: rec.Add(time.Hour)}}
+
+	after := before
+	after.Overrides = []OverrideWrite{{RecurrenceID: rec, Title: "Standup (moved)", Start: rec, End: rec.Add(time.Hour), URL: "https://example.com/ticket/42"}}
+
+	existing := []ExistingSeries{{MasterID: "master-1", ExternalUID: "uid-1", Content: before}}
+	incoming := []IncomingSeries{{ExternalUID: "uid-1", Write: after}}
+
+	result := ReconcileSeries(existing, incoming, nil)
+
+	if result.NoOpCount != 0 || len(result.Upserts) != 1 {
+		t.Fatalf("expected an override URL change alone to force an upsert, got noop=%d upserts=%+v", result.NoOpCount, result.Upserts)
+	}
+}
+
 func TestReconcileSeries_OverrideAddedOrRemovedMakesSeriesAnUpsert(t *testing.T) {
 	rec := mustTime(t, "2026-01-08T10:00:00Z")
 	override := OverrideWrite{RecurrenceID: rec, Title: "Standup (moved)", Start: rec, End: rec.Add(time.Hour)}
@@ -272,6 +292,23 @@ func TestReconcileSeries_ReminderChangeAloneMakesSeriesAnUpsert(t *testing.T) {
 	result := ReconcileSeries(existing, incoming, nil)
 	if result.NoOpCount != 0 || len(result.Upserts) != 1 {
 		t.Fatalf("expected a Reminder change alone to force an upsert, got noop=%d upserts=%+v", result.NoOpCount, result.Upserts)
+	}
+}
+
+// TestReconcileSeries_URLChangeAloneMakesSeriesAnUpsert exercises #207's
+// acceptance criterion that a feed changing only a series' URL is detected
+// as a change, not treated as unchanged.
+func TestReconcileSeries_URLChangeAloneMakesSeriesAnUpsert(t *testing.T) {
+	withoutURL := basicWrite(t, "Standup")
+	withURL := withoutURL
+	withURL.URL = "https://example.com/ticket/42"
+
+	existing := []ExistingSeries{{MasterID: "master-1", ExternalUID: "uid-1", Content: withoutURL}}
+	incoming := []IncomingSeries{{ExternalUID: "uid-1", Write: withURL}}
+
+	result := ReconcileSeries(existing, incoming, nil)
+	if result.NoOpCount != 0 || len(result.Upserts) != 1 {
+		t.Fatalf("expected a URL change alone to force an upsert, got noop=%d upserts=%+v", result.NoOpCount, result.Upserts)
 	}
 }
 
