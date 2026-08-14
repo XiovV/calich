@@ -818,12 +818,17 @@ func (s *EventService) attachCalendarMeta(ctx context.Context, rows []*repositor
 	return nil
 }
 
-// ListAllWithReminders returns every Event that fires at least one Reminder,
-// across every Calendar, alongside the resolution naming every User who fires
-// one on it (ADR-0064) — the firing engine's read path (ADR-0021). The same
+// ListAllWithReminders returns every Event that could fire a Reminder in the
+// window (from, to] — one tick of the firing engine (ADR-0021) — alongside the
+// resolution naming every User who fires one on it (ADR-0064). The same
 // resolution the web app, CalDAV and ICS export read through, answered for
 // everyUser instead of one viewer, so the two cannot drift (#216).
-func (s *EventService) ListAllWithReminders(ctx context.Context) ([]repository.Event, repository.ResolvedReminders, error) {
+//
+// The window bounds the read, not the answer: it is widened generously below
+// and the engine prunes to the exact trigger instant itself, so what comes back
+// is a superset of what fires — including the Overrides that fire nothing but
+// shadow an Occurrence out of their Master's expansion (withShadowingOverrides).
+func (s *EventService) ListAllWithReminders(ctx context.Context, from, to time.Time) ([]repository.Event, repository.ResolvedReminders, error) {
 	// candidates accumulates every Event that might fire a Reminder: those
 	// carrying a Reminder row of somebody's, plus every Event on a Calendar
 	// carrying at least one User's default, since any of those could resolve
@@ -838,7 +843,11 @@ func (s *EventService) ListAllWithReminders(ctx context.Context) ([]repository.E
 		return nil, nil, fmt.Errorf("list calendars with default reminders: %w", err)
 	}
 	if len(calendarIDs) > 0 {
-		onCalendarsWithDefaults, err := s.events.ListByCalendarIDs(ctx, calendarIDs, nil, nil)
+		windowStart, windowEnd, err := s.defaultReminderCandidateWindow(ctx, from, to)
+		if err != nil {
+			return nil, nil, err
+		}
+		onCalendarsWithDefaults, err := s.events.ListByCalendarIDs(ctx, calendarIDs, &windowStart, &windowEnd)
 		if err != nil {
 			return nil, nil, fmt.Errorf("list events for default reminders: %w", err)
 		}
@@ -857,6 +866,11 @@ func (s *EventService) ListAllWithReminders(ctx context.Context) ([]repository.E
 		}
 	}
 
+	events, err = s.withShadowingOverrides(ctx, events)
+	if err != nil {
+		return nil, nil, err
+	}
+
 	// Exdates alone: the engine reads nothing else off these rows, and unlike
 	// every other read path they reach nobody, so they carry no viewer's
 	// fields and name no hydration recipe (#215).
@@ -866,11 +880,86 @@ func (s *EventService) ListAllWithReminders(ctx context.Context) ([]repository.E
 	return events, resolved, nil
 }
 
+// withShadowingOverrides adds every Override of the recurring Masters in
+// events, whether or not it fires anything itself — the one part of the firing
+// read no window may bound.
+//
+// A Master's own RRULE keeps generating the Occurrence slot an Override has
+// replaced, since creating an Override adds no Exdate, and the engine
+// suppresses that slot only by finding the Override among the Events it was
+// handed (DueAll). An Occurrence may be moved arbitrarily far from the slot it
+// replaces, so no widening could reliably catch its Override, and an Override
+// resolving a Calendar default carries no Reminder row to pull it in either —
+// without this, a windowed read leaves the Master firing a stale cue for a slot
+// that no longer exists (#219).
+//
+// Only shadowing is at stake: an Override that could itself fire in this window
+// starts inside it, so it is already a candidate and already carries its own
+// resolution, which the merge leaves untouched.
+func (s *EventService) withShadowingOverrides(ctx context.Context, events []repository.Event) ([]repository.Event, error) {
+	masterIDs := make([]string, 0, len(events))
+	for _, e := range events {
+		if e.ParentID == nil && e.Rrule != "" {
+			masterIDs = append(masterIDs, e.ID)
+		}
+	}
+	if len(masterIDs) == 0 {
+		return events, nil
+	}
+
+	overridesByParent, err := s.events.ListChildrenByParentIDs(ctx, masterIDs)
+	if err != nil {
+		return nil, fmt.Errorf("list overrides for firing: %w", err)
+	}
+
+	overrides := make([]repository.Event, 0, len(overridesByParent))
+	for _, byParent := range overridesByParent {
+		overrides = append(overrides, byParent...)
+	}
+	return mergeEventsByID(events, overrides), nil
+}
+
+// firingCandidateSlack is generous slack added to either end of the
+// Calendar-default candidate window, on top of the widening by the offsets
+// themselves: an all-day Occurrence's anchor sits 9 hours after its row's
+// stored midnight start (ADR-0020), and the window's own comparisons are
+// strict at both ends. The firing engine recomputes every anchor and prunes to
+// the exact trigger, so this only has to be wide enough never to lose a
+// candidate.
+const firingCandidateSlack = 24 * time.Hour
+
+// defaultReminderCandidateWindow bounds the Events worth reading for
+// Calendar-default resolution on a tick covering (from, to] — the read that
+// was open-ended before #219, and so grew with a Calendar's whole history
+// rather than with what fires on it.
+//
+// A Reminder's trigger is its Occurrence's anchor minus its own offset, so an
+// Occurrence firing in this tick has its anchor in [from+minOffset,
+// to+maxOffset] — the window has to be widened by the offsets in play rather
+// than assumed small, since an offset may be arbitrarily long, and by the
+// smallest as well as the largest, since an offset decoded from an inbound
+// CalDAV TRIGGER may be negative (fire *after* the Occurrence).
+//
+// The Defaults' offsets are the only ones that matter here: an Event carrying
+// a Reminder row of anybody's is already a candidate via ListAllWithAnyReminder,
+// which this window never narrows, so a default-resolved fire is the only kind
+// this read is responsible for finding.
+func (s *EventService) defaultReminderCandidateWindow(ctx context.Context, from, to time.Time) (windowStart, windowEnd time.Time, err error) {
+	minOffset, maxOffset, err := s.calendarDefaults.OffsetMinutesRange(ctx)
+	if err != nil {
+		return time.Time{}, time.Time{}, fmt.Errorf("read default reminder offsets: %w", err)
+	}
+	windowStart = from.Add(time.Duration(minOffset)*time.Minute - firingCandidateSlack)
+	windowEnd = to.Add(time.Duration(maxOffset)*time.Minute + firingCandidateSlack)
+	return windowStart, windowEnd, nil
+}
+
 // mergeEventsByID appends b's Events not already present in a (by id), for the
 // two reads assembled from halves that can overlap: List's Calendar-Access and
 // Attendee sets, when a caller has both to the same Event (ADR-0046), and
-// ListAllWithReminders' Reminder-row and Calendar-default candidates. Either
-// way the merged result must carry each Event exactly once.
+// ListAllWithReminders' Reminder-row and Calendar-default candidates, and its
+// shadowing Overrides on top of both. Either way the merged result must carry
+// each Event exactly once.
 func mergeEventsByID(a, b []repository.Event) []repository.Event {
 	seen := make(map[string]bool, len(a))
 	for _, e := range a {

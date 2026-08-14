@@ -266,7 +266,7 @@ func TestResolution_ViewerReadAndFiringReadAgree(t *testing.T) {
 			if err != nil {
 				t.Fatalf("get reminders: %v", err)
 			}
-			_, resolved, err := svc.ListAllWithReminders(ctx)
+			_, resolved, err := svc.ListAllWithReminders(resolutionWindow(ctx))
 			if err != nil {
 				t.Fatalf("list all with reminders: %v", err)
 			}
@@ -321,7 +321,7 @@ func TestListAllWithReminders_ResolvesDefaultsForFiring(t *testing.T) {
 		t.Fatalf("create event: %v", err)
 	}
 
-	events, resolved, err := svc.ListAllWithReminders(ctx)
+	events, resolved, err := svc.ListAllWithReminders(resolutionWindow(ctx))
 	if err != nil {
 		t.Fatalf("list all with reminders: %v", err)
 	}
@@ -336,6 +336,14 @@ func TestListAllWithReminders_ResolvesDefaultsForFiring(t *testing.T) {
 	if len(resolved.For(event.ID, ownerID)) != 0 {
 		t.Fatalf("owner set no default and no explicit rows, expected none, got %+v", resolved.For(event.ID, ownerID))
 	}
+}
+
+// resolutionWindow is a firing window comfortably around the 2026-01-01 Events
+// every resolution test here creates: these are about which Reminders resolve,
+// not about the window that bounds the read (#219), which has its own tests.
+func resolutionWindow(ctx context.Context) (context.Context, time.Time, time.Time) {
+	day := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	return ctx, day.AddDate(0, 0, -1), day.AddDate(0, 0, 1)
 }
 
 // containsEventID reports whether the firing read returned eventID at all — an
@@ -366,7 +374,7 @@ func TestListAllWithReminders_ExplicitEmptyOptsOutOfFiring(t *testing.T) {
 		t.Fatalf("opt out: %v", err)
 	}
 
-	_, resolved, err := svc.ListAllWithReminders(ctx)
+	_, resolved, err := svc.ListAllWithReminders(resolutionWindow(ctx))
 	if err != nil {
 		t.Fatalf("list all with reminders: %v", err)
 	}

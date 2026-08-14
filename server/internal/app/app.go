@@ -122,10 +122,10 @@ func newFromGraph(graph *service.Graph, cfg config.Config) *App {
 	// falls back to the log sink otherwise.
 	var emailDispatcher reminder.Dispatcher = reminder.LogDispatcher{}
 	if a.Mailer != nil {
-		emailDispatcher = reminder.EmailDispatcher{Users: a.UserRepo, Mailer: a.Mailer, Fallback: reminder.LogDispatcher{}}
+		emailDispatcher = reminder.EmailDispatcher{Mailer: a.Mailer, Fallback: reminder.LogDispatcher{}}
 	}
-	dispatcher := reminder.NotificationDispatcher{Notifications: a.NotificationRepo, Users: a.UserRepo, Fallback: emailDispatcher, Now: time.Now}
-	a.ReminderScheduler = reminder.NewScheduler(a.Events, a.FiredReminderRepo, dispatcher, time.Now)
+	dispatcher := reminder.NotificationDispatcher{Notifications: a.NotificationRepo, Fallback: emailDispatcher, Now: time.Now}
+	a.ReminderScheduler = reminder.NewScheduler(a.Events, a.FiredReminderRepo, a.UserRepo, dispatcher, time.Now)
 
 	a.SubscriptionPoller = service.NewPoller(a.Calendars, a.Subscriptions, time.Now)
 	a.AttachmentSweeper = service.NewAttachmentSweeper(a.AttachmentRepo, a.AttachmentStore)

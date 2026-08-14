@@ -17,8 +17,31 @@ type fakeEventLister struct {
 	resolved repository.ResolvedReminders
 }
 
-func (f fakeEventLister) ListAllWithReminders(context.Context) ([]repository.Event, repository.ResolvedReminders, error) {
+func (f fakeEventLister) ListAllWithReminders(context.Context, time.Time, time.Time) ([]repository.Event, repository.ResolvedReminders, error) {
 	return f.events, f.resolved, nil
+}
+
+// fakeRecipients answers a tick's batched recipient lookup, recording the ids
+// of every call so a test can pin that one tick costs one read. An id it holds
+// no User for comes back as an ordinary, enabled one, which is what every test
+// that isn't about suppression wants.
+type fakeRecipients struct {
+	usersByID map[int64]repository.User
+	calls     [][]int64
+}
+
+func (f *fakeRecipients) GetByIDs(_ context.Context, ids []int64) (map[int64]repository.User, error) {
+	f.calls = append(f.calls, ids)
+
+	users := make(map[int64]repository.User, len(ids))
+	for _, id := range ids {
+		user, ok := f.usersByID[id]
+		if !ok {
+			user = repository.User{ID: id}
+		}
+		users[id] = user
+	}
+	return users, nil
 }
 
 // listing is the read a scheduler test hands the engine: one Event, plus the
@@ -33,7 +56,7 @@ type fakeDispatcher struct {
 	dispatched []DueReminder
 }
 
-func (f *fakeDispatcher) Dispatch(_ context.Context, due DueReminder) error {
+func (f *fakeDispatcher) Dispatch(_ context.Context, due DueReminder, _ repository.User) error {
 	f.dispatched = append(f.dispatched, due)
 	return nil
 }
@@ -168,7 +191,7 @@ func TestScheduler_Tick_DispatchesAReminderThatBecomesDueInTheWindow(t *testing.
 	reminders := ownerOf(repository.Reminder{ID: reminderID, OffsetMinutes: 10, Channel: "notification"})
 	dispatcher := &fakeDispatcher{}
 	c := &clock{t: at(2026, 1, 1, 8, 40)}
-	scheduler := NewScheduler(listing(event, reminders), ledger, dispatcher, c.now)
+	scheduler := NewScheduler(listing(event, reminders), ledger, &fakeRecipients{}, dispatcher, c.now)
 
 	// The trigger (08:50) falls in this tick's window.
 	c.set(at(2026, 1, 1, 8, 55))
@@ -191,7 +214,7 @@ func TestScheduler_Tick_DoesNotDispatchATriggerOutsideTheWindow(t *testing.T) {
 	reminders := ownerOf(repository.Reminder{ID: reminderID, OffsetMinutes: 10, Channel: "notification"})
 	dispatcher := &fakeDispatcher{}
 	c := &clock{t: at(2026, 1, 1, 6, 0)}
-	scheduler := NewScheduler(listing(event, reminders), ledger, dispatcher, c.now)
+	scheduler := NewScheduler(listing(event, reminders), ledger, &fakeRecipients{}, dispatcher, c.now)
 
 	c.set(at(2026, 1, 1, 6, 5))
 	if err := scheduler.Tick(context.Background()); err != nil {
@@ -217,7 +240,7 @@ func TestScheduler_Tick_ExactlyOnceAcrossRepeatedTicks(t *testing.T) {
 	reminders := ownerOf(repository.Reminder{ID: reminderID, OffsetMinutes: 10, Channel: "notification"})
 	dispatcher := &fakeDispatcher{}
 	c := &clock{t: at(2026, 1, 1, 8, 40)}
-	scheduler := NewScheduler(listing(event, reminders), ledger, dispatcher, c.now)
+	scheduler := NewScheduler(listing(event, reminders), ledger, &fakeRecipients{}, dispatcher, c.now)
 
 	c.set(at(2026, 1, 1, 8, 55))
 	if err := scheduler.Tick(context.Background()); err != nil {
@@ -228,7 +251,7 @@ func TestScheduler_Tick_ExactlyOnceAcrossRepeatedTicks(t *testing.T) {
 	// whose window covers the same trigger again, backed by the same ledger.
 	dispatcher2 := &fakeDispatcher{}
 	c2 := &clock{t: at(2026, 1, 1, 8, 40)}
-	scheduler2 := NewScheduler(listing(event, reminders), ledger, dispatcher2, c2.now)
+	scheduler2 := NewScheduler(listing(event, reminders), ledger, &fakeRecipients{}, dispatcher2, c2.now)
 	c2.set(at(2026, 1, 1, 8, 55))
 	if err := scheduler2.Tick(context.Background()); err != nil {
 		t.Fatalf("second tick: %v", err)
@@ -258,13 +281,13 @@ func TestScheduler_Restart_NeverCatchesUpAMissedTrigger(t *testing.T) {
 	// The old process's last tick was well before the trigger; it then went
 	// down and never ticked again.
 	c := &clock{t: at(2026, 1, 1, 6, 0)}
-	oldScheduler := NewScheduler(listing(event, reminders), ledger, dispatcher, c.now)
+	oldScheduler := NewScheduler(listing(event, reminders), ledger, &fakeRecipients{}, dispatcher, c.now)
 	_ = oldScheduler // downtime starts here; no further Tick call.
 
 	// The new process starts long after the trigger passed.
 	restartDispatcher := &fakeDispatcher{}
 	restartClock := &clock{t: at(2026, 1, 2, 0, 0)}
-	restarted := NewScheduler(listing(event, reminders), ledger, restartDispatcher, restartClock.now)
+	restarted := NewScheduler(listing(event, reminders), ledger, &fakeRecipients{}, restartDispatcher, restartClock.now)
 
 	restartClock.set(at(2026, 1, 2, 0, 1))
 	if err := restarted.Tick(context.Background()); err != nil {
@@ -294,7 +317,7 @@ func TestScheduler_Tick_FiresEachUsersOwnReminderIndependently(t *testing.T) {
 	c := &clock{t: at(2026, 1, 1, 8, 40)}
 	scheduler := NewScheduler(
 		listing(event, byUser),
-		ledger, dispatcher, c.now,
+		ledger, &fakeRecipients{}, dispatcher, c.now,
 	)
 
 	c.set(at(2026, 1, 1, 8, 55))
@@ -337,7 +360,7 @@ func TestScheduler_Tick_ExactlyOncePerUser_OneUsersReminderAlreadyFiredDoesNotSu
 	c := &clock{t: at(2026, 1, 1, 8, 40)}
 	scheduler := NewScheduler(
 		listing(event, byUser),
-		ledger, dispatcher, c.now,
+		ledger, &fakeRecipients{}, dispatcher, c.now,
 	)
 
 	c.set(at(2026, 1, 1, 8, 55))
@@ -350,5 +373,78 @@ func TestScheduler_Tick_ExactlyOncePerUser_OneUsersReminderAlreadyFiredDoesNotSu
 	}
 	if dispatcher.dispatched[0].UserID != otherUserID {
 		t.Fatalf("expected the dispatched reminder to be for user %d, got %d", otherUserID, dispatcher.dispatched[0].UserID)
+	}
+}
+
+// A Disabled User receives no Reminders on any Channel (ADR-0037), and the
+// suppression is the tick's, not each Dispatcher's: nothing reaches the
+// dispatch chain at all, so no sink downstream of it can deliver one either.
+func TestScheduler_Tick_DisabledUserReceivesNothingOnAnyChannel(t *testing.T) {
+	ledger, ownerReminderID, otherReminderID, ownerID, otherUserID := newTestLedgerWithSecondUser(t)
+	event := repository.Event{
+		ID:    "evt-1",
+		Start: at(2026, 1, 1, 9, 0),
+		End:   at(2026, 1, 1, 9, 30),
+	}
+	byUser := map[int64][]repository.Reminder{
+		ownerID:     {{ID: ownerReminderID, OffsetMinutes: 10, Channel: "notification"}},
+		otherUserID: {{ID: otherReminderID, OffsetMinutes: 10, Channel: "email"}},
+	}
+	recipients := &fakeRecipients{usersByID: map[int64]repository.User{
+		ownerID:     {ID: ownerID, IsDisabled: true},
+		otherUserID: {ID: otherUserID, IsDisabled: true},
+	}}
+
+	dispatcher := &fakeDispatcher{}
+	c := &clock{t: at(2026, 1, 1, 8, 40)}
+	scheduler := NewScheduler(listing(event, byUser), ledger, recipients, dispatcher, c.now)
+
+	c.set(at(2026, 1, 1, 8, 55))
+	if err := scheduler.Tick(context.Background()); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+
+	if len(dispatcher.dispatched) != 0 {
+		t.Fatalf("expected a disabled User's Reminders to reach no dispatcher on either Channel, got %+v", dispatcher.dispatched)
+	}
+}
+
+// A tick costs one User read per distinct recipient rather than one per due
+// Reminder (#219): the same Calendar default resolving onto two Events fires
+// twice for one User, and looks them up once.
+func TestScheduler_Tick_ReadsEachRecipientOnce(t *testing.T) {
+	ledger, defaultReminderID, userID := newTestDefaultReminderLedger(t)
+
+	makeEvent := func(id string) repository.Event {
+		return repository.Event{ID: id, Start: at(2026, 1, 1, 9, 0), End: at(2026, 1, 1, 9, 30)}
+	}
+	byUser := map[int64][]repository.Reminder{
+		userID: {{DefaultReminderID: defaultReminderID, OffsetMinutes: 10, Channel: "notification"}},
+	}
+	recipients := &fakeRecipients{}
+
+	dispatcher := &fakeDispatcher{}
+	c := &clock{t: at(2026, 1, 1, 8, 40)}
+	scheduler := NewScheduler(
+		fakeEventLister{
+			events:   []repository.Event{makeEvent("evt-1"), makeEvent("evt-2")},
+			resolved: repository.ResolvedReminders{"evt-1": byUser, "evt-2": byUser},
+		},
+		ledger, recipients, dispatcher, c.now,
+	)
+
+	c.set(at(2026, 1, 1, 8, 55))
+	if err := scheduler.Tick(context.Background()); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+
+	if len(dispatcher.dispatched) != 2 {
+		t.Fatalf("expected 2 dispatched reminders, got %+v", dispatcher.dispatched)
+	}
+	if len(recipients.calls) != 1 {
+		t.Fatalf("expected the tick to read its recipients in one call, got %+v", recipients.calls)
+	}
+	if len(recipients.calls[0]) != 1 || recipients.calls[0][0] != userID {
+		t.Fatalf("expected that one call to name user %d exactly once, got %+v", userID, recipients.calls[0])
 	}
 }

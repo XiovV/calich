@@ -68,37 +68,49 @@ const occurrenceSearchPad = 24 * time.Hour
 // Every User in byUser fires their own resolved Reminders only, at their own
 // offset and Channel — no fan-out to anyone else with Access or Invited, no
 // substitution, no collapse rule (ADR-0064): a User absent from the map is
-// simply never considered. Because each User's Reminders are independent, the
-// trigger window and its Occurrence search are computed once per (Reminder,
-// User) pair.
+// simply never considered.
+//
+// The rule is expanded once, over the union of every resolved Reminder's own
+// trigger window, rather than once per (Reminder, User) pair (#219): each
+// Reminder's exact trigger is still checked against its own window, so a
+// shared, wider search costs comparisons instead of expansions — and a
+// Calendar default resolving onto ten Users costs one expansion, not ten.
 func Due(event repository.Event, byUser map[int64][]repository.Reminder, from, to time.Time) ([]DueReminder, error) {
-	var due []DueReminder
+	minOffset, maxOffset, resolvesAny := offsetRange(byUser)
+	if !resolvesAny {
+		return nil, nil
+	}
 
+	starts, err := occurrenceStarts(
+		event,
+		from.Add(minOffset-occurrenceSearchPad),
+		to.Add(maxOffset+occurrenceSearchPad),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	occurrences := make([]occurrence, len(starts))
+	for i, start := range starts {
+		occurrences[i] = occurrence{start: start, anchor: anchor(event, start)}
+	}
+
+	var due []DueReminder
 	for userID, reminders := range byUser {
 		for _, reminder := range reminders {
 			offset := time.Duration(reminder.OffsetMinutes) * time.Minute
 			triggerFrom := from.Add(offset)
 			triggerTo := to.Add(offset)
 
-			starts, err := occurrenceStarts(
-				event,
-				triggerFrom.Add(-occurrenceSearchPad),
-				triggerTo.Add(occurrenceSearchPad),
-			)
-			if err != nil {
-				return nil, err
-			}
-
-			for _, start := range starts {
-				at := anchor(event, start)
-				if at.After(triggerFrom) && !at.After(triggerTo) {
+			for _, o := range occurrences {
+				if o.anchor.After(triggerFrom) && !o.anchor.After(triggerTo) {
 					due = append(due, DueReminder{
 						EventID:           event.ID,
 						UserID:            userID,
 						Title:             event.Title,
 						ReminderID:        reminder.ID,
 						DefaultReminderID: reminder.DefaultReminderID,
-						OccurrenceStart:   start,
+						OccurrenceStart:   o.start,
 						OffsetMinutes:     reminder.OffsetMinutes,
 						Channel:           reminder.Channel,
 					})
@@ -108,6 +120,34 @@ func Due(event repository.Event, byUser map[int64][]repository.Reminder, from, t
 	}
 
 	return due, nil
+}
+
+// occurrence is one expanded Occurrence start with the anchor its Reminders
+// count back from, so a tick's single expansion serves every Reminder resolved
+// on the Event without either being recomputed per pair (#219).
+type occurrence struct {
+	start  time.Time
+	anchor time.Time
+}
+
+// offsetRange spans every offset resolved on one Event — the widest the single
+// Occurrence search has to cover to serve all of them. resolvesAny is false
+// when nobody resolved a Reminder here at all, in which case there is nothing
+// to expand for.
+func offsetRange(byUser map[int64][]repository.Reminder) (minOffset, maxOffset time.Duration, resolvesAny bool) {
+	for _, reminders := range byUser {
+		for _, reminder := range reminders {
+			offset := time.Duration(reminder.OffsetMinutes) * time.Minute
+			if !resolvesAny || offset < minOffset {
+				minOffset = offset
+			}
+			if !resolvesAny || offset > maxOffset {
+				maxOffset = offset
+			}
+			resolvesAny = true
+		}
+	}
+	return minOffset, maxOffset, resolvesAny
 }
 
 // overriddenRecurrenceIDs indexes every Override's recurrence id by its

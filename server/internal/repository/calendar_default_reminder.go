@@ -138,6 +138,22 @@ func (r *CalendarDefaultReminderRepository) CalendarIDsWithAny(ctx context.Conte
 	return ids, nil
 }
 
+// OffsetMinutesRange returns the smallest and largest offset any User's
+// default Reminder fires at, across every Calendar — how far either side of a
+// tick's own window the firing engine has to look for candidate Events (#219),
+// since a Reminder's trigger is its Occurrence's anchor minus its own offset
+// and an offset may be arbitrarily long. Both come back zero when no default
+// exists anywhere, which widens a window by nothing at all.
+func (r *CalendarDefaultReminderRepository) OffsetMinutesRange(ctx context.Context) (minOffset, maxOffset int, err error) {
+	// COALESCE because an aggregate over no rows is one row of NULLs.
+	if err := r.db.QueryRowContext(ctx,
+		`SELECT COALESCE(MIN(offset_minutes), 0), COALESCE(MAX(offset_minutes), 0) FROM calendar_default_reminders`,
+	).Scan(&minOffset, &maxOffset); err != nil {
+		return 0, 0, fmt.Errorf("read calendar default reminder offset range: %w", err)
+	}
+	return minOffset, maxOffset, nil
+}
+
 // DeleteByUserAndCalendar clears both of userID's default Reminder lists on
 // calendarID — a User losing Access to the Calendar (a Share revoked or
 // renounced) takes their defaults with them (ADR-0064), mirroring

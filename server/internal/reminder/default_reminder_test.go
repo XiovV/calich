@@ -85,7 +85,7 @@ func TestScheduler_Tick_FiresADefaultResolvedReminderPerEventIndependently(t *te
 			events:   []repository.Event{makeEvent("evt-1"), makeEvent("evt-2")},
 			resolved: repository.ResolvedReminders{"evt-1": byUser, "evt-2": byUser},
 		},
-		ledger, dispatcher, c.now,
+		ledger, &fakeRecipients{}, dispatcher, c.now,
 	)
 
 	c.set(at(2026, 1, 1, 8, 55))
@@ -118,7 +118,7 @@ func TestScheduler_Tick_DefaultResolvedReminderExactlyOnce(t *testing.T) {
 
 	dispatcher := &fakeDispatcher{}
 	c := &clock{t: at(2026, 1, 1, 8, 40)}
-	scheduler := NewScheduler(listing(event, byUser), ledger, dispatcher, c.now)
+	scheduler := NewScheduler(listing(event, byUser), ledger, &fakeRecipients{}, dispatcher, c.now)
 	c.set(at(2026, 1, 1, 8, 55))
 	if err := scheduler.Tick(context.Background()); err != nil {
 		t.Fatalf("first tick: %v", err)
@@ -126,7 +126,7 @@ func TestScheduler_Tick_DefaultResolvedReminderExactlyOnce(t *testing.T) {
 
 	dispatcher2 := &fakeDispatcher{}
 	c2 := &clock{t: at(2026, 1, 1, 8, 40)}
-	scheduler2 := NewScheduler(listing(event, byUser), ledger, dispatcher2, c2.now)
+	scheduler2 := NewScheduler(listing(event, byUser), ledger, &fakeRecipients{}, dispatcher2, c2.now)
 	c2.set(at(2026, 1, 1, 8, 55))
 	if err := scheduler2.Tick(context.Background()); err != nil {
 		t.Fatalf("second tick: %v", err)

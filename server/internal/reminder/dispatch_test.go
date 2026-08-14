@@ -24,9 +24,8 @@ func (f *fakeNotificationInserter) Insert(_ context.Context, userID int64, event
 func TestNotificationDispatcher_NotificationChannelInsertsANotification(t *testing.T) {
 	inserter := &fakeNotificationInserter{}
 	fallback := &fakeDispatcher{}
-	users := fakeUserLookup{usersByID: map[int64]repository.User{7: {ID: 7}}}
 	fixedNow := time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC)
-	dispatcher := NotificationDispatcher{Notifications: inserter, Users: users, Fallback: fallback, Now: func() time.Time { return fixedNow }}
+	dispatcher := NotificationDispatcher{Notifications: inserter, Fallback: fallback, Now: func() time.Time { return fixedNow }}
 
 	due := DueReminder{
 		EventID:         "evt-1",
@@ -38,7 +37,7 @@ func TestNotificationDispatcher_NotificationChannelInsertsANotification(t *testi
 		Channel:         "notification",
 	}
 
-	if err := dispatcher.Dispatch(context.Background(), due); err != nil {
+	if err := dispatcher.Dispatch(context.Background(), due, repository.User{ID: 7}); err != nil {
 		t.Fatalf("dispatch: %v", err)
 	}
 
@@ -61,7 +60,7 @@ func TestNotificationDispatcher_NonNotificationChannelGoesToFallback(t *testing.
 
 	due := DueReminder{EventID: "evt-1", UserID: 7, ReminderID: 100, Channel: "email"}
 
-	if err := dispatcher.Dispatch(context.Background(), due); err != nil {
+	if err := dispatcher.Dispatch(context.Background(), due, repository.User{ID: 7}); err != nil {
 		t.Fatalf("dispatch: %v", err)
 	}
 
@@ -80,14 +79,12 @@ func TestNotificationDispatcher_NonNotificationChannelGoesToFallback(t *testing.
 func TestNotificationDispatcher_SkipsNotificationChannelWhenUserOptedIntoSyncedDeviceReminders(t *testing.T) {
 	inserter := &fakeNotificationInserter{}
 	fallback := &fakeDispatcher{}
-	users := fakeUserLookup{usersByID: map[int64]repository.User{
-		7: {ID: 7, SyncedDeviceRemindersEnabled: true},
-	}}
-	dispatcher := NotificationDispatcher{Notifications: inserter, Users: users, Fallback: fallback, Now: time.Now}
+	dispatcher := NotificationDispatcher{Notifications: inserter, Fallback: fallback, Now: time.Now}
 
 	due := DueReminder{EventID: "evt-1", UserID: 7, ReminderID: 100, Channel: "notification"}
+	recipient := repository.User{ID: 7, SyncedDeviceRemindersEnabled: true}
 
-	if err := dispatcher.Dispatch(context.Background(), due); err != nil {
+	if err := dispatcher.Dispatch(context.Background(), due, recipient); err != nil {
 		t.Fatalf("dispatch: %v", err)
 	}
 
@@ -105,14 +102,12 @@ func TestNotificationDispatcher_SkipsNotificationChannelWhenUserOptedIntoSyncedD
 func TestNotificationDispatcher_InsertsWhenSyncedDeviceRemindersDisabled(t *testing.T) {
 	inserter := &fakeNotificationInserter{}
 	fallback := &fakeDispatcher{}
-	users := fakeUserLookup{usersByID: map[int64]repository.User{
-		7: {ID: 7, SyncedDeviceRemindersEnabled: false},
-	}}
-	dispatcher := NotificationDispatcher{Notifications: inserter, Users: users, Fallback: fallback, Now: time.Now}
+	dispatcher := NotificationDispatcher{Notifications: inserter, Fallback: fallback, Now: time.Now}
 
 	due := DueReminder{EventID: "evt-1", UserID: 7, ReminderID: 100, Channel: "notification"}
+	recipient := repository.User{ID: 7, SyncedDeviceRemindersEnabled: false}
 
-	if err := dispatcher.Dispatch(context.Background(), due); err != nil {
+	if err := dispatcher.Dispatch(context.Background(), due, recipient); err != nil {
 		t.Fatalf("dispatch: %v", err)
 	}
 
@@ -131,56 +126,18 @@ func TestNotificationDispatcher_InsertsWhenSyncedDeviceRemindersDisabled(t *test
 func TestNotificationDispatcher_EmailChannelUnaffectedBySyncedDeviceRemindersToggle(t *testing.T) {
 	inserter := &fakeNotificationInserter{}
 	fallback := &fakeDispatcher{}
-	users := fakeUserLookup{usersByID: map[int64]repository.User{
-		7: {ID: 7, SyncedDeviceRemindersEnabled: true},
-	}}
-	dispatcher := NotificationDispatcher{Notifications: inserter, Users: users, Fallback: fallback, Now: time.Now}
+	dispatcher := NotificationDispatcher{Notifications: inserter, Fallback: fallback, Now: time.Now}
 
 	due := DueReminder{EventID: "evt-1", UserID: 7, ReminderID: 100, Channel: "email"}
+	recipient := repository.User{ID: 7, SyncedDeviceRemindersEnabled: true}
 
-	if err := dispatcher.Dispatch(context.Background(), due); err != nil {
+	if err := dispatcher.Dispatch(context.Background(), due, recipient); err != nil {
 		t.Fatalf("dispatch: %v", err)
 	}
 
 	if len(fallback.dispatched) != 1 || fallback.dispatched[0].EventID != "evt-1" {
 		t.Fatalf("expected the email Reminder to reach the fallback regardless of the toggle, got %+v", fallback.dispatched)
 	}
-}
-
-// TestNotificationDispatcher_SkipsDisabledUsersWithoutFallingBack covers
-// ADR-0037's "a Disabled User receives no Reminders on any Channel" — unlike
-// the synced-device toggle, this doesn't even fall back to LogDispatcher,
-// since that's still a delivery in spirit.
-func TestNotificationDispatcher_SkipsDisabledUsersWithoutFallingBack(t *testing.T) {
-	inserter := &fakeNotificationInserter{}
-	fallback := &fakeDispatcher{}
-	users := fakeUserLookup{usersByID: map[int64]repository.User{
-		7: {ID: 7, IsDisabled: true},
-	}}
-	dispatcher := NotificationDispatcher{Notifications: inserter, Users: users, Fallback: fallback, Now: time.Now}
-
-	due := DueReminder{EventID: "evt-1", UserID: 7, ReminderID: 100, Channel: "notification"}
-
-	if err := dispatcher.Dispatch(context.Background(), due); err != nil {
-		t.Fatalf("dispatch: %v", err)
-	}
-
-	if len(inserter.inserts) != 0 {
-		t.Fatalf("expected no notification insert for a disabled user, got %+v", inserter.inserts)
-	}
-	if len(fallback.dispatched) != 0 {
-		t.Fatalf("expected no fallback dispatch for a disabled user, got %+v", fallback.dispatched)
-	}
-}
-
-// fakeUserLookup returns a fixed user by id, standing in for the real
-// UserRepository.
-type fakeUserLookup struct {
-	usersByID map[int64]repository.User
-}
-
-func (f fakeUserLookup) GetByID(_ context.Context, id int64) (repository.User, error) {
-	return f.usersByID[id], nil
 }
 
 // fakeMailer records every email it's asked to send, standing in for a real
@@ -199,12 +156,9 @@ func (f *fakeMailer) Send(to, subject, body string) error {
 }
 
 func TestEmailDispatcher_EmailChannelSendsToTheUsersAddress(t *testing.T) {
-	users := fakeUserLookup{usersByID: map[int64]repository.User{
-		7: {ID: 7, Email: "alice@example.com"},
-	}}
 	mailer := &fakeMailer{}
 	fallback := &fakeDispatcher{}
-	dispatcher := EmailDispatcher{Users: users, Mailer: mailer, Fallback: fallback}
+	dispatcher := EmailDispatcher{Mailer: mailer, Fallback: fallback}
 
 	due := DueReminder{
 		EventID:         "evt-1",
@@ -215,7 +169,7 @@ func TestEmailDispatcher_EmailChannelSendsToTheUsersAddress(t *testing.T) {
 		Channel:         "email",
 	}
 
-	if err := dispatcher.Dispatch(context.Background(), due); err != nil {
+	if err := dispatcher.Dispatch(context.Background(), due, repository.User{ID: 7, Email: "alice@example.com"}); err != nil {
 		t.Fatalf("dispatch: %v", err)
 	}
 
@@ -231,14 +185,13 @@ func TestEmailDispatcher_EmailChannelSendsToTheUsersAddress(t *testing.T) {
 }
 
 func TestEmailDispatcher_NonEmailChannelGoesToFallback(t *testing.T) {
-	users := fakeUserLookup{usersByID: map[int64]repository.User{}}
 	mailer := &fakeMailer{}
 	fallback := &fakeDispatcher{}
-	dispatcher := EmailDispatcher{Users: users, Mailer: mailer, Fallback: fallback}
+	dispatcher := EmailDispatcher{Mailer: mailer, Fallback: fallback}
 
 	due := DueReminder{EventID: "evt-1", UserID: 7, ReminderID: 100, Channel: "notification"}
 
-	if err := dispatcher.Dispatch(context.Background(), due); err != nil {
+	if err := dispatcher.Dispatch(context.Background(), due, repository.User{ID: 7}); err != nil {
 		t.Fatalf("dispatch: %v", err)
 	}
 
@@ -250,52 +203,27 @@ func TestEmailDispatcher_NonEmailChannelGoesToFallback(t *testing.T) {
 	}
 }
 
-// TestEmailDispatcher_SkipsDisabledUsers covers ADR-0037's "a Disabled User
-// receives no Reminders on any Channel".
-func TestEmailDispatcher_SkipsDisabledUsers(t *testing.T) {
-	users := fakeUserLookup{usersByID: map[int64]repository.User{
-		7: {ID: 7, IsDisabled: true, Email: "alice@example.com"},
-	}}
-	mailer := &fakeMailer{}
-	fallback := &fakeDispatcher{}
-	dispatcher := EmailDispatcher{Users: users, Mailer: mailer, Fallback: fallback}
-
-	due := DueReminder{EventID: "evt-1", UserID: 7, ReminderID: 100, Channel: "email"}
-
-	if err := dispatcher.Dispatch(context.Background(), due); err != nil {
-		t.Fatalf("dispatch: %v", err)
-	}
-
-	if len(mailer.sent) != 0 {
-		t.Fatalf("expected no email sent for a disabled user, got %+v", mailer.sent)
-	}
-}
-
 // TestEmailDispatcher_RendersEachRecipientsTimeFormat covers ADR-0039: two
 // recipients of one Reminder with different Time format Preferences each get
-// their own rendering, read off the User already fetched by GetByID above —
-// no second, per-Email query for the Preference.
+// their own rendering, read off the recipient the tick already looked up — no
+// per-Email query for the Preference.
 func TestEmailDispatcher_RendersEachRecipientsTimeFormat(t *testing.T) {
-	users := fakeUserLookup{usersByID: map[int64]repository.User{
-		7: {ID: 7, Email: "alice@example.com", TimeFormat: "12h"},
-		8: {ID: 8, Email: "bob@example.com", TimeFormat: "24h"},
-	}}
 	mailer := &fakeMailer{}
 	fallback := &fakeDispatcher{}
-	dispatcher := EmailDispatcher{Users: users, Mailer: mailer, Fallback: fallback}
+	dispatcher := EmailDispatcher{Mailer: mailer, Fallback: fallback}
 
 	occurrenceStart := time.Date(2026, 1, 1, 13, 30, 0, 0, time.UTC)
 
 	if err := dispatcher.Dispatch(context.Background(), DueReminder{
 		EventID: "evt-1", UserID: 7, Title: "Standup", ReminderID: 100,
 		OccurrenceStart: occurrenceStart, Channel: "email",
-	}); err != nil {
+	}, repository.User{ID: 7, Email: "alice@example.com", TimeFormat: "12h"}); err != nil {
 		t.Fatalf("dispatch alice: %v", err)
 	}
 	if err := dispatcher.Dispatch(context.Background(), DueReminder{
 		EventID: "evt-1", UserID: 8, Title: "Standup", ReminderID: 100,
 		OccurrenceStart: occurrenceStart, Channel: "email",
-	}); err != nil {
+	}, repository.User{ID: 8, Email: "bob@example.com", TimeFormat: "24h"}); err != nil {
 		t.Fatalf("dispatch bob: %v", err)
 	}
 

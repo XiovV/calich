@@ -151,6 +151,41 @@ func TestCalendarDefaultReminderRepository_CalendarIDsWithAny(t *testing.T) {
 	}
 }
 
+func TestCalendarDefaultReminderRepository_OffsetMinutesRange(t *testing.T) {
+	repo, userID, otherUserID, calendarID := newTestCalendarDefaultReminderRepository(t)
+	ctx := context.Background()
+
+	minOffset, maxOffset, err := repo.OffsetMinutesRange(ctx)
+	if err != nil {
+		t.Fatalf("range before any default set: %v", err)
+	}
+	if minOffset != 0 || maxOffset != 0 {
+		t.Fatalf("expected no default to widen a window by anything, got [%d, %d]", minOffset, maxOffset)
+	}
+
+	// Spread across both lists and both Users: the range is what the firing
+	// engine widens one window by, so it spans every default anywhere.
+	if err := repo.ReplaceByCalendarID(ctx, userID, calendarID, false, []Reminder{
+		{OffsetMinutes: 10, Channel: "notification"},
+		{OffsetMinutes: 20160, Channel: "email"},
+	}); err != nil {
+		t.Fatalf("replace timed: %v", err)
+	}
+	if err := repo.ReplaceByCalendarID(ctx, otherUserID, calendarID, true, []Reminder{
+		{OffsetMinutes: -15, Channel: "notification"},
+	}); err != nil {
+		t.Fatalf("replace all-day: %v", err)
+	}
+
+	minOffset, maxOffset, err = repo.OffsetMinutesRange(ctx)
+	if err != nil {
+		t.Fatalf("range after defaults set: %v", err)
+	}
+	if minOffset != -15 || maxOffset != 20160 {
+		t.Fatalf("expected [-15, 20160], got [%d, %d]", minOffset, maxOffset)
+	}
+}
+
 func TestCalendarDefaultReminderRepository_DeleteByUserAndCalendar_ClearsBothLists(t *testing.T) {
 	repo, userID, _, calendarID := newTestCalendarDefaultReminderRepository(t)
 	ctx := context.Background()

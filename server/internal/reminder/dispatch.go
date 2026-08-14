@@ -10,11 +10,13 @@ import (
 )
 
 // Dispatcher delivers a DueReminder that the scheduler has just newly marked
-// fired in the ledger. It is the seam real delivery (Notification insert,
-// SMTP send) plugs into without touching the engine — this ticket wires it
-// to a no-op/logging sink only (ADR-0021).
+// fired in the ledger, to recipient — the User it belongs to, read once for
+// the whole tick by the scheduler rather than looked up here (#219), and
+// already known not to be Disabled (ADR-0037). It is the seam real delivery
+// (Notification insert, SMTP send) plugs into without touching the engine —
+// this ticket wires it to a no-op/logging sink only (ADR-0021).
 type Dispatcher interface {
-	Dispatch(ctx context.Context, due DueReminder) error
+	Dispatch(ctx context.Context, due DueReminder, recipient repository.User) error
 }
 
 // LogDispatcher logs each dispatched Reminder instead of delivering it — the
@@ -22,7 +24,7 @@ type Dispatcher interface {
 // in the delivery tickets (#56, #57) behind the same Dispatcher seam.
 type LogDispatcher struct{}
 
-func (LogDispatcher) Dispatch(_ context.Context, due DueReminder) error {
+func (LogDispatcher) Dispatch(_ context.Context, due DueReminder, _ repository.User) error {
 	log.Printf(
 		"reminder fired: event=%s user=%d channel=%s offsetMinutes=%d occurrenceStart=%s",
 		due.EventID, due.UserID, due.Channel, due.OffsetMinutes, due.OccurrenceStart.Format("2006-01-02T15:04:05Z07:00"),
@@ -41,7 +43,7 @@ type NotificationInserter interface {
 // Channel (Email) isn't this dispatcher's concern and goes to Fallback —
 // LogDispatcher until the Email delivery ticket (#57) lands its own seam.
 //
-// A user who has opted a synced device into showing its own reminder
+// A recipient who has opted a synced device into showing its own reminder
 // pop-ups (SyncedDeviceRemindersEnabled, ADR-0027) also goes to Fallback for
 // the Notification channel: the device already fires its own alarm from the
 // synced VALARM, so inserting a second, server-side Notification would
@@ -49,40 +51,20 @@ type NotificationInserter interface {
 // competes for it.
 type NotificationDispatcher struct {
 	Notifications NotificationInserter
-	Users         UserLookup
 	Fallback      Dispatcher
 	Now           func() time.Time
 }
 
-func (d NotificationDispatcher) Dispatch(ctx context.Context, due DueReminder) error {
+func (d NotificationDispatcher) Dispatch(ctx context.Context, due DueReminder, recipient repository.User) error {
 	if due.Channel != "notification" {
-		return d.Fallback.Dispatch(ctx, due)
+		return d.Fallback.Dispatch(ctx, due, recipient)
+	}
+	if recipient.SyncedDeviceRemindersEnabled {
+		return d.Fallback.Dispatch(ctx, due, recipient)
 	}
 
-	user, err := d.Users.GetByID(ctx, due.UserID)
-	if err != nil {
-		return fmt.Errorf("get user: %w", err)
-	}
-	// A Disabled User receives no Reminders on any Channel (ADR-0037) — not
-	// even the LogDispatcher fallback, since that's still a delivery in
-	// spirit for a device that would otherwise show it.
-	if user.IsDisabled {
-		return nil
-	}
-	if user.SyncedDeviceRemindersEnabled {
-		return d.Fallback.Dispatch(ctx, due)
-	}
-
-	_, err = d.Notifications.Insert(ctx, due.UserID, due.EventID, due.OccurrenceStart, due.Title, d.Now())
+	_, err := d.Notifications.Insert(ctx, due.UserID, due.EventID, due.OccurrenceStart, due.Title, d.Now())
 	return err
-}
-
-// UserLookup resolves a Reminder's owning user — the Email-channel
-// dispatch seam needs it to find the recipient address (ADR-0021), and the
-// Notification-channel seam needs it to check the synced-device-reminders
-// toggle (ADR-0027). Satisfied by *repository.UserRepository.
-type UserLookup interface {
-	GetByID(ctx context.Context, id int64) (repository.User, error)
 }
 
 // Mailer sends a plain-text email — the Email-Channel delivery seam
@@ -92,40 +74,30 @@ type Mailer interface {
 }
 
 // EmailDispatcher delivers an Email-Channel Reminder by sending an email
-// naming the Event and its start time to the user's account address
+// naming the Event and its start time to the recipient's account address
 // (ADR-0021, #57); any other Channel (Notification) isn't this dispatcher's
 // concern and goes to Fallback.
 type EmailDispatcher struct {
-	Users    UserLookup
 	Mailer   Mailer
 	Fallback Dispatcher
 }
 
-func (d EmailDispatcher) Dispatch(ctx context.Context, due DueReminder) error {
+func (d EmailDispatcher) Dispatch(ctx context.Context, due DueReminder, recipient repository.User) error {
 	if due.Channel != "email" {
-		return d.Fallback.Dispatch(ctx, due)
-	}
-
-	user, err := d.Users.GetByID(ctx, due.UserID)
-	if err != nil {
-		return fmt.Errorf("get user: %w", err)
-	}
-	// A Disabled User receives no Reminders on any Channel (ADR-0037).
-	if user.IsDisabled {
-		return nil
+		return d.Fallback.Dispatch(ctx, due, recipient)
 	}
 
 	subject := fmt.Sprintf("Reminder: %s", due.Title)
-	body := fmt.Sprintf("%s starts at %s.", due.Title, due.OccurrenceStart.Format(emailTimeLayout(user.TimeFormat)))
-	return d.Mailer.Send(user.Email, subject, body)
+	body := fmt.Sprintf("%s starts at %s.", due.Title, due.OccurrenceStart.Format(emailTimeLayout(recipient.TimeFormat)))
+	return d.Mailer.Send(recipient.Email, subject, body)
 }
 
 // emailTimeLayout is time.RFC1123 with its hour segment swapped for the
 // recipient's Time format Preference (ADR-0039) — everything else (date,
 // zone) is unaffected; which zone the Email renders in is a separate,
-// pre-existing question this doesn't touch. user.TimeFormat is already on
-// hand from the GetByID lookup above, so this reads it for free rather than
-// issuing a second per-Email query.
+// pre-existing question this doesn't touch. The recipient is already on hand
+// from the tick's own batched lookup, so this reads their Preference for free
+// rather than issuing a per-Email query.
 func emailTimeLayout(timeFormat string) string {
 	if timeFormat == "12h" {
 		return "Mon, 02 Jan 2006 3:04:05 PM MST"

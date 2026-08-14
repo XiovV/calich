@@ -10,11 +10,22 @@ import (
 )
 
 // EventLister is the scheduler's read path: every Event across every user that
-// fires at least one Reminder, and the resolution naming who fires each of them
-// (ADR-0021, ADR-0064). Satisfied by *service.EventService, whose resolution is
-// the same one every other read path goes through (#216).
+// could fire a Reminder in the tick's own window, and the resolution naming who
+// fires each of them (ADR-0021, ADR-0064). Satisfied by *service.EventService,
+// whose resolution is the same one every other read path goes through (#216)
+// and which widens the window by the offsets in play before reading, since only
+// it can see them (#219).
 type EventLister interface {
-	ListAllWithReminders(ctx context.Context) ([]repository.Event, repository.ResolvedReminders, error)
+	ListAllWithReminders(ctx context.Context, from, to time.Time) ([]repository.Event, repository.ResolvedReminders, error)
+}
+
+// RecipientLookup resolves the Users a tick's due Reminders belong to, in one
+// read for the whole tick rather than one per Reminder (#219). A recipient is
+// what ADR-0037's Disabled suppression is read off, what the Notification
+// channel checks ADR-0027's synced-device opt-in on, and what the Email channel
+// addresses and renders its times for. Satisfied by *repository.UserRepository.
+type RecipientLookup interface {
+	GetByIDs(ctx context.Context, ids []int64) (map[int64]repository.User, error)
 }
 
 // Ledger is the scheduler's exactly-once seam. Satisfied by
@@ -43,6 +54,7 @@ type Ledger interface {
 type Scheduler struct {
 	events     EventLister
 	ledger     Ledger
+	recipients RecipientLookup
 	dispatcher Dispatcher
 	now        func() time.Time
 	lastTick   time.Time
@@ -51,10 +63,11 @@ type Scheduler struct {
 // NewScheduler constructs a Scheduler whose window starts at construction
 // time — the first call to Tick only considers Reminders due after this
 // moment.
-func NewScheduler(events EventLister, ledger Ledger, dispatcher Dispatcher, now func() time.Time) *Scheduler {
+func NewScheduler(events EventLister, ledger Ledger, recipients RecipientLookup, dispatcher Dispatcher, now func() time.Time) *Scheduler {
 	return &Scheduler{
 		events:     events,
 		ledger:     ledger,
+		recipients: recipients,
 		dispatcher: dispatcher,
 		now:        now,
 		lastTick:   now(),
@@ -71,7 +84,7 @@ func NewScheduler(events EventLister, ledger Ledger, dispatcher Dispatcher, now 
 func (s *Scheduler) Tick(ctx context.Context) error {
 	from, to := s.lastTick, s.now()
 
-	events, resolved, err := s.events.ListAllWithReminders(ctx)
+	events, resolved, err := s.events.ListAllWithReminders(ctx, from, to)
 	if err != nil {
 		return fmt.Errorf("list events with reminders: %w", err)
 	}
@@ -79,6 +92,11 @@ func (s *Scheduler) Tick(ctx context.Context) error {
 	due, err := DueAll(events, resolved, from, to)
 	if err != nil {
 		return fmt.Errorf("compute due reminders: %w", err)
+	}
+
+	recipients, err := s.recipients.GetByIDs(ctx, recipientIDs(due))
+	if err != nil {
+		return fmt.Errorf("look up reminder recipients: %w", err)
 	}
 
 	for _, d := range due {
@@ -101,16 +119,47 @@ func (s *Scheduler) Tick(ctx context.Context) error {
 			// via the persisted ledger) — the exactly-once guarantee.
 			continue
 		}
+		recipient, ok := recipients[d.UserID]
+		if !ok {
+			// The User went away between the resolution read and this
+			// lookup: there is nobody left to deliver to.
+			log.Printf("dispatch reminder (event=%s user=%d): no such user", d.EventID, d.UserID)
+			continue
+		}
+		// A Disabled User receives no Reminders on any Channel (ADR-0037) —
+		// not even the LogDispatcher fallback, since that's still a delivery
+		// in spirit for a device that would otherwise show it. Applied here,
+		// once, ahead of the whole chain, rather than by each Dispatcher
+		// answering it for itself.
+		if recipient.IsDisabled {
+			continue
+		}
 		// The ledger entry is already committed before dispatch, so a
 		// dispatch failure is logged, not retried — this ticket's
 		// Dispatcher is a no-op/log sink; real delivery's own retry
 		// behavior (if any) is that seam's concern (#56, #57).
-		if err := s.dispatcher.Dispatch(ctx, d); err != nil {
+		if err := s.dispatcher.Dispatch(ctx, d, recipient); err != nil {
 			log.Printf("dispatch reminder (event=%s reminder=%d): %v", d.EventID, d.ReminderID, err)
 		}
 	}
 	s.lastTick = to
 	return nil
+}
+
+// recipientIDs is the distinct set of Users a tick's due Reminders belong to,
+// so a tick costs one User read per recipient rather than one per Reminder
+// (#219) — forty Reminders across four Users is four Users' worth of lookup.
+func recipientIDs(due []DueReminder) []int64 {
+	seen := make(map[int64]bool, len(due))
+	ids := make([]int64, 0, len(due))
+	for _, d := range due {
+		if seen[d.UserID] {
+			continue
+		}
+		seen[d.UserID] = true
+		ids = append(ids, d.UserID)
+	}
+	return ids
 }
 
 // Run ticks every interval until ctx is cancelled.
