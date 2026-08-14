@@ -350,10 +350,13 @@ func (s *EventService) GetReminders(ctx context.Context, userID int64, eventID s
 
 // SetReminders replaces userID's own Reminders on eventID wholesale
 // (ADR-0020, ADR-0064) — a Reminder is personal outright, so this never
-// touches another User's rows on the same Event, its title, or its change
-// sequence. Still Editor-gated at this stage (requireWritableCalendar) —
-// #211 opens this to a Viewer/Attendee with no write Access to the Event
-// itself.
+// touches another User's rows on the same Event, its title, or its
+// SEQUENCE (no Invitation is re-sent, ADR-0059). It does bump eventID's own
+// change_seq, so a per-principal CalDAV object (#210) reaches the caller's
+// other devices on their next sync — and only theirs, since a CTag bump is
+// still shared by the whole Calendar (ADR-0064's accepted CTag waste).
+// Still Editor-gated at this stage (requireWritableCalendar) — #211 opens
+// this to a Viewer/Attendee with no write Access to the Event itself.
 func (s *EventService) SetReminders(ctx context.Context, userID int64, eventID string, reminders []repository.Reminder) ([]repository.Reminder, error) {
 	if err := validateReminders(reminders); err != nil {
 		return nil, err
@@ -369,6 +372,9 @@ func (s *EventService) SetReminders(ctx context.Context, userID int64, eventID s
 
 	if err := s.reminders.ReplaceByEventID(ctx, userID, eventID, reminders); err != nil {
 		return nil, fmt.Errorf("set reminders: %w", err)
+	}
+	if err := s.TouchChangeSeq(ctx, eventID); err != nil {
+		return nil, fmt.Errorf("bump change seq: %w", err)
 	}
 	return reminders, nil
 }
@@ -860,7 +866,7 @@ func (s *EventService) attachExdates(ctx context.Context, events []repository.Ev
 }
 
 // attachExdatesTo fills in Exdates on rows that need not be contiguous in
-// memory, mirroring attachRemindersTo.
+// memory, mirroring attachViewerRemindersTo.
 func (s *EventService) attachExdatesTo(ctx context.Context, events []*repository.Event) error {
 	ids := make([]string, len(events))
 	for i, e := range events {
@@ -880,7 +886,7 @@ func (s *EventService) attachExdatesTo(ctx context.Context, events []*repository
 
 // attachCreatedByNames fills in CreatedByName on events whose
 // CreatedBy is set (#118), batching one query across every distinct creator
-// rather than one per Event — the same shape as attachReminders and
+// rather than one per Event — the same shape as attachViewerReminders and
 // attachExdates. An Event whose creator has since been deleted, or with no
 // recorded creator at all, is simply left with an empty
 // CreatedByName.
@@ -929,50 +935,6 @@ func (s *EventService) attachAttendeeCounts(ctx context.Context, events []reposi
 	return nil
 }
 
-// attachReminders is attachRemindersTo for a contiguous slice. calendarOwners
-// names each event's Calendar's Owner, keyed by CalendarID — see
-// attachRemindersTo.
-func (s *EventService) attachReminders(ctx context.Context, events []repository.Event, calendarOwners map[string]int64) error {
-	pointers := make([]*repository.Event, len(events))
-	for i := range events {
-		pointers[i] = &events[i]
-	}
-	return s.attachRemindersTo(ctx, pointers, calendarOwners)
-}
-
-// attachRemindersTo fills in Reminders on rows that need not be contiguous in
-// memory — a series spans one slice for its Master and another for its
-// Overrides — while still batching one lookup per distinct Owner across all
-// of them. Every Reminder read scopes to the Calendar's Owner (ADR-0064 step
-// one, #208): calendarOwners is CalendarID -> Owner id, resolved by the
-// caller (calendarOwnersForEvents, or a single-Calendar map built inline
-// where every event shares one Calendar) since a batch spanning many
-// Calendars — List's "everything I can see" — can carry as many distinct
-// Owners.
-func (s *EventService) attachRemindersTo(ctx context.Context, events []*repository.Event, calendarOwners map[string]int64) error {
-	idsByOwner := make(map[int64][]string)
-	for _, e := range events {
-		owner := calendarOwners[e.CalendarID]
-		idsByOwner[owner] = append(idsByOwner[owner], e.ID)
-	}
-
-	remindersByEvent := make(map[string][]repository.Reminder)
-	for owner, ids := range idsByOwner {
-		byEvent, err := s.reminders.ListByEventIDs(ctx, owner, ids)
-		if err != nil {
-			return fmt.Errorf("list reminders: %w", err)
-		}
-		for id, rs := range byEvent {
-			remindersByEvent[id] = rs
-		}
-	}
-
-	for _, e := range events {
-		e.Reminders = remindersByEvent[e.ID]
-	}
-	return nil
-}
-
 // attachViewerReminders is attachViewerRemindersTo for a contiguous slice.
 func (s *EventService) attachViewerReminders(ctx context.Context, events []repository.Event, viewerID int64) error {
 	pointers := make([]*repository.Event, len(events))
@@ -983,10 +945,9 @@ func (s *EventService) attachViewerReminders(ctx context.Context, events []repos
 }
 
 // attachViewerRemindersTo fills in Reminders on events with viewerID's own
-// rows (ADR-0064) — List and Get's read path, one User viewing everything
-// they can see, so unlike attachRemindersTo there is only ever one User to
-// scope the lookup to, regardless of how many distinct Calendars/Owners
-// events itself spans.
+// rows (ADR-0064) — every series read path's Reminder step, one User asking
+// for a set of Events, so there is only ever one User to scope the lookup
+// to, regardless of how many distinct Calendars/Owners events itself spans.
 func (s *EventService) attachViewerRemindersTo(ctx context.Context, events []*repository.Event, viewerID int64) error {
 	ids := make([]string, len(events))
 	for i, e := range events {
@@ -1003,45 +964,11 @@ func (s *EventService) attachViewerRemindersTo(ctx context.Context, events []*re
 	return nil
 }
 
-// calendarOwnersForEvents resolves each of events' Calendar's Owner id,
-// keyed by CalendarID — the map attachReminders/attachRemindersTo scope
-// their read through (ADR-0064 step one, #208). known is the caller's own
-// resolved Access set, reused to avoid a second lookup, mirroring
-// attachCalendarMeta; any Calendar missing from it — an Attendee-only Event
-// with no Calendar Access of its own (ADR-0046) — is resolved with one
-// batched, access-unchecked fallback query.
-func (s *EventService) calendarOwnersForEvents(ctx context.Context, events []repository.Event, known map[string]CalendarWithAccess) (map[string]int64, error) {
-	owners := make(map[string]int64, len(known))
-	for id, c := range known {
-		owners[id] = c.UserID
-	}
-
-	var missing []string
-	seen := make(map[string]bool)
-	for _, e := range events {
-		if _, ok := owners[e.CalendarID]; ok || seen[e.CalendarID] {
-			continue
-		}
-		seen[e.CalendarID] = true
-		missing = append(missing, e.CalendarID)
-	}
-	if len(missing) > 0 {
-		fetched, err := s.calendars.OwnerIDsByCalendarIDs(ctx, missing)
-		if err != nil {
-			return nil, fmt.Errorf("resolve calendar owners: %w", err)
-		}
-		for id, ownerID := range fetched {
-			owners[id] = ownerID
-		}
-	}
-	return owners, nil
-}
-
 // attachAttachments fills in Attachments on each Master in events (an
 // Override is left with none — it can never carry its own, ADR-0040),
 // plus UploadedByName on each of them, batching one Attachment lookup
 // and one user lookup across every Event rather than one per Event, the
-// same shape as attachReminders and attachCreatedByNames.
+// same shape as attachViewerReminders and attachCreatedByNames.
 func (s *EventService) attachAttachments(ctx context.Context, events []repository.Event) error {
 	masterIDs := make([]string, 0, len(events))
 	for _, e := range events {
@@ -1088,7 +1015,7 @@ func (s *EventService) attachAttachments(ctx context.Context, events []repositor
 
 // attachOrganizersAndAttendees is attachOrganizersAndAttendeesTo for a
 // contiguous slice — the value-slice convenience wrapper hydrateSeries uses,
-// mirroring attachReminders/attachRemindersTo's split.
+// mirroring attachViewerReminders/attachViewerRemindersTo's split.
 func (s *EventService) attachOrganizersAndAttendees(ctx context.Context, events []repository.Event) error {
 	pointers := make([]*repository.Event, len(events))
 	for i := range events {
@@ -1102,7 +1029,7 @@ func (s *EventService) attachOrganizersAndAttendees(ctx context.Context, events 
 // query across all of them rather than one per Event — the CalDAV/ICS
 // codec's read path (ADR-0062), which needs the mailto addresses
 // attachCreatedByNames and attachAttendeeCounts don't carry. Scoped per
-// Event row like attachRemindersTo: a Master and each of its Overrides can
+// Event row like attachViewerRemindersTo: a Master and each of its Overrides can
 // each carry their own Attendees and their own Organizer (#193, ADR-0055).
 func (s *EventService) attachOrganizersAndAttendeesTo(ctx context.Context, events []*repository.Event) error {
 	ids := make([]string, 0, len(events))
@@ -1786,7 +1713,7 @@ func (s *EventService) GetSeries(ctx context.Context, userID int64, masterID str
 		return repository.Event{}, nil, fmt.Errorf("list overrides: %w", err)
 	}
 
-	return s.hydrateSeries(ctx, master, overridesByParent[masterID])
+	return s.hydrateSeries(ctx, userID, master, overridesByParent[masterID])
 }
 
 // hydrateSeries attaches Exdates to master, then Reminders, Attachments, and
@@ -1794,23 +1721,17 @@ func (s *EventService) GetSeries(ctx context.Context, userID int64, masterID str
 // returning master then overrides — the tail GetSeries and
 // GetAttendeeOnlySeries share once each has resolved masterID and confirmed
 // the caller's own visibility to it (Calendar Access, or Attendee —
-// ADR-0046).
-func (s *EventService) hydrateSeries(ctx context.Context, master repository.Event, overrides []repository.Event) (repository.Event, []repository.Event, error) {
+// ADR-0046). userID is whoever is asking, so Reminders resolve to their own
+// rows, not the Calendar's Owner's (ADR-0064).
+func (s *EventService) hydrateSeries(ctx context.Context, userID int64, master repository.Event, overrides []repository.Event) (repository.Event, []repository.Event, error) {
 	masters := []repository.Event{master}
 	if err := s.attachExdates(ctx, masters); err != nil {
 		return repository.Event{}, nil, err
 	}
 	master = masters[0]
 
-	// Every Event in a series shares its Master's Calendar, so one Owner
-	// lookup covers the whole series (ADR-0064 step one, #208).
-	ownerID, err := s.reminderOwnerID(ctx, master.CalendarID)
-	if err != nil {
-		return repository.Event{}, nil, err
-	}
-
 	all := append([]repository.Event{master}, overrides...)
-	if err := s.attachReminders(ctx, all, map[string]int64{master.CalendarID: ownerID}); err != nil {
+	if err := s.attachViewerReminders(ctx, all, userID); err != nil {
 		return repository.Event{}, nil, err
 	}
 	if err := s.attachAttachments(ctx, all); err != nil {
@@ -1927,7 +1848,7 @@ func isOccurrenceStart(master repository.Event, occurrenceStart time.Time) (bool
 // Overrides (each with its own Reminders attached) — CalDAV's per-calendar
 // object listing (ADR-0025).
 func (s *EventService) ListSeriesByCalendar(ctx context.Context, userID int64, calendarID string) ([]repository.Event, map[string][]repository.Event, error) {
-	calendar, err := s.calendarByID(ctx, userID, calendarID)
+	_, err := s.calendarByID(ctx, userID, calendarID)
 	if err != nil {
 		if errors.Is(err, ErrCalendarNotFound) {
 			return []repository.Event{}, map[string][]repository.Event{}, nil
@@ -1943,7 +1864,7 @@ func (s *EventService) ListSeriesByCalendar(ctx context.Context, userID int64, c
 		return nil, nil, err
 	}
 
-	overridesByParent, err := s.attachOverridesAndReminders(ctx, masters, map[string]int64{calendarID: calendar.UserID})
+	overridesByParent, err := s.attachOverridesAndReminders(ctx, masters, userID)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -2008,14 +1929,7 @@ func (s *EventService) ListAttendeeOnlySeries(ctx context.Context, userID int64)
 	if err := s.attachExdates(ctx, masters); err != nil {
 		return nil, nil, err
 	}
-	// userID has no Access to any of masters' Calendars (that's this whole
-	// method's premise), so calendarOwnersForEvents' known set is empty —
-	// every Owner comes from its access-unchecked fallback fetch.
-	calendarOwners, err := s.calendarOwnersForEvents(ctx, masters, nil)
-	if err != nil {
-		return nil, nil, err
-	}
-	overridesByParent, err := s.attachOverridesAndReminders(ctx, masters, calendarOwners)
+	overridesByParent, err := s.attachOverridesAndReminders(ctx, masters, userID)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -2079,7 +1993,7 @@ func (s *EventService) GetAttendeeOnlySeries(ctx context.Context, userID int64, 
 		return repository.Event{}, nil, repository.ErrNotFound
 	}
 
-	return s.hydrateSeries(ctx, master, overrides)
+	return s.hydrateSeries(ctx, userID, master, overrides)
 }
 
 // attachOverridesAndReminders loads each of masters' Overrides and attaches
@@ -2087,12 +2001,9 @@ func (s *EventService) GetAttendeeOnlySeries(ctx context.Context, userID int64, 
 // their Overrides in place, returning a parentID-keyed map of the
 // Overrides. Shared by every read path that recomposes whole series —
 // ListSeriesByCalendar, ListAttendeeOnlySeries and SyncSince (ADR-0025,
-// ADR-0062). Callers have already checked the caller's Access to masters'
-// Calendar, so this needs no userID of its own. calendarOwners names each of
-// masters' Calendar's Owner, keyed by CalendarID — an Override always shares
-// its Master's CalendarID, so resolving it once per Master covers its
-// Overrides too (ADR-0064 step one, #208).
-func (s *EventService) attachOverridesAndReminders(ctx context.Context, masters []repository.Event, calendarOwners map[string]int64) (map[string][]repository.Event, error) {
+// ADR-0062). viewerID is whoever is asking, so Reminders resolve to their
+// own rows rather than the Calendar's Owner's (ADR-0064).
+func (s *EventService) attachOverridesAndReminders(ctx context.Context, masters []repository.Event, viewerID int64) (map[string][]repository.Event, error) {
 	masterIDs := eventIDs(masters)
 	overridesByParent, err := s.events.ListChildrenByParentIDs(ctx, masterIDs)
 	if err != nil {
@@ -2112,7 +2023,7 @@ func (s *EventService) attachOverridesAndReminders(ctx context.Context, masters 
 			all = append(all, &overrides[i])
 		}
 	}
-	if err := s.attachRemindersTo(ctx, all, calendarOwners); err != nil {
+	if err := s.attachViewerRemindersTo(ctx, all, viewerID); err != nil {
 		return nil, err
 	}
 	if err := s.attachOrganizersAndAttendeesTo(ctx, all); err != nil {
@@ -2137,7 +2048,7 @@ type SyncResult struct {
 // and the calendar's current CTag as the new sync-token. sinceToken of 0
 // returns every live series, matching an initial sync (ADR-0025, #65).
 func (s *EventService) SyncSince(ctx context.Context, userID int64, calendarID string, sinceToken int64) (SyncResult, error) {
-	calendar, err := s.calendarByID(ctx, userID, calendarID)
+	_, err := s.calendarByID(ctx, userID, calendarID)
 	if err != nil {
 		if errors.Is(err, ErrCalendarNotFound) {
 			return SyncResult{}, nil
@@ -2153,7 +2064,7 @@ func (s *EventService) SyncSince(ctx context.Context, userID int64, calendarID s
 		return SyncResult{}, err
 	}
 
-	overridesByParent, err := s.attachOverridesAndReminders(ctx, masters, map[string]int64{calendarID: calendar.UserID})
+	overridesByParent, err := s.attachOverridesAndReminders(ctx, masters, userID)
 	if err != nil {
 		return SyncResult{}, err
 	}
@@ -2549,12 +2460,6 @@ func (s *EventService) PutSeries(ctx context.Context, userID int64, calendarID, 
 	if err := s.requireWritableCalendar(ctx, userID, calendarID); err != nil {
 		return repository.Event{}, nil, err
 	}
-	// Every Reminder write names the Calendar's Owner, not the PUTting User
-	// (ADR-0064 step one, #208) — identical to every other write path here.
-	ownerID, err := s.reminderOwnerID(ctx, calendarID)
-	if err != nil {
-		return repository.Event{}, nil, err
-	}
 
 	existingMaster, err := s.getOwnedEvent(ctx, userID, masterID)
 	masterExists := err == nil
@@ -2612,7 +2517,9 @@ func (s *EventService) PutSeries(ctx context.Context, userID int64, calendarID, 
 				return fmt.Errorf("create master: %w", err)
 			}
 		}
-		if err := repos.reminders.ReplaceByEventID(ctx, ownerID, masterID, write.Reminders); err != nil {
+		// A PUT's VALARMs write the PUTting User's Reminders, not the
+		// Calendar's Owner's (ADR-0064).
+		if err := repos.reminders.ReplaceByEventID(ctx, userID, masterID, write.Reminders); err != nil {
 			return fmt.Errorf("persist master reminders: %w", err)
 		}
 
@@ -2650,7 +2557,7 @@ func (s *EventService) PutSeries(ctx context.Context, userID int64, calendarID, 
 				if _, err := repos.events.Update(ctx, existing.ID, override, seq, existing.Sequence); err != nil {
 					return fmt.Errorf("update override: %w", err)
 				}
-				if err := repos.reminders.ReplaceByEventID(ctx, ownerID, existing.ID, o.Reminders); err != nil {
+				if err := repos.reminders.ReplaceByEventID(ctx, userID, existing.ID, o.Reminders); err != nil {
 					return fmt.Errorf("persist override reminders: %w", err)
 				}
 				continue
@@ -2663,7 +2570,7 @@ func (s *EventService) PutSeries(ctx context.Context, userID int64, calendarID, 
 			if _, err := repos.events.Create(ctx, overrideID, &userID, override, seq); err != nil {
 				return fmt.Errorf("create override: %w", err)
 			}
-			if err := repos.reminders.ReplaceByEventID(ctx, ownerID, overrideID, o.Reminders); err != nil {
+			if err := repos.reminders.ReplaceByEventID(ctx, userID, overrideID, o.Reminders); err != nil {
 				return fmt.Errorf("persist override reminders: %w", err)
 			}
 		}

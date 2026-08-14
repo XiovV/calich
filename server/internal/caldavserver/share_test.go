@@ -2,8 +2,9 @@
 // a Share (ADR-0034): it appears in the accessor's own calendar-home-set at
 // their own principal path (ADR-0035), advertises read-only privileges for
 // a Viewer and read-write for an Editor, refuses a Viewer's writes outright
-// rather than merely discouraging them, and serves byte-identical objects to
-// every principal with Access (ADR-0036).
+// rather than merely discouraging them, and — since neither principal has
+// Reminders of their own by default (ADR-0064) — serves byte-identical
+// objects to every principal with Access until one of them sets a Reminder.
 package caldavserver
 
 import (
@@ -283,12 +284,14 @@ func TestSharedCalendar_ObjectBytesIdenticalForOwnerAndEditor(t *testing.T) {
 	}
 }
 
-// TestSharedCalendar_ObjectBytesUnchangedByEditorsOwnReminders is #209's
-// CalDAV boundary (ADR-0064): CalDAV still serves the Calendar Owner's rows
-// to every principal, byte for byte, until #210 — an Editor's own personal
-// Reminders (SetReminders, not the Event write) leave the Calendar object
-// CalDAV serves them, and everyone else, completely unchanged.
-func TestSharedCalendar_ObjectBytesUnchangedByEditorsOwnReminders(t *testing.T) {
+// TestSharedCalendar_ObjectServesEachPrincipalsOwnReminders is #210's CalDAV
+// boundary (ADR-0064): a GET of a shared Calendar object carries the
+// requesting principal's own Reminders as VALARMs, not the Calendar Owner's
+// — the Owner's reminder on a shared Event reaches nobody else's phone, the
+// Editor's own reminder (SetReminders, not the Event write) never touches
+// the Owner's object, and the two principals' bytes (and ETags) diverge
+// exactly where their Reminders do.
+func TestSharedCalendar_ObjectServesEachPrincipalsOwnReminders(t *testing.T) {
 	env := newTestCalDAVEnv(t)
 	editorID, editorSecret := env.addSharedUser(t, "editor", repository.RoleEditor)
 
@@ -312,6 +315,9 @@ func TestSharedCalendar_ObjectBytesUnchangedByEditorsOwnReminders(t *testing.T) 
 	if err := ical.NewEncoder(&beforeBuf).Encode(before.Data); err != nil {
 		t.Fatalf("encode object before own reminders: %v", err)
 	}
+	if strings.Contains(beforeBuf.String(), "VALARM") {
+		t.Fatalf("expected the editor with no Reminders of their own to see no VALARM, got:\n%s", beforeBuf.String())
+	}
 
 	if _, err := env.eventService.SetReminders(context.Background(), editorID, created.ID, []repository.Reminder{{OffsetMinutes: 120, Channel: "email"}}); err != nil {
 		t.Fatalf("editor set reminders: %v", err)
@@ -325,11 +331,14 @@ func TestSharedCalendar_ObjectBytesUnchangedByEditorsOwnReminders(t *testing.T) 
 	if err := ical.NewEncoder(&editorAfterBuf).Encode(editorAfter.Data); err != nil {
 		t.Fatalf("encode editor object after own reminders: %v", err)
 	}
-	if beforeBuf.String() != editorAfterBuf.String() {
-		t.Fatalf("expected the editor's own reminders not to change their object bytes, got:\nbefore:\n%s\nafter:\n%s", beforeBuf.String(), editorAfterBuf.String())
+	if !strings.Contains(editorAfterBuf.String(), "TRIGGER:-PT7200S") {
+		t.Fatalf("expected the editor's own reminder (120 minutes) as a VALARM, got:\n%s", editorAfterBuf.String())
 	}
-	if before.ETag != editorAfter.ETag {
-		t.Fatalf("expected the editor's own reminders not to change the ETag, got %q vs %q", before.ETag, editorAfter.ETag)
+	if beforeBuf.String() == editorAfterBuf.String() {
+		t.Fatalf("expected the editor's own reminders to change their object bytes")
+	}
+	if before.ETag == editorAfter.ETag {
+		t.Fatalf("expected the editor's own reminders to change their ETag")
 	}
 
 	ownerClient := newTestCalDAVClient(t, env)
@@ -341,8 +350,14 @@ func TestSharedCalendar_ObjectBytesUnchangedByEditorsOwnReminders(t *testing.T) 
 	if err := ical.NewEncoder(&ownerBuf).Encode(ownerObj.Data); err != nil {
 		t.Fatalf("encode owner object: %v", err)
 	}
-	if ownerBuf.String() != editorAfterBuf.String() {
-		t.Fatalf("expected the owner's object to stay byte-identical to the editor's, got:\nowner:\n%s\neditor:\n%s", ownerBuf.String(), editorAfterBuf.String())
+	if !strings.Contains(ownerBuf.String(), "TRIGGER:-PT600S") {
+		t.Fatalf("expected the owner to still see their own reminder (10 minutes), unaffected by the editor's, got:\n%s", ownerBuf.String())
+	}
+	if ownerBuf.String() == editorAfterBuf.String() {
+		t.Fatalf("expected the owner's object to diverge from the editor's — each carries only their own Reminders")
+	}
+	if ownerObj.ETag == editorAfter.ETag {
+		t.Fatalf("expected the owner's ETag to diverge from the editor's")
 	}
 }
 

@@ -502,31 +502,16 @@ func (s *CalendarService) AttendeeCalendarMetaByIDs(ctx context.Context, ids []s
 }
 
 // OwnerID resolves calendarID's Owner id, access-unchecked like
-// AttendeeCalendarMetaByIDs — every Reminder read and write scopes to the
-// Calendar's Owner (ADR-0064 step one, #208), and every caller reaching this
-// has already established its own Access to calendarID some other way.
+// AttendeeCalendarMetaByIDs — a Source's own Reminders (a Subscription's
+// kept alarms, a Linked Calendar) still scope to the Calendar's Owner
+// (ADR-0064), and every caller reaching this has already established its
+// own Access to calendarID some other way.
 func (s *CalendarService) OwnerID(ctx context.Context, calendarID string) (int64, error) {
 	calendar, err := s.calendars.GetByIDAny(ctx, calendarID)
 	if err != nil {
 		return 0, err
 	}
 	return calendar.UserID, nil
-}
-
-// OwnerIDsByCalendarIDs is OwnerID's batched sibling, mirroring
-// AttendeeCalendarMetaByIDs — every one of ids' Calendar Owner ids in one
-// query, for a Reminder read spanning many Calendars at once (List,
-// ListAttendeeOnlySeries). A missing id is simply absent from the result.
-func (s *CalendarService) OwnerIDsByCalendarIDs(ctx context.Context, ids []string) (map[string]int64, error) {
-	calendars, err := s.calendars.ListByIDsAny(ctx, ids)
-	if err != nil {
-		return nil, err
-	}
-	result := make(map[string]int64, len(calendars))
-	for _, c := range calendars {
-		result[c.ID] = c.UserID
-	}
-	return result, nil
 }
 
 // derefRole returns "" for a nil role, the empty string roleAccess already

@@ -36,6 +36,37 @@ type icsTestEnv struct {
 	calendars      *service.CalendarService
 	attachments    *service.AttachmentService
 	attachmentRepo *repository.AttachmentRepository
+	auth           *service.AuthService
+	workspaceRepo  *repository.WorkspaceRepository
+}
+
+// addSharedUser registers a new User, adds them to the fixture's Workspace
+// (a Share can only reach a Workspace member, #159/ADR-0045), shares
+// env.calendarID with them at role, and returns their id and access token
+// for exercising the export endpoints as them.
+func (env icsTestEnv) addSharedUser(t *testing.T, name, role string) (userID int64, accessToken string) {
+	t.Helper()
+	ctx := context.Background()
+	email := name + "@example.com"
+
+	if _, err := env.auth.Register(ctx, name, email, "temp-password"); err != nil {
+		t.Fatalf("register %s: %v", name, err)
+	}
+	login, err := env.auth.Login(ctx, email, "temp-password")
+	if err != nil {
+		t.Fatalf("login %s: %v", name, err)
+	}
+	userID, err = env.auth.Authenticate(ctx, login.AccessToken)
+	if err != nil {
+		t.Fatalf("authenticate %s: %v", name, err)
+	}
+	if err := env.workspaceRepo.AddMember(ctx, env.workspaceID, userID, repository.WorkspaceRoleMember); err != nil {
+		t.Fatalf("add %s as workspace member: %v", name, err)
+	}
+	if _, _, err := env.calendars.Share(ctx, env.userID, env.calendarID, email, role); err != nil {
+		t.Fatalf("share calendar with %s: %v", name, err)
+	}
+	return userID, login.AccessToken
 }
 
 func newICSTestEnv(t *testing.T) icsTestEnv {
@@ -53,7 +84,7 @@ func newICSTestEnv(t *testing.T) icsTestEnv {
 	workspaces := service.NewWorkspaceService(sqlDB, workspaceRepo, repository.NewWorkspaceInviteRepository(sqlDB), repository.NewCalendarRepository(sqlDB), repository.NewCalendarShareRepository(sqlDB))
 	calendarRepo := repository.NewCalendarRepository(sqlDB)
 	calendars := service.NewCalendarService(calendarRepo, repository.NewCalendarShareRepository(sqlDB), users, repository.NewEventReminderRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo, repository.NewCalendarGroupShareRepository(sqlDB), repository.NewGroupRepository(sqlDB))
-	auth := service.NewAuthService(users, sessions, workspaces, repository.NewWorkspaceInviteRepository(sqlDB), calendars, repository.NewAttendeeRepository(sqlDB), []byte("test-secret"), "alice", "alice@example.com", "hunter2", false)
+	auth := service.NewAuthService(users, sessions, workspaces, repository.NewWorkspaceInviteRepository(sqlDB), calendars, repository.NewAttendeeRepository(sqlDB), []byte("test-secret"), "alice", "alice@example.com", "hunter2", true)
 	bootstrapUser, _, err := auth.Bootstrap(context.Background())
 	if err != nil {
 		t.Fatalf("bootstrap: %v", err)
@@ -106,16 +137,23 @@ func newICSTestEnv(t *testing.T) icsTestEnv {
 	srv := httptest.NewServer(r)
 	t.Cleanup(srv.Close)
 
-	return icsTestEnv{baseURL: srv.URL, accessToken: loginResult.AccessToken, calendarID: cal.ID, userID: userID, workspaceID: workspaceID, events: events, calendars: calendars, attachments: attachments, attachmentRepo: attachmentRepo}
+	return icsTestEnv{baseURL: srv.URL, accessToken: loginResult.AccessToken, calendarID: cal.ID, userID: userID, workspaceID: workspaceID, events: events, calendars: calendars, attachments: attachments, attachmentRepo: attachmentRepo, auth: auth, workspaceRepo: workspaceRepo}
 }
 
 func (env icsTestEnv) get(t *testing.T, path string) *http.Response {
+	t.Helper()
+	return env.getAs(t, path, env.accessToken)
+}
+
+// getAs is get generalized to any principal's access token, so a shared
+// User distinct from the fixture's Owner can be exercised.
+func (env icsTestEnv) getAs(t *testing.T, path, accessToken string) *http.Response {
 	t.Helper()
 	req, err := http.NewRequest(http.MethodGet, env.baseURL+path, nil)
 	if err != nil {
 		t.Fatalf("build request: %v", err)
 	}
-	req.Header.Set("Authorization", "Bearer "+env.accessToken)
+	req.Header.Set("Authorization", "Bearer "+accessToken)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatalf("get %s: %v", path, err)
@@ -368,6 +406,56 @@ func TestCalendarHandler_ICS_EmitsNameColorAndEverySeries(t *testing.T) {
 	}
 	if countOccurrences(text, "BEGIN:VEVENT") != 2 {
 		t.Fatalf("expected both series, got:\n%s", text)
+	}
+}
+
+// TestCalendarHandler_ICS_SharedUserExportServesTheirOwnReminders is #210's
+// export boundary (ADR-0064): downloading a shared Calendar's .ics carries
+// the downloading User's own Reminders, not the Owner's — an Editor's
+// export never carries the Owner's VALARM, and the Owner's own export is
+// left untouched by the Editor's Reminder.
+func TestCalendarHandler_ICS_SharedUserExportServesTheirOwnReminders(t *testing.T) {
+	env := newICSTestEnv(t)
+	ctx := context.Background()
+	_, editorToken := env.addSharedUser(t, "editor", repository.RoleEditor)
+
+	start := time.Date(2026, 6, 2, 9, 0, 0, 0, time.UTC)
+	end := time.Date(2026, 6, 2, 9, 30, 0, 0, time.UTC)
+	created, err := env.events.Create(ctx, env.userID, "evt-1", service.EventWrite{CalendarID: env.calendarID, Title: "Bin day", Start: start, End: end})
+	if err != nil {
+		t.Fatalf("create event: %v", err)
+	}
+	if _, err := env.events.SetReminders(ctx, env.userID, created.ID, []repository.Reminder{{OffsetMinutes: 10, Channel: "notification"}}); err != nil {
+		t.Fatalf("owner set reminders: %v", err)
+	}
+	editorID, err := env.auth.Authenticate(ctx, editorToken)
+	if err != nil {
+		t.Fatalf("authenticate editor: %v", err)
+	}
+	if _, err := env.events.SetReminders(ctx, editorID, created.ID, []repository.Reminder{{OffsetMinutes: 120, Channel: "email"}}); err != nil {
+		t.Fatalf("editor set reminders: %v", err)
+	}
+
+	ownerResp := env.get(t, "/api/calendars/"+env.calendarID+"/ics")
+	defer ownerResp.Body.Close()
+	ownerBody, _ := io.ReadAll(ownerResp.Body)
+	ownerText := string(ownerBody)
+	if !strings.Contains(ownerText, "TRIGGER:-PT600S") {
+		t.Fatalf("expected the owner's export to carry the owner's own 10-minute reminder, got:\n%s", ownerText)
+	}
+	if strings.Contains(ownerText, "TRIGGER:-PT7200S") {
+		t.Fatalf("expected the owner's export not to carry the editor's reminder, got:\n%s", ownerText)
+	}
+
+	editorResp := env.getAs(t, "/api/calendars/"+env.calendarID+"/ics", editorToken)
+	defer editorResp.Body.Close()
+	editorBody, _ := io.ReadAll(editorResp.Body)
+	editorText := string(editorBody)
+	if !strings.Contains(editorText, "TRIGGER:-PT7200S") {
+		t.Fatalf("expected the editor's export to carry the editor's own 120-minute reminder, got:\n%s", editorText)
+	}
+	if strings.Contains(editorText, "TRIGGER:-PT600S") {
+		t.Fatalf("expected the editor's export not to carry the owner's reminder, got:\n%s", editorText)
 	}
 }
 

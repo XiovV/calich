@@ -931,6 +931,42 @@ func TestEventService_SetReminders_PersistsAndRoundTrips(t *testing.T) {
 	}
 }
 
+// TestEventService_SetReminders_BumpsChangeSeqNeverSequence is #210's
+// acceptance criterion (ADR-0064): a Reminder change bumps eventID's own
+// change_seq — so the setting User's other devices converge on their next
+// sync-collection — but never SEQUENCE, since it isn't a material change
+// under ADR-0059 and must not re-send an Invitation.
+func TestEventService_SetReminders_BumpsChangeSeqNeverSequence(t *testing.T) {
+	svc, userID, calendarID := newTestEventService(t)
+	ctx := context.Background()
+	start := time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC)
+	end := time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC)
+
+	created, err := svc.Create(ctx, userID, "evt-1", EventWrite{CalendarID: calendarID, Title: "Standup", Start: start, End: end})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	before, err := svc.events.GetByID(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("get before: %v", err)
+	}
+
+	if _, err := svc.SetReminders(ctx, userID, "evt-1", []repository.Reminder{{OffsetMinutes: 10, Channel: "notification"}}); err != nil {
+		t.Fatalf("set reminders: %v", err)
+	}
+
+	after, err := svc.events.GetByID(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("get after: %v", err)
+	}
+	if after.ChangeSeq <= before.ChangeSeq {
+		t.Fatalf("expected change_seq to bump after setting reminders, was %d, now %d", before.ChangeSeq, after.ChangeSeq)
+	}
+	if after.Sequence != before.Sequence {
+		t.Fatalf("expected SEQUENCE to stay unchanged, was %d, now %d", before.Sequence, after.Sequence)
+	}
+}
+
 func TestEventService_Create_NoReminders(t *testing.T) {
 	svc, userID, calendarID := newTestEventService(t)
 	ctx := context.Background()

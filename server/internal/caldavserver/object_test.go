@@ -440,6 +440,56 @@ func TestPutCalendarObject_EditingOneOccurrence_CreatesOverride_OthersUnchanged(
 	}
 }
 
+// TestPutCalendarObject_WritesPuttingPrincipalsOwnReminders is #210's PUT
+// boundary (ADR-0064): a PUT's VALARMs write the PUTting principal's
+// Reminders and leave every other principal's own rows on the same Event
+// untouched.
+func TestPutCalendarObject_WritesPuttingPrincipalsOwnReminders(t *testing.T) {
+	env := newTestCalDAVEnv(t)
+	ctx := context.Background()
+	editorID, editorSecret := env.addSharedUser(t, "editor", repository.RoleEditor)
+
+	created, err := env.eventService.Create(ctx, env.userID, "shared-evt", service.EventWrite{
+		CalendarID: env.calendarID, Title: "Bin day",
+		Start: time.Date(2026, 6, 1, 9, 0, 0, 0, time.UTC), End: time.Date(2026, 6, 1, 9, 30, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatalf("create event: %v", err)
+	}
+	if _, err := env.eventService.SetReminders(ctx, env.userID, created.ID, []repository.Reminder{{OffsetMinutes: 10, Channel: "notification"}}); err != nil {
+		t.Fatalf("owner set reminders: %v", err)
+	}
+
+	withReminder := created
+	withReminder.Reminders = []repository.Reminder{{OffsetMinutes: 120, Channel: "email"}}
+	cal, err := icalendar.SeriesToICal(withReminder, nil, icalendar.CalDAVTarget(attachmentsBasePath))
+	if err != nil {
+		t.Fatalf("seriesToICal: %v", err)
+	}
+
+	editorClient := newTestCalDAVClientAs(t, env, "editor@example.com", editorSecret)
+	path := calendarObjectPath(editorID, env.calendarID, created.ID)
+	if _, err := editorClient.PutCalendarObject(ctx, path, cal); err != nil {
+		t.Fatalf("editor PutCalendarObject: %v", err)
+	}
+
+	editorReminders, err := env.eventService.GetReminders(ctx, editorID, created.ID)
+	if err != nil {
+		t.Fatalf("get editor reminders: %v", err)
+	}
+	if len(editorReminders) != 1 || editorReminders[0].OffsetMinutes != 120 || editorReminders[0].Channel != "email" {
+		t.Fatalf("expected the PUT's VALARM to write the editor's own Reminders, got %+v", editorReminders)
+	}
+
+	ownerReminders, err := env.eventService.GetReminders(ctx, env.userID, created.ID)
+	if err != nil {
+		t.Fatalf("get owner reminders: %v", err)
+	}
+	if len(ownerReminders) != 1 || ownerReminders[0].OffsetMinutes != 10 || ownerReminders[0].Channel != "notification" {
+		t.Fatalf("expected the editor's PUT to leave the owner's own Reminders untouched, got %+v", ownerReminders)
+	}
+}
+
 func TestPutCalendarObject_IfMatch_StaleETag_Returns412(t *testing.T) {
 	env := newTestCalDAVEnv(t)
 	ctx := context.Background()
