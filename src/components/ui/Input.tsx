@@ -6,7 +6,13 @@ import { fieldContainerClasses, fieldLabelClass } from "./fieldStyles";
 // description above a filled, ringed container that holds the control and
 // optional leading/trailing icon slots.
 
-export interface InputProps extends InputHTMLAttributes<HTMLInputElement> {
+// `size` is omitted from the underlying attributes deliberately: the HTML
+// one is a number (a text field's visible character width), which nothing
+// here sets, and this component's own `size` is a height token. Redeclaring
+// it without the Omit is what made this interface not actually extend
+// InputHTMLAttributes.
+export interface InputProps
+  extends Omit<InputHTMLAttributes<HTMLInputElement>, "size"> {
   label?: string;
   description?: string;
   leadingIcon?: ReactNode;

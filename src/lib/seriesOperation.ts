@@ -15,11 +15,21 @@ import {
   truncateSeriesBefore,
   type EditScope,
   type EventFieldChanges,
+  type ResolvedFieldChanges,
 } from "./recurrenceScope";
 
 /** `EventFieldChanges` plus the rule — the shape a master's own row carries,
- * as opposed to an Override's (which never has one). */
+ * as opposed to an Override's (which never has one). The *input* to a
+ * planner: colour may still be the `null` that means "reset to the Calendar's
+ * colour" (ADR-0043). */
 export type MasterFieldChanges = EventFieldChanges & { rrule?: string };
+
+/** `MasterFieldChanges` after colour resolution — what an op actually
+ * carries, so it can be assigned onto an `Event` or sent to the API without
+ * a third colour state to collapse first. */
+export type ResolvedMasterFieldChanges = ResolvedFieldChanges & {
+  rrule?: string;
+};
 
 /** A master's own identifying fields, kept unchanged while only its rule
  * moves — carried by ops that truncate a series without replacing it
@@ -56,7 +66,7 @@ export type SeriesOp =
       isNew: boolean;
       parentId: string;
       recurrenceId: Date;
-      fields: EventFieldChanges;
+      fields: ResolvedFieldChanges;
     }
   /** Rewrites a single Event row wholesale — "All events": the master's own
    * fields and rule. `discardChildren` is cache-only (ADR-0016: a rule-*
@@ -66,7 +76,7 @@ export type SeriesOp =
   | {
       kind: "putEvent";
       id: string;
-      fields: MasterFieldChanges;
+      fields: ResolvedMasterFieldChanges;
       discardChildren: boolean;
     }
   /** Re-anchors a series at a split point — "This and following": the old
@@ -79,7 +89,7 @@ export type SeriesOp =
       truncatedRrule: string;
       keptExdates: Date[];
       newMasterId: string;
-      newMaster: MasterFieldChanges;
+      newMaster: ResolvedMasterFieldChanges;
       movedExdates: Date[];
       reparentFromStart: Date;
     }

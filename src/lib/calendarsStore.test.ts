@@ -275,8 +275,8 @@ describe("subscribeCalendar", () => {
       id: "evt-9",
       calendarId: "cal-3",
       title: "Holiday",
-      start: "2026-08-10T00:00:00Z",
-      end: "2026-08-11T00:00:00Z",
+      start: new Date("2026-08-10T00:00:00Z"),
+      end: new Date("2026-08-11T00:00:00Z"),
     };
     vi.mocked(calendarsApi.subscribe).mockResolvedValue(subscribed);
     vi.mocked(eventsApi.list).mockResolvedValue([imported]);
@@ -374,8 +374,8 @@ describe("refreshCalendar", () => {
       id: "evt-9",
       calendarId: "cal-3",
       title: "Holiday (moved)",
-      start: "2026-08-12T00:00:00Z",
-      end: "2026-08-13T00:00:00Z",
+      start: new Date("2026-08-12T00:00:00Z"),
+      end: new Date("2026-08-13T00:00:00Z"),
     };
     vi.mocked(calendarsApi.refresh).mockResolvedValue({
       notModified: false,

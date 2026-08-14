@@ -35,6 +35,19 @@ export interface EventFieldChanges {
   color?: string | null;
 }
 
+/**
+ * `EventFieldChanges` once its colour has been resolved: the shape an Event
+ * row and the wire both take, where colour is absent-or-set with no third
+ * state. The `null` that means "reset to the Calendar's colour" is an *input*
+ * concern (ADR-0043) — it expresses what an edit did, and every planner below
+ * resolves it through `resolveColor` before these fields reach a Series
+ * operation or an API call. Keeping the two apart is what lets a Series
+ * operation be assigned straight onto an `Event`.
+ */
+export type ResolvedFieldChanges = Omit<EventFieldChanges, "color"> & {
+  color?: string;
+};
+
 /** `changes`' allDay, falling back to `master`'s own when the edit didn't
  * touch it (a drag-only edit, which can't yet change allDay-ness). */
 export function resolveAllDay(
@@ -93,7 +106,7 @@ export function makeOverride(
   master: Event,
   occurrenceStart: Date,
   changes: EventFieldChanges,
-): { parentId: string; recurrenceId: Date } & EventFieldChanges {
+): { parentId: string; recurrenceId: Date } & ResolvedFieldChanges {
   // Picked field-by-field rather than spread: callers (the event modal) build
   // `changes` from form state that also carries `rrule` for the "all"
   // scope's own use, and an Override must never carry a rule of its own.
@@ -180,7 +193,7 @@ export interface SplitResult {
   /** The old master, truncated so its last Occurrence is just before the split. */
   truncatedMaster: { rrule: string };
   /** A new master carrying the same recurrence pattern, anchored at the split. */
-  newMaster: EventFieldChanges & { rrule: string | undefined };
+  newMaster: ResolvedFieldChanges & { rrule: string | undefined };
   /** Overrides/Exceptions at-or-after this instant move to the new master. */
   reparentFromStart: Date;
 }
