@@ -277,6 +277,55 @@ describe("updateEvent", () => {
   });
 });
 
+// setEventReminders is #211/ADR-0064's read-only-Event save path: a Viewer,
+// a Source-clamped Owner/Editor, or a User-backed Attendee with no Calendar
+// Access at all can set their own Reminders on an Event whose fields they
+// may not touch, so this action must never attempt eventsApi.update or any
+// series op alongside eventsApi.setReminders.
+describe("setEventReminders", () => {
+  it("applies the reminders immediately and calls only setReminders", () => {
+    const reminders = [{ offsetMinutes: 10, channel: "notification" as const }];
+    useEventsStore.setState({ events: [standup] });
+    let resolveSet: () => void = () => {};
+    vi.mocked(eventsApi.setReminders).mockReturnValue(
+      new Promise((resolve) => {
+        resolveSet = () => resolve(reminders);
+      }),
+    );
+
+    const promise = useEventsStore.getState().setEventReminders("evt-1", reminders);
+
+    expect(useEventsStore.getState().events[0].reminders).toEqual(reminders);
+    expect(eventsApi.setReminders).toHaveBeenCalledWith("token-123", "evt-1", reminders);
+    expect(eventsApi.update).not.toHaveBeenCalled();
+
+    resolveSet();
+    return promise;
+  });
+
+  it("rolls back and shows a toast when the API call fails", async () => {
+    useEventsStore.setState({ events: [standup] });
+    vi.mocked(eventsApi.setReminders).mockRejectedValue(new Error("network error"));
+
+    await useEventsStore
+      .getState()
+      .setEventReminders("evt-1", [{ offsetMinutes: 10, channel: "notification" }]);
+
+    expect(useEventsStore.getState().events).toEqual([standup]);
+    expect(toast.error).toHaveBeenCalledWith("Failed to update reminders.");
+  });
+
+  it("is a no-op for an id that isn't in the store, but still writes (an Attendee-only Event may not be locally cached yet)", async () => {
+    const reminders = [{ offsetMinutes: 10, channel: "notification" as const }];
+    vi.mocked(eventsApi.setReminders).mockResolvedValue(reminders);
+
+    await useEventsStore.getState().setEventReminders("evt-unknown", reminders);
+
+    expect(eventsApi.setReminders).toHaveBeenCalledWith("token-123", "evt-unknown", reminders);
+    expect(useEventsStore.getState().events).toEqual([]);
+  });
+});
+
 describe("removeEvent", () => {
   it("removes the event immediately", () => {
     useEventsStore.setState({ events: [standup] });

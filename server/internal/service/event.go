@@ -311,9 +311,11 @@ func (s *EventService) getOwnedEvent(ctx context.Context, userID int64, id strin
 // getVisibleEvent resolves id and confirms userID may see it — either via
 // Calendar Access (getOwnedEvent) or, failing that, by being one of its
 // Attendees (ADR-0046, #161): an Attendee invite grants visibility to that
-// one Event with no Calendar Access of its own. Read-only: every write path
+// one Event with no Calendar Access of its own. Every Event-field write path
 // keeps calling getOwnedEvent/requireWritableCalendar directly, since an
-// Attendee with no Calendar Access can never write.
+// Attendee with no Calendar Access can never write one — GetReminders and
+// SetReminders are the exception (#211), since a Reminder is personal state
+// rather than an Event field (ADR-0064).
 func (s *EventService) getVisibleEvent(ctx context.Context, userID int64, id string) (repository.Event, error) {
 	event, err := s.getOwnedEvent(ctx, userID, id)
 	if err == nil {
@@ -334,10 +336,13 @@ func (s *EventService) getVisibleEvent(ctx context.Context, userID int64, id str
 }
 
 // GetReminders returns userID's own Reminders on eventID (ADR-0064) — empty,
-// not an error, if userID has never set any. Any User with at least Viewer
-// Access to eventID's Calendar may call this.
+// not an error, if userID has never set any. Anyone who can see eventID may
+// call this — Owner, Editor, Viewer, or a User-backed Attendee with no
+// Calendar Access at all (ADR-0046, ADR-0058) — via getVisibleEvent, exactly
+// the old fan-out's recipient set now describing who may set their own
+// Reminder rather than who gets nagged (#211).
 func (s *EventService) GetReminders(ctx context.Context, userID int64, eventID string) ([]repository.Reminder, error) {
-	if _, err := s.getOwnedEvent(ctx, userID, eventID); err != nil {
+	if _, err := s.getVisibleEvent(ctx, userID, eventID); err != nil {
 		return nil, err
 	}
 
@@ -355,18 +360,17 @@ func (s *EventService) GetReminders(ctx context.Context, userID int64, eventID s
 // change_seq, so a per-principal CalDAV object (#210) reaches the caller's
 // other devices on their next sync — and only theirs, since a CTag bump is
 // still shared by the whole Calendar (ADR-0064's accepted CTag waste).
-// Still Editor-gated at this stage (requireWritableCalendar) — #211 opens
-// this to a Viewer/Attendee with no write Access to the Event itself.
+// Not an Event write (#211): it applies to the same recipient set as
+// GetReminders — visibility via getVisibleEvent is enough, with no
+// requireWritableCalendar call layered on top. It therefore bypasses the
+// Viewer restriction and a Source's read-only clamp alike, exactly as
+// SetColorOverride does for a Calendar colour (ADR-0038).
 func (s *EventService) SetReminders(ctx context.Context, userID int64, eventID string, reminders []repository.Reminder) ([]repository.Reminder, error) {
 	if err := validateReminders(reminders); err != nil {
 		return nil, err
 	}
 
-	event, err := s.getOwnedEvent(ctx, userID, eventID)
-	if err != nil {
-		return nil, err
-	}
-	if err := s.requireWritableCalendar(ctx, userID, event.CalendarID); err != nil {
+	if _, err := s.getVisibleEvent(ctx, userID, eventID); err != nil {
 		return nil, err
 	}
 

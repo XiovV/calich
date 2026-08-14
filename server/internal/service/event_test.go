@@ -1022,6 +1022,46 @@ func TestEventService_SetReminders_ReplacesWholesale(t *testing.T) {
 	}
 }
 
+// TestEventService_SetReminders_AllowedOnSourceClampedCalendar covers #211's
+// Subscribed/Linked Calendar case (ADR-0032, ADR-0064): a Source clamps
+// Access to read-only for every User, including the Owner, but that clamp
+// governs Event fields, not a personal Reminder — so SetReminders keeps
+// working through it, exactly as Update stops working confirms the clamp is
+// actually in effect.
+func TestEventService_SetReminders_AllowedOnSourceClampedCalendar(t *testing.T) {
+	svc, userID, calendarID := newTestEventService(t)
+	ctx := context.Background()
+	start := time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC)
+	end := time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC)
+
+	created, err := svc.Create(ctx, userID, "evt-1", EventWrite{CalendarID: calendarID, Title: "Standup", Start: start, End: end})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	if _, err := svc.calendars.UpdateSourceURL(ctx, userID, calendarID, "https://example.com/feed.ics"); err != nil {
+		t.Fatalf("update source url: %v", err)
+	}
+
+	// The clamp is actually in effect: even the Owner can no longer write
+	// an Event field.
+	if _, err := svc.Update(ctx, userID, created.ID, EventWrite{CalendarID: calendarID, Title: "Nope", Start: start, End: end}); !errors.Is(err, ErrCalendarReadOnly) {
+		t.Fatalf("update err = %v, want ErrCalendarReadOnly", err)
+	}
+
+	if _, err := svc.SetReminders(ctx, userID, created.ID, []repository.Reminder{{OffsetMinutes: 10, Channel: "notification"}}); err != nil {
+		t.Fatalf("set reminders: %v", err)
+	}
+
+	got, err := svc.GetReminders(ctx, userID, created.ID)
+	if err != nil {
+		t.Fatalf("get reminders: %v", err)
+	}
+	if len(got) != 1 || got[0].OffsetMinutes != 10 {
+		t.Fatalf("expected the reminder to have been set, got %+v", got)
+	}
+}
+
 // Setting an empty Reminders slice clears a User's Reminders on the Event.
 func TestEventService_SetReminders_EmptyClears(t *testing.T) {
 	svc, userID, calendarID := newTestEventService(t)

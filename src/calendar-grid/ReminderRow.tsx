@@ -19,11 +19,6 @@ interface ReminderRowProps {
   emailAvailable: boolean;
   onChange: (reminder: Reminder) => void;
   onRemove: () => void;
-  // A read-only Event's Reminders are still legible but not editable (#94,
-  // #111, ADR-0032, ADR-0034) — a Subscribed Calendar's Refresh is the
-  // collection's only legitimate writer, and a Calendar the caller has no
-  // more than Viewer Access to isn't theirs to edit either.
-  disabled?: boolean;
 }
 
 // One Reminder row in the event modal's Reminders section: a Channel dropdown
@@ -35,7 +30,6 @@ export function ReminderRow({
   emailAvailable,
   onChange,
   onRemove,
-  disabled,
 }: ReminderRowProps) {
   // Seeded once from the incoming offset so the fields don't jump around
   // while the user is typing.
@@ -61,7 +55,6 @@ export function ReminderRow({
         value={reminder.channel}
         onValueChange={(channel) => onChange({ ...reminder, channel })}
         options={reminderChannelOptions(emailAvailable)}
-        disabled={disabled}
         className="min-w-0 shrink truncate"
       />
       <Input
@@ -70,7 +63,6 @@ export function ReminderRow({
         min={0}
         value={amount}
         onChange={(event) => handleAmountChange(Number(event.target.value))}
-        disabled={disabled}
         size="small"
         className="w-16 shrink-0"
       />
@@ -79,10 +71,9 @@ export function ReminderRow({
         value={unit}
         onValueChange={handleUnitChange}
         options={REMINDER_OFFSET_UNIT_OPTIONS}
-        disabled={disabled}
         className="min-w-0 shrink truncate"
       />
-      <IconButton aria-label="Remove reminder" onClick={onRemove} disabled={disabled}>
+      <IconButton aria-label="Remove reminder" onClick={onRemove}>
         <X className="size-4" />
       </IconButton>
     </div>

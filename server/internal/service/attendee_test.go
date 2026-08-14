@@ -103,6 +103,40 @@ func TestEventService_AddAttendee_GrantsVisibilityWithNoCalendarAccess(t *testin
 	}
 }
 
+// TestEventService_Attendee_CanSetAndGetRemindersWithNoCalendarAccess is
+// #211's Attendee case (ADR-0064, ADR-0046, ADR-0058): a User-backed
+// Attendee with no Access to the Event's Calendar at all can still add,
+// edit, and remove their own Reminders on that one Event, via the same
+// visibility an invite already grants for reading it.
+func TestEventService_Attendee_CanSetAndGetRemindersWithNoCalendarAccess(t *testing.T) {
+	svc, _, _, ownerID, memberID, _, calendarID := newTestAttendeeService(t)
+	ctx := context.Background()
+	event := createTestEvent(t, svc, ownerID, calendarID, "evt-1")
+
+	if _, err := svc.AddAttendee(ctx, ownerID, event.ID, memberID); err != nil {
+		t.Fatalf("add attendee: %v", err)
+	}
+
+	reminders := []repository.Reminder{{OffsetMinutes: 15, Channel: "email"}}
+	if _, err := svc.SetReminders(ctx, memberID, event.ID, reminders); err != nil {
+		t.Fatalf("attendee set reminders: %v", err)
+	}
+
+	got, err := svc.GetReminders(ctx, memberID, event.ID)
+	if err != nil {
+		t.Fatalf("attendee get reminders: %v", err)
+	}
+	if len(got) != 1 || got[0].OffsetMinutes != 15 || got[0].Channel != "email" {
+		t.Fatalf("expected the attendee's own reminder, got %+v", got)
+	}
+
+	// Still no Calendar Access — Reminders ride the Attendee visibility
+	// seam, not a newly granted Access level.
+	if _, err := svc.calendars.Get(ctx, memberID, calendarID); !errors.Is(err, repository.ErrNotFound) {
+		t.Fatalf("expected member to still have no Calendar Access, got %v", err)
+	}
+}
+
 func TestEventService_AddAttendee_AppearsInVisibleEventsList(t *testing.T) {
 	svc, _, _, ownerID, memberID, _, calendarID := newTestAttendeeService(t)
 	ctx := context.Background()

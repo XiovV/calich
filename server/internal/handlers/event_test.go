@@ -1141,6 +1141,36 @@ func TestEventHandler_SetReminders_RejectsInvalidReminderChannel(t *testing.T) {
 	}
 }
 
+// TestEventHandler_SetReminders_AllowedOnSourceClampedCalendar is #211's
+// REST-level check: a Source clamps every Event field to read-only
+// (PATCH 403s), but PUT .../reminders still succeeds through the same
+// clamp, since setting a Reminder isn't an Event write (ADR-0064).
+func TestEventHandler_SetReminders_AllowedOnSourceClampedCalendar(t *testing.T) {
+	baseURL, accessToken, calendarID, userID, _, calendars, _ := newEventTestServerWithServices(t)
+
+	createResp := createEvent(t, baseURL, accessToken, "22222222-2222-2222-2222-222222222222", calendarID, "Standup", "2026-01-01T09:00:00Z", "2026-01-01T10:00:00Z")
+	var created decodedEvent
+	if err := json.NewDecoder(createResp.Body).Decode(&created); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	if _, err := calendars.UpdateSourceURL(context.Background(), userID, calendarID, "https://example.com/feed.ics"); err != nil {
+		t.Fatalf("update source url: %v", err)
+	}
+
+	patchResp := patchEvent(t, baseURL, accessToken, created.ID, calendarID, "Nope", "2026-01-01T09:00:00Z", "2026-01-01T10:00:00Z")
+	if patchResp.StatusCode != http.StatusForbidden {
+		t.Fatalf("expected the Event-field write to be refused (403), got %d", patchResp.StatusCode)
+	}
+
+	setResp := putJSON(t, baseURL, accessToken, "/api/events/"+created.ID+"/reminders", setRemindersRequest{
+		Reminders: []reminderWire{{OffsetMinutes: 10, Channel: "notification"}},
+	})
+	if setResp.StatusCode != http.StatusOK {
+		t.Fatalf("expected the Reminder write to succeed (200) through the same clamp, got %d", setResp.StatusCode)
+	}
+}
+
 // A second PUT replaces the caller's Reminders wholesale, on the same
 // request/response contract as the first (ADR-0020, ADR-0064).
 func TestEventHandler_SetReminders_ReplacesWholesale(t *testing.T) {

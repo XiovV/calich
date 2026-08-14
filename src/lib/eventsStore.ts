@@ -67,6 +67,14 @@ interface EventsState {
   ) => Promise<void>;
   /** Applies a scoped delete to a recurring Occurrence (ADR-0016). */
   deleteOccurrence: (occurrence: Occurrence, scope: EditScope) => Promise<void>;
+  /** Replaces the caller's own Reminders on eventId, and only that (#211,
+   * ADR-0064) — never an Event-field write, so it's the path a read-only
+   * Event's Reminders section uses: a Viewer, a User-backed Attendee with no
+   * Calendar Access, or anyone else who can see eventId but may not touch
+   * its fields. updateEvent/editOccurrence stay the writable-Event path,
+   * since they also carry title/time/etc. changes this one deliberately
+   * never attempts. */
+  setEventReminders: (eventId: string, reminders: Reminder[]) => Promise<void>;
 }
 
 // isAccessChangeError reports whether error is the shape the server uses for
@@ -313,6 +321,28 @@ export const useEventsStore = create<EventsState>((set, get) => ({
         error,
         master.calendarId,
         "Failed to delete event.",
+      );
+    }
+  },
+
+  setEventReminders: async (eventId, reminders) => {
+    const previousEvents = get().events;
+    const current = previousEvents.find((event) => event.id === eventId);
+
+    set((state) => ({
+      events: state.events.map((event) =>
+        event.id === eventId ? { ...event, reminders } : event,
+      ),
+    }));
+
+    try {
+      await eventsApi.setReminders(requireAccessToken(), eventId, reminders);
+    } catch (error) {
+      set({ events: previousEvents });
+      await handleWriteFailure(
+        error,
+        current?.calendarId,
+        "Failed to update reminders.",
       );
     }
   },

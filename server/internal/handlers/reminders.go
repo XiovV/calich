@@ -20,14 +20,13 @@ import (
 var remindersErrors = []errorCase{
 	{service.ErrInvalidReminderChannel, badRequest("reminder channel must be \"notification\" or \"email\"")},
 	{service.ErrCalendarNotFound, notFound("event not found")},
-	{service.ErrCalendarReadOnly, forbidden("calendar is read-only")},
 	{repository.ErrNotFound, notFound("event not found")},
 }
 
 // GetReminders serves GET /api/events/{id}/reminders: the caller's own
 // Reminders on the Event — empty, not an error, if they've never set any.
-// Any User with at least Viewer Access to the Event's Calendar may call
-// this.
+// Anyone who can see the Event may call this — Owner, Editor, Viewer, or a
+// User-backed Attendee with no Calendar Access at all (#211).
 func (h *EventHandler) GetReminders(w http.ResponseWriter, r *http.Request) {
 	userID, ok := httpauth.UserIDFromContext(r.Context())
 	if !ok {
@@ -51,8 +50,9 @@ type setRemindersRequest struct {
 
 // SetReminders serves PUT /api/events/{id}/reminders: replaces the caller's
 // own Reminders on the Event wholesale, never touching another User's rows
-// on the same Event (ADR-0064). Still Editor-gated at this stage — #211
-// opens this to a Viewer/Attendee with no write Access to the Event itself.
+// on the same Event (ADR-0064). Not an Event write, so it is not gated on
+// write Access to the Event — the same caller set as GetReminders may call
+// this (#211).
 func (h *EventHandler) SetReminders(w http.ResponseWriter, r *http.Request) {
 	userID, ok := httpauth.UserIDFromContext(r.Context())
 	if !ok {

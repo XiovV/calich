@@ -121,8 +121,9 @@ func New(logger *slog.Logger, authHandler *handlers.AuthHandler, calendarHandler
 
 			// Reminders (ADR-0064): personal to the caller, on their own
 			// write path rather than the Event create/update payload.
-			// SetReminders enforces Editor Access itself (still
-			// Editors-only at this stage — Viewers/Attendees are #211).
+			// Not gated on write Access to the Event — a Viewer or a
+			// User-backed Attendee with no Calendar Access at all may set
+			// their own, same as every other User who can see it (#211).
 			r.Get("/{id}/reminders", eventHandler.GetReminders)
 			r.Put("/{id}/reminders", eventHandler.SetReminders)
 

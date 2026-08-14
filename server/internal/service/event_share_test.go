@@ -401,6 +401,54 @@ func TestEventService_Viewer_CanRead(t *testing.T) {
 	}
 }
 
+// TestEventService_Viewer_CanSetAndGetOwnReminders covers #211's core case
+// (ADR-0064): setting a Reminder is not an Event write, so a Viewer who is
+// refused every Event field may still add, edit, and remove their own
+// Reminders on it — and the change reaches only them.
+func TestEventService_Viewer_CanSetAndGetOwnReminders(t *testing.T) {
+	f := newEventShareFixture(t)
+	ctx := context.Background()
+
+	event, err := f.events.Create(ctx, f.ownerID, "evt-1", EventWrite{CalendarID: f.calendarID, Title: "Standup", Start: shareTestStart, End: shareTestEnd})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	viewerReminders := []repository.Reminder{{OffsetMinutes: 10, Channel: "notification"}}
+	if _, err := f.events.SetReminders(ctx, f.viewerID, event.ID, viewerReminders); err != nil {
+		t.Fatalf("viewer set reminders: %v", err)
+	}
+
+	got, err := f.events.GetReminders(ctx, f.viewerID, event.ID)
+	if err != nil {
+		t.Fatalf("viewer get reminders: %v", err)
+	}
+	if len(got) != 1 || got[0].OffsetMinutes != 10 {
+		t.Fatalf("expected the viewer's own reminder, got %+v", got)
+	}
+
+	// Reaches only the viewer — the owner's own Reminders on the same Event
+	// are untouched.
+	ownerReminders, err := f.events.GetReminders(ctx, f.ownerID, event.ID)
+	if err != nil {
+		t.Fatalf("owner get reminders: %v", err)
+	}
+	if len(ownerReminders) != 0 {
+		t.Fatalf("expected the owner to have no reminders of their own, got %+v", ownerReminders)
+	}
+
+	if _, err := f.events.SetReminders(ctx, f.viewerID, event.ID, nil); err != nil {
+		t.Fatalf("viewer clear reminders: %v", err)
+	}
+	got, err = f.events.GetReminders(ctx, f.viewerID, event.ID)
+	if err != nil {
+		t.Fatalf("viewer get reminders after clear: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("expected reminders cleared, got %+v", got)
+	}
+}
+
 // TestEventService_Viewer_RefusedEveryWrite covers "... and is refused
 // every write" (#100) — Create, Update, and Delete each return
 // ErrCalendarReadOnly for a Viewer.
@@ -449,6 +497,26 @@ func TestEventService_Stranger_GetsNotFoundNotForbidden(t *testing.T) {
 	}
 	if len(events) != 0 {
 		t.Fatalf("expected 0 events visible to a stranger, got %d", len(events))
+	}
+}
+
+// A stranger's not-found treatment (#100) extends to Reminders (#211):
+// setting a Reminder is not an Event write, but it still requires being
+// able to see the Event in the first place.
+func TestEventService_Stranger_RemindersRefused(t *testing.T) {
+	f := newEventShareFixture(t)
+	ctx := context.Background()
+
+	event, err := f.events.Create(ctx, f.ownerID, "evt-1", EventWrite{CalendarID: f.calendarID, Title: "Standup", Start: shareTestStart, End: shareTestEnd})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	if _, err := f.events.GetReminders(ctx, f.strangerID, event.ID); !errors.Is(err, repository.ErrNotFound) {
+		t.Fatalf("stranger get reminders err = %v, want ErrNotFound", err)
+	}
+	if _, err := f.events.SetReminders(ctx, f.strangerID, event.ID, []repository.Reminder{{OffsetMinutes: 10, Channel: "notification"}}); !errors.Is(err, repository.ErrNotFound) {
+		t.Fatalf("stranger set reminders err = %v, want ErrNotFound", err)
 	}
 }
 

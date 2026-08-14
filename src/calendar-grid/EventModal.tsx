@@ -250,6 +250,7 @@ export function EventModal(props: EventModalProps) {
   const removeEvent = useEventsStore((state) => state.removeEvent);
   const editOccurrence = useEventsStore((state) => state.editOccurrence);
   const deleteOccurrence = useEventsStore((state) => state.deleteOccurrence);
+  const setEventReminders = useEventsStore((state) => state.setEventReminders);
   const calendars = useCalendarsStore((state) => state.calendars);
   const emailAvailable = useAuthStore(
     (state) => state.user?.emailReminderChannelAvailable ?? false,
@@ -682,8 +683,33 @@ export function EventModal(props: EventModalProps) {
     calendarId !== "" &&
     isTimeRangeValid &&
     !isSavingWithAttendees;
+  // Reminders have their own write path (ADR-0064), diffed against what the
+  // modal opened with regardless of isReadOnlyEvent — a read-only Event's
+  // Reminders section is live precisely because this diff, and the save
+  // path below, never go anywhere near an Event field (#211).
+  const remindersDraft: Reminder[] = reminders.map((r) => ({
+    offsetMinutes: r.offsetMinutes,
+    channel: r.channel,
+  }));
+  const remindersChanged = !remindersEqual(remindersDraft, initial.reminders);
 
   async function handleSave() {
+    // A read-only Event's Reminders section is the one live control left —
+    // saving here never attempts an Event-field write (which the caller has
+    // no Access for) or a series op; it writes only the caller's own
+    // Reminders on this Occurrence's current row (#211, ADR-0064). No scope
+    // picker (This event/This and following/All events): a read-only caller
+    // can't create an Override to scope "this event" to, so
+    // props.occurrence.event.id — the Master for an unoverridden instance,
+    // or the existing Override row for one already materialized — is the
+    // only row there is to write to.
+    if (isReadOnlyEvent) {
+      if (remindersChanged) {
+        await setEventReminders(props.occurrence.event.id, remindersDraft);
+      }
+      onClose();
+      return;
+    }
     if (!canSave) return;
     // Once a create has already gone through and its Attachments are
     // uploading, this Event is done — Enter shouldn't try to create a
@@ -701,15 +727,9 @@ export function EventModal(props: EventModalProps) {
       ? addDays(startOfDay(day), 1)
       : timeStringToDate(day, endTime);
     const rrule = repeat === "custom" ? customRule : buildRule(repeat, start);
-    // The acting User's own Reminders draft. Reminders have their own write
-    // path (eventsApi.setReminders), never the Event create/update payload
-    // (ADR-0064) — remindersDraft travels separately from `changes` below,
-    // and only when it actually differs from what the modal opened with.
-    const remindersDraft: Reminder[] = reminders.map((r) => ({
-      offsetMinutes: r.offsetMinutes,
-      channel: r.channel,
-    }));
-    const remindersChanged = !remindersEqual(remindersDraft, initial.reminders);
+    // remindersDraft/remindersChanged are computed once above canSave — they
+    // travel separately from `changes` below, and only when they actually
+    // differ from what the modal opened with (ADR-0064).
     const changes = {
       calendarId,
       title: title.trim(),
@@ -1326,6 +1346,9 @@ export function EventModal(props: EventModalProps) {
                     align="start"
                     startOffset="mt-1.5"
                   >
+                    {/* Reminders are personal state, never an Event write
+                      (ADR-0064) — live and interactive even when every other
+                      field on this Event is disabled (#211). */}
                     {reminders.length > 0 && (
                       <div className="flex flex-col gap-2">
                         {reminders.map((reminder) => (
@@ -1339,20 +1362,17 @@ export function EventModal(props: EventModalProps) {
                             onRemove={() =>
                               handleRemoveReminder(reminder.draftId)
                             }
-                            disabled={isReadOnlyEvent}
                           />
                         ))}
                       </div>
                     )}
-                    {!isReadOnlyEvent && (
-                      <button
-                        type="button"
-                        onClick={handleAddReminder}
-                        className="mt-1.5 cursor-pointer text-label-sm text-accent hover:underline"
-                      >
-                        Add reminder
-                      </button>
-                    )}
+                    <button
+                      type="button"
+                      onClick={handleAddReminder}
+                      className="mt-1.5 cursor-pointer text-label-sm text-accent hover:underline"
+                    >
+                      Add reminder
+                    </button>
                   </IconFieldRow>
 
                   <IconFieldRow
@@ -1447,15 +1467,27 @@ export function EventModal(props: EventModalProps) {
                       Done
                     </Dialog.Close>
                   ) : isReadOnlyEvent ? (
-                    <Dialog.Close
-                      className={buttonClasses({
-                        variant: "outline",
-                        color: "secondary",
-                        size: "small",
-                      })}
-                    >
-                      Close
-                    </Dialog.Close>
+                    <>
+                      <Dialog.Close
+                        className={buttonClasses({
+                          variant: "outline",
+                          color: "secondary",
+                          size: "small",
+                        })}
+                      >
+                        Close
+                      </Dialog.Close>
+                      {/* The one write this Event still accepts (#211,
+                        ADR-0064) — enabled only once the Reminders draft
+                        actually differs from what the modal opened with. */}
+                      <Button
+                        type="submit"
+                        size="small"
+                        disabled={!remindersChanged}
+                      >
+                        Save
+                      </Button>
+                    </>
                   ) : (
                     <>
                       <Dialog.Close
