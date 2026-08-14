@@ -10,29 +10,20 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/XiovV/calendar/server/internal/db"
+	"github.com/XiovV/calendar/server/internal/apptest"
 	"github.com/XiovV/calendar/server/internal/httpauth"
 	"github.com/XiovV/calendar/server/internal/repository"
-	"github.com/XiovV/calendar/server/internal/service"
 )
 
 func newNotificationTestServer(t *testing.T) (baseURL, accessToken string, userID int64, notifications *repository.NotificationRepository, eventID string) {
 	t.Helper()
 
-	sqlDB, err := db.OpenInMemory()
-	if err != nil {
-		t.Fatalf("open in-memory db: %v", err)
-	}
-	t.Cleanup(func() { sqlDB.Close() })
+	cfg := apptest.Config(t)
+	cfg.InitialName, cfg.InitialEmail, cfg.InitialPassword = "alice", "alice@example.com", "hunter2"
+	g := newTestGraphWithConfig(t, cfg)
 
-	users := repository.NewUserRepository(sqlDB)
-	sessions := repository.NewSessionRepository(sqlDB)
-	workspaceRepo := repository.NewWorkspaceRepository(sqlDB)
-	calendarRepo := repository.NewCalendarRepository(sqlDB)
-	shareRepo := repository.NewCalendarShareRepository(sqlDB)
-	workspaceSvc := service.NewWorkspaceService(sqlDB, workspaceRepo, repository.NewWorkspaceInviteRepository(sqlDB), calendarRepo, shareRepo)
-	calendarService := service.NewCalendarService(calendarRepo, shareRepo, users, repository.NewEventReminderRepository(sqlDB), repository.NewCalendarDefaultReminderRepository(sqlDB), repository.NewEventReminderExplicitRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo, repository.NewCalendarGroupShareRepository(sqlDB), repository.NewGroupRepository(sqlDB))
-	auth := service.NewAuthService(users, sessions, workspaceSvc, repository.NewWorkspaceInviteRepository(sqlDB), calendarService, repository.NewAttendeeRepository(sqlDB), []byte("test-secret"), "alice", "alice@example.com", "hunter2", false)
+	workspaceSvc := g.Workspaces
+	auth := g.Auth
 	user, _, err := auth.Bootstrap(context.Background())
 	if err != nil {
 		t.Fatalf("bootstrap: %v", err)
@@ -48,21 +39,21 @@ func newNotificationTestServer(t *testing.T) (baseURL, accessToken string, userI
 		t.Fatalf("list user workspaces: %v", err)
 	}
 
-	calendars := repository.NewCalendarRepository(sqlDB)
+	calendars := g.CalendarRepo
 	cal, err := calendars.Create(context.Background(), user.ID, userWorkspaces[0].ID, "cal-1", repository.CalendarFields{Name: "Personal", Color: "peacock"})
 	if err != nil {
 		t.Fatalf("create calendar: %v", err)
 	}
 
-	events := repository.NewEventRepository(sqlDB)
+	events := g.EventRepo
 	start, _ := time.Parse(time.RFC3339, "2026-01-01T09:00:00Z")
 	end, _ := time.Parse(time.RFC3339, "2026-01-01T10:00:00Z")
 	if _, err := events.Create(context.Background(), "evt-1", &user.ID, repository.EventFields{CalendarID: cal.ID, Title: "Standup", Start: start, End: end}, 0); err != nil {
 		t.Fatalf("create event: %v", err)
 	}
 
-	notifications = repository.NewNotificationRepository(sqlDB)
-	notificationHandler := NewNotificationHandler(service.NewNotificationService(notifications))
+	notifications = g.NotificationRepo
+	notificationHandler := NewNotificationHandler(g.Notifications)
 
 	r := chi.NewRouter()
 	r.Route("/api/notifications", func(r chi.Router) {

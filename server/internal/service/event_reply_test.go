@@ -8,7 +8,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/XiovV/calendar/server/internal/db"
 	"github.com/XiovV/calendar/server/internal/icalendar"
 	"github.com/XiovV/calendar/server/internal/repository"
 )
@@ -27,19 +26,15 @@ func newReplyFixture(t *testing.T) replyFixture {
 	t.Helper()
 	ctx := context.Background()
 
-	sqlDB, err := db.OpenInMemory()
-	if err != nil {
-		t.Fatalf("open in-memory db: %v", err)
-	}
-	t.Cleanup(func() { sqlDB.Close() })
+	g := newTestGraph(t)
 
-	users := repository.NewUserRepository(sqlDB)
+	users := g.UserRepo
 	owner, err := users.Create(ctx, "owner", "owner@example.com", "hash", false)
 	if err != nil {
 		t.Fatalf("create owner: %v", err)
 	}
 
-	workspaceRepo := repository.NewWorkspaceRepository(sqlDB)
+	workspaceRepo := g.WorkspaceRepo
 	workspace, err := workspaceRepo.Create(ctx, "Test Workspace", owner.ID)
 	if err != nil {
 		t.Fatalf("create workspace: %v", err)
@@ -48,17 +43,13 @@ func newReplyFixture(t *testing.T) replyFixture {
 		t.Fatalf("add workspace member: %v", err)
 	}
 
-	calendarRepo := repository.NewCalendarRepository(sqlDB)
+	calendarRepo := g.CalendarRepo
 	cal, err := calendarRepo.Create(ctx, owner.ID, workspace.ID, "cal-1", repository.CalendarFields{Name: "Personal", Color: "peacock"})
 	if err != nil {
 		t.Fatalf("create calendar: %v", err)
 	}
 
-	events := NewEventService(sqlDB, repository.NewEventRepository(sqlDB), repository.NewEventExceptionRepository(sqlDB), repository.NewEventReminderRepository(sqlDB), repository.NewCalendarDefaultReminderRepository(sqlDB), repository.NewEventReminderExplicitRepository(sqlDB), repository.NewSyncRepository(sqlDB),
-		NewCalendarService(calendarRepo, repository.NewCalendarShareRepository(sqlDB), users, repository.NewEventReminderRepository(sqlDB), repository.NewCalendarDefaultReminderRepository(sqlDB), repository.NewEventReminderExplicitRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo, repository.NewCalendarGroupShareRepository(sqlDB), repository.NewGroupRepository(sqlDB)),
-		users, repository.NewAttachmentRepository(sqlDB), repository.NewAttendeeRepository(sqlDB), workspaceRepo, repository.NewGroupRepository(sqlDB), repository.NewNotificationRepository(sqlDB), nil, 1000)
-
-	return replyFixture{events: events, users: users, ownerID: owner.ID, calendarID: cal.ID}
+	return replyFixture{events: g.Events, users: users, ownerID: owner.ID, calendarID: cal.ID}
 }
 
 func TestEventService_ApplyReply_UserBackedAttendee_SetsResponse(t *testing.T) {

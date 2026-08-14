@@ -6,7 +6,6 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/XiovV/calendar/server/internal/db"
 	"github.com/XiovV/calendar/server/internal/repository"
 )
 
@@ -17,18 +16,9 @@ import (
 func newTestGroupService(t *testing.T) (*GroupService, *WorkspaceService, *repository.UserRepository) {
 	t.Helper()
 
-	sqlDB, err := db.OpenInMemory()
-	if err != nil {
-		t.Fatalf("open in-memory db: %v", err)
-	}
-	t.Cleanup(func() { sqlDB.Close() })
+	g := newTestGraph(t)
 
-	users := repository.NewUserRepository(sqlDB)
-	workspaceRepo := repository.NewWorkspaceRepository(sqlDB)
-	workspaceService := NewWorkspaceService(sqlDB, workspaceRepo, repository.NewWorkspaceInviteRepository(sqlDB), repository.NewCalendarRepository(sqlDB), repository.NewCalendarShareRepository(sqlDB))
-	groupService := NewGroupService(repository.NewGroupRepository(sqlDB), workspaceRepo)
-
-	return groupService, workspaceService, users
+	return g.Groups, g.Workspaces, g.UserRepo
 }
 
 // groupWorkspaceWithMembers creates a Workspace owned by owner, adds member

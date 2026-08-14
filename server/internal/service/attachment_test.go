@@ -9,8 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/XiovV/calendar/server/internal/attachmentstore"
-	"github.com/XiovV/calendar/server/internal/db"
+	"github.com/XiovV/calendar/server/internal/apptest"
 	"github.com/XiovV/calendar/server/internal/repository"
 )
 
@@ -33,13 +32,11 @@ func newAttachmentTestFixture(t *testing.T, maxPerEvent int) attachmentTestFixtu
 	t.Helper()
 	ctx := context.Background()
 
-	sqlDB, err := db.OpenInMemory()
-	if err != nil {
-		t.Fatalf("open in-memory db: %v", err)
-	}
-	t.Cleanup(func() { sqlDB.Close() })
+	cfg := apptest.Config(t)
+	cfg.MaxAttachmentsPerEvent = maxPerEvent
+	g := newTestGraphWithConfig(t, cfg)
 
-	users := repository.NewUserRepository(sqlDB)
+	users := g.UserRepo
 	owner, err := users.Create(ctx, "owner", "owner@example.com", "hash", false)
 	if err != nil {
 		t.Fatalf("create owner: %v", err)
@@ -57,7 +54,7 @@ func newAttachmentTestFixture(t *testing.T, maxPerEvent int) attachmentTestFixtu
 		t.Fatalf("create stranger: %v", err)
 	}
 
-	workspaceRepo := repository.NewWorkspaceRepository(sqlDB)
+	workspaceRepo := g.WorkspaceRepo
 	workspace, err := workspaceRepo.Create(ctx, "Test Workspace", owner.ID)
 	if err != nil {
 		t.Fatalf("create workspace: %v", err)
@@ -74,7 +71,7 @@ func newAttachmentTestFixture(t *testing.T, maxPerEvent int) attachmentTestFixtu
 		t.Fatalf("add viewer as workspace member: %v", err)
 	}
 
-	calendars := NewCalendarService(repository.NewCalendarRepository(sqlDB), repository.NewCalendarShareRepository(sqlDB), users, repository.NewEventReminderRepository(sqlDB), repository.NewCalendarDefaultReminderRepository(sqlDB), repository.NewEventReminderExplicitRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo, repository.NewCalendarGroupShareRepository(sqlDB), repository.NewGroupRepository(sqlDB))
+	calendars := g.Calendars
 	cal, err := calendars.Create(ctx, owner.ID, workspace.ID, "cal-1", CalendarWrite{Name: "Family", Color: "#12809CFF"})
 	if err != nil {
 		t.Fatalf("create calendar: %v", err)
@@ -86,9 +83,7 @@ func newAttachmentTestFixture(t *testing.T, maxPerEvent int) attachmentTestFixtu
 		t.Fatalf("share viewer: %v", err)
 	}
 
-	attachmentsRepo := repository.NewAttachmentRepository(sqlDB)
-	eventsRepo := repository.NewEventRepository(sqlDB)
-	events := NewEventService(sqlDB, eventsRepo, repository.NewEventExceptionRepository(sqlDB), repository.NewEventReminderRepository(sqlDB), repository.NewCalendarDefaultReminderRepository(sqlDB), repository.NewEventReminderExplicitRepository(sqlDB), repository.NewSyncRepository(sqlDB), calendars, users, attachmentsRepo, repository.NewAttendeeRepository(sqlDB), workspaceRepo, repository.NewGroupRepository(sqlDB), repository.NewNotificationRepository(sqlDB), nil, 1000)
+	events := g.Events
 
 	start := time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC)
 	end := time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC)
@@ -97,14 +92,11 @@ func newAttachmentTestFixture(t *testing.T, maxPerEvent int) attachmentTestFixtu
 		t.Fatalf("create master: %v", err)
 	}
 
-	store := attachmentstore.New(t.TempDir())
-	attachments := NewAttachmentService(attachmentsRepo, eventsRepo, calendars, events, store, maxPerEvent)
-
 	return attachmentTestFixture{
-		attachments: attachments,
+		attachments: g.Attachments,
 		events:      events,
 		calendars:   calendars,
-		sqlDB:       sqlDB,
+		sqlDB:       g.DB,
 		ownerID:     owner.ID, editorID: editor.ID, viewerID: viewer.ID, strangerID: stranger.ID,
 		calendarID: cal.ID,
 		masterID:   master.ID,
@@ -283,19 +275,15 @@ func TestAttachmentService_Download_StrangerGetsNotFound(t *testing.T) {
 func TestAttachmentService_Upload_SubscribedCalendarRefused(t *testing.T) {
 	ctx := context.Background()
 
-	sqlDB, err := db.OpenInMemory()
-	if err != nil {
-		t.Fatalf("open in-memory db: %v", err)
-	}
-	t.Cleanup(func() { sqlDB.Close() })
+	g := newTestGraph(t)
 
-	users := repository.NewUserRepository(sqlDB)
+	users := g.UserRepo
 	owner, err := users.Create(ctx, "owner", "owner@example.com", "hash", false)
 	if err != nil {
 		t.Fatalf("create owner: %v", err)
 	}
 
-	workspaceRepo := repository.NewWorkspaceRepository(sqlDB)
+	workspaceRepo := g.WorkspaceRepo
 	workspace, err := workspaceRepo.Create(ctx, "Test Workspace", owner.ID)
 	if err != nil {
 		t.Fatalf("create workspace: %v", err)
@@ -304,17 +292,13 @@ func TestAttachmentService_Upload_SubscribedCalendarRefused(t *testing.T) {
 		t.Fatalf("add workspace member: %v", err)
 	}
 
-	calendarRepo := repository.NewCalendarRepository(sqlDB)
 	sourceURL := "https://example.com/feed.ics"
-	cal, err := calendarRepo.Create(ctx, owner.ID, workspace.ID, "cal-1", repository.CalendarFields{Name: "Feed", Color: "peacock", SourceURL: &sourceURL})
+	cal, err := g.CalendarRepo.Create(ctx, owner.ID, workspace.ID, "cal-1", repository.CalendarFields{Name: "Feed", Color: "peacock", SourceURL: &sourceURL})
 	if err != nil {
 		t.Fatalf("create subscribed calendar: %v", err)
 	}
 
-	calendars := NewCalendarService(calendarRepo, repository.NewCalendarShareRepository(sqlDB), users, repository.NewEventReminderRepository(sqlDB), repository.NewCalendarDefaultReminderRepository(sqlDB), repository.NewEventReminderExplicitRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo, repository.NewCalendarGroupShareRepository(sqlDB), repository.NewGroupRepository(sqlDB))
-	attachmentsRepo := repository.NewAttachmentRepository(sqlDB)
-	eventsRepo := repository.NewEventRepository(sqlDB)
-	events := NewEventService(sqlDB, eventsRepo, repository.NewEventExceptionRepository(sqlDB), repository.NewEventReminderRepository(sqlDB), repository.NewCalendarDefaultReminderRepository(sqlDB), repository.NewEventReminderExplicitRepository(sqlDB), repository.NewSyncRepository(sqlDB), calendars, users, attachmentsRepo, repository.NewAttendeeRepository(sqlDB), workspaceRepo, repository.NewGroupRepository(sqlDB), repository.NewNotificationRepository(sqlDB), nil, 1000)
+	events := g.Events
 
 	// ImportSubscribedSeries is the only writer a Subscribed Calendar's
 	// Events go through (ADR-0032) — reach past the write guard the same
@@ -334,9 +318,7 @@ func TestAttachmentService_Upload_SubscribedCalendarRefused(t *testing.T) {
 		t.Fatalf("list seeded event: %v, %+v", err, list)
 	}
 
-	attachments := NewAttachmentService(attachmentsRepo, eventsRepo, calendars, events, attachmentstore.New(t.TempDir()), 10)
-
-	_, err = attachments.Upload(ctx, owner.ID, list[0].ID, "x.txt", "text/plain", strings.NewReader("x"))
+	_, err = g.Attachments.Upload(ctx, owner.ID, list[0].ID, "x.txt", "text/plain", strings.NewReader("x"))
 	if !errors.Is(err, ErrCalendarReadOnly) {
 		t.Fatalf("expected ErrCalendarReadOnly for a Subscribed Calendar, got %v", err)
 	}

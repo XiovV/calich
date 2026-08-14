@@ -11,29 +11,20 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/XiovV/calendar/server/internal/db"
 	"github.com/XiovV/calendar/server/internal/httpauth"
-	"github.com/XiovV/calendar/server/internal/repository"
-	"github.com/XiovV/calendar/server/internal/service"
 )
 
 func newAppPasswordTestServer(t *testing.T) (*httptest.Server, string) {
 	t.Helper()
 
-	sqlDB, err := db.OpenInMemory()
-	if err != nil {
-		t.Fatalf("open in-memory db: %v", err)
-	}
-	t.Cleanup(func() { sqlDB.Close() })
+	g := newTestGraph(t)
 
-	users := repository.NewUserRepository(sqlDB)
-	sessions := repository.NewSessionRepository(sqlDB)
-	auth := service.NewAuthService(users, sessions, service.NewWorkspaceService(sqlDB, repository.NewWorkspaceRepository(sqlDB), repository.NewWorkspaceInviteRepository(sqlDB), repository.NewCalendarRepository(sqlDB), repository.NewCalendarShareRepository(sqlDB)), repository.NewWorkspaceInviteRepository(sqlDB), service.NewCalendarService(repository.NewCalendarRepository(sqlDB), repository.NewCalendarShareRepository(sqlDB), users, repository.NewEventReminderRepository(sqlDB), repository.NewCalendarDefaultReminderRepository(sqlDB), repository.NewEventReminderExplicitRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), repository.NewWorkspaceRepository(sqlDB), repository.NewCalendarGroupShareRepository(sqlDB), repository.NewGroupRepository(sqlDB)), repository.NewAttendeeRepository(sqlDB), []byte("test-secret"), "admin", "admin@example.com", "admin", false)
+	auth := g.Auth
 	if _, _, err := auth.Bootstrap(context.Background()); err != nil {
 		t.Fatalf("bootstrap: %v", err)
 	}
 
-	appPasswords := service.NewAppPasswordService(repository.NewAppPasswordRepository(sqlDB), users)
+	appPasswords := g.AppPasswords
 	h := NewAppPasswordHandler(appPasswords)
 	authHandler := NewAuthHandler(auth, false, false)
 

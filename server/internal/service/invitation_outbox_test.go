@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/XiovV/calendar/server/internal/db"
+	"github.com/XiovV/calendar/server/internal/apptest"
 	"github.com/XiovV/calendar/server/internal/repository"
 )
 
@@ -24,13 +24,12 @@ func outboxUserID(id int64) *int64 {
 func newTestOutboxAttendeeService(t *testing.T) (svc *EventService, outboxRepo *repository.OutboxRepository, ownerID, memberID, otherMemberID, workspaceID int64, calendarID string) {
 	t.Helper()
 
-	sqlDB, err := db.OpenInMemory()
-	if err != nil {
-		t.Fatalf("open in-memory db: %v", err)
-	}
-	t.Cleanup(func() { sqlDB.Close() })
+	// An SMTP transport is what gives the graph an OutboxRepo to queue
+	// Invitations into (ADR-0059, ADR-0060) — the deployment shape these
+	// tests are about.
+	g := newTestGraphWithConfig(t, apptest.SMTPConfig(t))
 
-	users := repository.NewUserRepository(sqlDB)
+	users := g.UserRepo
 	ctx := context.Background()
 
 	owner, err := users.Create(ctx, "owner", "owner@example.com", "hash", false)
@@ -46,7 +45,7 @@ func newTestOutboxAttendeeService(t *testing.T) (svc *EventService, outboxRepo *
 		t.Fatalf("create other member: %v", err)
 	}
 
-	workspaceRepo := repository.NewWorkspaceRepository(sqlDB)
+	workspaceRepo := g.WorkspaceRepo
 	workspace, err := workspaceRepo.Create(ctx, "Test Workspace", owner.ID)
 	if err != nil {
 		t.Fatalf("create workspace: %v", err)
@@ -61,18 +60,13 @@ func newTestOutboxAttendeeService(t *testing.T) (svc *EventService, outboxRepo *
 		t.Fatalf("add other member: %v", err)
 	}
 
-	groupRepo := repository.NewGroupRepository(sqlDB)
-	calendarRepo := repository.NewCalendarRepository(sqlDB)
+	calendarRepo := g.CalendarRepo
 	cal, err := calendarRepo.Create(ctx, owner.ID, workspace.ID, "cal-1", repository.CalendarFields{Name: "Personal", Color: "peacock"})
 	if err != nil {
 		t.Fatalf("create calendar: %v", err)
 	}
 
-	calendarService := NewCalendarService(calendarRepo, repository.NewCalendarShareRepository(sqlDB), users, repository.NewEventReminderRepository(sqlDB), repository.NewCalendarDefaultReminderRepository(sqlDB), repository.NewEventReminderExplicitRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo, repository.NewCalendarGroupShareRepository(sqlDB), groupRepo)
-	outboxRepo = repository.NewOutboxRepository(sqlDB)
-	svc = NewEventService(sqlDB, repository.NewEventRepository(sqlDB), repository.NewEventExceptionRepository(sqlDB), repository.NewEventReminderRepository(sqlDB), repository.NewCalendarDefaultReminderRepository(sqlDB), repository.NewEventReminderExplicitRepository(sqlDB), repository.NewSyncRepository(sqlDB), calendarService, users, repository.NewAttachmentRepository(sqlDB), repository.NewAttendeeRepository(sqlDB), workspaceRepo, groupRepo, repository.NewNotificationRepository(sqlDB), outboxRepo, 1000)
-
-	return svc, outboxRepo, owner.ID, member.ID, otherMember.ID, workspace.ID, cal.ID
+	return g.Events, g.OutboxRepo, owner.ID, member.ID, otherMember.ID, workspace.ID, cal.ID
 }
 
 // TestEventService_AddAttendee_EnqueuesInvitation covers the ADR-0059/

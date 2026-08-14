@@ -12,8 +12,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"golang.org/x/crypto/bcrypt"
 
-	"github.com/XiovV/calendar/server/internal/attachmentstore"
-	"github.com/XiovV/calendar/server/internal/db"
+	"github.com/XiovV/calendar/server/internal/apptest"
 	"github.com/XiovV/calendar/server/internal/httpauth"
 	"github.com/XiovV/calendar/server/internal/repository"
 	"github.com/XiovV/calendar/server/internal/service"
@@ -35,21 +34,16 @@ type shareTestServer struct {
 func newShareTestServer(t *testing.T) shareTestServer {
 	t.Helper()
 
-	sqlDB, err := db.OpenInMemory()
-	if err != nil {
-		t.Fatalf("open in-memory db: %v", err)
-	}
-	t.Cleanup(func() { sqlDB.Close() })
+	cfg := apptest.Config(t)
+	cfg.InitialName, cfg.InitialEmail, cfg.InitialPassword = "owner", "owner@example.com", "hunter2"
+	g := newTestGraphWithConfig(t, cfg)
 
-	users := repository.NewUserRepository(sqlDB)
-	sessions := repository.NewSessionRepository(sqlDB)
-	workspaceRepo := repository.NewWorkspaceRepository(sqlDB)
-	workspaceSvc := service.NewWorkspaceService(sqlDB, workspaceRepo, repository.NewWorkspaceInviteRepository(sqlDB), repository.NewCalendarRepository(sqlDB), repository.NewCalendarShareRepository(sqlDB))
-	calendarRepo := repository.NewCalendarRepository(sqlDB)
-	shareRepo := repository.NewCalendarShareRepository(sqlDB)
-	groupRepo := repository.NewGroupRepository(sqlDB)
-	calendars := service.NewCalendarService(calendarRepo, shareRepo, users, repository.NewEventReminderRepository(sqlDB), repository.NewCalendarDefaultReminderRepository(sqlDB), repository.NewEventReminderExplicitRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo, repository.NewCalendarGroupShareRepository(sqlDB), groupRepo)
-	auth := service.NewAuthService(users, sessions, workspaceSvc, repository.NewWorkspaceInviteRepository(sqlDB), calendars, repository.NewAttendeeRepository(sqlDB), []byte("test-secret"), "owner", "owner@example.com", "hunter2", false)
+	users := g.UserRepo
+	workspaceRepo := g.WorkspaceRepo
+	workspaceSvc := g.Workspaces
+	groupRepo := g.GroupRepo
+	calendars := g.Calendars
+	auth := g.Auth
 	ctx := context.Background()
 	ownerUser, _, err := auth.Bootstrap(ctx)
 	if err != nil {
@@ -89,10 +83,10 @@ func newShareTestServer(t *testing.T) shareTestServer {
 		t.Fatalf("add other as owner's workspace member: %v", err)
 	}
 
-	events := service.NewEventService(sqlDB, repository.NewEventRepository(sqlDB), repository.NewEventExceptionRepository(sqlDB), repository.NewEventReminderRepository(sqlDB), repository.NewCalendarDefaultReminderRepository(sqlDB), repository.NewEventReminderExplicitRepository(sqlDB), repository.NewSyncRepository(sqlDB), calendars, users, repository.NewAttachmentRepository(sqlDB), repository.NewAttendeeRepository(sqlDB), workspaceRepo, repository.NewGroupRepository(sqlDB), repository.NewNotificationRepository(sqlDB), nil, 1000)
-	attachmentStore := attachmentstore.New(t.TempDir())
-	imports := service.NewImportService(events, calendars, attachmentStore, testMaxAttachmentSize, testMaxAttachmentsPerEvent)
-	subscriptions := service.NewSubscribeService(events, calendars, 0, service.WithHTTPClient(&http.Client{}))
+	events := g.Events
+	attachmentStore := g.AttachmentStore
+	imports := g.Imports
+	subscriptions := g.Subscriptions
 	calendarHandler := NewCalendarHandler(calendars, events, imports, subscriptions, attachmentStore)
 
 	r := chi.NewRouter()

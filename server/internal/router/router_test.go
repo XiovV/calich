@@ -8,53 +8,27 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/emersion/go-webdav/caldav"
-
-	"github.com/XiovV/calendar/server/internal/attachmentstore"
-	"github.com/XiovV/calendar/server/internal/caldavserver"
-	"github.com/XiovV/calendar/server/internal/db"
-	"github.com/XiovV/calendar/server/internal/handlers"
-	"github.com/XiovV/calendar/server/internal/repository"
-	"github.com/XiovV/calendar/server/internal/service"
+	"github.com/XiovV/calendar/server/internal/app"
+	"github.com/XiovV/calendar/server/internal/apptest"
 )
 
 func newTestRouter(t *testing.T) http.Handler {
 	t.Helper()
 
-	sqlDB, err := db.OpenInMemory()
+	// The whole graph, handlers included, over an in-memory database (#214,
+	// ADR-0065). This package is the one that can take it: internal/app
+	// doesn't import router, so router's own in-package tests can import app.
+	a, err := app.NewInMemory(apptest.Config(t))
 	if err != nil {
-		t.Fatalf("open in-memory db: %v", err)
+		t.Fatalf("build app: %v", err)
 	}
-	t.Cleanup(func() { sqlDB.Close() })
+	t.Cleanup(func() { a.Close() })
 
-	users := repository.NewUserRepository(sqlDB)
-	sessions := repository.NewSessionRepository(sqlDB)
-	workspaceRepo := repository.NewWorkspaceRepository(sqlDB)
-	workspaceService := service.NewWorkspaceService(sqlDB, workspaceRepo, repository.NewWorkspaceInviteRepository(sqlDB), repository.NewCalendarRepository(sqlDB), repository.NewCalendarShareRepository(sqlDB))
-	calendarRepo := repository.NewCalendarRepository(sqlDB)
-	shareRepo := repository.NewCalendarShareRepository(sqlDB)
-	calendarService := service.NewCalendarService(calendarRepo, shareRepo, users, repository.NewEventReminderRepository(sqlDB), repository.NewCalendarDefaultReminderRepository(sqlDB), repository.NewEventReminderExplicitRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo, repository.NewCalendarGroupShareRepository(sqlDB), repository.NewGroupRepository(sqlDB))
-	authService := service.NewAuthService(users, sessions, workspaceService, repository.NewWorkspaceInviteRepository(sqlDB), calendarService, repository.NewAttendeeRepository(sqlDB), []byte("test-secret"), "admin", "admin@example.com", "admin", false)
-	if _, _, err := authService.Bootstrap(context.Background()); err != nil {
+	if _, _, err := a.Auth.Bootstrap(context.Background()); err != nil {
 		t.Fatalf("bootstrap: %v", err)
 	}
-	authHandler := handlers.NewAuthHandler(authService, false, false)
-	workspaceHandler := handlers.NewWorkspaceHandler(workspaceService)
-	eventService := service.NewEventService(sqlDB, repository.NewEventRepository(sqlDB), repository.NewEventExceptionRepository(sqlDB), repository.NewEventReminderRepository(sqlDB), repository.NewCalendarDefaultReminderRepository(sqlDB), repository.NewEventReminderExplicitRepository(sqlDB), repository.NewSyncRepository(sqlDB), calendarService, users, repository.NewAttachmentRepository(sqlDB), repository.NewAttendeeRepository(sqlDB), workspaceRepo, repository.NewGroupRepository(sqlDB), repository.NewNotificationRepository(sqlDB), nil, 1000)
-	attachmentStore := attachmentstore.New(t.TempDir())
-	calendarHandler := handlers.NewCalendarHandler(calendarService, eventService, service.NewImportService(eventService, calendarService, attachmentStore, 25<<20, 10), service.NewSubscribeService(eventService, calendarService, 0), attachmentStore)
-	eventHandler := handlers.NewEventHandler(eventService, attachmentStore)
-	attachmentService := service.NewAttachmentService(repository.NewAttachmentRepository(sqlDB), repository.NewEventRepository(sqlDB), calendarService, eventService, attachmentStore, 10)
-	attachmentHandler := handlers.NewAttachmentHandler(attachmentService, 25<<20)
-	notificationHandler := handlers.NewNotificationHandler(service.NewNotificationService(repository.NewNotificationRepository(sqlDB)))
-	appPasswordService := service.NewAppPasswordService(repository.NewAppPasswordRepository(sqlDB), users)
-	appPasswordHandler := handlers.NewAppPasswordHandler(appPasswordService)
-	accountHandler := handlers.NewAccountHandler(service.NewAccountService(sqlDB, users, sessions, calendarRepo, shareRepo, workspaceRepo, workspaceService))
-	userHandler := handlers.NewUserHandler(service.NewUserService(users))
-	groupHandler := handlers.NewGroupHandler(service.NewGroupService(repository.NewGroupRepository(sqlDB), workspaceRepo))
-	calDAVHandler := &caldav.Handler{Backend: caldavserver.NewBackend(calendarService, eventService, attachmentService, 25<<20, 10), Prefix: "/dav"}
 
-	r, err := New(slog.New(slog.NewTextHandler(io.Discard, nil)), authHandler, calendarHandler, eventHandler, attachmentHandler, notificationHandler, appPasswordHandler, accountHandler, userHandler, workspaceHandler, groupHandler, calDAVHandler, authService, authService, appPasswordService, authService, workspaceService)
+	r, err := New(slog.New(slog.NewTextHandler(io.Discard, nil)), a.AuthHandler, a.CalendarHandler, a.EventHandler, a.AttachmentHandler, a.NotificationHandler, a.AppPasswordHandler, a.AccountHandler, a.UserHandler, a.WorkspaceHandler, a.GroupHandler, a.CalDAVHandler, a.Auth, a.Auth, a.AppPasswords, a.Auth, a.Workspaces)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

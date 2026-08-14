@@ -3,7 +3,6 @@ package handlers
 import (
 	"bytes"
 	"context"
-	"database/sql"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -12,7 +11,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/XiovV/calendar/server/internal/db"
+	"github.com/XiovV/calendar/server/internal/apptest"
 	"github.com/XiovV/calendar/server/internal/httpauth"
 	"github.com/XiovV/calendar/server/internal/repository"
 	"github.com/XiovV/calendar/server/internal/service"
@@ -23,28 +22,22 @@ import (
 // Workspace) and the /api/workspaces routes.
 type workspaceHandlerTestServer struct {
 	srv        *httptest.Server
-	db         *sql.DB
+	graph      *service.Graph
 	workspaces *service.WorkspaceService
 }
 
 func newWorkspaceHandlerTestServer(t *testing.T) *workspaceHandlerTestServer {
 	t.Helper()
 
-	sqlDB, err := db.OpenInMemory()
-	if err != nil {
-		t.Fatalf("open in-memory db: %v", err)
-	}
-	t.Cleanup(func() { sqlDB.Close() })
+	// No bootstrap account, and ENABLE_SIGNUPS on: every User here registers
+	// through the HTTP surface.
+	cfg := apptest.Config(t)
+	cfg.InitialName, cfg.InitialEmail, cfg.InitialPassword = "", "", ""
+	cfg.EnableSignups = true
+	g := newTestGraphWithConfig(t, cfg)
 
-	users := repository.NewUserRepository(sqlDB)
-	sessions := repository.NewSessionRepository(sqlDB)
-	calendarRepo := repository.NewCalendarRepository(sqlDB)
-	shareRepo := repository.NewCalendarShareRepository(sqlDB)
-	workspaceRepo := repository.NewWorkspaceRepository(sqlDB)
-	inviteRepo := repository.NewWorkspaceInviteRepository(sqlDB)
-	workspaces := service.NewWorkspaceService(sqlDB, workspaceRepo, inviteRepo, calendarRepo, shareRepo)
-	calendars := service.NewCalendarService(calendarRepo, shareRepo, users, repository.NewEventReminderRepository(sqlDB), repository.NewCalendarDefaultReminderRepository(sqlDB), repository.NewEventReminderExplicitRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo, repository.NewCalendarGroupShareRepository(sqlDB), repository.NewGroupRepository(sqlDB))
-	auth := service.NewAuthService(users, sessions, workspaces, inviteRepo, calendars, repository.NewAttendeeRepository(sqlDB), []byte("test-secret"), "", "", "", true)
+	workspaces := g.Workspaces
+	auth := g.Auth
 
 	authHandler := NewAuthHandler(auth, false, false)
 	workspaceHandler := NewWorkspaceHandler(workspaces)
@@ -67,7 +60,7 @@ func newWorkspaceHandlerTestServer(t *testing.T) *workspaceHandlerTestServer {
 	srv := httptest.NewServer(r)
 	t.Cleanup(srv.Close)
 
-	return &workspaceHandlerTestServer{srv: srv, db: sqlDB, workspaces: workspaces}
+	return &workspaceHandlerTestServer{srv: srv, graph: g, workspaces: workspaces}
 }
 
 func (s *workspaceHandlerTestServer) register(t *testing.T, username string) (accessToken string, userID, workspaceID int64) {
@@ -91,7 +84,7 @@ func (s *workspaceHandlerTestServer) register(t *testing.T, username string) (ac
 		t.Fatalf("decode register response: %v", err)
 	}
 
-	users := repository.NewUserRepository(s.db)
+	users := s.graph.UserRepo
 	user, err := users.GetByEmail(ctx, username+"@example.com")
 	if err != nil {
 		t.Fatalf("get %s: %v", username, err)
@@ -106,7 +99,7 @@ func (s *workspaceHandlerTestServer) register(t *testing.T, username string) (ac
 
 func (s *workspaceHandlerTestServer) addMember(t *testing.T, workspaceID, userID int64, role string) {
 	t.Helper()
-	if _, err := s.db.Exec("INSERT INTO workspace_members (workspace_id, user_id, role) VALUES (?, ?, ?)", workspaceID, userID, role); err != nil {
+	if _, err := s.graph.DB.Exec("INSERT INTO workspace_members (workspace_id, user_id, role) VALUES (?, ?, ?)", workspaceID, userID, role); err != nil {
 		t.Fatalf("add member: %v", err)
 	}
 }
@@ -237,7 +230,7 @@ func TestWorkspaceHandler_RemoveMemberImpact_ReportsOwnedCalendars(t *testing.T)
 	_, bobID, _ := s.register(t, "bob")
 	s.addMember(t, workspaceID, bobID, repository.WorkspaceRoleMember)
 
-	calendars := repository.NewCalendarRepository(s.db)
+	calendars := s.graph.CalendarRepo
 	if _, err := calendars.Create(context.Background(), bobID, workspaceID, "cal-1", repository.CalendarFields{Name: "Bob's calendar", Color: "#112233FF"}); err != nil {
 		t.Fatalf("create calendar: %v", err)
 	}
@@ -313,7 +306,7 @@ func TestWorkspaceHandler_RemoveMember_RequiresDispositionForOwnedCalendar(t *te
 	_, bobID, _ := s.register(t, "bob")
 	s.addMember(t, workspaceID, bobID, repository.WorkspaceRoleMember)
 
-	calendars := repository.NewCalendarRepository(s.db)
+	calendars := s.graph.CalendarRepo
 	if _, err := calendars.Create(context.Background(), bobID, workspaceID, "cal-1", repository.CalendarFields{Name: "Bob's calendar", Color: "#112233FF"}); err != nil {
 		t.Fatalf("create calendar: %v", err)
 	}

@@ -4,7 +4,6 @@ import (
 	"context"
 	"testing"
 
-	"github.com/XiovV/calendar/server/internal/db"
 	"github.com/XiovV/calendar/server/internal/repository"
 )
 
@@ -121,13 +120,9 @@ func TestAccess_CanRead_CanWrite_IsOwner(t *testing.T) {
 // repository seam (rather than constructing repository.Calendar by hand),
 // covering owner, stranger, and the Subscription clamp end-to-end.
 func TestCalendarService_Access(t *testing.T) {
-	sqlDB, err := db.OpenInMemory()
-	if err != nil {
-		t.Fatalf("open in-memory db: %v", err)
-	}
-	t.Cleanup(func() { sqlDB.Close() })
+	g := newTestGraph(t)
 
-	users := repository.NewUserRepository(sqlDB)
+	users := g.UserRepo
 	owner, err := users.Create(context.Background(), "owner", "owner@example.com", "hash", false)
 	if err != nil {
 		t.Fatalf("create owner: %v", err)
@@ -137,7 +132,7 @@ func TestCalendarService_Access(t *testing.T) {
 		t.Fatalf("create stranger: %v", err)
 	}
 
-	workspaceRepo := repository.NewWorkspaceRepository(sqlDB)
+	workspaceRepo := g.WorkspaceRepo
 	workspace, err := workspaceRepo.Create(context.Background(), "Test Workspace", owner.ID)
 	if err != nil {
 		t.Fatalf("create workspace: %v", err)
@@ -146,7 +141,7 @@ func TestCalendarService_Access(t *testing.T) {
 		t.Fatalf("add workspace member: %v", err)
 	}
 
-	svc := NewCalendarService(repository.NewCalendarRepository(sqlDB), repository.NewCalendarShareRepository(sqlDB), users, repository.NewEventReminderRepository(sqlDB), repository.NewCalendarDefaultReminderRepository(sqlDB), repository.NewEventReminderExplicitRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo, repository.NewCalendarGroupShareRepository(sqlDB), repository.NewGroupRepository(sqlDB))
+	svc := g.Calendars
 	ctx := context.Background()
 	calendar, err := svc.Create(ctx, owner.ID, workspace.ID, "cal-1", CalendarWrite{Name: "Personal", Color: "#12809CFF"})
 	if err != nil {

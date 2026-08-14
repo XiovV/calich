@@ -7,9 +7,6 @@ import (
 	"testing"
 
 	"golang.org/x/crypto/bcrypt"
-
-	"github.com/XiovV/calendar/server/internal/db"
-	"github.com/XiovV/calendar/server/internal/repository"
 )
 
 func newTestAppPasswordService(t *testing.T) (svc *AppPasswordService, userID int64) {
@@ -22,19 +19,14 @@ func newTestAppPasswordService(t *testing.T) (svc *AppPasswordService, userID in
 func newTestAppPasswordServiceWithEmail(t *testing.T) (svc *AppPasswordService, userID int64, email string) {
 	t.Helper()
 
-	sqlDB, err := db.OpenInMemory()
-	if err != nil {
-		t.Fatalf("open in-memory db: %v", err)
-	}
-	t.Cleanup(func() { sqlDB.Close() })
+	g := newTestGraph(t)
 
-	users := repository.NewUserRepository(sqlDB)
-	user, err := users.Create(context.Background(), "user-a", "user-a@example.com", "hash", false)
+	user, err := g.UserRepo.Create(context.Background(), "user-a", "user-a@example.com", "hash", false)
 	if err != nil {
 		t.Fatalf("create user: %v", err)
 	}
 
-	return NewAppPasswordService(repository.NewAppPasswordRepository(sqlDB), users), user.ID, user.Email
+	return g.AppPasswords, user.ID, user.Email
 }
 
 func TestAppPasswordService_Create(t *testing.T) {
@@ -243,11 +235,7 @@ func TestAppPasswordService_Authenticate_RejectsRevokedAppPassword(t *testing.T)
 }
 
 func TestAppPasswordService_Authenticate_RejectsTheAccountLoginPassword(t *testing.T) {
-	sqlDB, err := db.OpenInMemory()
-	if err != nil {
-		t.Fatalf("open in-memory db: %v", err)
-	}
-	t.Cleanup(func() { sqlDB.Close() })
+	g := newTestGraph(t)
 
 	loginPassword := "the-account-login-password"
 	hash, err := bcrypt.GenerateFromPassword([]byte(loginPassword), bcrypt.DefaultCost)
@@ -255,13 +243,12 @@ func TestAppPasswordService_Authenticate_RejectsTheAccountLoginPassword(t *testi
 		t.Fatalf("hash login password: %v", err)
 	}
 
-	users := repository.NewUserRepository(sqlDB)
-	user, err := users.Create(context.Background(), "user-a", "user-a@example.com", string(hash), false)
+	user, err := g.UserRepo.Create(context.Background(), "user-a", "user-a@example.com", string(hash), false)
 	if err != nil {
 		t.Fatalf("create user: %v", err)
 	}
 
-	svc := NewAppPasswordService(repository.NewAppPasswordRepository(sqlDB), users)
+	svc := g.AppPasswords
 	if _, err := svc.Create(context.Background(), user.ID, "iPhone"); err != nil {
 		t.Fatalf("create app password: %v", err)
 	}

@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/XiovV/calendar/server/internal/db"
+	"github.com/XiovV/calendar/server/internal/apptest"
 	"github.com/XiovV/calendar/server/internal/repository"
 )
 
@@ -22,35 +22,29 @@ import (
 // a Workspace, which is WorkspaceService.CreateInvite/AuthService.Accept*'s
 // job, not AccountService's).
 type accountTestHarness struct {
-	db         *sql.DB
-	accounts   *AccountService
-	auth       *AuthService
-	calendars  *CalendarService
-	workspaces *WorkspaceService
-	users      *repository.UserRepository
+	graph *Graph
+	// The handful of graph members these tests reach for by name, kept as
+	// fields so the assertions below read as they always did.
+	db           *sql.DB
+	accounts     *AccountService
+	auth         *AuthService
+	calendars    *CalendarService
+	calendarRepo *repository.CalendarRepository
+	workspaces   *WorkspaceService
+	users        *repository.UserRepository
 }
 
 func newAccountTestHarness(t *testing.T) *accountTestHarness {
 	t.Helper()
 
-	sqlDB, err := db.OpenInMemory()
-	if err != nil {
-		t.Fatalf("open in-memory db: %v", err)
-	}
-	t.Cleanup(func() { sqlDB.Close() })
+	// No bootstrap account, and ENABLE_SIGNUPS on: every User here arrives
+	// through register below.
+	cfg := apptest.Config(t)
+	cfg.InitialName, cfg.InitialEmail, cfg.InitialPassword = "", "", ""
+	cfg.EnableSignups = true
+	g := newTestGraphWithConfig(t, cfg)
 
-	users := repository.NewUserRepository(sqlDB)
-	sessions := repository.NewSessionRepository(sqlDB)
-	calendarRepo := repository.NewCalendarRepository(sqlDB)
-	shareRepo := repository.NewCalendarShareRepository(sqlDB)
-	workspaceRepo := repository.NewWorkspaceRepository(sqlDB)
-	workspaceInviteRepo := repository.NewWorkspaceInviteRepository(sqlDB)
-	workspaces := NewWorkspaceService(sqlDB, workspaceRepo, workspaceInviteRepo, repository.NewCalendarRepository(sqlDB), repository.NewCalendarShareRepository(sqlDB))
-	calendars := NewCalendarService(calendarRepo, shareRepo, users, repository.NewEventReminderRepository(sqlDB), repository.NewCalendarDefaultReminderRepository(sqlDB), repository.NewEventReminderExplicitRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo, repository.NewCalendarGroupShareRepository(sqlDB), repository.NewGroupRepository(sqlDB))
-	auth := NewAuthService(users, sessions, workspaces, workspaceInviteRepo, calendars, repository.NewAttendeeRepository(sqlDB), []byte("test-secret"), "", "", "", true)
-	accounts := NewAccountService(sqlDB, users, sessions, calendarRepo, shareRepo, workspaceRepo, workspaces)
-
-	return &accountTestHarness{db: sqlDB, accounts: accounts, auth: auth, calendars: calendars, workspaces: workspaces, users: users}
+	return &accountTestHarness{graph: g, db: g.DB, accounts: g.Accounts, auth: g.Auth, calendars: g.Calendars, calendarRepo: g.CalendarRepo, workspaces: g.Workspaces, users: g.UserRepo}
 }
 
 // register self-registers username (ENABLE_SIGNUPS is always true in the
@@ -144,7 +138,7 @@ func TestAccountService_SetDisabled_DeletesLiveSessions(t *testing.T) {
 	ctx := context.Background()
 
 	alice, _ := h.register(t, "alice")
-	sessions := repository.NewSessionRepository(h.db)
+	sessions := h.graph.SessionRepo
 	if _, err := sessions.Create(ctx, alice.ID, "refresh-token-hash", time.Now().Add(24*time.Hour)); err != nil {
 		t.Fatalf("create session: %v", err)
 	}
@@ -412,14 +406,14 @@ func TestAccountService_Delete_DispositionDelete_RemovesOwnedCalendarsWorkspaceA
 		t.Fatalf("delete alice: %v", err)
 	}
 
-	calendarRepo := repository.NewCalendarRepository(h.db)
+	calendarRepo := h.calendarRepo
 	for _, id := range []string{calendarA.ID, calendarB.ID} {
 		if _, err := calendarRepo.GetByIDAny(ctx, id); !errors.Is(err, repository.ErrNotFound) {
 			t.Fatalf("expected calendar %s to be deleted, got %v", id, err)
 		}
 	}
 
-	workspaceRepo := repository.NewWorkspaceRepository(h.db)
+	workspaceRepo := h.graph.WorkspaceRepo
 	if _, err := workspaceRepo.GetByID(ctx, aliceWorkspace.ID); !errors.Is(err, repository.ErrNotFound) {
 		t.Fatalf("expected alice's solo workspace to be retired, got %v", err)
 	}
@@ -449,7 +443,7 @@ func TestAccountService_Delete_DispositionTransfer_KeepsEventsAndShares(t *testi
 		t.Fatalf("share calendar with bob: %v", err)
 	}
 
-	events := repository.NewEventRepository(h.db)
+	events := h.graph.EventRepo
 	bobID := bob.ID
 	event, err := events.Create(ctx, "evt-1", &bobID, repository.EventFields{
 		CalendarID: calendar.ID,
@@ -483,7 +477,7 @@ func TestAccountService_Delete_DispositionTransfer_KeepsEventsAndShares(t *testi
 		t.Fatalf("delete alice with transfer to bob: %v", err)
 	}
 
-	calendarRepo := repository.NewCalendarRepository(h.db)
+	calendarRepo := h.calendarRepo
 	transferred, err := calendarRepo.GetByIDAny(ctx, calendar.ID)
 	if err != nil {
 		t.Fatalf("expected the calendar to survive the transfer: %v", err)
@@ -500,7 +494,7 @@ func TestAccountService_Delete_DispositionTransfer_KeepsEventsAndShares(t *testi
 		t.Fatalf("expected the event to be unchanged, got %+v", survivingEvent)
 	}
 
-	shareRepo := repository.NewCalendarShareRepository(h.db)
+	shareRepo := h.graph.ShareRepo
 	if _, err := shareRepo.Get(ctx, calendar.ID, bob.ID); err != nil {
 		t.Fatalf("expected bob's share to survive the transfer: %v", err)
 	}

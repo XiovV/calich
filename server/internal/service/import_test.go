@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/XiovV/calendar/server/internal/apptest"
 	"github.com/XiovV/calendar/server/internal/attachmentstore"
-	"github.com/XiovV/calendar/server/internal/db"
 	"github.com/XiovV/calendar/server/internal/repository"
 )
 
@@ -39,38 +39,30 @@ func newTestImportService(t *testing.T) (svc *ImportService, events *EventServic
 func newTestImportServiceWithAttachmentLimits(t *testing.T, maxAttachmentSize int64, maxAttachmentsPerEvent int) (svc *ImportService, events *EventService, calendars *CalendarService, store *attachmentstore.Store, userID, workspaceID int64, existingCalendarID string) {
 	t.Helper()
 
-	sqlDB, err := db.OpenInMemory()
-	if err != nil {
-		t.Fatalf("open in-memory db: %v", err)
-	}
-	t.Cleanup(func() { sqlDB.Close() })
+	cfg := apptest.Config(t)
+	cfg.MaxAttachmentSize = maxAttachmentSize
+	cfg.MaxAttachmentsPerEvent = maxAttachmentsPerEvent
+	g := newTestGraphWithConfig(t, cfg)
 
-	users := repository.NewUserRepository(sqlDB)
-	user, err := users.Create(context.Background(), "user-a", "user-a@example.com", "hash", false)
+	user, err := g.UserRepo.Create(context.Background(), "user-a", "user-a@example.com", "hash", false)
 	if err != nil {
 		t.Fatalf("create user: %v", err)
 	}
 
-	workspaceRepo := repository.NewWorkspaceRepository(sqlDB)
-	workspace, err := workspaceRepo.Create(context.Background(), "Test Workspace", user.ID)
+	workspace, err := g.WorkspaceRepo.Create(context.Background(), "Test Workspace", user.ID)
 	if err != nil {
 		t.Fatalf("create workspace: %v", err)
 	}
-	if err := workspaceRepo.AddMember(context.Background(), workspace.ID, user.ID, repository.WorkspaceRoleOwner); err != nil {
+	if err := g.WorkspaceRepo.AddMember(context.Background(), workspace.ID, user.ID, repository.WorkspaceRoleOwner); err != nil {
 		t.Fatalf("add workspace member: %v", err)
 	}
 
-	calendarRepo := repository.NewCalendarRepository(sqlDB)
-	calendarSvc := NewCalendarService(calendarRepo, repository.NewCalendarShareRepository(sqlDB), users, repository.NewEventReminderRepository(sqlDB), repository.NewCalendarDefaultReminderRepository(sqlDB), repository.NewEventReminderExplicitRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo, repository.NewCalendarGroupShareRepository(sqlDB), repository.NewGroupRepository(sqlDB))
-	cal, err := calendarRepo.Create(context.Background(), user.ID, workspace.ID, "cal-1", repository.CalendarFields{Name: "Existing", Color: "#12809CFF"})
+	cal, err := g.CalendarRepo.Create(context.Background(), user.ID, workspace.ID, "cal-1", repository.CalendarFields{Name: "Existing", Color: "#12809CFF"})
 	if err != nil {
 		t.Fatalf("create calendar: %v", err)
 	}
 
-	eventSvc := NewEventService(sqlDB, repository.NewEventRepository(sqlDB), repository.NewEventExceptionRepository(sqlDB), repository.NewEventReminderRepository(sqlDB), repository.NewCalendarDefaultReminderRepository(sqlDB), repository.NewEventReminderExplicitRepository(sqlDB), repository.NewSyncRepository(sqlDB), calendarSvc, users, repository.NewAttachmentRepository(sqlDB), repository.NewAttendeeRepository(sqlDB), workspaceRepo, repository.NewGroupRepository(sqlDB), repository.NewNotificationRepository(sqlDB), nil, 1000)
-	attachmentStore := attachmentstore.New(t.TempDir())
-
-	return NewImportService(eventSvc, calendarSvc, attachmentStore, maxAttachmentSize, maxAttachmentsPerEvent), eventSvc, calendarSvc, attachmentStore, user.ID, workspace.ID, cal.ID
+	return g.Imports, g.Events, g.Calendars, g.AttachmentStore, user.ID, workspace.ID, cal.ID
 }
 
 const singleEventICS = `BEGIN:VCALENDAR
@@ -611,30 +603,23 @@ func TestImportService_RealRun_WritesInlineAttachment(t *testing.T) {
 }
 
 func TestImportService_DryRun_DoesNotSaveAttachmentBytes(t *testing.T) {
-	dataDir := t.TempDir()
-	store := attachmentstore.New(dataDir)
+	g := newTestGraph(t)
+	// The Data directory the graph's own Store writes under, so the
+	// file-count assertion below looks where a real save would land.
+	dataDir := g.Config.DataDir
 
-	sqlDB, err := db.OpenInMemory()
-	if err != nil {
-		t.Fatalf("open in-memory db: %v", err)
-	}
-	t.Cleanup(func() { sqlDB.Close() })
-	users := repository.NewUserRepository(sqlDB)
-	user, err := users.Create(context.Background(), "user-a", "user-a@example.com", "hash", false)
+	user, err := g.UserRepo.Create(context.Background(), "user-a", "user-a@example.com", "hash", false)
 	if err != nil {
 		t.Fatalf("create user: %v", err)
 	}
-	workspaceRepo := repository.NewWorkspaceRepository(sqlDB)
-	workspace, err := workspaceRepo.Create(context.Background(), "Test Workspace", user.ID)
+	workspace, err := g.WorkspaceRepo.Create(context.Background(), "Test Workspace", user.ID)
 	if err != nil {
 		t.Fatalf("create workspace: %v", err)
 	}
-	if err := workspaceRepo.AddMember(context.Background(), workspace.ID, user.ID, repository.WorkspaceRoleOwner); err != nil {
+	if err := g.WorkspaceRepo.AddMember(context.Background(), workspace.ID, user.ID, repository.WorkspaceRoleOwner); err != nil {
 		t.Fatalf("add workspace member: %v", err)
 	}
-	calendarSvc := NewCalendarService(repository.NewCalendarRepository(sqlDB), repository.NewCalendarShareRepository(sqlDB), users, repository.NewEventReminderRepository(sqlDB), repository.NewCalendarDefaultReminderRepository(sqlDB), repository.NewEventReminderExplicitRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo, repository.NewCalendarGroupShareRepository(sqlDB), repository.NewGroupRepository(sqlDB))
-	eventSvc := NewEventService(sqlDB, repository.NewEventRepository(sqlDB), repository.NewEventExceptionRepository(sqlDB), repository.NewEventReminderRepository(sqlDB), repository.NewCalendarDefaultReminderRepository(sqlDB), repository.NewEventReminderExplicitRepository(sqlDB), repository.NewSyncRepository(sqlDB), calendarSvc, users, repository.NewAttachmentRepository(sqlDB), repository.NewAttendeeRepository(sqlDB), workspaceRepo, repository.NewGroupRepository(sqlDB), repository.NewNotificationRepository(sqlDB), nil, 1000)
-	svc := NewImportService(eventSvc, calendarSvc, store, testMaxAttachmentSize, testMaxAttachmentsPerEvent)
+	svc := g.Imports
 	ctx := context.Background()
 
 	summary, err := svc.Import(ctx, user.ID, workspace.ID, "invite.ics", []byte(crlf(singleEventWithAttachICS)), []ImportTarget{

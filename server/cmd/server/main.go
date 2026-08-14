@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"crypto/rand"
 	"log/slog"
 	"net/http"
 	"os"
@@ -10,18 +9,10 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/XiovV/calendar/server/internal/attachmentstore"
-	"github.com/XiovV/calendar/server/internal/caldavserver"
+	"github.com/XiovV/calendar/server/internal/app"
 	"github.com/XiovV/calendar/server/internal/config"
 	"github.com/XiovV/calendar/server/internal/db"
-	"github.com/XiovV/calendar/server/internal/handlers"
-	"github.com/XiovV/calendar/server/internal/mailer"
-	"github.com/XiovV/calendar/server/internal/outbox"
-	"github.com/XiovV/calendar/server/internal/reminder"
-	"github.com/XiovV/calendar/server/internal/reply"
-	"github.com/XiovV/calendar/server/internal/repository"
 	"github.com/XiovV/calendar/server/internal/router"
-	"github.com/XiovV/calendar/server/internal/service"
 )
 
 // reminderTickInterval is how often the firing engine checks for due
@@ -67,52 +58,15 @@ func main() {
 	}
 	defer sqlDB.Close()
 
-	jwtSecret := make([]byte, 32)
-	if _, err := rand.Read(jwtSecret); err != nil {
-		logger.Error("failed to generate JWT signing secret", "error", err)
+	// The whole object graph, built in one place (#214, ADR-0065).
+	a, err := app.New(sqlDB, cfg)
+	if err != nil {
+		logger.Error("failed to build application", "error", err)
 		os.Exit(1)
 	}
 
-	users := repository.NewUserRepository(sqlDB)
-	sessions := repository.NewSessionRepository(sqlDB)
-	calendarRepo := repository.NewCalendarRepository(sqlDB)
-	shareRepo := repository.NewCalendarShareRepository(sqlDB)
-	eventReminderRepo := repository.NewEventReminderRepository(sqlDB)
-	calendarDefaultReminderRepo := repository.NewCalendarDefaultReminderRepository(sqlDB)
-	eventReminderExplicitRepo := repository.NewEventReminderExplicitRepository(sqlDB)
-	colorOverrideRepo := repository.NewCalendarUserColorRepository(sqlDB)
-	workspaceRepo := repository.NewWorkspaceRepository(sqlDB)
-	workspaceInviteRepo := repository.NewWorkspaceInviteRepository(sqlDB)
-	workspaceService := service.NewWorkspaceService(sqlDB, workspaceRepo, workspaceInviteRepo, calendarRepo, shareRepo)
-	groupShareRepo := repository.NewCalendarGroupShareRepository(sqlDB)
-	groupRepo := repository.NewGroupRepository(sqlDB)
-	groupService := service.NewGroupService(groupRepo, workspaceRepo)
-	calendarService := service.NewCalendarService(calendarRepo, shareRepo, users, eventReminderRepo, calendarDefaultReminderRepo, eventReminderExplicitRepo, colorOverrideRepo, workspaceRepo, groupShareRepo, groupRepo)
-	attendeeRepo := repository.NewAttendeeRepository(sqlDB)
-	authService := service.NewAuthService(users, sessions, workspaceService, workspaceInviteRepo, calendarService, attendeeRepo, jwtSecret, cfg.InitialName, cfg.InitialEmail, cfg.InitialPassword, cfg.EnableSignups)
-	attachmentRepo := repository.NewAttachmentRepository(sqlDB)
-	eventRepo := repository.NewEventRepository(sqlDB)
-	notificationRepo := repository.NewNotificationRepository(sqlDB)
-	// smtpMailer serves Reminder email delivery (ADR-0021) and Invitation
-	// delivery (ADR-0059) alike — nil when this deployment has no SMTP
-	// transport configured, in which case Reminders fall back to the log
-	// sink and inviteUser/expandGroupMembers queue no Invitation at all
-	// (eventOutbox stays nil too, ADR-0059's "no affordance" posture).
-	var smtpMailer *mailer.SMTPMailer
-	var eventOutbox *repository.OutboxRepository
-	if cfg.SMTPConfigured() {
-		smtpMailer = mailer.NewSMTPMailer(cfg.SMTPHost, cfg.SMTPPort, cfg.SMTPUser, cfg.SMTPPass, cfg.SMTPFrom)
-		eventOutbox = repository.NewOutboxRepository(sqlDB)
-	}
-	eventService := service.NewEventService(sqlDB, eventRepo, repository.NewEventExceptionRepository(sqlDB), eventReminderRepo, calendarDefaultReminderRepo, eventReminderExplicitRepo, repository.NewSyncRepository(sqlDB), calendarService, users, attachmentRepo, attendeeRepo, workspaceRepo, groupRepo, notificationRepo, eventOutbox, cfg.InviteRateLimitPerHour)
-	attachmentStore := attachmentstore.New(cfg.DataDir)
-	attachmentService := service.NewAttachmentService(attachmentRepo, eventRepo, calendarService, eventService, attachmentStore, cfg.MaxAttachmentsPerEvent)
-	notificationService := service.NewNotificationService(notificationRepo)
-	appPasswordService := service.NewAppPasswordService(repository.NewAppPasswordRepository(sqlDB), users)
-	accountService := service.NewAccountService(sqlDB, users, sessions, calendarRepo, shareRepo, workspaceRepo, workspaceService)
-
 	ctx := context.Background()
-	bootstrapUser, bootstrapCreatedUser, err := authService.Bootstrap(ctx)
+	bootstrapUser, bootstrapCreatedUser, err := a.Auth.Bootstrap(ctx)
 	if err != nil {
 		logger.Error("failed to bootstrap initial user", "error", err)
 		os.Exit(1)
@@ -122,34 +76,18 @@ func main() {
 		// Bootstrap just created bootstrapUser's own Workspace (AuthService.
 		// Bootstrap) — resolve it so the seeded default Calendars land inside
 		// it rather than nowhere (#155, ADR-0045).
-		bootstrapWorkspaces, err := workspaceService.ListForUser(ctx, bootstrapUser.ID)
+		bootstrapWorkspaces, err := a.Workspaces.ListForUser(ctx, bootstrapUser.ID)
 		if err != nil {
 			logger.Error("failed to look up bootstrap workspace", "error", err)
 			os.Exit(1)
 		}
-		if err := calendarService.EnsureDefaults(ctx, bootstrapUser.ID, bootstrapWorkspaces[0].ID); err != nil {
+		if err := a.Calendars.EnsureDefaults(ctx, bootstrapUser.ID, bootstrapWorkspaces[0].ID); err != nil {
 			logger.Error("failed to seed default calendars", "error", err)
 			os.Exit(1)
 		}
 	}
 
-	importService := service.NewImportService(eventService, calendarService, attachmentStore, cfg.MaxAttachmentSize, cfg.MaxAttachmentsPerEvent)
-	subscribeService := service.NewSubscribeService(eventService, calendarService, cfg.SubscriptionRefreshInterval)
-
-	authHandler := handlers.NewAuthHandler(authService, cfg.SMTPConfigured(), cfg.ImapConfigured())
-	calendarHandler := handlers.NewCalendarHandler(calendarService, eventService, importService, subscribeService, attachmentStore)
-	eventHandler := handlers.NewEventHandler(eventService, attachmentStore)
-	attachmentHandler := handlers.NewAttachmentHandler(attachmentService, cfg.MaxAttachmentSize)
-	notificationHandler := handlers.NewNotificationHandler(notificationService)
-	appPasswordHandler := handlers.NewAppPasswordHandler(appPasswordService)
-	accountHandler := handlers.NewAccountHandler(accountService)
-	userService := service.NewUserService(users)
-	userHandler := handlers.NewUserHandler(userService)
-	workspaceHandler := handlers.NewWorkspaceHandler(workspaceService)
-	groupHandler := handlers.NewGroupHandler(groupService)
-	calDAVHandler := caldavserver.NewHTTPHandler(caldavserver.NewBackend(calendarService, eventService, attachmentService, cfg.MaxAttachmentSize, cfg.MaxAttachmentsPerEvent))
-
-	handler, err := router.New(logger, authHandler, calendarHandler, eventHandler, attachmentHandler, notificationHandler, appPasswordHandler, accountHandler, userHandler, workspaceHandler, groupHandler, calDAVHandler, authService, authService, appPasswordService, authService, workspaceService)
+	handler, err := router.New(logger, a.AuthHandler, a.CalendarHandler, a.EventHandler, a.AttachmentHandler, a.NotificationHandler, a.AppPasswordHandler, a.AccountHandler, a.UserHandler, a.WorkspaceHandler, a.GroupHandler, a.CalDAVHandler, a.Auth, a.Auth, a.AppPasswords, a.Auth, a.Workspaces)
 	if err != nil {
 		logger.Error("failed to build router", "error", err)
 		os.Exit(1)
@@ -160,43 +98,30 @@ func main() {
 		Handler: handler,
 	}
 
-	// The firing engine's scheduler (ADR-0021): a Notification-Channel
-	// Reminder inserts a persistent Notification (#56); an Email-Channel
-	// Reminder sends over SMTP (#57) once the self-hoster has configured it,
-	// otherwise it falls back to the log sink.
-	var emailDispatcher reminder.Dispatcher = reminder.LogDispatcher{}
-	if smtpMailer != nil {
-		emailDispatcher = reminder.EmailDispatcher{Users: users, Mailer: smtpMailer, Fallback: reminder.LogDispatcher{}}
-	}
-	dispatcher := reminder.NotificationDispatcher{Notifications: notificationRepo, Users: users, Fallback: emailDispatcher, Now: time.Now}
+	// The firing engine's scheduler (ADR-0021).
 	schedulerCtx, stopScheduler := context.WithCancel(context.Background())
 	defer stopScheduler()
-	scheduler := reminder.NewScheduler(eventService, repository.NewFiredReminderRepository(sqlDB), dispatcher, time.Now)
-	go scheduler.Run(schedulerCtx, reminderTickInterval)
+	go a.ReminderScheduler.Run(schedulerCtx, reminderTickInterval)
 
 	// The background poller that refreshes Subscribed Calendars on its own,
 	// whether or not a browser is open (#86, ADR-0033).
 	pollerCtx, stopPoller := context.WithCancel(context.Background())
 	defer stopPoller()
-	poller := service.NewPoller(calendarService, subscribeService, time.Now)
-	go poller.Run(pollerCtx, subscriptionPollerTickInterval)
+	go a.SubscriptionPoller.Run(pollerCtx, subscriptionPollerTickInterval)
 
 	// The Attachment sweeper: reclaims files with no matching row, at
 	// startup and daily thereafter (#132, ADR-0040).
 	sweeperCtx, stopSweeper := context.WithCancel(context.Background())
 	defer stopSweeper()
-	sweeper := service.NewAttachmentSweeper(attachmentRepo, attachmentStore)
-	go sweeper.Run(sweeperCtx, attachmentSweepInterval)
+	go a.AttachmentSweeper.Run(sweeperCtx, attachmentSweepInterval)
 
 	// The outbox Worker: drains queued Invitations (ADR-0059, ADR-0060).
-	// Absent entirely when eventOutbox is nil (no SMTP configured) — there
-	// is nothing queued to drain, and nothing to send it with.
+	// Absent entirely when no SMTP is configured — there is nothing queued
+	// to drain, and nothing to send it with.
 	outboxCtx, stopOutbox := context.WithCancel(context.Background())
 	defer stopOutbox()
-	if eventOutbox != nil {
-		invitationSender := service.NewInvitationSender(eventService, smtpMailer, cfg.SMTPFrom)
-		outboxWorker := outbox.NewWorker(eventOutbox, invitationSender, time.Now)
-		go outboxWorker.Run(outboxCtx, outboxTickInterval)
+	if a.OutboxWorker != nil {
+		go a.OutboxWorker.Run(outboxCtx, outboxTickInterval)
 	}
 
 	// The reply poller: reads Attendee Responses back from the ORGANIZER
@@ -205,10 +130,8 @@ func main() {
 	// needs-action forever.
 	replyCtx, stopReply := context.WithCancel(context.Background())
 	defer stopReply()
-	if cfg.ImapConfigured() {
-		imapClient := reply.NewIMAPClient(cfg.IMAPHost, cfg.IMAPPort, cfg.IMAPUser, cfg.IMAPPass)
-		replyWorker := reply.NewWorker(imapClient, eventService)
-		go replyWorker.Run(replyCtx, replyTickInterval)
+	if a.ReplyWorker != nil {
+		go a.ReplyWorker.Run(replyCtx, replyTickInterval)
 	}
 
 	go func() {

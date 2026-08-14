@@ -10,7 +10,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/XiovV/calendar/server/internal/db"
 	"github.com/XiovV/calendar/server/internal/repository"
 )
 
@@ -36,13 +35,9 @@ func newCreateAttendeeFixture(t *testing.T) createAttendeeFixture {
 	t.Helper()
 	ctx := context.Background()
 
-	sqlDB, err := db.OpenInMemory()
-	if err != nil {
-		t.Fatalf("open in-memory db: %v", err)
-	}
-	t.Cleanup(func() { sqlDB.Close() })
+	g := newTestGraph(t)
 
-	users := repository.NewUserRepository(sqlDB)
+	users := g.UserRepo
 	owner, err := users.Create(ctx, "owner", "owner@example.com", "hash", false)
 	if err != nil {
 		t.Fatalf("create owner: %v", err)
@@ -60,7 +55,7 @@ func newCreateAttendeeFixture(t *testing.T) createAttendeeFixture {
 		t.Fatalf("create outsider: %v", err)
 	}
 
-	workspaceRepo := repository.NewWorkspaceRepository(sqlDB)
+	workspaceRepo := g.WorkspaceRepo
 	workspace, err := workspaceRepo.Create(ctx, "Test Workspace", owner.ID)
 	if err != nil {
 		t.Fatalf("create workspace: %v", err)
@@ -71,7 +66,7 @@ func newCreateAttendeeFixture(t *testing.T) createAttendeeFixture {
 		}
 	}
 
-	groupRepo := repository.NewGroupRepository(sqlDB)
+	groupRepo := g.GroupRepo
 	group, err := groupRepo.Create(ctx, workspace.ID, "Tech team")
 	if err != nil {
 		t.Fatalf("create group: %v", err)
@@ -92,14 +87,13 @@ func newCreateAttendeeFixture(t *testing.T) createAttendeeFixture {
 		t.Fatalf("create outside group: %v", err)
 	}
 
-	calendarRepo := repository.NewCalendarRepository(sqlDB)
+	calendarRepo := g.CalendarRepo
 	cal, err := calendarRepo.Create(ctx, owner.ID, workspace.ID, "cal-1", repository.CalendarFields{Name: "Personal", Color: "peacock"})
 	if err != nil {
 		t.Fatalf("create calendar: %v", err)
 	}
 
-	calendarService := NewCalendarService(calendarRepo, repository.NewCalendarShareRepository(sqlDB), users, repository.NewEventReminderRepository(sqlDB), repository.NewCalendarDefaultReminderRepository(sqlDB), repository.NewEventReminderExplicitRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo, repository.NewCalendarGroupShareRepository(sqlDB), groupRepo)
-	eventService := NewEventService(sqlDB, repository.NewEventRepository(sqlDB), repository.NewEventExceptionRepository(sqlDB), repository.NewEventReminderRepository(sqlDB), repository.NewCalendarDefaultReminderRepository(sqlDB), repository.NewEventReminderExplicitRepository(sqlDB), repository.NewSyncRepository(sqlDB), calendarService, users, repository.NewAttachmentRepository(sqlDB), repository.NewAttendeeRepository(sqlDB), workspaceRepo, groupRepo, repository.NewNotificationRepository(sqlDB), nil, 1000)
+	eventService := g.Events
 
 	return createAttendeeFixture{
 		events: eventService, users: users, groups: groupRepo,

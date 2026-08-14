@@ -5,7 +5,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/XiovV/calendar/server/internal/db"
 	"github.com/XiovV/calendar/server/internal/repository"
 )
 
@@ -15,14 +14,10 @@ import (
 func newTestReminderResolutionFixture(t *testing.T) (svc *EventService, ownerID, memberID int64, calendarID string) {
 	t.Helper()
 
-	sqlDB, err := db.OpenInMemory()
-	if err != nil {
-		t.Fatalf("open in-memory db: %v", err)
-	}
-	t.Cleanup(func() { sqlDB.Close() })
+	g := newTestGraph(t)
 
 	ctx := context.Background()
-	users := repository.NewUserRepository(sqlDB)
+	users := g.UserRepo
 	owner, err := users.Create(ctx, "owner", "owner@example.com", "hash", false)
 	if err != nil {
 		t.Fatalf("create owner: %v", err)
@@ -32,7 +27,7 @@ func newTestReminderResolutionFixture(t *testing.T) (svc *EventService, ownerID,
 		t.Fatalf("create member: %v", err)
 	}
 
-	workspaceRepo := repository.NewWorkspaceRepository(sqlDB)
+	workspaceRepo := g.WorkspaceRepo
 	workspace, err := workspaceRepo.Create(ctx, "Test Workspace", owner.ID)
 	if err != nil {
 		t.Fatalf("create workspace: %v", err)
@@ -44,18 +39,18 @@ func newTestReminderResolutionFixture(t *testing.T) (svc *EventService, ownerID,
 		t.Fatalf("add plain member: %v", err)
 	}
 
-	calendarRepo := repository.NewCalendarRepository(sqlDB)
+	calendarRepo := g.CalendarRepo
 	cal, err := calendarRepo.Create(ctx, owner.ID, workspace.ID, "cal-1", repository.CalendarFields{Name: "Personal", Color: "peacock"})
 	if err != nil {
 		t.Fatalf("create calendar: %v", err)
 	}
 
-	calendarService := NewCalendarService(calendarRepo, repository.NewCalendarShareRepository(sqlDB), users, repository.NewEventReminderRepository(sqlDB), repository.NewCalendarDefaultReminderRepository(sqlDB), repository.NewEventReminderExplicitRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo, repository.NewCalendarGroupShareRepository(sqlDB), repository.NewGroupRepository(sqlDB))
+	calendarService := g.Calendars
 	if _, _, err := calendarService.Share(ctx, owner.ID, cal.ID, member.Email, repository.RoleEditor); err != nil {
 		t.Fatalf("share calendar with member: %v", err)
 	}
 
-	svc = NewEventService(sqlDB, repository.NewEventRepository(sqlDB), repository.NewEventExceptionRepository(sqlDB), repository.NewEventReminderRepository(sqlDB), repository.NewCalendarDefaultReminderRepository(sqlDB), repository.NewEventReminderExplicitRepository(sqlDB), repository.NewSyncRepository(sqlDB), calendarService, users, repository.NewAttachmentRepository(sqlDB), repository.NewAttendeeRepository(sqlDB), workspaceRepo, repository.NewGroupRepository(sqlDB), repository.NewNotificationRepository(sqlDB), nil, 1000)
+	svc = g.Events
 
 	return svc, owner.ID, member.ID, cal.ID
 }

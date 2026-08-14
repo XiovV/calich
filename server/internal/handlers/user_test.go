@@ -9,10 +9,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/XiovV/calendar/server/internal/db"
+	"github.com/XiovV/calendar/server/internal/apptest"
 	"github.com/XiovV/calendar/server/internal/httpauth"
-	"github.com/XiovV/calendar/server/internal/repository"
-	"github.com/XiovV/calendar/server/internal/service"
 )
 
 // userDirectoryTestServer is #113's REST fixture: three Users — the caller,
@@ -26,26 +24,19 @@ type userDirectoryTestServer struct {
 func newUserDirectoryTestServer(t *testing.T) userDirectoryTestServer {
 	t.Helper()
 
-	sqlDB, err := db.OpenInMemory()
-	if err != nil {
-		t.Fatalf("open in-memory db: %v", err)
-	}
-	t.Cleanup(func() { sqlDB.Close() })
+	cfg := apptest.Config(t)
+	cfg.InitialName, cfg.InitialEmail, cfg.InitialPassword = "caller", "caller@example.com", "hunter2"
+	cfg.EnableSignups = true
+	g := newTestGraphWithConfig(t, cfg)
 
-	users := repository.NewUserRepository(sqlDB)
-	sessions := repository.NewSessionRepository(sqlDB)
-	workspaceRepo := repository.NewWorkspaceRepository(sqlDB)
-	workspaceSvc := service.NewWorkspaceService(sqlDB, workspaceRepo, repository.NewWorkspaceInviteRepository(sqlDB), repository.NewCalendarRepository(sqlDB), repository.NewCalendarShareRepository(sqlDB))
-	calendarRepo := repository.NewCalendarRepository(sqlDB)
-	shareRepo := repository.NewCalendarShareRepository(sqlDB)
-	calendars := service.NewCalendarService(calendarRepo, shareRepo, users, repository.NewEventReminderRepository(sqlDB), repository.NewCalendarDefaultReminderRepository(sqlDB), repository.NewEventReminderExplicitRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo, repository.NewCalendarGroupShareRepository(sqlDB), repository.NewGroupRepository(sqlDB))
-	auth := service.NewAuthService(users, sessions, workspaceSvc, repository.NewWorkspaceInviteRepository(sqlDB), calendars, repository.NewAttendeeRepository(sqlDB), []byte("test-secret"), "caller", "caller@example.com", "hunter2", true)
+	users := g.UserRepo
+	auth := g.Auth
 	ctx := context.Background()
 	if _, _, err := auth.Bootstrap(ctx); err != nil {
 		t.Fatalf("bootstrap: %v", err)
 	}
 
-	accounts := service.NewAccountService(sqlDB, users, sessions, calendarRepo, shareRepo, workspaceRepo, workspaceSvc)
+	accounts := g.Accounts
 
 	if _, err := auth.Register(ctx, "bob", "bob@example.com", "temp-password"); err != nil {
 		t.Fatalf("register bob: %v", err)
@@ -61,7 +52,7 @@ func newUserDirectoryTestServer(t *testing.T) userDirectoryTestServer {
 		t.Fatalf("disable ghost: %v", err)
 	}
 
-	userHandler := NewUserHandler(service.NewUserService(users))
+	userHandler := NewUserHandler(g.Users)
 
 	r := chi.NewRouter()
 	r.Route("/api/users", func(r chi.Router) {

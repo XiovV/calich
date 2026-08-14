@@ -13,10 +13,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/XiovV/calendar/server/internal/attachmentstore"
-	"github.com/XiovV/calendar/server/internal/db"
+	"github.com/XiovV/calendar/server/internal/apptest"
 	"github.com/XiovV/calendar/server/internal/httpauth"
-	"github.com/XiovV/calendar/server/internal/repository"
 	"github.com/XiovV/calendar/server/internal/service"
 )
 
@@ -96,19 +94,13 @@ func newEventTestServer(t *testing.T) (baseURL, accessToken, calendarID string) 
 func newEventTestServerWithServices(t *testing.T) (baseURL, accessToken, calendarID string, userID int64, workspaceID int64, calendars *service.CalendarService, events *service.EventService) {
 	t.Helper()
 
-	sqlDB, err := db.OpenInMemory()
-	if err != nil {
-		t.Fatalf("open in-memory db: %v", err)
-	}
-	t.Cleanup(func() { sqlDB.Close() })
+	cfg := apptest.Config(t)
+	cfg.InitialName, cfg.InitialEmail, cfg.InitialPassword = "alice", "alice@example.com", "hunter2"
+	g := newTestGraphWithConfig(t, cfg)
 
-	users := repository.NewUserRepository(sqlDB)
-	sessions := repository.NewSessionRepository(sqlDB)
-	workspaceRepo := repository.NewWorkspaceRepository(sqlDB)
-	workspaces := service.NewWorkspaceService(sqlDB, workspaceRepo, repository.NewWorkspaceInviteRepository(sqlDB), repository.NewCalendarRepository(sqlDB), repository.NewCalendarShareRepository(sqlDB))
-	calendarRepo := repository.NewCalendarRepository(sqlDB)
-	calendars = service.NewCalendarService(calendarRepo, repository.NewCalendarShareRepository(sqlDB), users, repository.NewEventReminderRepository(sqlDB), repository.NewCalendarDefaultReminderRepository(sqlDB), repository.NewEventReminderExplicitRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo, repository.NewCalendarGroupShareRepository(sqlDB), repository.NewGroupRepository(sqlDB))
-	auth := service.NewAuthService(users, sessions, workspaces, repository.NewWorkspaceInviteRepository(sqlDB), calendars, repository.NewAttendeeRepository(sqlDB), []byte("test-secret"), "alice", "alice@example.com", "hunter2", false)
+	workspaces := g.Workspaces
+	calendars = g.Calendars
+	auth := g.Auth
 	bootstrapUser, _, err := auth.Bootstrap(context.Background())
 	if err != nil {
 		t.Fatalf("bootstrap: %v", err)
@@ -138,8 +130,8 @@ func newEventTestServerWithServices(t *testing.T) (baseURL, accessToken, calenda
 		t.Fatalf("create calendar: %v", err)
 	}
 
-	events = service.NewEventService(sqlDB, repository.NewEventRepository(sqlDB), repository.NewEventExceptionRepository(sqlDB), repository.NewEventReminderRepository(sqlDB), repository.NewCalendarDefaultReminderRepository(sqlDB), repository.NewEventReminderExplicitRepository(sqlDB), repository.NewSyncRepository(sqlDB), calendars, users, repository.NewAttachmentRepository(sqlDB), repository.NewAttendeeRepository(sqlDB), workspaceRepo, repository.NewGroupRepository(sqlDB), repository.NewNotificationRepository(sqlDB), nil, 1000)
-	eventHandler := NewEventHandler(events, attachmentstore.New(t.TempDir()))
+	events = g.Events
+	eventHandler := NewEventHandler(events, g.AttachmentStore)
 
 	r := chi.NewRouter()
 	r.Route("/api/events", func(r chi.Router) {

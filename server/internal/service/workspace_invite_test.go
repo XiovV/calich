@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/XiovV/calendar/server/internal/db"
 	"github.com/XiovV/calendar/server/internal/repository"
 )
 
@@ -28,25 +27,9 @@ func newTestWorkspaceInviteHarness(t *testing.T) (*WorkspaceService, *AuthServic
 func newTestWorkspaceInviteHarnessWithAttendees(t *testing.T) (*WorkspaceService, *AuthService, *repository.UserRepository, *repository.CalendarRepository, *repository.EventRepository, *repository.AttendeeRepository) {
 	t.Helper()
 
-	sqlDB, err := db.OpenInMemory()
-	if err != nil {
-		t.Fatalf("open in-memory db: %v", err)
-	}
-	t.Cleanup(func() { sqlDB.Close() })
+	g := newTestGraph(t)
 
-	users := repository.NewUserRepository(sqlDB)
-	sessions := repository.NewSessionRepository(sqlDB)
-	inviteRepo := repository.NewWorkspaceInviteRepository(sqlDB)
-	workspaceRepo := repository.NewWorkspaceRepository(sqlDB)
-	calendarRepo := repository.NewCalendarRepository(sqlDB)
-	shareRepo := repository.NewCalendarShareRepository(sqlDB)
-	workspaces := NewWorkspaceService(sqlDB, workspaceRepo, inviteRepo, calendarRepo, shareRepo)
-	calendars := NewCalendarService(calendarRepo, shareRepo, users, repository.NewEventReminderRepository(sqlDB), repository.NewCalendarDefaultReminderRepository(sqlDB), repository.NewEventReminderExplicitRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo, repository.NewCalendarGroupShareRepository(sqlDB), repository.NewGroupRepository(sqlDB))
-	attendeeRepo := repository.NewAttendeeRepository(sqlDB)
-	auth := NewAuthService(users, sessions, workspaces, inviteRepo, calendars, attendeeRepo, []byte("test-secret"), "", "", "", false)
-	eventRepo := repository.NewEventRepository(sqlDB)
-
-	return workspaces, auth, users, calendarRepo, eventRepo, attendeeRepo
+	return g.Workspaces, g.Auth, g.UserRepo, g.CalendarRepo, g.EventRepo, g.AttendeeRepo
 }
 
 func TestWorkspaceService_CreateInvite_RequiresOwnerOrAdmin(t *testing.T) {

@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/XiovV/calendar/server/internal/db"
+	"github.com/XiovV/calendar/server/internal/apptest"
 	"github.com/XiovV/calendar/server/internal/repository"
 )
 
@@ -43,13 +43,14 @@ func newInviteRateLimitFixture(t *testing.T, limitPerHour, memberCount int) invi
 	t.Helper()
 	ctx := context.Background()
 
-	sqlDB, err := db.OpenInMemory()
-	if err != nil {
-		t.Fatalf("open in-memory db: %v", err)
-	}
-	t.Cleanup(func() { sqlDB.Close() })
+	// An SMTP transport, so the graph carries the OutboxRepo the rate limit
+	// is counted against (ADR-0058, ADR-0060), and limitPerHour as
+	// INVITE_RATE_LIMIT_PER_HOUR.
+	cfg := apptest.SMTPConfig(t)
+	cfg.InviteRateLimitPerHour = limitPerHour
+	g := newTestGraphWithConfig(t, cfg)
 
-	users := repository.NewUserRepository(sqlDB)
+	users := g.UserRepo
 	ownerA, err := users.Create(ctx, "owner-a", "owner-a@example.com", "hash", false)
 	if err != nil {
 		t.Fatalf("create owner a: %v", err)
@@ -59,7 +60,7 @@ func newInviteRateLimitFixture(t *testing.T, limitPerHour, memberCount int) invi
 		t.Fatalf("create owner b: %v", err)
 	}
 
-	workspaceRepo := repository.NewWorkspaceRepository(sqlDB)
+	workspaceRepo := g.WorkspaceRepo
 	workspace, err := workspaceRepo.Create(ctx, "Test Workspace", ownerA.ID)
 	if err != nil {
 		t.Fatalf("create workspace: %v", err)
@@ -72,7 +73,7 @@ func newInviteRateLimitFixture(t *testing.T, limitPerHour, memberCount int) invi
 	}
 
 	memberIDs := make([]int64, memberCount)
-	groupRepo := repository.NewGroupRepository(sqlDB)
+	groupRepo := g.GroupRepo
 	group, err := groupRepo.Create(ctx, workspace.ID, "Everyone")
 	if err != nil {
 		t.Fatalf("create group: %v", err)
@@ -91,7 +92,7 @@ func newInviteRateLimitFixture(t *testing.T, limitPerHour, memberCount int) invi
 		memberIDs[i] = m.ID
 	}
 
-	calendarRepo := repository.NewCalendarRepository(sqlDB)
+	calendarRepo := g.CalendarRepo
 	calA, err := calendarRepo.Create(ctx, ownerA.ID, workspace.ID, "cal-a", repository.CalendarFields{Name: "A", Color: "peacock"})
 	if err != nil {
 		t.Fatalf("create calendar a: %v", err)
@@ -101,12 +102,8 @@ func newInviteRateLimitFixture(t *testing.T, limitPerHour, memberCount int) invi
 		t.Fatalf("create calendar b: %v", err)
 	}
 
-	calendarService := NewCalendarService(calendarRepo, repository.NewCalendarShareRepository(sqlDB), users, repository.NewEventReminderRepository(sqlDB), repository.NewCalendarDefaultReminderRepository(sqlDB), repository.NewEventReminderExplicitRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo, repository.NewCalendarGroupShareRepository(sqlDB), groupRepo)
-	outboxRepo := repository.NewOutboxRepository(sqlDB)
-	events := NewEventService(sqlDB, repository.NewEventRepository(sqlDB), repository.NewEventExceptionRepository(sqlDB), repository.NewEventReminderRepository(sqlDB), repository.NewCalendarDefaultReminderRepository(sqlDB), repository.NewEventReminderExplicitRepository(sqlDB), repository.NewSyncRepository(sqlDB), calendarService, users, repository.NewAttachmentRepository(sqlDB), repository.NewAttendeeRepository(sqlDB), workspaceRepo, groupRepo, repository.NewNotificationRepository(sqlDB), outboxRepo, limitPerHour)
-
 	return inviteRateLimitFixture{
-		events: events, outbox: outboxRepo,
+		events: g.Events, outbox: g.OutboxRepo,
 		ownerAID: ownerA.ID, calendarAID: calA.ID,
 		ownerBID: ownerB.ID, calendarBID: calB.ID,
 		memberIDs: memberIDs, groupID: group.ID,

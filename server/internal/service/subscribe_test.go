@@ -10,51 +10,41 @@ import (
 	"testing"
 	"time"
 
-	"github.com/XiovV/calendar/server/internal/db"
 	"github.com/XiovV/calendar/server/internal/repository"
 )
 
 // newTestSubscribeService returns a SubscribeService plus a real user id,
-// wired to a real in-memory SQLite DB (db.OpenInMemory) — the same recipe
-// newTestImportService uses. The outbound feed side is a real
-// httptest.Server per test, not a mocked fetcher, per #83's acceptance
-// criteria.
-// opts is applied after the default WithHTTPClient override below, so a
-// caller wanting the real address guard (#97, ADR-0032) back — as the
-// blocked-address tests do — passes WithHTTPClient(subscribeHTTPClient)
-// itself; NewSubscribeService applies options in order, so it wins.
-func newTestSubscribeService(t *testing.T, opts ...SubscribeOption) (svc *SubscribeService, events *EventService, calendars *CalendarService, userID, workspaceID int64) {
+// over a real in-memory SQLite DB like every other fixture here. The
+// outbound feed side is a real httptest.Server per test, not a mocked
+// fetcher, per #83's acceptance criteria.
+// opts is applied after the default WithSubscribeHTTPClient override below,
+// so a caller wanting the real address guard (#97, ADR-0032) back — as the
+// blocked-address tests do — passes WithSubscribeHTTPClient(
+// subscribeHTTPClient) itself; NewGraph applies options in order, so it
+// wins.
+func newTestSubscribeService(t *testing.T, opts ...GraphOption) (svc *SubscribeService, events *EventService, calendars *CalendarService, userID, workspaceID int64) {
 	t.Helper()
-
-	sqlDB, err := db.OpenInMemory()
-	if err != nil {
-		t.Fatalf("open in-memory db: %v", err)
-	}
-	t.Cleanup(func() { sqlDB.Close() })
-
-	users := repository.NewUserRepository(sqlDB)
-	user, err := users.Create(context.Background(), "user-a", "user-a@example.com", "hash", false)
-	if err != nil {
-		t.Fatalf("create user: %v", err)
-	}
-
-	workspaceRepo := repository.NewWorkspaceRepository(sqlDB)
-	workspace, err := workspaceRepo.Create(context.Background(), "Test Workspace", user.ID)
-	if err != nil {
-		t.Fatalf("create workspace: %v", err)
-	}
-	if err := workspaceRepo.AddMember(context.Background(), workspace.ID, user.ID, repository.WorkspaceRoleOwner); err != nil {
-		t.Fatalf("add workspace member: %v", err)
-	}
-
-	calendarSvc := NewCalendarService(repository.NewCalendarRepository(sqlDB), repository.NewCalendarShareRepository(sqlDB), users, repository.NewEventReminderRepository(sqlDB), repository.NewCalendarDefaultReminderRepository(sqlDB), repository.NewEventReminderExplicitRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo, repository.NewCalendarGroupShareRepository(sqlDB), repository.NewGroupRepository(sqlDB))
-	eventSvc := NewEventService(sqlDB, repository.NewEventRepository(sqlDB), repository.NewEventExceptionRepository(sqlDB), repository.NewEventReminderRepository(sqlDB), repository.NewCalendarDefaultReminderRepository(sqlDB), repository.NewEventReminderExplicitRepository(sqlDB), repository.NewSyncRepository(sqlDB), calendarSvc, users, repository.NewAttachmentRepository(sqlDB), repository.NewAttendeeRepository(sqlDB), workspaceRepo, repository.NewGroupRepository(sqlDB), repository.NewNotificationRepository(sqlDB), nil, 1000)
 
 	// The address guard (#97, ADR-0032) would otherwise refuse every fetch
 	// here: icsServer/redirect servers below are httptest.Server instances on
 	// 127.0.0.1, a loopback address the guard exists to block.
-	allOpts := append([]SubscribeOption{WithHTTPClient(&http.Client{})}, opts...)
-	return NewSubscribeService(eventSvc, calendarSvc, 0, allOpts...), eventSvc, calendarSvc, user.ID, workspace.ID
+	allOpts := append([]GraphOption{WithSubscribeHTTPClient(&http.Client{})}, opts...)
+	g := newTestGraph(t, allOpts...)
+
+	user, err := g.UserRepo.Create(context.Background(), "user-a", "user-a@example.com", "hash", false)
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+
+	workspace, err := g.WorkspaceRepo.Create(context.Background(), "Test Workspace", user.ID)
+	if err != nil {
+		t.Fatalf("create workspace: %v", err)
+	}
+	if err := g.WorkspaceRepo.AddMember(context.Background(), workspace.ID, user.ID, repository.WorkspaceRoleOwner); err != nil {
+		t.Fatalf("add workspace member: %v", err)
+	}
+
+	return g.Subscriptions, g.Events, g.Calendars, user.ID, workspace.ID
 }
 
 // subscribeFeedICS carries the feed's own name/color, a recurring timed
@@ -353,7 +343,7 @@ func TestSubscribeService_Subscribe_InvalidURL(t *testing.T) {
 // would refuse any other private/link-local address, and must not create a
 // Calendar in the process.
 func TestSubscribeService_Subscribe_BlocksPrivateAddress(t *testing.T) {
-	svc, _, calendars, userID, workspaceID := newTestSubscribeService(t, WithHTTPClient(subscribeHTTPClient))
+	svc, _, calendars, userID, workspaceID := newTestSubscribeService(t, WithSubscribeHTTPClient(subscribeHTTPClient))
 	srv := icsServer(t, subscribeFeedICS)
 	ctx := context.Background()
 
@@ -381,7 +371,7 @@ func TestSubscribeService_Subscribe_BlocksPrivateAddress(t *testing.T) {
 // rejected the same way Subscribe would reject it, classified
 // needs_attention rather than retrying since no amount of retrying fixes it.
 func TestSubscribeService_Refresh_BlocksPrivateAddress(t *testing.T) {
-	svc, _, calendars, userID, workspaceID := newTestSubscribeService(t, WithHTTPClient(subscribeHTTPClient))
+	svc, _, calendars, userID, workspaceID := newTestSubscribeService(t, WithSubscribeHTTPClient(subscribeHTTPClient))
 	ctx := context.Background()
 
 	sourceURL := "http://127.0.0.1:9999/feed.ics"

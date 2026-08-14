@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/XiovV/calendar/server/internal/db"
+	"github.com/XiovV/calendar/server/internal/apptest"
 	"github.com/XiovV/calendar/server/internal/repository"
 )
 
@@ -33,13 +33,16 @@ func newEmailAttendeeFixture(t *testing.T, withOutbox bool) emailAttendeeFixture
 	t.Helper()
 	ctx := context.Background()
 
-	sqlDB, err := db.OpenInMemory()
-	if err != nil {
-		t.Fatalf("open in-memory db: %v", err)
+	// An SMTP transport is what gives the graph an OutboxRepo to queue
+	// Invitations into (ADR-0059, ADR-0060); without one there is none, which
+	// is the other half of what this fixture covers.
+	cfg := apptest.Config(t)
+	if withOutbox {
+		cfg = apptest.SMTPConfig(t)
 	}
-	t.Cleanup(func() { sqlDB.Close() })
+	g := newTestGraphWithConfig(t, cfg)
 
-	users := repository.NewUserRepository(sqlDB)
+	users := g.UserRepo
 	owner, err := users.Create(ctx, "owner", "owner@example.com", "hash", false)
 	if err != nil {
 		t.Fatalf("create owner: %v", err)
@@ -60,7 +63,7 @@ func newEmailAttendeeFixture(t *testing.T, withOutbox bool) emailAttendeeFixture
 		t.Fatalf("create cross-workspace user: %v", err)
 	}
 
-	workspaceRepo := repository.NewWorkspaceRepository(sqlDB)
+	workspaceRepo := g.WorkspaceRepo
 	workspace, err := workspaceRepo.Create(ctx, "Test Workspace", owner.ID)
 	if err != nil {
 		t.Fatalf("create workspace: %v", err)
@@ -79,19 +82,13 @@ func newEmailAttendeeFixture(t *testing.T, withOutbox bool) emailAttendeeFixture
 		t.Fatalf("add cross-workspace user to other workspace: %v", err)
 	}
 
-	calendarRepo := repository.NewCalendarRepository(sqlDB)
-	cal, err := calendarRepo.Create(ctx, owner.ID, workspace.ID, "cal-1", repository.CalendarFields{Name: "Personal", Color: "peacock"})
+	cal, err := g.CalendarRepo.Create(ctx, owner.ID, workspace.ID, "cal-1", repository.CalendarFields{Name: "Personal", Color: "peacock"})
 	if err != nil {
 		t.Fatalf("create calendar: %v", err)
 	}
 
-	var outboxRepo *repository.OutboxRepository
-	if withOutbox {
-		outboxRepo = repository.NewOutboxRepository(sqlDB)
-	}
-
-	calendarService := NewCalendarService(calendarRepo, repository.NewCalendarShareRepository(sqlDB), users, repository.NewEventReminderRepository(sqlDB), repository.NewCalendarDefaultReminderRepository(sqlDB), repository.NewEventReminderExplicitRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo, repository.NewCalendarGroupShareRepository(sqlDB), repository.NewGroupRepository(sqlDB))
-	eventService := NewEventService(sqlDB, repository.NewEventRepository(sqlDB), repository.NewEventExceptionRepository(sqlDB), repository.NewEventReminderRepository(sqlDB), repository.NewCalendarDefaultReminderRepository(sqlDB), repository.NewEventReminderExplicitRepository(sqlDB), repository.NewSyncRepository(sqlDB), calendarService, users, repository.NewAttachmentRepository(sqlDB), repository.NewAttendeeRepository(sqlDB), workspaceRepo, repository.NewGroupRepository(sqlDB), repository.NewNotificationRepository(sqlDB), outboxRepo, 1000)
+	outboxRepo := g.OutboxRepo
+	eventService := g.Events
 
 	return emailAttendeeFixture{
 		events: eventService, outboxRepo: outboxRepo,

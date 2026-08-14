@@ -11,10 +11,9 @@ import (
 	"github.com/go-chi/chi/v5"
 	"golang.org/x/crypto/bcrypt"
 
-	"github.com/XiovV/calendar/server/internal/db"
+	"github.com/XiovV/calendar/server/internal/apptest"
 	"github.com/XiovV/calendar/server/internal/httpauth"
 	"github.com/XiovV/calendar/server/internal/repository"
-	"github.com/XiovV/calendar/server/internal/service"
 )
 
 func newAuthTestServer(t *testing.T) *httptest.Server {
@@ -30,15 +29,13 @@ func newAuthTestServerWithSMTP(t *testing.T, smtpConfigured bool) *httptest.Serv
 func newAuthTestServerWithMail(t *testing.T, smtpConfigured, imapConfigured bool) *httptest.Server {
 	t.Helper()
 
-	sqlDB, err := db.OpenInMemory()
-	if err != nil {
-		t.Fatalf("open in-memory db: %v", err)
-	}
-	t.Cleanup(func() { sqlDB.Close() })
+	// No bootstrap account: these tests seed or register the Users they need.
+	cfg := apptest.Config(t)
+	cfg.InitialName, cfg.InitialEmail, cfg.InitialPassword = "", "", ""
+	g := newTestGraphWithConfig(t, cfg)
 
-	users := repository.NewUserRepository(sqlDB)
-	sessions := repository.NewSessionRepository(sqlDB)
-	auth := service.NewAuthService(users, sessions, service.NewWorkspaceService(sqlDB, repository.NewWorkspaceRepository(sqlDB), repository.NewWorkspaceInviteRepository(sqlDB), repository.NewCalendarRepository(sqlDB), repository.NewCalendarShareRepository(sqlDB)), repository.NewWorkspaceInviteRepository(sqlDB), service.NewCalendarService(repository.NewCalendarRepository(sqlDB), repository.NewCalendarShareRepository(sqlDB), users, repository.NewEventReminderRepository(sqlDB), repository.NewCalendarDefaultReminderRepository(sqlDB), repository.NewEventReminderExplicitRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), repository.NewWorkspaceRepository(sqlDB), repository.NewCalendarGroupShareRepository(sqlDB), repository.NewGroupRepository(sqlDB)), repository.NewAttendeeRepository(sqlDB), []byte("test-secret"), "", "", "", false)
+	users := g.UserRepo
+	auth := g.Auth
 
 	// A User requiring a password change (ADR-0037's must_change_password
 	// gate) is seeded directly rather than via Bootstrap, which no longer
@@ -220,15 +217,13 @@ func TestMe_NoToken_Returns401(t *testing.T) {
 // reactivate them for), but every route except the self-service
 // account-lifecycle ones is closed off — /api/auth/me included.
 func TestLogin_DisabledAccount_SucceedsButMeIsBlocked(t *testing.T) {
-	sqlDB, err := db.OpenInMemory()
-	if err != nil {
-		t.Fatalf("open in-memory db: %v", err)
-	}
-	t.Cleanup(func() { sqlDB.Close() })
+	// No bootstrap account: these tests seed or register the Users they need.
+	cfg := apptest.Config(t)
+	cfg.InitialName, cfg.InitialEmail, cfg.InitialPassword = "", "", ""
+	g := newTestGraphWithConfig(t, cfg)
 
-	users := repository.NewUserRepository(sqlDB)
-	sessions := repository.NewSessionRepository(sqlDB)
-	auth := service.NewAuthService(users, sessions, service.NewWorkspaceService(sqlDB, repository.NewWorkspaceRepository(sqlDB), repository.NewWorkspaceInviteRepository(sqlDB), repository.NewCalendarRepository(sqlDB), repository.NewCalendarShareRepository(sqlDB)), repository.NewWorkspaceInviteRepository(sqlDB), service.NewCalendarService(repository.NewCalendarRepository(sqlDB), repository.NewCalendarShareRepository(sqlDB), users, repository.NewEventReminderRepository(sqlDB), repository.NewCalendarDefaultReminderRepository(sqlDB), repository.NewEventReminderExplicitRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), repository.NewWorkspaceRepository(sqlDB), repository.NewCalendarGroupShareRepository(sqlDB), repository.NewGroupRepository(sqlDB)), repository.NewAttendeeRepository(sqlDB), []byte("test-secret"), "", "", "", false)
+	users := g.UserRepo
+	auth := g.Auth
 
 	hash, err := bcrypt.GenerateFromPassword([]byte("hunter2"), bcrypt.DefaultCost)
 	if err != nil {
@@ -603,15 +598,10 @@ func TestUpdateName_RejectsEmptyName(t *testing.T) {
 // TestUpdateName_DuplicateNameIsAllowed covers ADR-0047: two accounts may
 // share a display Name — only Email is unique.
 func TestUpdateName_DuplicateNameIsAllowed(t *testing.T) {
-	sqlDB, err := db.OpenInMemory()
-	if err != nil {
-		t.Fatalf("open in-memory db: %v", err)
-	}
-	t.Cleanup(func() { sqlDB.Close() })
+	g := newTestGraph(t)
 
-	users := repository.NewUserRepository(sqlDB)
-	sessions := repository.NewSessionRepository(sqlDB)
-	auth := service.NewAuthService(users, sessions, service.NewWorkspaceService(sqlDB, repository.NewWorkspaceRepository(sqlDB), repository.NewWorkspaceInviteRepository(sqlDB), repository.NewCalendarRepository(sqlDB), repository.NewCalendarShareRepository(sqlDB)), repository.NewWorkspaceInviteRepository(sqlDB), service.NewCalendarService(repository.NewCalendarRepository(sqlDB), repository.NewCalendarShareRepository(sqlDB), users, repository.NewEventReminderRepository(sqlDB), repository.NewCalendarDefaultReminderRepository(sqlDB), repository.NewEventReminderExplicitRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), repository.NewWorkspaceRepository(sqlDB), repository.NewCalendarGroupShareRepository(sqlDB), repository.NewGroupRepository(sqlDB)), repository.NewAttendeeRepository(sqlDB), []byte("test-secret"), "admin", "admin@example.com", "admin", false)
+	users := g.UserRepo
+	auth := g.Auth
 	bootstrapUser, _, err := auth.Bootstrap(context.Background())
 	if err != nil {
 		t.Fatalf("bootstrap: %v", err)

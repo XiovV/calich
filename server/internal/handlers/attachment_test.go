@@ -13,8 +13,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/XiovV/calendar/server/internal/attachmentstore"
-	"github.com/XiovV/calendar/server/internal/db"
+	"github.com/XiovV/calendar/server/internal/apptest"
 	"github.com/XiovV/calendar/server/internal/httpauth"
 	"github.com/XiovV/calendar/server/internal/repository"
 	"github.com/XiovV/calendar/server/internal/service"
@@ -37,20 +36,17 @@ func newAttachmentTestServer(t *testing.T, maxAttachmentSize int64, maxAttachmen
 	t.Helper()
 	ctx := context.Background()
 
-	sqlDB, err := db.OpenInMemory()
-	if err != nil {
-		t.Fatalf("open in-memory db: %v", err)
-	}
-	t.Cleanup(func() { sqlDB.Close() })
+	cfg := apptest.Config(t)
+	cfg.InitialName, cfg.InitialEmail, cfg.InitialPassword = "owner", "owner@example.com", "hunter2"
+	cfg.EnableSignups = true
+	cfg.MaxAttachmentSize = maxAttachmentSize
+	cfg.MaxAttachmentsPerEvent = maxAttachmentsPerEvent
+	g := newTestGraphWithConfig(t, cfg)
 
-	users := repository.NewUserRepository(sqlDB)
-	sessions := repository.NewSessionRepository(sqlDB)
-	workspaceRepo := repository.NewWorkspaceRepository(sqlDB)
-	workspaces := service.NewWorkspaceService(sqlDB, workspaceRepo, repository.NewWorkspaceInviteRepository(sqlDB), repository.NewCalendarRepository(sqlDB), repository.NewCalendarShareRepository(sqlDB))
-	calendarRepo := repository.NewCalendarRepository(sqlDB)
-	shareRepo := repository.NewCalendarShareRepository(sqlDB)
-	calendars := service.NewCalendarService(calendarRepo, shareRepo, users, repository.NewEventReminderRepository(sqlDB), repository.NewCalendarDefaultReminderRepository(sqlDB), repository.NewEventReminderExplicitRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo, repository.NewCalendarGroupShareRepository(sqlDB), repository.NewGroupRepository(sqlDB))
-	auth := service.NewAuthService(users, sessions, workspaces, repository.NewWorkspaceInviteRepository(sqlDB), calendars, repository.NewAttendeeRepository(sqlDB), []byte("test-secret"), "owner", "owner@example.com", "hunter2", true)
+	workspaceRepo := g.WorkspaceRepo
+	workspaces := g.Workspaces
+	calendars := g.Calendars
+	auth := g.Auth
 	bootstrapUser, _, err := auth.Bootstrap(ctx)
 	if err != nil {
 		t.Fatalf("bootstrap: %v", err)
@@ -125,8 +121,7 @@ func newAttachmentTestServer(t *testing.T, maxAttachmentSize int64, maxAttachmen
 		t.Fatalf("share viewer: %v", err)
 	}
 
-	attachmentRepo := repository.NewAttachmentRepository(sqlDB)
-	events := service.NewEventService(sqlDB, repository.NewEventRepository(sqlDB), repository.NewEventExceptionRepository(sqlDB), repository.NewEventReminderRepository(sqlDB), repository.NewCalendarDefaultReminderRepository(sqlDB), repository.NewEventReminderExplicitRepository(sqlDB), repository.NewSyncRepository(sqlDB), calendars, users, attachmentRepo, repository.NewAttendeeRepository(sqlDB), workspaceRepo, repository.NewGroupRepository(sqlDB), repository.NewNotificationRepository(sqlDB), nil, 1000)
+	events := g.Events
 	master, err := events.Create(ctx, ownerID, "evt-1", service.EventWrite{CalendarID: cal.ID, Title: "Standup", Rrule: "FREQ=WEEKLY", Start: mustParseTestTime(t, "2026-01-01T09:00:00Z"), End: mustParseTestTime(t, "2026-01-01T10:00:00Z")})
 	if err != nil {
 		t.Fatalf("create master event: %v", err)
@@ -144,8 +139,8 @@ func newAttachmentTestServer(t *testing.T, maxAttachmentSize int64, maxAttachmen
 		t.Fatalf("create override event: %v", err)
 	}
 
-	store := attachmentstore.New(t.TempDir())
-	attachments := service.NewAttachmentService(attachmentRepo, repository.NewEventRepository(sqlDB), calendars, events, store, maxAttachmentsPerEvent)
+	store := g.AttachmentStore
+	attachments := g.Attachments
 	eventHandler := NewEventHandler(events, store)
 	attachmentHandler := NewAttachmentHandler(attachments, maxAttachmentSize)
 

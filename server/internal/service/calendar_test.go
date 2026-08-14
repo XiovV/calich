@@ -5,7 +5,6 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/XiovV/calendar/server/internal/db"
 	"github.com/XiovV/calendar/server/internal/repository"
 )
 
@@ -16,28 +15,22 @@ import (
 func newTestCalendarService(t *testing.T) (svc *CalendarService, userID, workspaceID int64) {
 	t.Helper()
 
-	sqlDB, err := db.OpenInMemory()
-	if err != nil {
-		t.Fatalf("open in-memory db: %v", err)
-	}
-	t.Cleanup(func() { sqlDB.Close() })
+	g := newTestGraph(t)
 
-	users := repository.NewUserRepository(sqlDB)
-	user, err := users.Create(context.Background(), "user-a", "user-a@example.com", "hash", false)
+	user, err := g.UserRepo.Create(context.Background(), "user-a", "user-a@example.com", "hash", false)
 	if err != nil {
 		t.Fatalf("create user: %v", err)
 	}
 
-	workspaceRepo := repository.NewWorkspaceRepository(sqlDB)
-	workspace, err := workspaceRepo.Create(context.Background(), "Test Workspace", user.ID)
+	workspace, err := g.WorkspaceRepo.Create(context.Background(), "Test Workspace", user.ID)
 	if err != nil {
 		t.Fatalf("create workspace: %v", err)
 	}
-	if err := workspaceRepo.AddMember(context.Background(), workspace.ID, user.ID, repository.WorkspaceRoleOwner); err != nil {
+	if err := g.WorkspaceRepo.AddMember(context.Background(), workspace.ID, user.ID, repository.WorkspaceRoleOwner); err != nil {
 		t.Fatalf("add workspace member: %v", err)
 	}
 
-	return NewCalendarService(repository.NewCalendarRepository(sqlDB), repository.NewCalendarShareRepository(sqlDB), users, repository.NewEventReminderRepository(sqlDB), repository.NewCalendarDefaultReminderRepository(sqlDB), repository.NewEventReminderExplicitRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo, repository.NewCalendarGroupShareRepository(sqlDB), repository.NewGroupRepository(sqlDB)), user.ID, workspace.ID
+	return g.Calendars, user.ID, workspace.ID
 }
 
 func TestCalendarService_Create(t *testing.T) {

@@ -11,7 +11,6 @@ import (
 	"context"
 	"testing"
 
-	"github.com/XiovV/calendar/server/internal/db"
 	"github.com/XiovV/calendar/server/internal/repository"
 )
 
@@ -93,14 +92,10 @@ func TestCalendarService_ResolveDisplayColor_FallsBackOnceEverySwatchIsTaken(t *
 // if id order weren't honoured this test would assign the Swatches the
 // other way around.
 func TestCalendarService_ListAccessible_BatchAssignsInCalendarIDOrder(t *testing.T) {
-	sqlDB, err := db.OpenInMemory()
-	if err != nil {
-		t.Fatalf("open in-memory db: %v", err)
-	}
-	t.Cleanup(func() { sqlDB.Close() })
+	g := newTestGraph(t)
 	ctx := context.Background()
 
-	users := repository.NewUserRepository(sqlDB)
+	users := g.UserRepo
 	owner, err := users.Create(ctx, "owner", "owner@example.com", "hash", false)
 	if err != nil {
 		t.Fatalf("create owner: %v", err)
@@ -109,7 +104,7 @@ func TestCalendarService_ListAccessible_BatchAssignsInCalendarIDOrder(t *testing
 	if err != nil {
 		t.Fatalf("create other: %v", err)
 	}
-	workspaceRepo := repository.NewWorkspaceRepository(sqlDB)
+	workspaceRepo := g.WorkspaceRepo
 	workspace, err := workspaceRepo.Create(ctx, "Test Workspace", owner.ID)
 	if err != nil {
 		t.Fatalf("create workspace: %v", err)
@@ -120,7 +115,7 @@ func TestCalendarService_ListAccessible_BatchAssignsInCalendarIDOrder(t *testing
 	if err := workspaceRepo.AddMember(ctx, workspace.ID, other.ID, repository.WorkspaceRoleMember); err != nil {
 		t.Fatalf("add other as workspace member: %v", err)
 	}
-	svc := NewCalendarService(repository.NewCalendarRepository(sqlDB), repository.NewCalendarShareRepository(sqlDB), users, repository.NewEventReminderRepository(sqlDB), repository.NewCalendarDefaultReminderRepository(sqlDB), repository.NewEventReminderExplicitRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo, repository.NewCalendarGroupShareRepository(sqlDB), repository.NewGroupRepository(sqlDB))
+	svc := g.Calendars
 
 	last, err := svc.Create(ctx, owner.ID, workspace.ID, "cal-zzz", CalendarWrite{Name: "Last alphabetically", Color: "#123456FF"})
 	if err != nil {
@@ -136,7 +131,7 @@ func TestCalendarService_ListAccessible_BatchAssignsInCalendarIDOrder(t *testing
 	// cal-aaa's by a wide margin, so only an explicit id-order sort in
 	// resolveDisplayColor's caller — not creation time — can make cal-aaa
 	// resolve first.
-	if _, err := sqlDB.ExecContext(ctx, `UPDATE calendars SET created_at = datetime('now', '-1 hour') WHERE id = ?`, last.ID); err != nil {
+	if _, err := g.DB.ExecContext(ctx, `UPDATE calendars SET created_at = datetime('now', '-1 hour') WHERE id = ?`, last.ID); err != nil {
 		t.Fatalf("backdate cal-zzz: %v", err)
 	}
 

@@ -3,7 +3,6 @@ package handlers
 import (
 	"bytes"
 	"context"
-	"database/sql"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -12,7 +11,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/XiovV/calendar/server/internal/db"
+	"github.com/XiovV/calendar/server/internal/apptest"
 	"github.com/XiovV/calendar/server/internal/httpauth"
 	"github.com/XiovV/calendar/server/internal/repository"
 	"github.com/XiovV/calendar/server/internal/service"
@@ -24,29 +23,23 @@ import (
 // like router.New wires them.
 type groupHandlerTestServer struct {
 	srv        *httptest.Server
-	db         *sql.DB
+	graph      *service.Graph
 	workspaces *service.WorkspaceService
 }
 
 func newGroupHandlerTestServer(t *testing.T) *groupHandlerTestServer {
 	t.Helper()
 
-	sqlDB, err := db.OpenInMemory()
-	if err != nil {
-		t.Fatalf("open in-memory db: %v", err)
-	}
-	t.Cleanup(func() { sqlDB.Close() })
+	// No bootstrap account, and ENABLE_SIGNUPS on: every User here registers
+	// through the HTTP surface.
+	cfg := apptest.Config(t)
+	cfg.InitialName, cfg.InitialEmail, cfg.InitialPassword = "", "", ""
+	cfg.EnableSignups = true
+	g := newTestGraphWithConfig(t, cfg)
 
-	users := repository.NewUserRepository(sqlDB)
-	sessions := repository.NewSessionRepository(sqlDB)
-	calendarRepo := repository.NewCalendarRepository(sqlDB)
-	shareRepo := repository.NewCalendarShareRepository(sqlDB)
-	workspaceRepo := repository.NewWorkspaceRepository(sqlDB)
-	inviteRepo := repository.NewWorkspaceInviteRepository(sqlDB)
-	workspaces := service.NewWorkspaceService(sqlDB, workspaceRepo, inviteRepo, calendarRepo, shareRepo)
-	calendars := service.NewCalendarService(calendarRepo, shareRepo, users, repository.NewEventReminderRepository(sqlDB), repository.NewCalendarDefaultReminderRepository(sqlDB), repository.NewEventReminderExplicitRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo, repository.NewCalendarGroupShareRepository(sqlDB), repository.NewGroupRepository(sqlDB))
-	auth := service.NewAuthService(users, sessions, workspaces, inviteRepo, calendars, repository.NewAttendeeRepository(sqlDB), []byte("test-secret"), "", "", "", true)
-	groups := service.NewGroupService(repository.NewGroupRepository(sqlDB), workspaceRepo)
+	workspaces := g.Workspaces
+	auth := g.Auth
+	groups := g.Groups
 
 	authHandler := NewAuthHandler(auth, false, false)
 	groupHandler := NewGroupHandler(groups)
@@ -70,7 +63,7 @@ func newGroupHandlerTestServer(t *testing.T) *groupHandlerTestServer {
 	srv := httptest.NewServer(r)
 	t.Cleanup(srv.Close)
 
-	return &groupHandlerTestServer{srv: srv, db: sqlDB, workspaces: workspaces}
+	return &groupHandlerTestServer{srv: srv, graph: g, workspaces: workspaces}
 }
 
 func (s *groupHandlerTestServer) register(t *testing.T, username string) (accessToken string, userID, workspaceID int64) {
@@ -94,7 +87,7 @@ func (s *groupHandlerTestServer) register(t *testing.T, username string) (access
 		t.Fatalf("decode register response: %v", err)
 	}
 
-	users := repository.NewUserRepository(s.db)
+	users := s.graph.UserRepo
 	user, err := users.GetByEmail(ctx, username+"@example.com")
 	if err != nil {
 		t.Fatalf("get %s: %v", username, err)
@@ -109,7 +102,7 @@ func (s *groupHandlerTestServer) register(t *testing.T, username string) (access
 
 func (s *groupHandlerTestServer) addMember(t *testing.T, workspaceID, userID int64, role string) {
 	t.Helper()
-	if _, err := s.db.Exec("INSERT INTO workspace_members (workspace_id, user_id, role) VALUES (?, ?, ?)", workspaceID, userID, role); err != nil {
+	if _, err := s.graph.DB.Exec("INSERT INTO workspace_members (workspace_id, user_id, role) VALUES (?, ?, ?)", workspaceID, userID, role); err != nil {
 		t.Fatalf("add member: %v", err)
 	}
 }

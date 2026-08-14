@@ -3,7 +3,6 @@ package handlers
 import (
 	"bytes"
 	"context"
-	"database/sql"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -12,7 +11,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/XiovV/calendar/server/internal/db"
+	"github.com/XiovV/calendar/server/internal/apptest"
 	"github.com/XiovV/calendar/server/internal/httpauth"
 	"github.com/XiovV/calendar/server/internal/repository"
 	"github.com/XiovV/calendar/server/internal/service"
@@ -23,7 +22,7 @@ import (
 // their own Workspace) and the self-service /api/account routes.
 type accountHandlerTestServer struct {
 	srv        *httptest.Server
-	db         *sql.DB
+	graph      *service.Graph
 	calendars  *service.CalendarService
 	workspaces *service.WorkspaceService
 }
@@ -31,21 +30,17 @@ type accountHandlerTestServer struct {
 func newAccountHandlerTestServer(t *testing.T) *accountHandlerTestServer {
 	t.Helper()
 
-	sqlDB, err := db.OpenInMemory()
-	if err != nil {
-		t.Fatalf("open in-memory db: %v", err)
-	}
-	t.Cleanup(func() { sqlDB.Close() })
+	// No bootstrap account, and ENABLE_SIGNUPS on: every User here arrives
+	// through register below.
+	cfg := apptest.Config(t)
+	cfg.InitialName, cfg.InitialEmail, cfg.InitialPassword = "", "", ""
+	cfg.EnableSignups = true
+	g := newTestGraphWithConfig(t, cfg)
 
-	users := repository.NewUserRepository(sqlDB)
-	sessions := repository.NewSessionRepository(sqlDB)
-	calendarRepo := repository.NewCalendarRepository(sqlDB)
-	shareRepo := repository.NewCalendarShareRepository(sqlDB)
-	workspaceRepo := repository.NewWorkspaceRepository(sqlDB)
-	workspaces := service.NewWorkspaceService(sqlDB, workspaceRepo, repository.NewWorkspaceInviteRepository(sqlDB), repository.NewCalendarRepository(sqlDB), repository.NewCalendarShareRepository(sqlDB))
-	calendars := service.NewCalendarService(calendarRepo, shareRepo, users, repository.NewEventReminderRepository(sqlDB), repository.NewCalendarDefaultReminderRepository(sqlDB), repository.NewEventReminderExplicitRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo, repository.NewCalendarGroupShareRepository(sqlDB), repository.NewGroupRepository(sqlDB))
-	auth := service.NewAuthService(users, sessions, workspaces, repository.NewWorkspaceInviteRepository(sqlDB), calendars, repository.NewAttendeeRepository(sqlDB), []byte("test-secret"), "", "", "", true)
-	accounts := service.NewAccountService(sqlDB, users, sessions, calendarRepo, shareRepo, workspaceRepo, workspaces)
+	workspaces := g.Workspaces
+	calendars := g.Calendars
+	auth := g.Auth
+	accounts := g.Accounts
 
 	authHandler := NewAuthHandler(auth, false, false)
 	accountHandler := NewAccountHandler(accounts)
@@ -63,7 +58,7 @@ func newAccountHandlerTestServer(t *testing.T) *accountHandlerTestServer {
 	srv := httptest.NewServer(r)
 	t.Cleanup(srv.Close)
 
-	return &accountHandlerTestServer{srv: srv, db: sqlDB, calendars: calendars, workspaces: workspaces}
+	return &accountHandlerTestServer{srv: srv, graph: g, calendars: calendars, workspaces: workspaces}
 }
 
 // register self-registers username and returns their access token, id, and
@@ -89,7 +84,7 @@ func (s *accountHandlerTestServer) register(t *testing.T, username string) (acce
 		t.Fatalf("decode register response: %v", err)
 	}
 
-	users := repository.NewUserRepository(s.db)
+	users := s.graph.UserRepo
 	user, err := users.GetByEmail(ctx, username+"@example.com")
 	if err != nil {
 		t.Fatalf("get %s: %v", username, err)
@@ -122,7 +117,7 @@ func (s *accountHandlerTestServer) deleteAllCalendars(t *testing.T, userID int64
 // accepting a Workspace Invite (not this handler's concern).
 func (s *accountHandlerTestServer) addMember(t *testing.T, workspaceID, userID int64, role string) {
 	t.Helper()
-	if _, err := s.db.Exec("INSERT INTO workspace_members (workspace_id, user_id, role) VALUES (?, ?, ?)", workspaceID, userID, role); err != nil {
+	if _, err := s.graph.DB.Exec("INSERT INTO workspace_members (workspace_id, user_id, role) VALUES (?, ?, ?)", workspaceID, userID, role); err != nil {
 		t.Fatalf("add member: %v", err)
 	}
 }
@@ -324,13 +319,13 @@ func TestAccountDelete_DispositionTransfer_ReassignsCalendar(t *testing.T) {
 
 	// Transfer Workspace ownership to bob so alice is no longer its sole
 	// Owner (ADR-0044's guard) while bob stays a Member the calendar can go to.
-	if _, err := s.db.Exec("UPDATE workspaces SET owner_user_id = ? WHERE id = ?", bobID, aliceWorkspaceID); err != nil {
+	if _, err := s.graph.DB.Exec("UPDATE workspaces SET owner_user_id = ? WHERE id = ?", bobID, aliceWorkspaceID); err != nil {
 		t.Fatalf("transfer workspace ownership: %v", err)
 	}
-	if _, err := s.db.Exec("UPDATE workspace_members SET role = 'owner' WHERE workspace_id = ? AND user_id = ?", aliceWorkspaceID, bobID); err != nil {
+	if _, err := s.graph.DB.Exec("UPDATE workspace_members SET role = 'owner' WHERE workspace_id = ? AND user_id = ?", aliceWorkspaceID, bobID); err != nil {
 		t.Fatalf("promote bob: %v", err)
 	}
-	if _, err := s.db.Exec("UPDATE workspace_members SET role = 'member' WHERE workspace_id = ? AND user_id = ?", aliceWorkspaceID, aliceID); err != nil {
+	if _, err := s.graph.DB.Exec("UPDATE workspace_members SET role = 'member' WHERE workspace_id = ? AND user_id = ?", aliceWorkspaceID, aliceID); err != nil {
 		t.Fatalf("demote alice: %v", err)
 	}
 
@@ -343,7 +338,7 @@ func TestAccountDelete_DispositionTransfer_ReassignsCalendar(t *testing.T) {
 		t.Fatalf("expected 204, got %d", resp.StatusCode)
 	}
 
-	calendarRepo := repository.NewCalendarRepository(s.db)
+	calendarRepo := s.graph.CalendarRepo
 	transferred, err := calendarRepo.GetByIDAny(context.Background(), calendar.ID)
 	if err != nil {
 		t.Fatalf("expected the calendar to survive: %v", err)

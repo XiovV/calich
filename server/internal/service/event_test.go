@@ -6,7 +6,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/XiovV/calendar/server/internal/db"
 	"github.com/XiovV/calendar/server/internal/repository"
 )
 
@@ -15,34 +14,27 @@ import (
 func newTestEventService(t *testing.T) (svc *EventService, userID int64, calendarID string) {
 	t.Helper()
 
-	sqlDB, err := db.OpenInMemory()
-	if err != nil {
-		t.Fatalf("open in-memory db: %v", err)
-	}
-	t.Cleanup(func() { sqlDB.Close() })
+	g := newTestGraph(t)
 
-	users := repository.NewUserRepository(sqlDB)
-	user, err := users.Create(context.Background(), "user-a", "user-a@example.com", "hash", false)
+	user, err := g.UserRepo.Create(context.Background(), "user-a", "user-a@example.com", "hash", false)
 	if err != nil {
 		t.Fatalf("create user: %v", err)
 	}
 
-	workspaceRepo := repository.NewWorkspaceRepository(sqlDB)
-	workspace, err := workspaceRepo.Create(context.Background(), "Test Workspace", user.ID)
+	workspace, err := g.WorkspaceRepo.Create(context.Background(), "Test Workspace", user.ID)
 	if err != nil {
 		t.Fatalf("create workspace: %v", err)
 	}
-	if err := workspaceRepo.AddMember(context.Background(), workspace.ID, user.ID, repository.WorkspaceRoleOwner); err != nil {
+	if err := g.WorkspaceRepo.AddMember(context.Background(), workspace.ID, user.ID, repository.WorkspaceRoleOwner); err != nil {
 		t.Fatalf("add workspace member: %v", err)
 	}
 
-	calendarRepo := repository.NewCalendarRepository(sqlDB)
-	cal, err := calendarRepo.Create(context.Background(), user.ID, workspace.ID, "cal-1", repository.CalendarFields{Name: "Personal", Color: "peacock"})
+	cal, err := g.CalendarRepo.Create(context.Background(), user.ID, workspace.ID, "cal-1", repository.CalendarFields{Name: "Personal", Color: "peacock"})
 	if err != nil {
 		t.Fatalf("create calendar: %v", err)
 	}
 
-	return NewEventService(sqlDB, repository.NewEventRepository(sqlDB), repository.NewEventExceptionRepository(sqlDB), repository.NewEventReminderRepository(sqlDB), repository.NewCalendarDefaultReminderRepository(sqlDB), repository.NewEventReminderExplicitRepository(sqlDB), repository.NewSyncRepository(sqlDB), NewCalendarService(calendarRepo, repository.NewCalendarShareRepository(sqlDB), users, repository.NewEventReminderRepository(sqlDB), repository.NewCalendarDefaultReminderRepository(sqlDB), repository.NewEventReminderExplicitRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo, repository.NewCalendarGroupShareRepository(sqlDB), repository.NewGroupRepository(sqlDB)), users, repository.NewAttachmentRepository(sqlDB), repository.NewAttendeeRepository(sqlDB), workspaceRepo, repository.NewGroupRepository(sqlDB), repository.NewNotificationRepository(sqlDB), nil, 1000), user.ID, cal.ID
+	return g.Events, user.ID, cal.ID
 }
 
 func TestEventService_Create(t *testing.T) {

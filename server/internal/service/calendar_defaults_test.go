@@ -4,35 +4,28 @@ import (
 	"context"
 	"testing"
 
-	"github.com/XiovV/calendar/server/internal/db"
 	"github.com/XiovV/calendar/server/internal/repository"
 )
 
 func newTestCalendarServiceForUser(t *testing.T) (svc *CalendarService, userID, workspaceID int64) {
 	t.Helper()
 
-	sqlDB, err := db.OpenInMemory()
-	if err != nil {
-		t.Fatalf("open in-memory db: %v", err)
-	}
-	t.Cleanup(func() { sqlDB.Close() })
+	g := newTestGraph(t)
 
-	users := repository.NewUserRepository(sqlDB)
-	user, err := users.Create(context.Background(), "admin", "admin@example.com", "hash", true)
+	user, err := g.UserRepo.Create(context.Background(), "admin", "admin@example.com", "hash", true)
 	if err != nil {
 		t.Fatalf("create user: %v", err)
 	}
 
-	workspaceRepo := repository.NewWorkspaceRepository(sqlDB)
-	workspace, err := workspaceRepo.Create(context.Background(), "Test Workspace", user.ID)
+	workspace, err := g.WorkspaceRepo.Create(context.Background(), "Test Workspace", user.ID)
 	if err != nil {
 		t.Fatalf("create workspace: %v", err)
 	}
-	if err := workspaceRepo.AddMember(context.Background(), workspace.ID, user.ID, repository.WorkspaceRoleOwner); err != nil {
+	if err := g.WorkspaceRepo.AddMember(context.Background(), workspace.ID, user.ID, repository.WorkspaceRoleOwner); err != nil {
 		t.Fatalf("add workspace member: %v", err)
 	}
 
-	return NewCalendarService(repository.NewCalendarRepository(sqlDB), repository.NewCalendarShareRepository(sqlDB), users, repository.NewEventReminderRepository(sqlDB), repository.NewCalendarDefaultReminderRepository(sqlDB), repository.NewEventReminderExplicitRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo, repository.NewCalendarGroupShareRepository(sqlDB), repository.NewGroupRepository(sqlDB)), user.ID, workspace.ID
+	return g.Calendars, user.ID, workspace.ID
 }
 
 func TestEnsureDefaultCalendars_SeedsPersonalWorkFamily(t *testing.T) {
@@ -119,17 +112,10 @@ func TestEnsureDefaultCalendars_RepeatedCallsAreNoOps(t *testing.T) {
 // "does the user currently have zero calendars" instead of this flag would
 // re-seed here, which is exactly the behavior the ticket rules out.
 func TestBootstrapCreatedFlag_GatesSeedingSoDeletedCalendarsStayDeleted(t *testing.T) {
-	sqlDB, err := db.OpenInMemory()
-	if err != nil {
-		t.Fatalf("open in-memory db: %v", err)
-	}
-	t.Cleanup(func() { sqlDB.Close() })
-
-	users := repository.NewUserRepository(sqlDB)
-	workspaceRepo := repository.NewWorkspaceRepository(sqlDB)
-	workspaces := NewWorkspaceService(sqlDB, workspaceRepo, repository.NewWorkspaceInviteRepository(sqlDB), repository.NewCalendarRepository(sqlDB), repository.NewCalendarShareRepository(sqlDB))
-	calendarSvc := NewCalendarService(repository.NewCalendarRepository(sqlDB), repository.NewCalendarShareRepository(sqlDB), users, repository.NewEventReminderRepository(sqlDB), repository.NewCalendarDefaultReminderRepository(sqlDB), repository.NewEventReminderExplicitRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo, repository.NewCalendarGroupShareRepository(sqlDB), repository.NewGroupRepository(sqlDB))
-	authSvc := NewAuthService(users, repository.NewSessionRepository(sqlDB), workspaces, repository.NewWorkspaceInviteRepository(sqlDB), calendarSvc, repository.NewAttendeeRepository(sqlDB), []byte("test-secret"), "admin", "admin@example.com", "admin", false)
+	g := newTestGraph(t)
+	workspaces := g.Workspaces
+	calendarSvc := g.Calendars
+	authSvc := g.Auth
 	ctx := context.Background()
 
 	user, created, err := authSvc.Bootstrap(ctx)

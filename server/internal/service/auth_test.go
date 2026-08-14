@@ -10,7 +10,7 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"golang.org/x/crypto/bcrypt"
 
-	"github.com/XiovV/calendar/server/internal/db"
+	"github.com/XiovV/calendar/server/internal/apptest"
 	"github.com/XiovV/calendar/server/internal/repository"
 )
 
@@ -32,21 +32,15 @@ func newTestAuthServiceWithSignups(t *testing.T, initialUsername, initialPasswor
 		initialEmail = initialUsername + "@example.com"
 	}
 
-	sqlDB, err := db.OpenInMemory()
-	if err != nil {
-		t.Fatalf("open in-memory db: %v", err)
-	}
-	t.Cleanup(func() { sqlDB.Close() })
+	cfg := apptest.Config(t)
+	cfg.InitialName = initialUsername
+	cfg.InitialEmail = initialEmail
+	cfg.InitialPassword = initialPassword
+	cfg.EnableSignups = enableSignups
 
-	users := repository.NewUserRepository(sqlDB)
-	sessions := repository.NewSessionRepository(sqlDB)
-	workspaceRepo := repository.NewWorkspaceRepository(sqlDB)
-	calendarRepo := repository.NewCalendarRepository(sqlDB)
-	shareRepo := repository.NewCalendarShareRepository(sqlDB)
-	workspaces := NewWorkspaceService(sqlDB, workspaceRepo, repository.NewWorkspaceInviteRepository(sqlDB), calendarRepo, shareRepo)
-	calendars := NewCalendarService(calendarRepo, shareRepo, users, repository.NewEventReminderRepository(sqlDB), repository.NewCalendarDefaultReminderRepository(sqlDB), repository.NewEventReminderExplicitRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo, repository.NewCalendarGroupShareRepository(sqlDB), repository.NewGroupRepository(sqlDB))
-
-	return NewAuthService(users, sessions, workspaces, repository.NewWorkspaceInviteRepository(sqlDB), calendars, repository.NewAttendeeRepository(sqlDB), []byte("test-secret"), initialUsername, initialEmail, initialPassword, enableSignups)
+	// The signing secret is pinned rather than minted, so the expired-token
+	// test below can sign one AuthService will accept as authentic.
+	return newTestGraphWithConfig(t, cfg, WithJWTSecret([]byte("test-secret"))).Auth
 }
 
 // mustSeedUserRequiringPasswordChange inserts a User directly via the
@@ -157,20 +151,11 @@ func TestBootstrap_UsesEnvCredentialsWhenBothSet(t *testing.T) {
 // is operator-typed like any other email input, so a mixed-case value must
 // be folded to lowercase on write, the same as Register and UpdateEmail.
 func TestBootstrap_FoldsInitialEmailCase(t *testing.T) {
-	sqlDB, err := db.OpenInMemory()
-	if err != nil {
-		t.Fatalf("open in-memory db: %v", err)
-	}
-	t.Cleanup(func() { sqlDB.Close() })
-
-	users := repository.NewUserRepository(sqlDB)
-	sessions := repository.NewSessionRepository(sqlDB)
-	workspaceRepo := repository.NewWorkspaceRepository(sqlDB)
-	calendarRepo := repository.NewCalendarRepository(sqlDB)
-	shareRepo := repository.NewCalendarShareRepository(sqlDB)
-	workspaces := NewWorkspaceService(sqlDB, workspaceRepo, repository.NewWorkspaceInviteRepository(sqlDB), calendarRepo, shareRepo)
-	calendars := NewCalendarService(calendarRepo, shareRepo, users, repository.NewEventReminderRepository(sqlDB), repository.NewCalendarDefaultReminderRepository(sqlDB), repository.NewEventReminderExplicitRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo, repository.NewCalendarGroupShareRepository(sqlDB), repository.NewGroupRepository(sqlDB))
-	svc := NewAuthService(users, sessions, workspaces, repository.NewWorkspaceInviteRepository(sqlDB), calendars, repository.NewAttendeeRepository(sqlDB), []byte("test-secret"), "Admin", "Admin@Example.com", "hunter2", false)
+	cfg := apptest.Config(t)
+	cfg.InitialName = "Admin"
+	cfg.InitialEmail = "Admin@Example.com"
+	cfg.InitialPassword = "hunter2"
+	svc := newTestGraphWithConfig(t, cfg).Auth
 
 	ctx := context.Background()
 	user, _, err := svc.Bootstrap(ctx)
@@ -601,7 +586,9 @@ func TestAuthenticate_RejectsWrongSigningSecret(t *testing.T) {
 	svc := newTestAuthService(t, "admin", "admin")
 	ctx := context.Background()
 
-	other := NewAuthService(svc.users, svc.sessions, svc.workspaces, svc.workspaceInvites, svc.calendars, svc.attendees, []byte("a-different-secret"), "admin", "admin@example.com", "admin", false)
+	// A second instance, identical to svc except for the secret it signs
+	// with — its own graph, since nothing about this crosses the database.
+	other := newTestGraph(t, WithJWTSecret([]byte("a-different-secret"))).Auth
 	if _, _, err := other.Bootstrap(ctx); err != nil {
 		t.Fatalf("bootstrap: %v", err)
 	}

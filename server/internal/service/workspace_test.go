@@ -6,21 +6,15 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/XiovV/calendar/server/internal/db"
 	"github.com/XiovV/calendar/server/internal/repository"
 )
 
 func newTestWorkspaceService(t *testing.T) (*WorkspaceService, *repository.UserRepository) {
 	t.Helper()
 
-	sqlDB, err := db.OpenInMemory()
-	if err != nil {
-		t.Fatalf("open in-memory db: %v", err)
-	}
-	t.Cleanup(func() { sqlDB.Close() })
+	g := newTestGraph(t)
 
-	users := repository.NewUserRepository(sqlDB)
-	return NewWorkspaceService(sqlDB, repository.NewWorkspaceRepository(sqlDB), repository.NewWorkspaceInviteRepository(sqlDB), repository.NewCalendarRepository(sqlDB), repository.NewCalendarShareRepository(sqlDB)), users
+	return g.Workspaces, g.UserRepo
 }
 
 func TestWorkspaceService_CreateForOwner_AddsOwnerMembership(t *testing.T) {
@@ -383,7 +377,7 @@ func TestWorkspaceService_RemoveMember_SucceedsAfterTransfer(t *testing.T) {
 		t.Fatalf("remove bob with transfer: %v", err)
 	}
 
-	transferred, err := repository.NewCalendarRepository(h.db).GetByIDAny(ctx, calendar.ID)
+	transferred, err := h.calendarRepo.GetByIDAny(ctx, calendar.ID)
 	if err != nil {
 		t.Fatalf("expected the calendar to survive the transfer: %v", err)
 	}
@@ -414,7 +408,7 @@ func TestWorkspaceService_RemoveMember_SucceedsAfterDelete(t *testing.T) {
 		t.Fatalf("remove bob with delete: %v", err)
 	}
 
-	if _, err := repository.NewCalendarRepository(h.db).GetByIDAny(ctx, calendar.ID); !errors.Is(err, repository.ErrNotFound) {
+	if _, err := h.calendarRepo.GetByIDAny(ctx, calendar.ID); !errors.Is(err, repository.ErrNotFound) {
 		t.Fatalf("expected the calendar to be deleted, got %v", err)
 	}
 
@@ -442,7 +436,7 @@ func TestWorkspaceService_RemoveMember_LeavesCalendarsInOtherWorkspacesUntouched
 		t.Fatalf("remove bob: %v", err)
 	}
 
-	stillOwned, err := repository.NewCalendarRepository(h.db).GetByIDAny(ctx, bobsOwnCalendar.ID)
+	stillOwned, err := h.calendarRepo.GetByIDAny(ctx, bobsOwnCalendar.ID)
 	if err != nil {
 		t.Fatalf("expected bob's own-workspace calendar to survive: %v", err)
 	}
