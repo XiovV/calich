@@ -34,14 +34,13 @@ import {
   resolveMaster,
   type Occurrence,
 } from "../lib/occurrence";
-import { viewerZone } from "../lib/floatingTime";
+import { resolveColor, type EditScope } from "../lib/recurrenceScope";
+import type { MasterFieldChanges } from "../lib/seriesOperation";
 import {
-  hasFieldChanges,
-  remindersEqual,
-  shouldDiscardChildren,
-  type EditScope,
-  type EventFieldChanges,
-} from "../lib/recurrenceScope";
+  planEventSave,
+  type PlanEventSaveInput,
+  type SavePlan,
+} from "../lib/savePlan";
 import {
   RECURRENCE_PRESETS,
   buildRule,
@@ -383,6 +382,10 @@ export function EventModal(props: EventModalProps) {
   // set once a brand-new Event's create POST has succeeded, since an
   // upload needs a row to reference; until then, a picked/dropped file just
   // sits in attachmentDrafts as "pending" (ADR-0040).
+  // The id this modal session's create would mint, fixed at open rather than
+  // per render: only one create can ever succeed here (the plan refuses a
+  // second), so a stable id also keeps the render-time plan stable.
+  const [newEventId] = useState(() => crypto.randomUUID());
   const [createdEventId, setCreatedEventId] = useState<string | null>(null);
   const attachmentEventId =
     mode === "edit" ? master?.id : (createdEventId ?? undefined);
@@ -436,14 +439,10 @@ export function EventModal(props: EventModalProps) {
   const [isCustomDialogOpen, setIsCustomDialogOpen] = useState(false);
   const [isCreateCalendarOpen, setIsCreateCalendarOpen] = useState(false);
   const [isDeleteConfirmOpen, setIsDeleteConfirmOpen] = useState(false);
-  // reminders is the acting User's own Reminders draft, present only when it
-  // differs from initial.reminders — undefined means "untouched", so the
-  // eventual editOccurrence call writes nothing rather than resetting
-  // fired-history for no reason (ADR-0064).
-  const [pendingEditChanges, setPendingEditChanges] = useState<{
-    changes: EventFieldChanges & { rrule?: string };
-    reminders: Reminder[] | undefined;
-  } | null>(null);
+  // Which resume dialog is open, if any. Neither holds any part of the edit
+  // itself: what they answer is fed back into planEventSave, which recomputes
+  // from live form state rather than replaying a captured payload (ADR-0066).
+  const [isScopePickerOpen, setIsScopePickerOpen] = useState(false);
   const [isDiscardWarningOpen, setIsDiscardWarningOpen] = useState(false);
   const [isDeleteScopePickerOpen, setIsDeleteScopePickerOpen] = useState(false);
   const [isDownloadScopePickerOpen, setIsDownloadScopePickerOpen] =
@@ -655,256 +654,224 @@ export function EventModal(props: EventModalProps) {
   // validate (ADR-0017).
   const isTimeRangeValid =
     allDay || timeStringToDate(day, endTime) > timeStringToDate(day, startTime);
-  const canSave =
-    !isReadOnlyEvent &&
-    title.trim() !== "" &&
-    calendarId !== "" &&
-    isTimeRangeValid &&
-    !isSavingWithAttendees;
-  // Reminders have their own write path (ADR-0064), diffed against what the
-  // modal opened with regardless of isReadOnlyEvent — a read-only Event's
-  // Reminders section is live precisely because this diff, and the save
-  // path below, never go anywhere near an Event field (#211).
+  // Reminders have their own write path (ADR-0064) — a read-only Event's
+  // Reminders section is live precisely because the plan below, and the
+  // write it resolves to, never go anywhere near an Event field (#211).
   const remindersDraft: Reminder[] = fromReminderDrafts(reminders);
-  const remindersChanged = !remindersEqual(remindersDraft, initial.reminders);
 
-  async function handleSave() {
-    // A read-only Event's Reminders section is the one live control left —
-    // saving here never attempts an Event-field write (which the caller has
-    // no Access for) or a series op; it writes only the caller's own
-    // Reminders on this Occurrence's current row (#211, ADR-0064). No scope
-    // picker (This event/This and following/All events): a read-only caller
-    // can't create an Override to scope "this event" to, so
-    // props.occurrence.event.id — the Master for an unoverridden instance,
-    // or the existing Override row for one already materialized — is the
-    // only row there is to write to.
-    if (isReadOnlyEvent) {
-      if (remindersChanged) {
-        await setEventReminders(props.occurrence.event.id, remindersDraft);
-      }
-      onClose();
-      return;
+  // The form's fields, normalized into the shape the rest of the recurrence
+  // code already speaks. An all-day Event's start/end are whole dates: start
+  // is the day itself, end the exclusive next day (ADR-0017).
+  const draftChanges: MasterFieldChanges = {
+    calendarId,
+    title: title.trim(),
+    start: startForRule,
+    end: allDay ? addDays(startOfDay(day), 1) : timeStringToDate(day, endTime),
+    allDay,
+    rrule: repeat === "custom" ? customRule : buildRule(repeat, startForRule),
+    description: description.trim(),
+    location: location.trim(),
+    // Unlike description/location, never trimmed — trailing whitespace must
+    // round-trip byte-for-byte (ADR-0063).
+    url,
+    color,
+  };
+
+  // `resume` carries what a dialog answered — the scope picker's choice, or
+  // the discard warning's confirmation — so planning again with it settled
+  // produces the write instead of the question (ADR-0066).
+  function buildSaveInput(
+    resume: { resolvedScope?: EditScope; discardConfirmed?: boolean } = {},
+  ): PlanEventSaveInput {
+    if (mode === "edit") {
+      return {
+        mode: "edit",
+        changes: draftChanges,
+        reminders: remindersDraft,
+        eventId: props.occurrence.event.id,
+        isReadOnly: isReadOnlyEvent,
+        isRecurring,
+        masterRrule: master?.rrule,
+        masterHasChildren,
+        // What the modal opened with. start/end come from the Occurrence
+        // rather than `initial`, whose own are the form's time strings.
+        original: {
+          calendarId: initial.calendarId,
+          title: initial.title,
+          start: props.occurrence.start,
+          end: props.occurrence.end,
+          allDay: initial.allDay,
+          rrule: master?.rrule,
+          description: initial.description,
+          location: initial.location,
+          url: initial.url,
+          color: initial.color,
+        },
+        originalReminders: initial.reminders,
+        ...resume,
+      };
     }
-    if (!canSave) return;
-    // Once a create has already gone through and its Attachments are
-    // uploading, this Event is done — Enter shouldn't try to create a
-    // second one (the Save button is already hidden by then too).
-    if (mode !== "edit" && createdEventId) return;
-    // A create carrying staged Attendees is already in flight — Enter
-    // shouldn't fire a second create while the first is still awaiting its
-    // response (#187, ADR-0055).
-    if (mode !== "edit" && isSavingWithAttendees) return;
-
-    // An all-day Event's start/end are whole dates: start is the day itself,
-    // end is the exclusive next day (ADR-0017).
-    const start = allDay ? startOfDay(day) : timeStringToDate(day, startTime);
-    const end = allDay
-      ? addDays(startOfDay(day), 1)
-      : timeStringToDate(day, endTime);
-    const rrule = repeat === "custom" ? customRule : buildRule(repeat, start);
-    // remindersDraft/remindersChanged are computed once above canSave — they
-    // travel separately from `changes` below, and only when they actually
-    // differ from what the modal opened with (ADR-0064).
-    const changes = {
-      calendarId,
-      title: title.trim(),
-      start,
-      end,
-      allDay,
-      rrule,
-      description: description.trim(),
-      location: location.trim(),
-      // Unlike description/location, never trimmed — trailing whitespace
-      // must round-trip byte-for-byte (ADR-0063).
-      url,
-      color,
+    return {
+      mode: "create",
+      changes: draftChanges,
+      reminders: remindersDraft,
+      stagedAttendees,
+      pendingAttachments: attachmentDrafts
+        .filter(
+          (draft): draft is Extract<AttachmentDraft, { status: "pending" }> =>
+            draft.status === "pending",
+        )
+        .map((draft) => ({ draftId: draft.draftId, file: draft.file })),
+      hasCreated: createdEventId !== null,
+      isSaving: isSavingWithAttendees,
     };
+  }
 
-    if (mode !== "edit") {
-      // A newly created Event is stamped with the creator's Viewer zone; an
-      // all-day Event stays timezone-free (ADR-0017, ADR-0019).
-      const tzid = allDay ? undefined : viewerZone();
-      const id = crypto.randomUUID();
+  // One plan per render, read by both the Save button's disabled state and
+  // the submit handler, so the two cannot disagree about whether this form
+  // can be saved (ADR-0066).
+  const savePlan = planEventSave(buildSaveInput(), { newId: () => newEventId });
 
-      const pendingFiles = attachmentDrafts.filter(
-        (draft): draft is Extract<AttachmentDraft, { status: "pending" }> =>
-          draft.status === "pending",
-      );
-      const attendeeUserIds = stagedAttendees
-        .filter(
-          (t): t is Extract<StagedAttendeeTarget, { kind: "user" }> =>
-            t.kind === "user",
-        )
-        .map((t) => t.userId);
-      const attendeeGroupIds = stagedAttendees
-        .filter(
-          (t): t is Extract<StagedAttendeeTarget, { kind: "group" }> =>
-            t.kind === "group",
-        )
-        .map((t) => t.groupId);
-      const attendeeEmails = stagedAttendees
-        .filter(
-          (t): t is Extract<StagedAttendeeTarget, { kind: "email" }> =>
-            t.kind === "email",
-        )
-        .map((t) => t.email);
-      const attendeesAreStaged =
-        attendeeUserIds.length > 0 ||
-        attendeeGroupIds.length > 0 ||
-        attendeeEmails.length > 0;
+  async function runSavePlan(plan: SavePlan): Promise<void> {
+    switch (plan.kind) {
+      case "blocked":
+        return;
 
-      if (pendingFiles.length === 0 && !attendeesAreStaged) {
-        addEvent({ id, ...changes, tzid, reminders: remindersDraft });
+      case "close":
         onClose();
         return;
-      }
 
-      if (attendeesAreStaged) {
-        // The create POST is awaited before anything is painted on the
-        // grid — a rejected explicit target never shows an Event whose
-        // invites silently didn't go out (#187, ADR-0055). Rejection keeps
-        // the dialog open with the form intact and shows its own banner in
-        // the Attendees section, rather than the generic toast the
-        // Attachment-only branch below relies on.
+      // The one write a read-only Event still accepts: the caller's own
+      // Reminders on this Occurrence's current row, never an Event field and
+      // never a series op (#211, ADR-0064).
+      case "writeReminders":
+        await setEventReminders(plan.eventId, plan.reminders);
+        onClose();
+        return;
+
+      case "createAndClose":
+        addEvent(plan.event);
+        onClose();
+        return;
+
+      case "createWithAttendees": {
+        // The create POST is awaited before anything is painted on the grid
+        // — a rejected explicit target never shows an Event whose invites
+        // silently didn't go out (#187, ADR-0055). Rejection keeps the dialog
+        // open with the form intact and shows its own banner in the Attendees
+        // section, rather than the generic toast addEvent raises otherwise.
         setIsSavingWithAttendees(true);
         setAttendeeCreateError(null);
         try {
-          await addEvent(
-            { id, ...changes, tzid, reminders: remindersDraft },
-            { attendeeUserIds, attendeeGroupIds, attendeeEmails },
-          );
+          await addEvent(plan.event, plan.attendees);
         } catch (err) {
           setAttendeeCreateError(errorMessage(err));
           return;
         } finally {
           setIsSavingWithAttendees(false);
         }
-        setCreatedEventId(id);
-        for (const draft of pendingFiles) {
-          startAttachmentUpload(draft.file, id, draft.draftId);
+        setCreatedEventId(plan.event.id);
+        for (const attachment of plan.pendingAttachments) {
+          startAttachmentUpload(
+            attachment.file,
+            plan.event.id,
+            attachment.draftId,
+          );
         }
-        // No Attachments pending: success closes the dialog immediately,
-        // same as the no-Attendees/no-Attachments branch above. Pending
-        // Attachments keep it open so their upload progress has somewhere
-        // to live, exactly like the branch below.
-        if (pendingFiles.length === 0) onClose();
+        // Pending Attachments keep the dialog open so their upload progress
+        // has somewhere to live; with none, success closes it immediately.
+        if (plan.pendingAttachments.length === 0) onClose();
         return;
       }
 
-      // Only pending Attachments, no staged Attendees — #132/ADR-0040's
-      // existing path. The row must exist before an upload can reference
-      // it, so the create POST is awaited here rather than
-      // fired-and-forgotten like the first branch above — cancelling the
-      // modal (closing without files staged) still uploads nothing, since
-      // this whole branch is skipped when there's nothing pending. The
-      // dialog stays open afterwards so per-file progress/retry has
-      // somewhere to live; its footer switches to a single Done button
-      // once createdEventId is set.
-      await addEvent({ id, ...changes, tzid, reminders: remindersDraft });
-      if (!useEventsStore.getState().events.some((event) => event.id === id)) {
-        // addEvent already rolled back its optimistic add and toasted the
-        // failure — the Event was never saved, so there's nothing to
-        // upload against.
+      case "createThenUpload": {
+        // The row must exist before an upload can reference it, so this
+        // create is awaited rather than fired-and-forgotten (#132, ADR-0040).
+        // The dialog stays open afterwards for per-file progress/retry; its
+        // footer switches to a single Done button once createdEventId is set.
+        await addEvent(plan.event);
+        if (
+          !useEventsStore
+            .getState()
+            .events.some((event) => event.id === plan.event.id)
+        ) {
+          // addEvent already rolled back its optimistic add and toasted the
+          // failure — the Event was never saved, so there's nothing to
+          // upload against.
+          onClose();
+          return;
+        }
+        setCreatedEventId(plan.event.id);
+        for (const attachment of plan.pendingAttachments) {
+          startAttachmentUpload(
+            attachment.file,
+            plan.event.id,
+            attachment.draftId,
+          );
+        }
+        return;
+      }
+
+      case "updateEvent":
+        updateEvent(plan.id, {
+          ...plan.changes,
+          // An Event's own colour is absent-or-set; the explicit "reset to
+          // Calendar colour" that travels as null through EventFieldChanges
+          // resolves to absent here (ADR-0043).
+          color: resolveColor(plan.changes, { color: undefined }),
+          // Reminders travel only when the acting User actually touched them
+          // (ADR-0064), so an untouched save never resets fired-history.
+          ...(plan.reminders !== undefined
+            ? { reminders: plan.reminders }
+            : {}),
+        });
         onClose();
         return;
-      }
-      setCreatedEventId(id);
-      for (const draft of pendingFiles) {
-        startAttachmentUpload(draft.file, id, draft.draftId);
-      }
-      return;
-    }
 
-    if (!isRecurring) {
-      updateEvent(props.occurrence.event.id, {
-        ...changes,
-        ...(remindersChanged ? { reminders: remindersDraft } : {}),
-      });
-      onClose();
-      return;
-    }
+      case "editSeries":
+        if (mode !== "edit") return;
+        editOccurrence(
+          props.occurrence,
+          plan.scope,
+          plan.changes,
+          plan.reminders,
+        );
+        onClose();
+        return;
 
-    if (master && shouldDiscardChildren(master.rrule, rrule)) {
-      // A rule change is forced to "All events"; warn first only if there's
-      // something to lose.
-      if (masterHasChildren) {
-        setPendingEditChanges({
-          changes,
-          reminders: remindersChanged ? remindersDraft : undefined,
-        });
+      case "askScope":
+        setIsScopePickerOpen(true);
+        return;
+
+      case "confirmDiscard":
         setIsDiscardWarningOpen(true);
         return;
-      }
-      editOccurrence(
-        props.occurrence,
-        "all",
-        changes,
-        remindersChanged ? remindersDraft : undefined,
-      );
-      onClose();
-      return;
     }
-
-    // The rule is unchanged — ask which Occurrences the edit applies to,
-    // but only if something actually differs from the Occurrence's current
-    // values. A no-op save (e.g. one where only an Attachment was
-    // added/removed — that applies to the Master immediately and
-    // independently of Save, ADR-0040) would otherwise misleadingly prompt
-    // for a scope that controls nothing (#141).
-    if (
-      master &&
-      !hasFieldChanges(
-        changes,
-        {
-          calendarId: initial.calendarId,
-          title: initial.title,
-          start: props.occurrence.start,
-          end: props.occurrence.end,
-          allDay: initial.allDay,
-          rrule: master.rrule,
-          description: initial.description,
-          location: initial.location,
-          url: initial.url,
-          color: initial.color,
-        },
-        remindersDraft,
-        initial.reminders,
-      )
-    ) {
-      onClose();
-      return;
-    }
-    setPendingEditChanges({
-      changes,
-      reminders: remindersChanged ? remindersDraft : undefined,
-    });
   }
 
+  async function handleSave() {
+    await runSavePlan(savePlan);
+  }
+
+  // Both dialogs resume the same way: plan again with what they answered and
+  // let the resulting editSeries case perform the write (ADR-0066). A rule
+  // change is always "All events", so the discard warning settles no scope.
   function handleConfirmDiscardWarning() {
-    if (mode === "edit" && pendingEditChanges) {
-      editOccurrence(
-        props.occurrence,
-        "all",
-        pendingEditChanges.changes,
-        pendingEditChanges.reminders,
-      );
-    }
     setIsDiscardWarningOpen(false);
-    setPendingEditChanges(null);
-    onClose();
+    void runSavePlan(
+      planEventSave(buildSaveInput({ discardConfirmed: true }), {
+        newId: () => newEventId,
+      }),
+    );
   }
 
   function handleScopeConfirm(scope: EditScope) {
-    if (mode === "edit" && pendingEditChanges) {
-      editOccurrence(
-        props.occurrence,
-        scope,
-        pendingEditChanges.changes,
-        pendingEditChanges.reminders,
-      );
-    }
-    setPendingEditChanges(null);
-    onClose();
+    setIsScopePickerOpen(false);
+    void runSavePlan(
+      planEventSave(buildSaveInput({ resolvedScope: scope }), {
+        newId: () => newEventId,
+      }),
+    );
   }
 
   function handleDeleteClick() {
@@ -1442,11 +1409,12 @@ export function EventModal(props: EventModalProps) {
                       </Dialog.Close>
                       {/* The one write this Event still accepts (#211,
                         ADR-0064) — enabled only once the Reminders draft
-                        actually differs from what the modal opened with. */}
+                        actually differs from what the modal opened with,
+                        which is what the plan reports as blocked. */}
                       <Button
                         type="submit"
                         size="small"
-                        disabled={!remindersChanged}
+                        disabled={savePlan.kind === "blocked"}
                       >
                         Save
                       </Button>
@@ -1465,7 +1433,7 @@ export function EventModal(props: EventModalProps) {
                       <Button
                         type="submit"
                         size="small"
-                        disabled={!canSave}
+                        disabled={savePlan.kind === "blocked"}
                         loading={isSavingWithAttendees}
                       >
                         Save
@@ -1526,20 +1494,17 @@ export function EventModal(props: EventModalProps) {
           onClose={() => setPendingExportSummary(null)}
         />
       )}
-      {pendingEditChanges && !isDiscardWarningOpen && (
+      {isScopePickerOpen && (
         <ScopePicker
           action="Edit"
           onConfirm={handleScopeConfirm}
-          onClose={() => setPendingEditChanges(null)}
+          onClose={() => setIsScopePickerOpen(false)}
         />
       )}
       {isDiscardWarningOpen && (
         <DiscardRecurrenceWarning
           onConfirm={handleConfirmDiscardWarning}
-          onClose={() => {
-            setIsDiscardWarningOpen(false);
-            setPendingEditChanges(null);
-          }}
+          onClose={() => setIsDiscardWarningOpen(false)}
         />
       )}
     </>
