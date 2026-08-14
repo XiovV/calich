@@ -63,6 +63,10 @@ _Avoid_: deleted occurrence, skip, override
 One of the ordered steps a scoped edit (This event/This and following/All events) on a recurring Occurrence compiles down to — override an Occurrence, re-anchor a series at a split point, or put a single Event's fields wholesale. The same operation list is realized two ways: applied to the local cache, and dispatched to the API in order, so the two can never drift apart. See ADR-0016.
 _Avoid_: edit step, mutation, transform
 
+**Save plan**:
+What pressing Save on the Event modal compiles down to before anything is written — a refusal, a close, a Reminders-only write, one of three creates, an Event update, a scoped series edit, or a request to ask the User for a scope or to confirm discarding a series' Overrides. Recomputed from the form's current state rather than captured when Save was pressed, so confirming a scope re-enters the same planner with the scope now known. Distinct from a Series operation, which is what a scoped edit compiles to one tier below, once the scope is settled. See ADR-0066.
+_Avoid_: save action, submit handler, intent, command
+
 **All-day Event**:
 An Event that occupies whole dates rather than a time range, flagged by `allDay`. Stored with the iCalendar half-open date convention — `start` is the date, `end` is the exclusive next day (a single-day all-day Event spans one day). Its start/end are wall-clock dates, serialized as date-only strings and never timezone-converted. Rendered in the all-day lane, not on the hourly grid. Multi-day all-day Events are out of scope for now.
 _Avoid_: full-day event, date event
