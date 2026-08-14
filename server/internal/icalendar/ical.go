@@ -41,12 +41,37 @@ type AttachmentOpener func(attachmentID string) (io.ReadCloser, error)
 // SerializationTarget is how ATTACH is rendered — the one property that
 // differs between a Calendar object and a Calendar file (ADR-0041).
 // Everything else the codec emits comes from the same unconditional path
-// regardless of target. The zero value renders no ATTACH at all
-// (OccurrenceToICal's flattened single Occurrence never carries one by
-// construction and so never constructs a SerializationTarget).
+// regardless of target. The zero value renders no ATTACH at all, which is
+// what a caller wanting neither shape (the decode-side round-trip tests)
+// passes.
 type SerializationTarget struct {
 	caldavURIPrefix string
 	inline          *inlineAttachments
+}
+
+// OmissionReason is why an encode left an Attachment out of the calendar it
+// produced. One reason today, named rather than implied so the Export
+// summary reports the encoder's own answer instead of restating the rule
+// (#217).
+type OmissionReason string
+
+// OmittedOverInlineCap means the Attachment is larger than the target's
+// inline ceiling, so a Calendar file omits it rather than inlining or
+// truncating it (ADR-0041).
+const OmittedOverInlineCap OmissionReason = "over_inline_cap"
+
+// OmittedAttachment is one Attachment an encode left out, and why — what
+// the Export summary discloses to a human still able to act on it
+// (ADR-0041). Attributed to the Event whose series the Attachment hangs off
+// (ADR-0040). Every encoder entrypoint returns these alongside its
+// calendar, so the pre-flight and the download cannot disagree: they are
+// the same encode.
+type OmittedAttachment struct {
+	Filename   string
+	SizeBytes  int64
+	EventID    string
+	EventTitle string
+	Reason     OmissionReason
 }
 
 // inlineAttachments holds a CalendarFileTarget's inline ceiling and how to
@@ -78,22 +103,24 @@ func CalendarFileTarget(maxInlineBytes int64, open AttachmentOpener) Serializati
 // VEVENT (carrying EXDATE for each cancelled Occurrence) followed by one
 // VEVENT per Override ordered by RecurrenceID, all sharing master's id as
 // their UID (ADR-0025). target picks how master.Attachments are rendered as
-// ATTACH — see appendSeriesVEvents.
-func SeriesToICal(master repository.Event, overrides []repository.Event, target SerializationTarget) (*ical.Calendar, error) {
+// ATTACH — see appendSeriesVEvents. The returned OmittedAttachments are what
+// target could not carry (#217).
+func SeriesToICal(master repository.Event, overrides []repository.Event, target SerializationTarget) (*ical.Calendar, []OmittedAttachment, error) {
 	cal := newVCalendar()
 
 	for _, tzid := range seriesTzids(master, overrides) {
 		vtz, err := buildVTimezone(tzid)
 		if err != nil {
-			return nil, fmt.Errorf("build vtimezone %q: %w", tzid, err)
+			return nil, nil, fmt.Errorf("build vtimezone %q: %w", tzid, err)
 		}
 		cal.Children = append(cal.Children, vtz)
 	}
 
-	if err := appendSeriesVEvents(cal, master, overrides, target); err != nil {
-		return nil, err
+	omitted, err := appendSeriesVEvents(cal, master, overrides, target)
+	if err != nil {
+		return nil, nil, err
 	}
-	return cal, nil
+	return cal, omitted, nil
 }
 
 // newVCalendar starts a VCALENDAR carrying this app's PRODID and VERSION —
@@ -111,21 +138,24 @@ func newVCalendar() *ical.Calendar {
 // the latter once per series in a Calendar. target's ATTACH rendering (see
 // appendAttachProps) is added to every VEVENT emitted, master and every
 // override alike — an Attachment belongs to the whole series, never to one
-// Occurrence (ADR-0040).
-func appendSeriesVEvents(cal *ical.Calendar, master repository.Event, overrides []repository.Event, target SerializationTarget) error {
+// Occurrence (ADR-0040). The omissions returned are the Master pass's alone:
+// every VEVENT renders the same master.Attachments, so one Attachment the
+// target cannot carry is one thing the file lost, not one per VEVENT.
+func appendSeriesVEvents(cal *ical.Calendar, master repository.Event, overrides []repository.Event, target SerializationTarget) ([]OmittedAttachment, error) {
 	masterEvent, err := buildVEvent(master, master.ID, nil, nil)
 	if err != nil {
-		return fmt.Errorf("build master vevent: %w", err)
+		return nil, fmt.Errorf("build master vevent: %w", err)
 	}
 	for _, exdate := range master.Exdates {
 		prop, err := newDateTimeProp(ical.PropExceptionDates, exdate, master.AllDay, master.Tzid)
 		if err != nil {
-			return fmt.Errorf("build exdate: %w", err)
+			return nil, fmt.Errorf("build exdate: %w", err)
 		}
 		masterEvent.Props.Add(prop)
 	}
-	if err := appendAttachProps(masterEvent, master.Attachments, target); err != nil {
-		return fmt.Errorf("append master attachments: %w", err)
+	omitted, err := appendAttachProps(masterEvent, master, target)
+	if err != nil {
+		return nil, fmt.Errorf("append master attachments: %w", err)
 	}
 	cal.Children = append(cal.Children, masterEvent.Component)
 
@@ -136,14 +166,14 @@ func appendSeriesVEvents(cal *ical.Calendar, master repository.Event, overrides 
 	for _, override := range sorted {
 		overrideEvent, err := buildVEvent(override, master.ID, override.RecurrenceID, &master)
 		if err != nil {
-			return fmt.Errorf("build override vevent: %w", err)
+			return nil, fmt.Errorf("build override vevent: %w", err)
 		}
-		if err := appendAttachProps(overrideEvent, master.Attachments, target); err != nil {
-			return fmt.Errorf("append override attachments: %w", err)
+		if _, err := appendAttachProps(overrideEvent, master, target); err != nil {
+			return nil, fmt.Errorf("append override attachments: %w", err)
 		}
 		cal.Children = append(cal.Children, overrideEvent.Component)
 	}
-	return nil
+	return omitted, nil
 }
 
 // attachManagedIDParam, attachFmtTypeParam, attachSizeParam and
@@ -156,33 +186,47 @@ const (
 	attachFilenameParam  = "FILENAME"
 )
 
-// appendAttachProps adds one ATTACH property per attachment onto v, rendered
-// per target (ADR-0041):
+// appendAttachProps adds one ATTACH property per owner.Attachments entry onto
+// v, rendered per target (ADR-0041):
 //   - CalDAVTarget: the RFC 8607 managed-attachment URI (uriPrefix+id) as the
 //     value, with MANAGED-ID/FMTTYPE/SIZE/FILENAME params (#133, ADR-0040).
 //   - CalendarFileTarget: the Attachment's bytes inlined
 //     (ENCODING=BASE64;VALUE=BINARY) with FMTTYPE/FILENAME params. An
-//     Attachment over the target's inline cap is omitted, not truncated.
-//   - The zero SerializationTarget (OccurrenceToICal): a no-op.
-func appendAttachProps(v *ical.Event, attachments []repository.Attachment, target SerializationTarget) error {
+//     Attachment over the target's inline cap is omitted, not truncated, and
+//     returned as an OmittedAttachment attributed to owner.
+//   - The zero SerializationTarget: a no-op.
+//
+// This inline-cap comparison is the only place the ceiling is applied — the
+// Export summary reads these omissions rather than restating the predicate
+// (#217).
+func appendAttachProps(v *ical.Event, owner repository.Event, target SerializationTarget) ([]OmittedAttachment, error) {
 	switch {
 	case target.caldavURIPrefix != "":
-		for _, a := range attachments {
+		for _, a := range owner.Attachments {
 			v.Props.Add(caldavAttachProp(a, target.caldavURIPrefix))
 		}
 	case target.inline != nil:
-		for _, a := range attachments {
+		var omitted []OmittedAttachment
+		for _, a := range owner.Attachments {
 			if a.SizeBytes > target.inline.maxBytes {
+				omitted = append(omitted, OmittedAttachment{
+					Filename:   a.Filename,
+					SizeBytes:  a.SizeBytes,
+					EventID:    owner.ID,
+					EventTitle: owner.Title,
+					Reason:     OmittedOverInlineCap,
+				})
 				continue
 			}
 			prop, err := inlineAttachProp(a, target.inline.open)
 			if err != nil {
-				return fmt.Errorf("inline attachment %s: %w", a.ID, err)
+				return nil, fmt.Errorf("inline attachment %s: %w", a.ID, err)
 			}
 			v.Props.Add(prop)
 		}
+		return omitted, nil
 	}
-	return nil
+	return nil, nil
 }
 
 // caldavAttachProp builds one RFC 8607 managed-attachment reference ATTACH
@@ -562,8 +606,10 @@ func setRawText(props ical.Props, name, value string) {
 // X-APPLE-CALENDAR-COLOR so a Calendar's identity survives the round trip
 // (#76) — masters need not be pre-sorted; the output orders them by ID for
 // a deterministic file. Every export call site passes a CalendarFileTarget
-// (ADR-0041); CalendarToICal is never used to serve CalDAV.
-func CalendarToICal(name, color string, masters []repository.Event, overridesByParent map[string][]repository.Event, target SerializationTarget) (*ical.Calendar, error) {
+// (ADR-0041); CalendarToICal is never used to serve CalDAV. The returned
+// OmittedAttachments span every series, in the same order the file is
+// written in (#217).
+func CalendarToICal(name, color string, masters []repository.Event, overridesByParent map[string][]repository.Event, target SerializationTarget) (*ical.Calendar, []OmittedAttachment, error) {
 	cal := newVCalendar()
 	setRawText(cal.Props, propWRCalName, name)
 	if color != "" {
@@ -573,19 +619,22 @@ func CalendarToICal(name, color string, masters []repository.Event, overridesByP
 	for _, tzid := range calendarTzids(masters, overridesByParent) {
 		vtz, err := buildVTimezone(tzid)
 		if err != nil {
-			return nil, fmt.Errorf("build vtimezone %q: %w", tzid, err)
+			return nil, nil, fmt.Errorf("build vtimezone %q: %w", tzid, err)
 		}
 		cal.Children = append(cal.Children, vtz)
 	}
 
 	sorted := append([]repository.Event(nil), masters...)
 	sort.Slice(sorted, func(i, j int) bool { return sorted[i].ID < sorted[j].ID })
+	var omitted []OmittedAttachment
 	for _, master := range sorted {
-		if err := appendSeriesVEvents(cal, master, overridesByParent[master.ID], target); err != nil {
-			return nil, err
+		seriesOmitted, err := appendSeriesVEvents(cal, master, overridesByParent[master.ID], target)
+		if err != nil {
+			return nil, nil, err
 		}
+		omitted = append(omitted, seriesOmitted...)
 	}
-	return cal, nil
+	return cal, omitted, nil
 }
 
 // calendarTzids is seriesTzids generalized across every series in a
@@ -614,21 +663,32 @@ func calendarTzids(masters []repository.Event, overridesByParent map[string][]re
 // the series' UID with a RECURRENCE-ID instead would describe an orphan
 // detached instance, which is both a bad shape for a recipient client and
 // the exact shape this app's own ICS importer rejects (#76).
-func OccurrenceToICal(uid string, e repository.Event) (*ical.Calendar, error) {
+//
+// target renders e.Attachments as ATTACH exactly as it does for a whole
+// series: a Calendar file describing one Occurrence is no less standalone
+// than one describing a series, so it inlines the bytes too (#217,
+// ADR-0041). That an Attachment belongs to the series rather than to any one
+// Occurrence (ADR-0040) governs where it is stored and edited, not what a
+// file exported from it carries.
+func OccurrenceToICal(uid string, e repository.Event, target SerializationTarget) (*ical.Calendar, []OmittedAttachment, error) {
 	cal := newVCalendar()
 
 	if e.Tzid != nil {
 		vtz, err := buildVTimezone(*e.Tzid)
 		if err != nil {
-			return nil, fmt.Errorf("build vtimezone %q: %w", *e.Tzid, err)
+			return nil, nil, fmt.Errorf("build vtimezone %q: %w", *e.Tzid, err)
 		}
 		cal.Children = append(cal.Children, vtz)
 	}
 
 	v, err := buildVEvent(e, uid, nil, nil)
 	if err != nil {
-		return nil, fmt.Errorf("build occurrence vevent: %w", err)
+		return nil, nil, fmt.Errorf("build occurrence vevent: %w", err)
+	}
+	omitted, err := appendAttachProps(v, e, target)
+	if err != nil {
+		return nil, nil, fmt.Errorf("append occurrence attachments: %w", err)
 	}
 	cal.Children = append(cal.Children, v.Component)
-	return cal, nil
+	return cal, omitted, nil
 }

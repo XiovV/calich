@@ -112,6 +112,21 @@ describe("icsApi export pre-flight (ADR-0041)", () => {
     });
   });
 
+  it("eventOversizedAttachments carries the occurrence scope, matching the download it precedes", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, { count: 0 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await icsApi.eventOversizedAttachments("token-123", "evt-1", {
+      type: "occurrence",
+      occurrenceStart: new Date("2026-06-09T09:00:00.000Z"),
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/events/evt-1/ics/oversized-attachments?scope=occurrence&occurrenceStart=2026-06-09T09%3A00%3A00.000Z",
+      expect.objectContaining({ credentials: "include" }),
+    );
+  });
+
   it("calendarOversizedAttachments fetches the calendar's oversized-attachments endpoint", async () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, { count: 0 }));
     vi.stubGlobal("fetch", fetchMock);

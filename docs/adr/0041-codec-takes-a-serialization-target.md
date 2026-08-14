@@ -44,6 +44,16 @@ Disclosure lands while the user can still act on it, which is what made the Impo
 
 A post-hoc toast was rejected as transient — miss it and you hand over an incomplete file believing it complete. A manifest inside the archive was rejected as unreachable in the case that matters most: a single-Event `.ics` from the event modal is not a zip and has nowhere to carry one.
 
+## The codec reports its own omissions, and every export scope inlines
+
+Amended by #217. Two things this decision left implicit turned out to be one mistake with two faces.
+
+**Every export scope inlines.** A Calendar file describing one Occurrence is no less standalone than one describing a series, so `OccurrenceToICal` takes a serialization target like the other two entrypoints and inlines under the same cap. It previously took none and emitted no `ATTACH` at all, making the single-Occurrence download the one export that dropped every Attachment regardless of its size. That an Attachment belongs to the series rather than to any one Occurrence (`CONTEXT.md`'s **Attachment**, ADR-0040) governs where it is stored and edited, not what a file exported from it carries.
+
+**The cap is applied in exactly one place, and the pre-flight asks rather than predicts.** Each encoder entrypoint returns what it omitted — filename, size, the Event it belongs to, and why — alongside the calendar, and the Export summary endpoints report those omissions. The pre-flight had been a second, independent expression of `SizeBytes > cap`: the same constant, two predicates, one of them *predicting* what the codec would do. The Occurrence gap is what that shape produced once, and the disclosure this ADR built the pre-flight for was missing from precisely the scope that lost the most. A pre-flight that re-derives the rule is a pre-flight that can be wrong about the download it precedes.
+
+So the pre-flight dry-runs the same entrypoint against the same target at the same cap, differing only in that its opener reads no bytes — sound because an omission is decided from an Attachment's recorded size before the opener is ever consulted, and it keeps the all-Calendars pre-flight from reading and base64-encoding every Attachment on the instance only to discard the result.
+
 ## Consequences
 
 - **Import ingests inline `ATTACH`** under ADR-0040's size and count limits, and ignores URI `ATTACH` — fetching a foreign URL server-side is a request-forgery surface, and the target usually needs credentials anyway. Both outcomes are counted in the Import summary. Without this the symmetry above is a slogan rather than a property.

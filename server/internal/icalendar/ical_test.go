@@ -13,7 +13,7 @@ import (
 
 func mustEncode(t *testing.T, master repository.Event, overrides []repository.Event) string {
 	t.Helper()
-	cal, err := SeriesToICal(master, overrides, SerializationTarget{})
+	cal, _, err := SeriesToICal(master, overrides, SerializationTarget{})
 	if err != nil {
 		t.Fatalf("seriesToICal: %v", err)
 	}
@@ -484,7 +484,7 @@ func TestCalendarETag_ChangesWhenReconstructionChanges(t *testing.T) {
 		CreatedAt: time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC),
 	}
 
-	cal1, err := SeriesToICal(base, nil, SerializationTarget{})
+	cal1, _, err := SeriesToICal(base, nil, SerializationTarget{})
 	if err != nil {
 		t.Fatalf("seriesToICal: %v", err)
 	}
@@ -493,7 +493,7 @@ func TestCalendarETag_ChangesWhenReconstructionChanges(t *testing.T) {
 		t.Fatalf("calendarETag: %v", err)
 	}
 
-	cal2, err := SeriesToICal(base, nil, SerializationTarget{})
+	cal2, _, err := SeriesToICal(base, nil, SerializationTarget{})
 	if err != nil {
 		t.Fatalf("seriesToICal: %v", err)
 	}
@@ -507,7 +507,7 @@ func TestCalendarETag_ChangesWhenReconstructionChanges(t *testing.T) {
 
 	changed := base
 	changed.Title = "Meeting (renamed)"
-	cal3, err := SeriesToICal(changed, nil, SerializationTarget{})
+	cal3, _, err := SeriesToICal(changed, nil, SerializationTarget{})
 	if err != nil {
 		t.Fatalf("seriesToICal: %v", err)
 	}

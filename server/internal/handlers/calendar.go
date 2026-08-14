@@ -374,7 +374,9 @@ func (h *CalendarHandler) icsForCalendar(ctx context.Context, userID int64, cale
 		return nil, err
 	}
 
-	cal, err := icalendar.CalendarToICal(calendar.Name, calendar.Color, masters, overridesByParent, calendarFileTarget(h.attachments))
+	// What the encode omitted was already disclosed by the Export summary
+	// pre-flight the user confirmed (omittedForCalendar, ADR-0041).
+	cal, _, err := icalendar.CalendarToICal(calendar.Name, calendar.Color, masters, overridesByParent, calendarFileTarget(h.attachments))
 	if err != nil {
 		return nil, err
 	}

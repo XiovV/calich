@@ -10,7 +10,7 @@ import (
 
 func mustEncodeCalendar(t *testing.T, name, color string, masters []repository.Event, overridesByParent map[string][]repository.Event) string {
 	t.Helper()
-	cal, err := CalendarToICal(name, color, masters, overridesByParent, SerializationTarget{})
+	cal, _, err := CalendarToICal(name, color, masters, overridesByParent, SerializationTarget{})
 	if err != nil {
 		t.Fatalf("CalendarToICal: %v", err)
 	}
@@ -126,7 +126,7 @@ func TestCalendarToICal_SharedTzidAcrossSeriesEmitsOneVTimezone(t *testing.T) {
 }
 
 func TestCalendarToICal_EmptyCalendarHasNoChildren(t *testing.T) {
-	cal, err := CalendarToICal("Work", "#12809CFF", nil, nil, SerializationTarget{})
+	cal, _, err := CalendarToICal("Work", "#12809CFF", nil, nil, SerializationTarget{})
 	if err != nil {
 		t.Fatalf("CalendarToICal: %v", err)
 	}
@@ -141,7 +141,7 @@ func TestCalendarToICal_EmptyCalendarHasNoChildren(t *testing.T) {
 }
 
 func TestEncodeEmpty_RendersNameAndColorWithNoVEvents(t *testing.T) {
-	cal, err := CalendarToICal("Work", "#12809CFF", nil, nil, SerializationTarget{})
+	cal, _, err := CalendarToICal("Work", "#12809CFF", nil, nil, SerializationTarget{})
 	if err != nil {
 		t.Fatalf("CalendarToICal: %v", err)
 	}
@@ -178,7 +178,7 @@ func TestEncodeEmpty_RejectsCalendarWithChildren(t *testing.T) {
 		CreatedAt: time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC),
 	}
 
-	cal, err := CalendarToICal("Work", "#12809CFF", []repository.Event{master}, nil, SerializationTarget{})
+	cal, _, err := CalendarToICal("Work", "#12809CFF", []repository.Event{master}, nil, SerializationTarget{})
 	if err != nil {
 		t.Fatalf("CalendarToICal: %v", err)
 	}
@@ -202,7 +202,7 @@ func TestOccurrenceToICal_FreshUIDNoRRuleNoRecurrenceID(t *testing.T) {
 	occurrence.End = time.Date(2026, 6, 9, 9, 30, 0, 0, time.UTC)
 	occurrence.Rrule = ""
 
-	cal, err := OccurrenceToICal("fresh-uid", occurrence)
+	cal, _, err := OccurrenceToICal("fresh-uid", occurrence, SerializationTarget{})
 	if err != nil {
 		t.Fatalf("OccurrenceToICal: %v", err)
 	}
@@ -251,7 +251,7 @@ func TestOccurrenceToICal_NamedTzid_EmitsVTimezone(t *testing.T) {
 	occurrence.End = time.Date(2026, 6, 9, 9, 30, 0, 0, time.UTC)
 	occurrence.Rrule = ""
 
-	cal, err := OccurrenceToICal("fresh-uid", occurrence)
+	cal, _, err := OccurrenceToICal("fresh-uid", occurrence, SerializationTarget{})
 	if err != nil {
 		t.Fatalf("OccurrenceToICal: %v", err)
 	}

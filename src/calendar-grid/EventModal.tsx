@@ -448,8 +448,11 @@ export function EventModal(props: EventModalProps) {
   const [isDeleteScopePickerOpen, setIsDeleteScopePickerOpen] = useState(false);
   const [isDownloadScopePickerOpen, setIsDownloadScopePickerOpen] =
     useState(false);
+  // The pre-flight's result plus the scope it was raised for, so confirming
+  // downloads the scope the dialog described rather than always the series
+  // (#217 — both scopes now inline, so both can raise this).
   const [pendingExportSummary, setPendingExportSummary] =
-    useState<ExportSummary | null>(null);
+    useState<{ summary: ExportSummary; scope: "all" | "occurrence" } | null>(null);
   const [isConfirmingExport, setIsConfirmingExport] = useState(false);
 
   // The Calendar row's swatch (#193): this Event's own color if it has one,
@@ -943,24 +946,24 @@ export function EventModal(props: EventModalProps) {
     }
   }
 
-  // The Export summary pre-flight (#134, ADR-0041): a flattened Occurrence
-  // never carries an Attachment, so only scope "all" needs the check. When
-  // nothing is oversized this stays a single click, same as before.
+  // The Export summary pre-flight (#134, ADR-0041), run for both scopes: an
+  // Occurrence export inlines its series' Attachments exactly as the series
+  // export does, so it can lose one exactly as the series export can (#217).
+  // When nothing is oversized this stays a single click in either scope.
   async function runDownload(scope: "all" | "occurrence") {
     if (mode !== "edit" || !accessToken) return;
-    if (scope === "occurrence") {
-      await downloadEvent("occurrence");
-      return;
-    }
     try {
       const summary = await icsApi.eventOversizedAttachments(
         accessToken,
         props.occurrence.event.id,
+        scope === "occurrence"
+          ? { type: "occurrence", occurrenceStart: props.occurrence.start }
+          : { type: "all" },
       );
       if (summary.count === 0) {
-        await downloadEvent("all");
+        await downloadEvent(scope);
       } else {
-        setPendingExportSummary(summary);
+        setPendingExportSummary({ summary, scope });
       }
     } catch {
       toast.error("Failed to check attachments before download.");
@@ -981,9 +984,10 @@ export function EventModal(props: EventModalProps) {
   }
 
   async function handleConfirmExport() {
+    if (!pendingExportSummary) return;
     setIsConfirmingExport(true);
     try {
-      await downloadEvent("all");
+      await downloadEvent(pendingExportSummary.scope);
     } finally {
       setIsConfirmingExport(false);
       setPendingExportSummary(null);
@@ -1516,7 +1520,7 @@ export function EventModal(props: EventModalProps) {
       )}
       {pendingExportSummary && (
         <ExportSummaryDialog
-          summary={pendingExportSummary}
+          summary={pendingExportSummary.summary}
           isSubmitting={isConfirmingExport}
           onConfirm={handleConfirmExport}
           onClose={() => setPendingExportSummary(null)}

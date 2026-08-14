@@ -12,7 +12,7 @@ import (
 
 func mustParse(t *testing.T, master repository.Event, overrides []repository.Event) *ParsedSeries {
 	t.Helper()
-	cal, err := SeriesToICal(master, overrides, SerializationTarget{})
+	cal, _, err := SeriesToICal(master, overrides, SerializationTarget{})
 	if err != nil {
 		t.Fatalf("seriesToICal: %v", err)
 	}
@@ -401,7 +401,7 @@ func TestParseCalendarObject_ColorKeyword_DecodesExactDefinedRGB(t *testing.T) {
 		End:       time.Date(2026, 7, 1, 16, 0, 0, 0, time.UTC),
 		CreatedAt: time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC),
 	}
-	cal, err := SeriesToICal(master, nil, SerializationTarget{})
+	cal, _, err := SeriesToICal(master, nil, SerializationTarget{})
 	if err != nil {
 		t.Fatalf("seriesToICal: %v", err)
 	}
@@ -424,7 +424,7 @@ func TestParseCalendarObject_UnrecognizedColorKeyword_IsDropped(t *testing.T) {
 		End:       time.Date(2026, 7, 1, 16, 0, 0, 0, time.UTC),
 		CreatedAt: time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC),
 	}
-	cal, err := SeriesToICal(master, nil, SerializationTarget{})
+	cal, _, err := SeriesToICal(master, nil, SerializationTarget{})
 	if err != nil {
 		t.Fatalf("seriesToICal: %v", err)
 	}
@@ -447,7 +447,7 @@ func TestParseCalendarObject_UnmodeledValarmAction_IsDropped(t *testing.T) {
 		End:       time.Date(2026, 7, 1, 16, 0, 0, 0, time.UTC),
 		CreatedAt: time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC),
 	}
-	cal, err := SeriesToICal(master, nil, SerializationTarget{})
+	cal, _, err := SeriesToICal(master, nil, SerializationTarget{})
 	if err != nil {
 		t.Fatalf("seriesToICal: %v", err)
 	}

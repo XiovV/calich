@@ -1855,10 +1855,11 @@ func (s *EventService) GetSeriesForEvent(ctx context.Context, userID int64, id s
 // starting at occurrenceStart, for ICS export's scope=occurrence (#76): the
 // matching Override's own fields verbatim if one exists at that
 // RecurrenceID, or the Master's own fields with Start/End shifted to
-// occurrenceStart/occurrenceStart+duration otherwise. id may name either a
-// Master or an Override (see GetSeriesForEvent). The returned Event always
-// carries a cleared Rrule/ParentID/RecurrenceID — it describes one concrete
-// Occurrence, not a series or a series member.
+// occurrenceStart/occurrenceStart+duration otherwise, and the series'
+// Attachments either way. id may name either a Master or an Override (see
+// GetSeriesForEvent). The returned Event always carries a cleared
+// Rrule/ParentID/RecurrenceID — it describes one concrete Occurrence, not a
+// series or a series member.
 func (s *EventService) GetOccurrence(ctx context.Context, userID int64, id string, occurrenceStart time.Time) (repository.Event, error) {
 	master, overrides, err := s.GetSeriesForEvent(ctx, userID, id)
 	if err != nil {
@@ -1869,6 +1870,12 @@ func (s *EventService) GetOccurrence(ctx context.Context, userID int64, id strin
 		flattened := override
 		flattened.ParentID = nil
 		flattened.RecurrenceID = nil
+		// An Attachment hangs off the Master, so only the Master's row
+		// carries any (hydrateEvents' attachAttachments). Every Occurrence
+		// shows the series' Attachments (ADR-0040) and every export scope
+		// inlines them (#217), so an overridden Occurrence carries them too
+		// — without this it would export as the one Occurrence that has none.
+		flattened.Attachments = master.Attachments
 		// An Override never carries a rule of its own (ADR-0016), so
 		// this is always already "", but cleared explicitly since
 		// icalendar.OccurrenceToICal trusts its caller to have done so.

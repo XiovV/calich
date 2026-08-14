@@ -1,18 +1,21 @@
 // ics_export_summary.go implements the Export summary's pre-flight (#134,
-// ADR-0041): a metadata-only check of which Attachments a would-be export
-// would have to omit — over maxImportUploadBytes, the same cap the encoder
-// itself enforces (icalendar.CalendarFileTarget) — computed entirely from
-// Attachment rows already loaded for the real export (event_attachments'
-// size_bytes column), generating no file and reading no bytes off disk.
+// ADR-0041): which Attachments a would-be export would have to omit. It asks
+// the encoder rather than restating its rule — the same encode the download
+// performs, run against dryRunTarget so no bytes leave disk, and the calendar
+// it produces discarded. The inline cap therefore lives in exactly one place,
+// and the pre-flight cannot disagree with the download that follows it (#217).
 package handlers
 
 import (
+	"context"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 
 	"github.com/XiovV/calendar/server/internal/httpauth"
 	"github.com/XiovV/calendar/server/internal/httpresponse"
+	"github.com/XiovV/calendar/server/internal/icalendar"
 	"github.com/XiovV/calendar/server/internal/repository"
 )
 
@@ -34,40 +37,33 @@ type exportSummaryResponse struct {
 	Count     int                           `json:"count"`
 }
 
-// oversizedForEvent returns one oversizedAttachmentResponse per Attachment
-// on attachments over maxImportUploadBytes, attributed to (eventTitle,
-// eventID) — attachments always belong to a Master (ADR-0040), so callers
-// pass the Master's own title/id.
-func oversizedForEvent(attachments []repository.Attachment, eventTitle, eventID string) []oversizedAttachmentResponse {
-	var out []oversizedAttachmentResponse
-	for _, a := range attachments {
-		if a.SizeBytes <= maxImportUploadBytes {
-			continue
+// toExportSummaryResponse renders the encoder's omissions on the wire,
+// capping entries at maxOversizedSamples for display while keeping Count as
+// the true total, so a caller with many oversized Attachments (the
+// all-Calendars case especially) still learns how many there are without the
+// response growing unbounded.
+func toExportSummaryResponse(omitted []icalendar.OmittedAttachment) exportSummaryResponse {
+	entries := make([]oversizedAttachmentResponse, 0, len(omitted))
+	for _, o := range omitted {
+		if len(entries) == maxOversizedSamples {
+			break
 		}
-		out = append(out, oversizedAttachmentResponse{
-			Filename:   a.Filename,
-			SizeBytes:  a.SizeBytes,
-			EventTitle: eventTitle,
-			EventID:    eventID,
+		entries = append(entries, oversizedAttachmentResponse{
+			Filename:   o.Filename,
+			SizeBytes:  o.SizeBytes,
+			EventTitle: o.EventTitle,
+			EventID:    o.EventID,
 		})
 	}
-	return out
-}
-
-// toExportSummaryResponse caps entries at maxOversizedSamples for display
-// while keeping Count as the true total, so a caller with many oversized
-// Attachments (the all-Calendars case especially) still learns how many
-// there are without the response growing unbounded.
-func toExportSummaryResponse(entries []oversizedAttachmentResponse) exportSummaryResponse {
-	if len(entries) > maxOversizedSamples {
-		return exportSummaryResponse{Oversized: entries[:maxOversizedSamples], Count: len(entries)}
-	}
-	return exportSummaryResponse{Oversized: entries, Count: len(entries)}
+	return exportSummaryResponse{Oversized: entries, Count: len(omitted)}
 }
 
 // ICSOversizedAttachments serves GET /api/events/{id}/ics/oversized-attachments:
 // the Export summary pre-flight for a single Event's download (#134,
-// ADR-0041).
+// ADR-0041). It takes the same scope/occurrenceStart pair the download does
+// and dry-runs the same encoder entrypoint, so its answer describes the
+// download that follows it — including scope=occurrence, which drops nothing
+// silently any more (#217).
 func (h *EventHandler) ICSOversizedAttachments(w http.ResponseWriter, r *http.Request) {
 	userID, ok := httpauth.UserIDFromContext(r.Context())
 	if !ok {
@@ -77,12 +73,50 @@ func (h *EventHandler) ICSOversizedAttachments(w http.ResponseWriter, r *http.Re
 
 	id := chi.URLParam(r, "id")
 
-	master, _, err := h.events.GetSeriesForEvent(r.Context(), userID, id)
-	if respondError(w, err, eventNotFoundErrors, "failed to load event") {
+	scope, ok := parseICSScope(w, r)
+	if !ok {
 		return
 	}
 
-	httpresponse.JSON(w, http.StatusOK, toExportSummaryResponse(oversizedForEvent(master.Attachments, master.Title, master.ID)))
+	var (
+		omitted []icalendar.OmittedAttachment
+		err     error
+	)
+	if scope.occurrence {
+		var occurrence repository.Event
+		occurrence, err = h.events.GetOccurrence(r.Context(), userID, id, scope.occurrenceStart)
+		if respondError(w, err, occurrenceErrors, "failed to load occurrence") {
+			return
+		}
+		_, omitted, err = icalendar.OccurrenceToICal(uuid.NewString(), occurrence, dryRunTarget())
+	} else {
+		var master repository.Event
+		var overrides []repository.Event
+		master, overrides, err = h.events.GetSeriesForEvent(r.Context(), userID, id)
+		if respondError(w, err, eventNotFoundErrors, "failed to load event") {
+			return
+		}
+		_, omitted, err = icalendar.SeriesToICal(master, overrides, dryRunTarget())
+	}
+	if err != nil {
+		httpresponse.Error(w, http.StatusInternalServerError, "internal_error", "failed to build calendar object")
+		return
+	}
+
+	httpresponse.JSON(w, http.StatusOK, toExportSummaryResponse(omitted))
+}
+
+// omittedForCalendar is icsForCalendar's pre-flight twin: the same
+// CalendarToICal encode over the same series, reporting what it omitted and
+// discarding the calendar itself.
+func (h *CalendarHandler) omittedForCalendar(ctx context.Context, userID int64, calendar repository.Calendar) ([]icalendar.OmittedAttachment, error) {
+	masters, overridesByParent, err := h.events.ListSeriesByCalendar(ctx, userID, calendar.ID)
+	if err != nil {
+		return nil, err
+	}
+
+	_, omitted, err := icalendar.CalendarToICal(calendar.Name, calendar.Color, masters, overridesByParent, dryRunTarget())
+	return omitted, err
 }
 
 // ICSOversizedAttachments serves GET /api/calendars/{id}/ics/oversized-attachments:
@@ -102,18 +136,13 @@ func (h *CalendarHandler) ICSOversizedAttachments(w http.ResponseWriter, r *http
 		return
 	}
 
-	masters, _, err := h.events.ListSeriesByCalendar(r.Context(), userID, calendar.ID)
+	omitted, err := h.omittedForCalendar(r.Context(), userID, calendar)
 	if err != nil {
-		httpresponse.Error(w, http.StatusInternalServerError, "internal_error", "failed to list events")
+		httpresponse.Error(w, http.StatusInternalServerError, "internal_error", "failed to build export summary")
 		return
 	}
 
-	var entries []oversizedAttachmentResponse
-	for _, master := range masters {
-		entries = append(entries, oversizedForEvent(master.Attachments, master.Title, master.ID)...)
-	}
-
-	httpresponse.JSON(w, http.StatusOK, toExportSummaryResponse(entries))
+	httpresponse.JSON(w, http.StatusOK, toExportSummaryResponse(omitted))
 }
 
 // ICSAllOversizedAttachments serves GET /api/calendars/ics/oversized-attachments:
@@ -133,21 +162,19 @@ func (h *CalendarHandler) ICSAllOversizedAttachments(w http.ResponseWriter, r *h
 		return
 	}
 
-	var entries []oversizedAttachmentResponse
+	var omitted []icalendar.OmittedAttachment
 	for _, calendar := range calendars {
 		if calendar.SourceURL != nil {
 			continue
 		}
 
-		masters, _, err := h.events.ListSeriesByCalendar(r.Context(), userID, calendar.ID)
+		calendarOmitted, err := h.omittedForCalendar(r.Context(), userID, calendar)
 		if err != nil {
-			httpresponse.Error(w, http.StatusInternalServerError, "internal_error", "failed to list events")
+			httpresponse.Error(w, http.StatusInternalServerError, "internal_error", "failed to build export summary")
 			return
 		}
-		for _, master := range masters {
-			entries = append(entries, oversizedForEvent(master.Attachments, master.Title, master.ID)...)
-		}
+		omitted = append(omitted, calendarOmitted...)
 	}
 
-	httpresponse.JSON(w, http.StatusOK, toExportSummaryResponse(entries))
+	httpresponse.JSON(w, http.StatusOK, toExportSummaryResponse(omitted))
 }

@@ -280,7 +280,7 @@ func TestPutCalendarObject_CreatesNewEvent_PutThenGetRoundTrips(t *testing.T) {
 		End:       time.Date(2026, 6, 1, 9, 30, 0, 0, time.UTC),
 		CreatedAt: time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC),
 	}
-	cal, err := icalendar.SeriesToICal(newEvent, nil, icalendar.CalDAVTarget(attachmentsBasePath))
+	cal, _, err := icalendar.SeriesToICal(newEvent, nil, icalendar.CalDAVTarget(attachmentsBasePath))
 	if err != nil {
 		t.Fatalf("seriesToICal: %v", err)
 	}
@@ -332,7 +332,7 @@ func TestPutCalendarObject_URL_PutThenGetRoundTrips_NonWebScheme(t *testing.T) {
 		End:       time.Date(2026, 6, 1, 9, 30, 0, 0, time.UTC),
 		CreatedAt: time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC),
 	}
-	cal, err := icalendar.SeriesToICal(newEvent, nil, icalendar.CalDAVTarget(attachmentsBasePath))
+	cal, _, err := icalendar.SeriesToICal(newEvent, nil, icalendar.CalDAVTarget(attachmentsBasePath))
 	if err != nil {
 		t.Fatalf("seriesToICal: %v", err)
 	}
@@ -377,7 +377,7 @@ func TestPutCalendarObject_UpdatesExistingEvent(t *testing.T) {
 
 	updated := created
 	updated.Title = "Standup (renamed)"
-	cal, err := icalendar.SeriesToICal(updated, nil, icalendar.CalDAVTarget(attachmentsBasePath))
+	cal, _, err := icalendar.SeriesToICal(updated, nil, icalendar.CalDAVTarget(attachmentsBasePath))
 	if err != nil {
 		t.Fatalf("seriesToICal: %v", err)
 	}
@@ -417,7 +417,7 @@ func TestPutCalendarObject_EditingOneOccurrence_CreatesOverride_OthersUnchanged(
 		End:          recurrenceID.Add(2*time.Hour + 30*time.Minute),
 		CreatedAt:    masterStart,
 	}
-	cal, err := icalendar.SeriesToICal(master, []repository.Event{override}, icalendar.CalDAVTarget(attachmentsBasePath))
+	cal, _, err := icalendar.SeriesToICal(master, []repository.Event{override}, icalendar.CalDAVTarget(attachmentsBasePath))
 	if err != nil {
 		t.Fatalf("seriesToICal: %v", err)
 	}
@@ -462,7 +462,7 @@ func TestPutCalendarObject_WritesPuttingPrincipalsOwnReminders(t *testing.T) {
 
 	withReminder := created
 	withReminder.Reminders = []repository.Reminder{{OffsetMinutes: 120, Channel: "email"}}
-	cal, err := icalendar.SeriesToICal(withReminder, nil, icalendar.CalDAVTarget(attachmentsBasePath))
+	cal, _, err := icalendar.SeriesToICal(withReminder, nil, icalendar.CalDAVTarget(attachmentsBasePath))
 	if err != nil {
 		t.Fatalf("seriesToICal: %v", err)
 	}
@@ -501,7 +501,7 @@ func TestPutCalendarObject_IfMatch_StaleETag_Returns412(t *testing.T) {
 
 	updated := created
 	updated.Title = "Standup (renamed)"
-	cal, err := icalendar.SeriesToICal(updated, nil, icalendar.CalDAVTarget(attachmentsBasePath))
+	cal, _, err := icalendar.SeriesToICal(updated, nil, icalendar.CalDAVTarget(attachmentsBasePath))
 	if err != nil {
 		t.Fatalf("seriesToICal: %v", err)
 	}
@@ -541,7 +541,7 @@ func TestPutCalendarObject_IfMatch_MatchingETag_Succeeds(t *testing.T) {
 
 	updated := created
 	updated.Title = "Standup (renamed)"
-	cal, err := icalendar.SeriesToICal(updated, nil, icalendar.CalDAVTarget(attachmentsBasePath))
+	cal, _, err := icalendar.SeriesToICal(updated, nil, icalendar.CalDAVTarget(attachmentsBasePath))
 	if err != nil {
 		t.Fatalf("seriesToICal: %v", err)
 	}
@@ -573,7 +573,7 @@ func TestPutCalendarObject_UnmodeledData_NormalizedAway_StableETag(t *testing.T)
 		End:       time.Date(2026, 6, 1, 9, 30, 0, 0, time.UTC),
 		CreatedAt: time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC),
 	}
-	cal, err := icalendar.SeriesToICal(newEvent, nil, icalendar.CalDAVTarget(attachmentsBasePath))
+	cal, _, err := icalendar.SeriesToICal(newEvent, nil, icalendar.CalDAVTarget(attachmentsBasePath))
 	if err != nil {
 		t.Fatalf("seriesToICal: %v", err)
 	}

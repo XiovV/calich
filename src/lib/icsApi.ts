@@ -52,6 +52,22 @@ function sanitizeFilename(name: string, fallback: string): string {
     .join("");
 }
 
+/** Which of an Event's Occurrences an export covers: the whole series, or
+ * one flattened Occurrence named by its start. The download and its Export
+ * summary pre-flight take the same value, so the two can never describe
+ * different files (#217). */
+export type EventExportScope = { type: "all" } | { type: "occurrence"; occurrenceStart: Date };
+
+/** The scope/occurrenceStart query string GET /api/events/{id}/ics and its
+ * oversized-attachments pre-flight both read. */
+function eventScopeQuery(scope: EventExportScope): string {
+  if (scope.type === "all") return "";
+  return `?${new URLSearchParams({
+    scope: "occurrence",
+    occurrenceStart: scope.occurrenceStart.toISOString(),
+  }).toString()}`;
+}
+
 export const icsApi = {
   /**
    * Downloads a single Event as .ics — the whole series (scope "all", the
@@ -63,19 +79,13 @@ export const icsApi = {
     accessToken: string,
     eventId: string,
     title: string,
-    scope: { type: "all" } | { type: "occurrence"; occurrenceStart: Date } = {
-      type: "all",
-    },
+    scope: EventExportScope = { type: "all" },
   ): Promise<void> {
-    let url = `/api/events/${eventId}/ics`;
-    if (scope.type === "occurrence") {
-      const params = new URLSearchParams({
-        scope: "occurrence",
-        occurrenceStart: scope.occurrenceStart.toISOString(),
-      });
-      url += `?${params.toString()}`;
-    }
-    await downloadBlob(accessToken, url, `${sanitizeFilename(title, "event")}.ics`);
+    await downloadBlob(
+      accessToken,
+      `/api/events/${eventId}/ics${eventScopeQuery(scope)}`,
+      `${sanitizeFilename(title, "event")}.ics`,
+    );
   },
 
   /** Downloads one Calendar (every Event in it) as .ics. */
@@ -93,14 +103,21 @@ export const icsApi = {
   },
 
   /**
-   * The Export summary pre-flight (ADR-0041) for a single Event's
-   * whole-series download: which Attachments (if any) would be omitted for
-   * being too large to inline. Metadata-only — no file is generated. Not
-   * meaningful for scope "occurrence": a flattened Occurrence never carries
-   * an Attachment to begin with.
+   * The Export summary pre-flight (ADR-0041) for a single Event's download:
+   * which Attachments (if any) would be omitted for being too large to
+   * inline. Metadata-only — no file is generated. Takes the same scope the
+   * download does, because both scopes inline: a Calendar file describing one
+   * Occurrence carries its series' Attachments too (#217).
    */
-  eventOversizedAttachments(accessToken: string, eventId: string): Promise<ExportSummary> {
-    return fetchExportSummary(accessToken, `/api/events/${eventId}/ics/oversized-attachments`);
+  eventOversizedAttachments(
+    accessToken: string,
+    eventId: string,
+    scope: EventExportScope = { type: "all" },
+  ): Promise<ExportSummary> {
+    return fetchExportSummary(
+      accessToken,
+      `/api/events/${eventId}/ics/oversized-attachments${eventScopeQuery(scope)}`,
+    );
   },
 
   /** The Export summary pre-flight for one Calendar's download. */

@@ -412,7 +412,7 @@ func seriesHasOccurrenceInRange(master repository.Event, from, to time.Time) (bo
 // since no per-principal collection backs a Calendar the caller lacks
 // Access to.
 func buildCalendarObject(ctx context.Context, userID int64, collectionID string, master repository.Event, overrides []repository.Event) (*caldav.CalendarObject, error) {
-	cal, err := icalendar.SeriesToICal(master, overrides, icalendar.CalDAVTarget(attachmentsURIPrefix(ctx)))
+	cal, _, err := icalendar.SeriesToICal(master, overrides, icalendar.CalDAVTarget(attachmentsURIPrefix(ctx)))
 	if err != nil {
 		return nil, fmt.Errorf("serialize series %q: %w", master.ID, err)
 	}
@@ -563,7 +563,7 @@ func (b *Backend) currentObjectETag(ctx context.Context, userID int64, calendarI
 		return false, "", nil
 	}
 
-	cal, err := icalendar.SeriesToICal(master, overrides, icalendar.CalDAVTarget(attachmentsURIPrefix(ctx)))
+	cal, _, err := icalendar.SeriesToICal(master, overrides, icalendar.CalDAVTarget(attachmentsURIPrefix(ctx)))
 	if err != nil {
 		return false, "", err
 	}

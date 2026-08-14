@@ -976,3 +976,252 @@ func TestCalendarHandler_ICS_InlinesAttachmentBytes(t *testing.T) {
 		t.Fatalf("expected an inline ATTACH in the per-calendar export, got:\n%s", text)
 	}
 }
+
+// TestEventHandler_ICS_ScopeOccurrence_InlinesAttachmentBytes is #217's
+// regression: an occurrence export used to drop every Attachment, whatever
+// its size, and say nothing about it.
+func TestEventHandler_ICS_ScopeOccurrence_InlinesAttachmentBytes(t *testing.T) {
+	env := newICSTestEnv(t)
+	ctx := context.Background()
+	start := time.Date(2026, 6, 2, 9, 0, 0, 0, time.UTC)
+	end := time.Date(2026, 6, 2, 9, 30, 0, 0, time.UTC)
+
+	master, err := env.events.Create(ctx, env.userID, "evt-1", service.EventWrite{
+		CalendarID: env.calendarID, Title: "Standup", Start: start, End: end, Rrule: "FREQ=WEEKLY;BYDAY=TU",
+	})
+	if err != nil {
+		t.Fatalf("create master: %v", err)
+	}
+	if _, err := env.attachments.Upload(ctx, env.userID, master.ID, "notes.txt", "text/plain", strings.NewReader("hello world")); err != nil {
+		t.Fatalf("upload attachment: %v", err)
+	}
+
+	occurrenceStart := start.AddDate(0, 0, 7)
+	resp := env.get(t, "/api/events/"+master.ID+"/ics?scope=occurrence&occurrenceStart="+occurrenceStart.Format(time.RFC3339))
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	text := string(body)
+
+	if !containsAll(text, "ENCODING=BASE64", "VALUE=BINARY", "FMTTYPE=text/plain", "FILENAME=notes.txt") {
+		t.Fatalf("expected an inline ATTACH on the flattened occurrence, got:\n%s", text)
+	}
+	// base64("hello world") = "aGVsbG8gd29ybGQ="
+	if !containsAll(text, "aGVsbG8gd29ybGQ=") {
+		t.Fatalf("expected the attachment's bytes, got:\n%s", text)
+	}
+	if bytes.Contains(body, []byte("MANAGED-ID")) {
+		t.Fatalf("expected no managed-attachment reference in an export, got:\n%s", text)
+	}
+}
+
+// TestEventHandler_ICS_ScopeOccurrence_OverriddenOccurrenceInlinesSeriesAttachment
+// covers the other GetOccurrence branch: an Attachment hangs off the Master,
+// so exporting an *overridden* Occurrence must still carry the series'
+// Attachments — every Occurrence shows them (ADR-0040).
+func TestEventHandler_ICS_ScopeOccurrence_OverriddenOccurrenceInlinesSeriesAttachment(t *testing.T) {
+	env := newICSTestEnv(t)
+	ctx := context.Background()
+	start := time.Date(2026, 6, 2, 9, 0, 0, 0, time.UTC)
+	end := time.Date(2026, 6, 2, 9, 30, 0, 0, time.UTC)
+
+	master, err := env.events.Create(ctx, env.userID, "evt-1", service.EventWrite{
+		CalendarID: env.calendarID, Title: "Standup", Start: start, End: end, Rrule: "FREQ=WEEKLY;BYDAY=TU",
+	})
+	if err != nil {
+		t.Fatalf("create master: %v", err)
+	}
+	recurrenceID := start.AddDate(0, 0, 7)
+	if _, err := env.events.Create(ctx, env.userID, "evt-1-override", service.EventWrite{
+		CalendarID: env.calendarID, Title: "Standup (moved)", Start: recurrenceID.Add(2 * time.Hour), End: recurrenceID.Add(2*time.Hour + 30*time.Minute),
+		ParentID: &master.ID, RecurrenceID: &recurrenceID,
+	}); err != nil {
+		t.Fatalf("create override: %v", err)
+	}
+	if _, err := env.attachments.Upload(ctx, env.userID, master.ID, "notes.txt", "text/plain", strings.NewReader("hello world")); err != nil {
+		t.Fatalf("upload attachment: %v", err)
+	}
+
+	resp := env.get(t, "/api/events/"+master.ID+"/ics?scope=occurrence&occurrenceStart="+recurrenceID.Format(time.RFC3339))
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	text := string(body)
+
+	if !containsAll(text, "SUMMARY:Standup (moved)") {
+		t.Fatalf("expected the override's own title, got:\n%s", text)
+	}
+	if !containsAll(text, "FILENAME=notes.txt", "aGVsbG8gd29ybGQ=") {
+		t.Fatalf("expected the series' attachment inlined on the overridden occurrence, got:\n%s", text)
+	}
+}
+
+func TestEventHandler_ICS_ScopeOccurrence_OmitsOversizedAttachment(t *testing.T) {
+	env := newICSTestEnv(t)
+	ctx := context.Background()
+	start := time.Date(2026, 6, 2, 9, 0, 0, 0, time.UTC)
+	end := time.Date(2026, 6, 2, 9, 30, 0, 0, time.UTC)
+
+	master, err := env.events.Create(ctx, env.userID, "evt-1", service.EventWrite{
+		CalendarID: env.calendarID, Title: "Standup", Start: start, End: end, Rrule: "FREQ=WEEKLY;BYDAY=TU",
+	})
+	if err != nil {
+		t.Fatalf("create master: %v", err)
+	}
+	createFakeOversizedAttachment(t, env, master.ID, "huge.bin", maxImportUploadBytes+1)
+
+	occurrenceStart := start.AddDate(0, 0, 7)
+	resp := env.get(t, "/api/events/"+master.ID+"/ics?scope=occurrence&occurrenceStart="+occurrenceStart.Format(time.RFC3339))
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+
+	if bytes.Contains(body, []byte("ATTACH")) {
+		t.Fatalf("expected the oversized attachment to be omitted, got:\n%s", body)
+	}
+}
+
+// TestEventHandler_ICSOversizedAttachments_ScopeOccurrence_ReportsOversized
+// is #217's other half: the one export scope that dropped every Attachment
+// was the one scope with no disclosure.
+func TestEventHandler_ICSOversizedAttachments_ScopeOccurrence_ReportsOversized(t *testing.T) {
+	env := newICSTestEnv(t)
+	ctx := context.Background()
+	start := time.Date(2026, 6, 2, 9, 0, 0, 0, time.UTC)
+	end := time.Date(2026, 6, 2, 9, 30, 0, 0, time.UTC)
+
+	master, err := env.events.Create(ctx, env.userID, "evt-1", service.EventWrite{
+		CalendarID: env.calendarID, Title: "Standup", Start: start, End: end, Rrule: "FREQ=WEEKLY;BYDAY=TU",
+	})
+	if err != nil {
+		t.Fatalf("create master: %v", err)
+	}
+	createFakeOversizedAttachment(t, env, master.ID, "huge.bin", maxImportUploadBytes+1)
+
+	occurrenceStart := start.AddDate(0, 0, 7)
+	resp := env.get(t, "/api/events/"+master.ID+"/ics/oversized-attachments?scope=occurrence&occurrenceStart="+occurrenceStart.Format(time.RFC3339))
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	var summary exportSummaryResponse
+	if err := json.NewDecoder(resp.Body).Decode(&summary); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if summary.Count != 1 || len(summary.Oversized) != 1 {
+		t.Fatalf("expected exactly one oversized attachment for occurrence scope, got %+v", summary)
+	}
+	got := summary.Oversized[0]
+	if got.Filename != "huge.bin" || got.SizeBytes != maxImportUploadBytes+1 || got.EventTitle != "Standup" || got.EventID != master.ID {
+		t.Fatalf("unexpected entry: %+v", got)
+	}
+}
+
+func TestEventHandler_ICSOversizedAttachments_ScopeOccurrence_EmptyWhenUnderCap(t *testing.T) {
+	env := newICSTestEnv(t)
+	ctx := context.Background()
+	start := time.Date(2026, 6, 2, 9, 0, 0, 0, time.UTC)
+	end := time.Date(2026, 6, 2, 9, 30, 0, 0, time.UTC)
+
+	master, err := env.events.Create(ctx, env.userID, "evt-1", service.EventWrite{
+		CalendarID: env.calendarID, Title: "Standup", Start: start, End: end, Rrule: "FREQ=WEEKLY;BYDAY=TU",
+	})
+	if err != nil {
+		t.Fatalf("create master: %v", err)
+	}
+	if _, err := env.attachments.Upload(ctx, env.userID, master.ID, "notes.txt", "text/plain", strings.NewReader("hello")); err != nil {
+		t.Fatalf("upload attachment: %v", err)
+	}
+
+	occurrenceStart := start.AddDate(0, 0, 7)
+	resp := env.get(t, "/api/events/"+master.ID+"/ics/oversized-attachments?scope=occurrence&occurrenceStart="+occurrenceStart.Format(time.RFC3339))
+	defer resp.Body.Close()
+
+	var summary exportSummaryResponse
+	if err := json.NewDecoder(resp.Body).Decode(&summary); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if summary.Count != 0 {
+		t.Fatalf("expected an under-cap attachment to keep the export a single click, got %+v", summary)
+	}
+}
+
+func TestEventHandler_ICSOversizedAttachments_ScopeOccurrence_RequiresOccurrenceStart(t *testing.T) {
+	env := newICSTestEnv(t)
+	ctx := context.Background()
+	start := time.Date(2026, 6, 2, 9, 0, 0, 0, time.UTC)
+	end := time.Date(2026, 6, 2, 9, 30, 0, 0, time.UTC)
+
+	master, err := env.events.Create(ctx, env.userID, "evt-1", service.EventWrite{
+		CalendarID: env.calendarID, Title: "Standup", Start: start, End: end, Rrule: "FREQ=WEEKLY;BYDAY=TU",
+	})
+	if err != nil {
+		t.Fatalf("create master: %v", err)
+	}
+
+	resp := env.get(t, "/api/events/"+master.ID+"/ics/oversized-attachments?scope=occurrence")
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400 without occurrenceStart, got %d", resp.StatusCode)
+	}
+}
+
+// TestEventHandler_ICSOversizedAttachments_ReportsSeriesAttachmentOnce pins
+// that the pre-flight counts an oversized Attachment once per series, not
+// once per VEVENT the encoder renders it on (Master plus every Override).
+func TestEventHandler_ICSOversizedAttachments_ReportsSeriesAttachmentOnce(t *testing.T) {
+	env := newICSTestEnv(t)
+	ctx := context.Background()
+	start := time.Date(2026, 6, 2, 9, 0, 0, 0, time.UTC)
+	end := time.Date(2026, 6, 2, 9, 30, 0, 0, time.UTC)
+
+	master, err := env.events.Create(ctx, env.userID, "evt-1", service.EventWrite{
+		CalendarID: env.calendarID, Title: "Standup", Start: start, End: end, Rrule: "FREQ=WEEKLY;BYDAY=TU",
+	})
+	if err != nil {
+		t.Fatalf("create master: %v", err)
+	}
+	recurrenceID := start.AddDate(0, 0, 7)
+	if _, err := env.events.Create(ctx, env.userID, "evt-1-override", service.EventWrite{
+		CalendarID: env.calendarID, Title: "Standup (moved)", Start: recurrenceID.Add(2 * time.Hour), End: recurrenceID.Add(2*time.Hour + 30*time.Minute),
+		ParentID: &master.ID, RecurrenceID: &recurrenceID,
+	}); err != nil {
+		t.Fatalf("create override: %v", err)
+	}
+	createFakeOversizedAttachment(t, env, master.ID, "huge.bin", maxImportUploadBytes+1)
+
+	resp := env.get(t, "/api/events/"+master.ID+"/ics/oversized-attachments")
+	defer resp.Body.Close()
+
+	var summary exportSummaryResponse
+	if err := json.NewDecoder(resp.Body).Decode(&summary); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if summary.Count != 1 {
+		t.Fatalf("expected one oversized Attachment counted once for the series, got %+v", summary)
+	}
+}
+
+// TestEventHandler_ICSOversizedAttachments_ScopeOccurrence_UnknownOccurrenceIs404
+// is where the pre-flight and the download used to part company: the
+// endpoint ignored scope and occurrenceStart entirely, so it answered for
+// the whole series about an Occurrence the download itself would 404 on.
+func TestEventHandler_ICSOversizedAttachments_ScopeOccurrence_UnknownOccurrenceIs404(t *testing.T) {
+	env := newICSTestEnv(t)
+	ctx := context.Background()
+	start := time.Date(2026, 6, 2, 9, 0, 0, 0, time.UTC)
+	end := time.Date(2026, 6, 2, 9, 30, 0, 0, time.UTC)
+
+	master, err := env.events.Create(ctx, env.userID, "evt-1", service.EventWrite{
+		CalendarID: env.calendarID, Title: "Standup", Start: start, End: end, Rrule: "FREQ=WEEKLY;BYDAY=TU",
+	})
+	if err != nil {
+		t.Fatalf("create master: %v", err)
+	}
+	createFakeOversizedAttachment(t, env, master.ID, "huge.bin", maxImportUploadBytes+1)
+
+	notAnOccurrence := start.AddDate(0, 0, 1)
+	resp := env.get(t, "/api/events/"+master.ID+"/ics/oversized-attachments?scope=occurrence&occurrenceStart="+notAnOccurrence.Format(time.RFC3339))
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("expected 404 for a datetime the rule never produced, got %d", resp.StatusCode)
+	}
+}

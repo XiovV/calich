@@ -21,19 +21,75 @@ import (
 	"github.com/XiovV/calendar/server/internal/service"
 )
 
-// calendarFileTarget builds the icalendar.SerializationTarget every export
-// call site renders ATTACH with (ADR-0041): bytes inlined from store, capped
-// at maxImportUploadBytes — the same cap the ICS importer enforces, so a
-// file this instance produces is a file it could accept back.
+// exportTarget builds the icalendar.SerializationTarget every export renders
+// ATTACH with (ADR-0041): bytes inlined via open, capped at
+// maxImportUploadBytes — the same cap the ICS importer enforces, so a file
+// this instance produces is a file it could accept back. The cap is named
+// here and nowhere else, so a download and the pre-flight that precedes it
+// cannot be capped differently (#217).
+func exportTarget(open icalendar.AttachmentOpener) icalendar.SerializationTarget {
+	return icalendar.CalendarFileTarget(maxImportUploadBytes, open)
+}
+
+// calendarFileTarget is the target a download encodes with: the Attachment's
+// real bytes, read from store.
 func calendarFileTarget(store *attachmentstore.Store) icalendar.SerializationTarget {
-	return icalendar.CalendarFileTarget(maxImportUploadBytes, func(id string) (io.ReadCloser, error) {
+	return exportTarget(func(id string) (io.ReadCloser, error) {
 		return store.Open(id)
+	})
+}
+
+// dryRunTarget is calendarFileTarget's metadata-only twin, and what the
+// Export summary pre-flight encodes with (#217): the same target at the same
+// cap, so it omits exactly what the download omits, but reading no bytes off
+// disk. Sound because the codec decides an omission from an Attachment's
+// recorded size before it ever consults the opener — so the pre-flight learns
+// what the download would drop without paying to produce the file, which for
+// the all-Calendars case is every Attachment on the instance read and
+// base64'd to be thrown away.
+func dryRunTarget() icalendar.SerializationTarget {
+	return exportTarget(func(string) (io.ReadCloser, error) {
+		return io.NopCloser(strings.NewReader("")), nil
 	})
 }
 
 var occurrenceErrors = alsoHandling(eventNotFoundErrors,
 	errorCase{service.ErrOccurrenceNotFound, notFound("occurrence not found")},
 )
+
+// icsScope is the export scope GET /api/events/{id}/ics and its Export
+// summary pre-flight both take: the whole Calendar object ("all", the
+// default) or one flattened Occurrence ("occurrence", requiring
+// occurrenceStart). Parsed in one place so the pre-flight can never describe
+// a different download than the one that follows it (#217).
+type icsScope struct {
+	occurrence      bool
+	occurrenceStart time.Time
+}
+
+// parseICSScope reads the scope/occurrenceStart query pair, responding 400
+// and reporting false if either is missing or malformed.
+func parseICSScope(w http.ResponseWriter, r *http.Request) (icsScope, bool) {
+	switch r.URL.Query().Get("scope") {
+	case "", "all":
+		return icsScope{}, true
+	case "occurrence":
+		raw := r.URL.Query().Get("occurrenceStart")
+		if raw == "" {
+			httpresponse.Error(w, http.StatusBadRequest, "invalid_request", "occurrenceStart is required for scope=occurrence")
+			return icsScope{}, false
+		}
+		occurrenceStart, err := time.Parse(time.RFC3339, raw)
+		if err != nil {
+			httpresponse.Error(w, http.StatusBadRequest, "invalid_request", "occurrenceStart must be an RFC3339 timestamp")
+			return icsScope{}, false
+		}
+		return icsScope{occurrence: true, occurrenceStart: occurrenceStart}, true
+	default:
+		httpresponse.Error(w, http.StatusBadRequest, "invalid_request", `scope must be "all" or "occurrence"`)
+		return icsScope{}, false
+	}
+}
 
 // ICS serves GET /api/events/{id}/ics: the whole calendar object
 // (scope=all, the default) or one flattened Occurrence (scope=occurrence,
@@ -47,19 +103,15 @@ func (h *EventHandler) ICS(w http.ResponseWriter, r *http.Request) {
 
 	id := chi.URLParam(r, "id")
 
-	scope := r.URL.Query().Get("scope")
-	if scope == "" {
-		scope = "all"
+	scope, ok := parseICSScope(w, r)
+	if !ok {
+		return
 	}
-
-	switch scope {
-	case "all":
-		h.icsAll(w, r, userID, id)
-	case "occurrence":
-		h.icsOccurrence(w, r, userID, id)
-	default:
-		httpresponse.Error(w, http.StatusBadRequest, "invalid_request", `scope must be "all" or "occurrence"`)
+	if scope.occurrence {
+		h.icsOccurrence(w, r, userID, id, scope.occurrenceStart)
+		return
 	}
+	h.icsAll(w, r, userID, id)
 }
 
 // icsAll renders id's whole Calendar object — Master + Overrides + EXDATEs —
@@ -72,8 +124,9 @@ func (h *EventHandler) icsAll(w http.ResponseWriter, r *http.Request, userID int
 	}
 
 	// This standalone .ics is a Calendar file (ADR-0041): its Attachments'
-	// bytes are inlined rather than referenced.
-	cal, err := icalendar.SeriesToICal(master, overrides, calendarFileTarget(h.attachments))
+	// bytes are inlined rather than referenced. What the encode omitted was
+	// already disclosed by the Export summary pre-flight the user confirmed.
+	cal, _, err := icalendar.SeriesToICal(master, overrides, calendarFileTarget(h.attachments))
 	if err != nil {
 		httpresponse.Error(w, http.StatusInternalServerError, "internal_error", "failed to build calendar object")
 		return
@@ -83,25 +136,16 @@ func (h *EventHandler) icsAll(w http.ResponseWriter, r *http.Request, userID int
 
 // icsOccurrence renders the named Occurrence flattened: a fresh UID, no
 // RRULE, no RECURRENCE-ID, concrete start/end, with the matching Override's
-// fields substituted when one exists at that recurrence id (#76).
-func (h *EventHandler) icsOccurrence(w http.ResponseWriter, r *http.Request, userID int64, id string) {
-	raw := r.URL.Query().Get("occurrenceStart")
-	if raw == "" {
-		httpresponse.Error(w, http.StatusBadRequest, "invalid_request", "occurrenceStart is required for scope=occurrence")
-		return
-	}
-	occurrenceStart, err := time.Parse(time.RFC3339, raw)
-	if err != nil {
-		httpresponse.Error(w, http.StatusBadRequest, "invalid_request", "occurrenceStart must be an RFC3339 timestamp")
-		return
-	}
-
+// fields substituted when one exists at that recurrence id (#76). A Calendar
+// file either way, so its series' Attachments are inlined exactly as
+// scope=all inlines them (#217, ADR-0041).
+func (h *EventHandler) icsOccurrence(w http.ResponseWriter, r *http.Request, userID int64, id string, occurrenceStart time.Time) {
 	occurrence, err := h.events.GetOccurrence(r.Context(), userID, id, occurrenceStart)
 	if respondError(w, err, occurrenceErrors, "failed to load occurrence") {
 		return
 	}
 
-	cal, err := icalendar.OccurrenceToICal(uuid.NewString(), occurrence)
+	cal, _, err := icalendar.OccurrenceToICal(uuid.NewString(), occurrence, calendarFileTarget(h.attachments))
 	if err != nil {
 		httpresponse.Error(w, http.StatusInternalServerError, "internal_error", "failed to build calendar object")
 		return
