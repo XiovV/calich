@@ -285,18 +285,23 @@ func (s *EventService) reminderOwnerID(ctx context.Context, calendarID string) (
 // its write touches. This is the Subscribed Calendar write guard expressed
 // through the Access resolver rather than beside it: ResolveAccess is what
 // now decides it's read-only, not a SourceURL check made here.
-func (s *EventService) requireWritableCalendar(ctx context.Context, userID int64, calendarID string) error {
-	access, _, err := s.calendars.Access(ctx, userID, calendarID)
+//
+// Returns the Calendar the Access resolution already fetched, so a caller
+// that also needs it — its WorkspaceID, typically — reads it here instead of
+// paying calendarByID's up-to-three queries to resolve the same Access a
+// second time. Guard-only callers discard it explicitly.
+func (s *EventService) requireWritableCalendar(ctx context.Context, userID int64, calendarID string) (repository.Calendar, error) {
+	access, calendar, err := s.calendars.Access(ctx, userID, calendarID)
 	if err != nil {
-		return asCalendarNotFound(err)
+		return repository.Calendar{}, asCalendarNotFound(err)
 	}
 	if !access.CanRead() {
-		return ErrCalendarNotFound
+		return repository.Calendar{}, ErrCalendarNotFound
 	}
 	if !access.CanWrite() {
-		return ErrCalendarReadOnly
+		return repository.Calendar{}, ErrCalendarReadOnly
 	}
-	return nil
+	return calendar, nil
 }
 
 // getOwnedEvent resolves id and checks the caller's Access to its Calendar,
@@ -571,21 +576,16 @@ func (s *EventService) Create(ctx context.Context, userID int64, id string, writ
 		return repository.Event{}, ErrInvalidRecurrenceRule
 	}
 
-	if err := s.requireWritableCalendar(ctx, userID, write.CalendarID); err != nil {
+	calendar, err := s.requireWritableCalendar(ctx, userID, write.CalendarID)
+	if err != nil {
 		return repository.Event{}, err
 	}
 
-	// Resolved once, outside the transaction, only when there's an Attendee
-	// to check against it — every other Create stays exactly as cheap as it
-	// was before #187.
-	var workspaceID int64
-	if len(write.AttendeeUserIDs) > 0 || len(write.AttendeeGroupIDs) > 0 || len(write.AttendeeEmails) > 0 {
-		calendar, err := s.calendarByID(ctx, userID, write.CalendarID)
-		if err != nil {
-			return repository.Event{}, err
-		}
-		workspaceID = calendar.WorkspaceID
-	}
+	// Taken off the Calendar the guard above already resolved (#187 paid three
+	// queries for it, and only when there was an Attendee to check against it;
+	// a field read is worth no such condition). Read only by
+	// addCreateAttendees' loops, so a Create with no Attendee never looks at it.
+	workspaceID := calendar.WorkspaceID
 
 	var event repository.Event
 	err = s.withTx(ctx, func(repos txRepos) error {
@@ -1234,7 +1234,7 @@ func (s *EventService) Update(ctx context.Context, userID int64, id string, writ
 		return repository.Event{}, err
 	}
 	write.Color = normalizedColor
-	if err := s.requireWritableCalendar(ctx, userID, write.CalendarID); err != nil {
+	if _, err := s.requireWritableCalendar(ctx, userID, write.CalendarID); err != nil {
 		return repository.Event{}, err
 	}
 
@@ -1247,7 +1247,7 @@ func (s *EventService) Update(ctx context.Context, userID int64, id string, writ
 	// otherwise editing an Event out of a Subscribed Calendar would be a
 	// legitimate write, exactly the case ADR-0032 exists to prevent.
 	if existing.CalendarID != write.CalendarID {
-		if err := s.requireWritableCalendar(ctx, userID, existing.CalendarID); err != nil {
+		if _, err := s.requireWritableCalendar(ctx, userID, existing.CalendarID); err != nil {
 			return repository.Event{}, err
 		}
 	}
@@ -1356,7 +1356,7 @@ func (s *EventService) ImportSeries(ctx context.Context, userID int64, calendarI
 		return 0, err
 	}
 
-	if err := s.requireWritableCalendar(ctx, userID, calendarID); err != nil {
+	if _, err := s.requireWritableCalendar(ctx, userID, calendarID); err != nil {
 		return 0, err
 	}
 
@@ -2264,7 +2264,7 @@ func (s *EventService) Delete(ctx context.Context, userID int64, id string) erro
 	if err != nil {
 		return err
 	}
-	if err := s.requireWritableCalendar(ctx, userID, existing.CalendarID); err != nil {
+	if _, err := s.requireWritableCalendar(ctx, userID, existing.CalendarID); err != nil {
 		return err
 	}
 
@@ -2319,7 +2319,7 @@ func (s *EventService) AddException(ctx context.Context, userID int64, parentID 
 	if parent.Rrule == "" {
 		return ErrParentNotRecurring
 	}
-	if err := s.requireWritableCalendar(ctx, userID, parent.CalendarID); err != nil {
+	if _, err := s.requireWritableCalendar(ctx, userID, parent.CalendarID); err != nil {
 		return err
 	}
 
@@ -2360,11 +2360,11 @@ func (s *EventService) ReparentFrom(ctx context.Context, userID int64, oldParent
 		return err
 	}
 
-	if err := s.requireWritableCalendar(ctx, userID, oldParent.CalendarID); err != nil {
+	if _, err := s.requireWritableCalendar(ctx, userID, oldParent.CalendarID); err != nil {
 		return err
 	}
 	if newParent.CalendarID != oldParent.CalendarID {
-		if err := s.requireWritableCalendar(ctx, userID, newParent.CalendarID); err != nil {
+		if _, err := s.requireWritableCalendar(ctx, userID, newParent.CalendarID); err != nil {
 			return err
 		}
 	}
@@ -2563,7 +2563,7 @@ func (s *EventService) PutSeries(ctx context.Context, userID int64, calendarID, 
 		write.Overrides[i].Color = overrideColor
 	}
 
-	if err := s.requireWritableCalendar(ctx, userID, calendarID); err != nil {
+	if _, err := s.requireWritableCalendar(ctx, userID, calendarID); err != nil {
 		return repository.Event{}, nil, err
 	}
 
@@ -2716,20 +2716,18 @@ func (s *EventService) PutSeries(ctx context.Context, userID int64, calendarID, 
 // RemoveAttendee's shared guard, since Attendee management is a Calendar
 // write like any other Event edit (#161), not something an Attendee with no
 // Calendar Access could ever do to their own invite. Also returns the
-// Calendar, so callers can resolve its WorkspaceID without a second lookup.
+// Calendar the guard resolved, so callers can read its WorkspaceID without a
+// second lookup — one Access resolution per invite or removal, not two.
 func (s *EventService) attendeeManagementCalendar(ctx context.Context, actorUserID int64, eventID string) (repository.Event, repository.Calendar, error) {
 	event, err := s.events.GetByID(ctx, eventID)
 	if err != nil {
 		return repository.Event{}, repository.Calendar{}, err
 	}
-	if err := s.requireWritableCalendar(ctx, actorUserID, event.CalendarID); err != nil {
+	calendar, err := s.requireWritableCalendar(ctx, actorUserID, event.CalendarID)
+	if err != nil {
 		if errors.Is(err, ErrCalendarNotFound) {
 			return repository.Event{}, repository.Calendar{}, repository.ErrNotFound
 		}
-		return repository.Event{}, repository.Calendar{}, err
-	}
-	calendar, err := s.calendarByID(ctx, actorUserID, event.CalendarID)
-	if err != nil {
 		return repository.Event{}, repository.Calendar{}, err
 	}
 	return event, calendar, nil
