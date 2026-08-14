@@ -12,18 +12,7 @@ Single-context: `CONTEXT.md` + `docs/adr/` at the repo root. See `docs/agents/do
 
 - Never launch dev servers or run browser tests (Playwright, chromium-cli, etc.) yourself. The user runs dev servers and does browser testing manually.
 
-## 1. Think Before Coding
-
-**Don't assume. Don't hide confusion. Surface tradeoffs.**
-
-Before implementing:
-
-- State your assumptions explicitly. If uncertain, ask.
-- If multiple interpretations exist, present them - don't pick silently.
-- If a simpler approach exists, say so. Push back when warranted.
-- If something is unclear, stop. Name what's confusing. Ask.
-
-## 2. Simplicity First
+## 1. Simplicity First
 
 **Minimum code that solves the problem. Nothing speculative.**
 
@@ -35,7 +24,7 @@ Before implementing:
 
 Ask yourself: "Would a senior engineer say this is overcomplicated?" If yes, simplify.
 
-## 3. Surgical Changes
+## 2. Surgical Changes
 
 **Touch only what you must. Clean up only your own mess.**
 
@@ -50,5 +39,3 @@ When your changes create orphans:
 
 - Remove imports/variables/functions that YOUR changes made unused.
 - Don't remove pre-existing dead code unless asked.
-
-The test: Every changed line should trace directly to the user's request.
