@@ -404,6 +404,25 @@ func (r *EventRepository) SetChangeSeq(ctx context.Context, id string, changeSeq
 	return requireAffected(res)
 }
 
+// BumpChangeSeqForCalendar stamps changeSeq onto every live Master under
+// calendarID in one write — the wide counterpart to SetChangeSeq's single
+// row, for a Calendar-wide change no individual Event write causes: a
+// Default reminders change (ADR-0064, #213). Resolution already makes the
+// next read of every one of those Events reflect it; this exists only so
+// CTag, and sync-collection's diff, actually notice — without it, a client
+// holding a sync-token would never learn a default changed. Overrides are
+// left untouched: they aren't independently addressable, and their own
+// Reminders resolve fresh on read regardless of their stored change_seq.
+func (r *EventRepository) BumpChangeSeqForCalendar(ctx context.Context, calendarID string, changeSeq int64) error {
+	if _, err := r.db.ExecContext(ctx,
+		`UPDATE events SET change_seq = ? WHERE calendar_id = ? AND parent_id IS NULL`,
+		changeSeq, calendarID,
+	); err != nil {
+		return fmt.Errorf("bump change_seq for calendar: %w", err)
+	}
+	return nil
+}
+
 func (r *EventRepository) Delete(ctx context.Context, id string) error {
 	res, err := r.db.ExecContext(ctx, `DELETE FROM events WHERE id = ?`, id)
 	if err != nil {

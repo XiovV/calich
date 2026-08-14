@@ -966,7 +966,7 @@ func (s *EventService) attachExdates(ctx context.Context, events []repository.Ev
 }
 
 // attachExdatesTo fills in Exdates on rows that need not be contiguous in
-// memory, mirroring attachViewerRemindersTo.
+// memory, mirroring attachResolvedViewerRemindersTo.
 func (s *EventService) attachExdatesTo(ctx context.Context, events []*repository.Event) error {
 	ids := make([]string, len(events))
 	for i, e := range events {
@@ -986,8 +986,8 @@ func (s *EventService) attachExdatesTo(ctx context.Context, events []*repository
 
 // attachCreatedByNames fills in CreatedByName on events whose
 // CreatedBy is set (#118), batching one query across every distinct creator
-// rather than one per Event — the same shape as attachViewerReminders and
-// attachExdates. An Event whose creator has since been deleted, or with no
+// rather than one per Event — the same shape as attachResolvedViewerReminders
+// and attachExdates. An Event whose creator has since been deleted, or with no
 // recorded creator at all, is simply left with an empty
 // CreatedByName.
 func (s *EventService) attachCreatedByNames(ctx context.Context, events []repository.Event) error {
@@ -1035,38 +1035,6 @@ func (s *EventService) attachAttendeeCounts(ctx context.Context, events []reposi
 	return nil
 }
 
-// attachViewerReminders is attachViewerRemindersTo for a contiguous slice.
-func (s *EventService) attachViewerReminders(ctx context.Context, events []repository.Event, viewerID int64) error {
-	pointers := make([]*repository.Event, len(events))
-	for i := range events {
-		pointers[i] = &events[i]
-	}
-	return s.attachViewerRemindersTo(ctx, pointers, viewerID)
-}
-
-// attachViewerRemindersTo fills in Reminders on events with viewerID's own
-// explicit rows only — no Calendar-default resolution (ADR-0064). This is
-// hydrateSeries' Reminder step alone, reached only from CalDAV and ICS
-// export (GetSeries, ListSeriesByCalendar, ...): a Reminder that exists only
-// by resolution does not appear as a VALARM yet, since projecting the
-// resolved set into CalDAV/Calendar files is #213's, not this one's. Every
-// other read path wants attachResolvedViewerReminders(To) instead.
-func (s *EventService) attachViewerRemindersTo(ctx context.Context, events []*repository.Event, viewerID int64) error {
-	ids := make([]string, len(events))
-	for i, e := range events {
-		ids[i] = e.ID
-	}
-
-	remindersByEvent, err := s.reminders.ListByEventIDs(ctx, viewerID, ids)
-	if err != nil {
-		return fmt.Errorf("list reminders: %w", err)
-	}
-	for _, e := range events {
-		e.Reminders = remindersByEvent[e.ID]
-	}
-	return nil
-}
-
 // attachResolvedViewerReminders fills in Reminders on events with viewerID's
 // resolved Reminders (ADR-0064) — their own explicit rows if any exist or
 // they've explicitly saved an empty list, otherwise their matching
@@ -1082,14 +1050,35 @@ func (s *EventService) attachResolvedViewerReminders(ctx context.Context, events
 	return nil
 }
 
+// attachResolvedViewerRemindersTo is attachResolvedViewerReminders for rows
+// that need not be contiguous in memory — hydrateSeries and
+// attachOverridesAndReminders' Reminder step, reached from CalDAV and ICS
+// export (GetSeries, ListSeriesByCalendar, SyncSince, ...) as well as the
+// live web-app series reads. A Reminder that exists only by Calendar-default
+// resolution now appears as a VALARM exactly like an explicit one (ADR-0064,
+// #213): CalDAV/ICS export no longer stay scoped to explicit rows alone.
+func (s *EventService) attachResolvedViewerRemindersTo(ctx context.Context, events []*repository.Event, viewerID int64) error {
+	values := make([]repository.Event, len(events))
+	for i, e := range events {
+		values[i] = *e
+	}
+	resolved, err := s.resolveReminders(ctx, values, viewerID)
+	if err != nil {
+		return err
+	}
+	for _, e := range events {
+		e.Reminders = resolved[e.ID]
+	}
+	return nil
+}
+
 // resolveReminders returns viewerID's own Reminders on each of events,
 // resolved (ADR-0064): their explicit rows if any exist or they've
 // explicitly saved an empty list for that Event (event_reminders_explicit),
 // otherwise their matching Calendar default — timed or all-day, per each
 // Event's own AllDay flag — resolved fresh on every read rather than copied
-// onto the Event. Absent from the result when neither applies, exactly like
-// the explicit-only lookup it replaces at every read path but the CalDAV/ICS
-// export ones (attachViewerRemindersTo, #213).
+// onto the Event. Absent from the result when neither applies. Every read
+// path, CalDAV/ICS export included, resolves through this (#213).
 func (s *EventService) resolveReminders(ctx context.Context, events []repository.Event, viewerID int64) (map[string][]repository.Reminder, error) {
 	ids := eventIDs(events)
 
@@ -1160,7 +1149,7 @@ func uniqueCalendarIDs(events []repository.Event) []string {
 // Override is left with none — it can never carry its own, ADR-0040),
 // plus UploadedByName on each of them, batching one Attachment lookup
 // and one user lookup across every Event rather than one per Event, the
-// same shape as attachViewerReminders and attachCreatedByNames.
+// same shape as attachResolvedViewerReminders and attachCreatedByNames.
 func (s *EventService) attachAttachments(ctx context.Context, events []repository.Event) error {
 	masterIDs := make([]string, 0, len(events))
 	for _, e := range events {
@@ -1207,7 +1196,8 @@ func (s *EventService) attachAttachments(ctx context.Context, events []repositor
 
 // attachOrganizersAndAttendees is attachOrganizersAndAttendeesTo for a
 // contiguous slice — the value-slice convenience wrapper hydrateSeries uses,
-// mirroring attachViewerReminders/attachViewerRemindersTo's split.
+// mirroring attachResolvedViewerReminders/attachResolvedViewerRemindersTo's
+// split.
 func (s *EventService) attachOrganizersAndAttendees(ctx context.Context, events []repository.Event) error {
 	pointers := make([]*repository.Event, len(events))
 	for i := range events {
@@ -1221,7 +1211,7 @@ func (s *EventService) attachOrganizersAndAttendees(ctx context.Context, events 
 // query across all of them rather than one per Event — the CalDAV/ICS
 // codec's read path (ADR-0062), which needs the mailto addresses
 // attachCreatedByNames and attachAttendeeCounts don't carry. Scoped per
-// Event row like attachViewerRemindersTo: a Master and each of its Overrides can
+// Event row like attachResolvedViewerRemindersTo: a Master and each of its Overrides can
 // each carry their own Attendees and their own Organizer (#193, ADR-0055).
 func (s *EventService) attachOrganizersAndAttendeesTo(ctx context.Context, events []*repository.Event) error {
 	ids := make([]string, 0, len(events))
@@ -1923,7 +1913,7 @@ func (s *EventService) hydrateSeries(ctx context.Context, userID int64, master r
 	master = masters[0]
 
 	all := append([]repository.Event{master}, overrides...)
-	if err := s.attachViewerReminders(ctx, all, userID); err != nil {
+	if err := s.attachResolvedViewerReminders(ctx, all, userID); err != nil {
 		return repository.Event{}, nil, err
 	}
 	if err := s.attachAttachments(ctx, all); err != nil {
@@ -2215,7 +2205,7 @@ func (s *EventService) attachOverridesAndReminders(ctx context.Context, masters 
 			all = append(all, &overrides[i])
 		}
 	}
-	if err := s.attachViewerRemindersTo(ctx, all, viewerID); err != nil {
+	if err := s.attachResolvedViewerRemindersTo(ctx, all, viewerID); err != nil {
 		return nil, err
 	}
 	if err := s.attachOrganizersAndAttendeesTo(ctx, all); err != nil {
@@ -2296,6 +2286,32 @@ func (s *EventService) TouchChangeSeq(ctx context.Context, masterID string) erro
 		}
 		if err := repos.events.SetChangeSeq(ctx, masterID, seq); err != nil {
 			return fmt.Errorf("bump change_seq: %w", err)
+		}
+		return nil
+	})
+}
+
+// BumpCalendarChangeSeq bumps every live Master under calendarID to a single
+// new change_seq (ADR-0064, #213) — the wide counterpart to TouchChangeSeq,
+// called after a Calendar default Reminders change: SetDefaultReminders
+// itself lives on CalendarService and touches no events row, but resolution
+// means every Event on calendarID now reads differently for userID, so CTag
+// (and sync-collection's diff) must say so too, or a client holding a
+// sync-token never learns anything moved. Same CanRead bar as
+// SetDefaultReminders, and the same accepted waste as its own CTag bump:
+// shared indiscriminately across every User with Access to calendarID, most
+// of whom see no actual content change.
+func (s *EventService) BumpCalendarChangeSeq(ctx context.Context, userID int64, calendarID string) error {
+	if _, err := s.calendarByID(ctx, userID, calendarID); err != nil {
+		return err
+	}
+	return s.withTx(ctx, func(repos txRepos) error {
+		seq, err := repos.sync.NextChangeSeq(ctx)
+		if err != nil {
+			return fmt.Errorf("next change seq: %w", err)
+		}
+		if err := repos.events.BumpChangeSeqForCalendar(ctx, calendarID, seq); err != nil {
+			return fmt.Errorf("bump calendar change_seq: %w", err)
 		}
 		return nil
 	})

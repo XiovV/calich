@@ -80,5 +80,15 @@ func (h *CalendarHandler) SetDefaultReminders(w http.ResponseWriter, r *http.Req
 		return
 	}
 
+	// Every Event on id now resolves differently for userID (ADR-0064): bump
+	// its Calendar's CTag so their devices notice on next sync (#213). The
+	// default write itself already committed by this point, so a failure
+	// here means the write stands but the client must retry to have their
+	// devices pick it up.
+	if err := h.events.BumpCalendarChangeSeq(r.Context(), userID, id); err != nil {
+		respondError(w, err, defaultRemindersErrorsWithNotFound, "failed to refresh calendar sync state")
+		return
+	}
+
 	httpresponse.JSON(w, http.StatusOK, toReminderWire(reminders))
 }
