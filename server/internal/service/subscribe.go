@@ -451,7 +451,11 @@ func (s *SubscribeService) doRefresh(ctx context.Context, userID int64, calendar
 	if err != nil {
 		return RefreshResult{}, refreshSyncOutcome{}, fmt.Errorf("list existing series: %w", err)
 	}
-	existing := existingSeriesFromMasters(masters, overridesByParent)
+	storedReminders, err := s.events.ListStoredReminders(ctx, userID, seriesEventIDs(masters, overridesByParent))
+	if err != nil {
+		return RefreshResult{}, refreshSyncOutcome{}, fmt.Errorf("list stored reminders: %w", err)
+	}
+	existing := existingSeriesFromMasters(masters, overridesByParent, storedReminders)
 
 	result := ReconcileSeries(existing, incoming, unparseable)
 
@@ -511,7 +515,13 @@ func resolveFollowedField(currentDisplay string, currentShadow *string, feedValu
 // no ExternalUID can't occur in a Subscribed Calendar — every write path
 // that populates one sets it — but is skipped defensively rather than
 // panicking on the nil dereference.
-func existingSeriesFromMasters(masters []repository.Event, overridesByParent map[string][]repository.Event) []ExistingSeries {
+//
+// storedReminders supplies each Master's and Override's Reminders instead of
+// m.Reminders/o.Reminders: those are the Owner's *resolved* set (Calendar
+// defaults included), and a default never reaches the diff (#220) — only
+// what is actually stored on the series can compare equal to what a feed
+// sends.
+func existingSeriesFromMasters(masters []repository.Event, overridesByParent map[string][]repository.Event, storedReminders map[string][]repository.Reminder) []ExistingSeries {
 	existing := make([]ExistingSeries, 0, len(masters))
 	for _, m := range masters {
 		if m.ExternalUID == nil {
@@ -529,7 +539,7 @@ func existingSeriesFromMasters(masters []repository.Event, overridesByParent map
 			Tzid:        m.Tzid,
 			Rrule:       m.Rrule,
 			Exdates:     m.Exdates,
-			Reminders:   m.Reminders,
+			Reminders:   storedReminders[m.ID],
 		}
 		for _, o := range overridesByParent[m.ID] {
 			content.Overrides = append(content.Overrides, OverrideWrite{
@@ -542,13 +552,26 @@ func existingSeriesFromMasters(masters []repository.Event, overridesByParent map
 				End:          o.End,
 				AllDay:       o.AllDay,
 				Tzid:         o.Tzid,
-				Reminders:    o.Reminders,
+				Reminders:    storedReminders[o.ID],
 			})
 		}
 
 		existing = append(existing, ExistingSeries{MasterID: m.ID, ExternalUID: *m.ExternalUID, Content: content})
 	}
 	return existing
+}
+
+// seriesEventIDs collects every Master and Override id across a Subscribed
+// Calendar's series — the set doRefresh needs stored Reminders for.
+func seriesEventIDs(masters []repository.Event, overridesByParent map[string][]repository.Event) []string {
+	ids := make([]string, 0, len(masters))
+	for _, m := range masters {
+		ids = append(ids, m.ID)
+		for _, o := range overridesByParent[m.ID] {
+			ids = append(ids, o.ID)
+		}
+	}
+	return ids
 }
 
 // fetchAndParse is Preview and Subscribe's shared prefix: normalize, fetch,

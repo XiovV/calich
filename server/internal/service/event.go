@@ -2057,6 +2057,25 @@ func (s *EventService) ListSeriesByCalendar(ctx context.Context, userID int64, c
 	return masters, overridesByParent, nil
 }
 
+// ListStoredReminders returns userID's own Reminders on eventIDs exactly as
+// stored — the raw event_reminders rows, with no Calendar-default
+// resolution layered on top (ADR-0064). Refresh's diff needs this rather
+// than a viewer's resolved set (as ListSeriesByCalendar's Reminders are):
+// a Default reminder is the Owner's own state beside the Calendar, never
+// content a feed could send, so comparing against it can never converge
+// (#220).
+func (s *EventService) ListStoredReminders(ctx context.Context, userID int64, eventIDs []string) (map[string][]repository.Reminder, error) {
+	byEvent, err := s.reminders.ListByEventIDs(ctx, eventIDs, []int64{userID})
+	if err != nil {
+		return nil, fmt.Errorf("list reminders: %w", err)
+	}
+	stored := make(map[string][]repository.Reminder, len(byEvent))
+	for eventID, byUser := range byEvent {
+		stored[eventID] = byUser[userID]
+	}
+	return stored, nil
+}
+
 // ListAttendeeOnlySeries returns, shaped like ListSeriesByCalendar, every
 // series userID is an Attendee of (on its Master or any of its Overrides)
 // whose Calendar userID has no Access to (ADR-0046, #163) — the content of

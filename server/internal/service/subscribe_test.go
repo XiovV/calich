@@ -647,6 +647,195 @@ func TestSubscribeService_Refresh_ChangedSeriesUpdatedInPlaceUnchangedLeftAlone(
 	}
 }
 
+// TestSubscribeService_Refresh_DefaultReminderNeverReachesDiff_MasterNoOp is
+// #220's regression: a Subscribed Calendar's Owner setting a Default
+// reminder on it must not make Refresh see an otherwise-unchanged series as
+// changed. Before the fix, existingSeriesFromMasters read the Owner's
+// *resolved* Reminders (Calendar defaults included) rather than what is
+// actually stored, and a Default reminder can never equal the empty
+// Reminders KeepAlarms off (buildWrites) always produces for the incoming
+// side — so the series never reconciled as a no-op and change_seq bumped on
+// every forced Refresh.
+func TestSubscribeService_Refresh_DefaultReminderNeverReachesDiff_MasterNoOp(t *testing.T) {
+	svc, events, calendars, userID, workspaceID := newTestSubscribeService(t)
+	ctx := context.Background()
+
+	body := twoSeriesFeed("Standup", true, true)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/calendar")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(crlfSub(body)))
+	}))
+	t.Cleanup(srv.Close)
+
+	cal, err := svc.Subscribe(ctx, userID, workspaceID, srv.URL+"/feed.ics", "Feed", "#8E44ADFF", false)
+	if err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+
+	masters, err := events.events.ListMastersByCalendar(ctx, cal.ID)
+	if err != nil {
+		t.Fatalf("list masters: %v", err)
+	}
+	var standup repository.Event
+	for _, m := range masters {
+		if m.Title == "Standup" {
+			standup = m
+		}
+	}
+	if standup.ID == "" {
+		t.Fatalf("expected a Standup master, got %+v", masters)
+	}
+
+	if _, err := calendars.SetDefaultReminders(ctx, userID, cal.ID, false, []repository.Reminder{{OffsetMinutes: 30, Channel: "notification"}}); err != nil {
+		t.Fatalf("set default reminders: %v", err)
+	}
+
+	result, err := svc.Refresh(ctx, userID, cal.ID, true)
+	if err != nil {
+		t.Fatalf("refresh: %v", err)
+	}
+	if result.Updated != 0 || result.NoOp != 2 {
+		t.Fatalf("expected the unchanged feed to reconcile as 2 no-ops despite the Owner's Default reminder, got %+v", result)
+	}
+
+	after, err := events.events.GetByID(ctx, standup.ID)
+	if err != nil {
+		t.Fatalf("get master after refresh: %v", err)
+	}
+	if after.ChangeSeq != standup.ChangeSeq {
+		t.Fatalf("expected change_seq to be untouched by a no-op reconcile, got %d before, %d after", standup.ChangeSeq, after.ChangeSeq)
+	}
+}
+
+// TestSubscribeService_Refresh_DefaultReminderNeverReachesDiff_KeepAlarmsOnStillNoOp
+// is the KeepAlarms-on half of #220. subscribeFeedICS's "Standup" carries a
+// VALARM, so KeepAlarms on gives the Owner an explicit stored Reminder that
+// shadows any Default and can't exercise the bug; "Company holiday" carries
+// none, so the Owner has no stored row for it and an all-day Default resolves
+// straight onto it. Before the fix, that resolved Default compared against
+// the feed's (still empty) incoming side and never matched, so the series
+// could never reconcile as a no-op even though nothing about it, or the
+// KeepAlarms-kept series beside it, had changed.
+func TestSubscribeService_Refresh_DefaultReminderNeverReachesDiff_KeepAlarmsOnStillNoOp(t *testing.T) {
+	svc, events, calendars, userID, workspaceID := newTestSubscribeService(t)
+	srv := icsServer(t, subscribeFeedICS)
+	ctx := context.Background()
+
+	cal, err := svc.Subscribe(ctx, userID, workspaceID, srv.URL+"/feed.ics", "Team Holidays", "#8E44ADFF", true)
+	if err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+
+	masters, err := events.events.ListMastersByCalendar(ctx, cal.ID)
+	if err != nil {
+		t.Fatalf("list masters: %v", err)
+	}
+	var holiday repository.Event
+	for _, m := range masters {
+		if m.Title == "Company holiday" {
+			holiday = m
+		}
+	}
+	if holiday.ID == "" {
+		t.Fatalf("expected a Company holiday master, got %+v", masters)
+	}
+
+	if _, err := calendars.SetDefaultReminders(ctx, userID, cal.ID, true, []repository.Reminder{{OffsetMinutes: 45, Channel: "email"}}); err != nil {
+		t.Fatalf("set default reminders: %v", err)
+	}
+
+	result, err := svc.Refresh(ctx, userID, cal.ID, true)
+	if err != nil {
+		t.Fatalf("refresh: %v", err)
+	}
+	if result.Updated != 0 || result.NoOp != 2 {
+		t.Fatalf("expected the unchanged feed to reconcile as 2 no-ops with KeepAlarms on despite the Owner's all-day Default reminder, got %+v", result)
+	}
+
+	after, err := events.events.GetByID(ctx, holiday.ID)
+	if err != nil {
+		t.Fatalf("get master after refresh: %v", err)
+	}
+	if after.ChangeSeq != holiday.ChangeSeq {
+		t.Fatalf("expected change_seq to be untouched by a no-op reconcile, got %d before, %d after", holiday.ChangeSeq, after.ChangeSeq)
+	}
+}
+
+// subscribeFeedWithOverrideICS is a recurring Master plus one Override,
+// carrying no VALARM of its own — the shape
+// TestSubscribeService_Refresh_DefaultReminderNeverReachesDiff_OverrideNoOp
+// needs to prove the Override side of the diff gets the same treatment as
+// the Master (#220's acceptance criterion: existingSeriesFromMasters:545).
+const subscribeFeedWithOverrideICS = `BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//test//EN
+BEGIN:VEVENT
+UID:series-1
+DTSTART:20260601T090000Z
+DTEND:20260601T093000Z
+RRULE:FREQ=WEEKLY;COUNT=3
+SUMMARY:Standup
+END:VEVENT
+BEGIN:VEVENT
+UID:series-1
+RECURRENCE-ID:20260608T090000Z
+DTSTART:20260608T100000Z
+DTEND:20260608T103000Z
+SUMMARY:Standup (moved)
+END:VEVENT
+END:VCALENDAR
+`
+
+func TestSubscribeService_Refresh_DefaultReminderNeverReachesDiff_OverrideNoOp(t *testing.T) {
+	svc, events, calendars, userID, workspaceID := newTestSubscribeService(t)
+	srv := icsServer(t, subscribeFeedWithOverrideICS)
+	ctx := context.Background()
+
+	cal, err := svc.Subscribe(ctx, userID, workspaceID, srv.URL+"/feed.ics", "Feed", "#8E44ADFF", false)
+	if err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+
+	masters, err := events.events.ListMastersByCalendar(ctx, cal.ID)
+	if err != nil {
+		t.Fatalf("list masters: %v", err)
+	}
+	if len(masters) != 1 {
+		t.Fatalf("expected 1 master, got %+v", masters)
+	}
+	masterID := masters[0].ID
+
+	childrenByParent, err := events.events.ListChildrenByParentIDs(ctx, []string{masterID})
+	if err != nil {
+		t.Fatalf("list overrides: %v", err)
+	}
+	if len(childrenByParent[masterID]) != 1 {
+		t.Fatalf("expected 1 override, got %+v", childrenByParent[masterID])
+	}
+	overrideChangeSeqBefore := childrenByParent[masterID][0].ChangeSeq
+
+	if _, err := calendars.SetDefaultReminders(ctx, userID, cal.ID, false, []repository.Reminder{{OffsetMinutes: 15, Channel: "notification"}}); err != nil {
+		t.Fatalf("set default reminders: %v", err)
+	}
+
+	result, err := svc.Refresh(ctx, userID, cal.ID, true)
+	if err != nil {
+		t.Fatalf("refresh: %v", err)
+	}
+	if result.Updated != 0 || result.NoOp != 1 {
+		t.Fatalf("expected the unchanged series (Master plus Override) to reconcile as a no-op despite the Owner's Default reminder, got %+v", result)
+	}
+
+	childrenAfter, err := events.events.ListChildrenByParentIDs(ctx, []string{masterID})
+	if err != nil {
+		t.Fatalf("list overrides after refresh: %v", err)
+	}
+	if len(childrenAfter[masterID]) != 1 || childrenAfter[masterID][0].ChangeSeq != overrideChangeSeqBefore {
+		t.Fatalf("expected the Override's change_seq untouched by a no-op reconcile, got %+v", childrenAfter[masterID])
+	}
+}
+
 // TestSubscribeService_Refresh_URLChangeAloneUpdatesStoredEvent exercises
 // #207's acceptance criterion that a Refresh whose only upstream change is
 // a series' URL updates the stored Event rather than leaving it unchanged.
