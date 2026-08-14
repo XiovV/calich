@@ -19,6 +19,13 @@ type Reminder struct {
 	ID            int64
 	OffsetMinutes int
 	Channel       string
+	// DefaultReminderID is set only when this value was resolved from a
+	// Calendar default rather than read from the User's own explicit
+	// event_reminders row (ADR-0064) — zero on every explicit Reminder, and
+	// the resolving calendar_default_reminders row's own id otherwise. ID is
+	// always zero alongside it: a resolved Reminder was never one of the
+	// User's own rows on the Event it resolved onto.
+	DefaultReminderID int64
 }
 
 // EventReminderRepository stores Reminders (ADR-0020) — many per (User,

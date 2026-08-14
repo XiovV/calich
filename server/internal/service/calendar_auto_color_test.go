@@ -120,7 +120,7 @@ func TestCalendarService_ListAccessible_BatchAssignsInCalendarIDOrder(t *testing
 	if err := workspaceRepo.AddMember(ctx, workspace.ID, other.ID, repository.WorkspaceRoleMember); err != nil {
 		t.Fatalf("add other as workspace member: %v", err)
 	}
-	svc := NewCalendarService(repository.NewCalendarRepository(sqlDB), repository.NewCalendarShareRepository(sqlDB), users, repository.NewEventReminderRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo, repository.NewCalendarGroupShareRepository(sqlDB), repository.NewGroupRepository(sqlDB))
+	svc := NewCalendarService(repository.NewCalendarRepository(sqlDB), repository.NewCalendarShareRepository(sqlDB), users, repository.NewEventReminderRepository(sqlDB), repository.NewCalendarDefaultReminderRepository(sqlDB), repository.NewEventReminderExplicitRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo, repository.NewCalendarGroupShareRepository(sqlDB), repository.NewGroupRepository(sqlDB))
 
 	last, err := svc.Create(ctx, owner.ID, workspace.ID, "cal-zzz", CalendarWrite{Name: "Last alphabetically", Color: "#123456FF"})
 	if err != nil {

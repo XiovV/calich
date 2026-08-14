@@ -43,7 +43,7 @@ func newWorkspaceHandlerTestServer(t *testing.T) *workspaceHandlerTestServer {
 	workspaceRepo := repository.NewWorkspaceRepository(sqlDB)
 	inviteRepo := repository.NewWorkspaceInviteRepository(sqlDB)
 	workspaces := service.NewWorkspaceService(sqlDB, workspaceRepo, inviteRepo, calendarRepo, shareRepo)
-	calendars := service.NewCalendarService(calendarRepo, shareRepo, users, repository.NewEventReminderRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo, repository.NewCalendarGroupShareRepository(sqlDB), repository.NewGroupRepository(sqlDB))
+	calendars := service.NewCalendarService(calendarRepo, shareRepo, users, repository.NewEventReminderRepository(sqlDB), repository.NewCalendarDefaultReminderRepository(sqlDB), repository.NewEventReminderExplicitRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo, repository.NewCalendarGroupShareRepository(sqlDB), repository.NewGroupRepository(sqlDB))
 	auth := service.NewAuthService(users, sessions, workspaces, inviteRepo, calendars, repository.NewAttendeeRepository(sqlDB), []byte("test-secret"), "", "", "", true)
 
 	authHandler := NewAuthHandler(auth, false, false)

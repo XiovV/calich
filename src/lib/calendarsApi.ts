@@ -1,5 +1,6 @@
 import { authedFetch, errorFromResponse } from "./apiClient";
 import type { Calendar } from "./calendar";
+import type { Reminder } from "./event";
 import { requireActiveWorkspaceId } from "./workspacesStore";
 
 export interface SubscriptionPreview {
@@ -61,6 +62,14 @@ export interface ShareTargetGroup {
 export interface ShareTargets {
   users: ShareTargetUser[];
   groups: ShareTargetGroup[];
+}
+
+// DefaultReminders is the caller's own Default reminders on a Calendar
+// (ADR-0064): two independent lists, since an all-day Reminder's offset
+// counts back from 09:00 rather than midnight.
+export interface DefaultReminders {
+  timed: Reminder[];
+  allDay: Reminder[];
 }
 
 export const calendarsApi = {
@@ -304,5 +313,38 @@ export const calendarsApi = {
       credentials: "include",
     });
     if (!response.ok) throw await errorFromResponse(response);
+  },
+
+  // getDefaultReminders returns the caller's own Default reminders on id
+  // (ADR-0064) — empty lists, not an error, if they've never set either.
+  // Open to any User with Access, not Owner-only, same posture as the
+  // colour override.
+  async getDefaultReminders(accessToken: string, id: string): Promise<DefaultReminders> {
+    const response = await authedFetch(accessToken, `/api/calendars/${id}/default-reminders`, {
+      credentials: "include",
+    });
+    if (!response.ok) throw await errorFromResponse(response);
+
+    return (await response.json()) as DefaultReminders;
+  },
+
+  // setDefaultReminders replaces the caller's own default Reminder list —
+  // timed or all-day, whichever allDay names — wholesale (ADR-0064). Never
+  // touches the other list or another User's rows on the same Calendar.
+  async setDefaultReminders(
+    accessToken: string,
+    id: string,
+    allDay: boolean,
+    reminders: Reminder[],
+  ): Promise<Reminder[]> {
+    const response = await authedFetch(accessToken, `/api/calendars/${id}/default-reminders`, {
+      method: "PUT",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ allDay, reminders }),
+    });
+    if (!response.ok) throw await errorFromResponse(response);
+
+    return (await response.json()) as Reminder[];
   },
 };

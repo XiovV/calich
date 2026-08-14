@@ -86,17 +86,17 @@ import { DeleteEventConfirmation } from "./DeleteEventConfirmation";
 import { CustomRecurrenceDialog } from "./CustomRecurrenceDialog";
 import { ScopePicker } from "./ScopePicker";
 import { DiscardRecurrenceWarning } from "./DiscardRecurrenceWarning";
-import { ReminderRow } from "./ReminderRow";
 import { AttachmentRow, type AttachmentDraft } from "./AttachmentRow";
 import {
   EventAttendeesSection,
   type StagedAttendeeTarget,
 } from "./EventAttendeesSection";
-
-/** A Reminder plus a local id, so its row keeps stable identity across
- * add/remove/reorder in the Reminders section (Reminder itself has no id —
- * it's just an offset + channel pair, ADR-0020). */
-type ReminderDraft = Reminder & { draftId: string };
+import {
+  ReminderListEditor,
+  fromReminderDrafts,
+  toReminderDrafts,
+  type ReminderDraft,
+} from "./ReminderListEditor";
 
 // The Repeat dropdown offers the fixed presets plus a "Custom…" entry that opens
 // the Custom recurrence dialog (issue #35).
@@ -422,10 +422,7 @@ export function EventModal(props: EventModalProps) {
     initial.customRule,
   );
   const [reminders, setReminders] = useState<ReminderDraft[]>(() =>
-    initial.reminders.map((reminder) => ({
-      ...reminder,
-      draftId: crypto.randomUUID(),
-    })),
+    toReminderDrafts(initial.reminders),
   );
   const [description, setDescription] = useState(initial.description);
   const [location, setLocation] = useState(initial.location);
@@ -493,29 +490,6 @@ export function EventModal(props: EventModalProps) {
     setCustomRule(rule);
     setRepeat("custom");
     setIsCustomDialogOpen(false);
-  }
-
-  function handleAddReminder() {
-    setReminders((current) => [
-      ...current,
-      {
-        draftId: crypto.randomUUID(),
-        offsetMinutes: allDay ? 1440 : 10,
-        channel: "notification",
-      },
-    ]);
-  }
-
-  function handleReminderChange(draftId: string, reminder: Reminder) {
-    setReminders((current) =>
-      current.map((r) =>
-        r.draftId === draftId ? { ...reminder, draftId } : r,
-      ),
-    );
-  }
-
-  function handleRemoveReminder(draftId: string) {
-    setReminders((current) => current.filter((r) => r.draftId !== draftId));
   }
 
   // startAttachmentUpload drives one file's XHR upload (attachmentsApi —
@@ -687,10 +661,7 @@ export function EventModal(props: EventModalProps) {
   // modal opened with regardless of isReadOnlyEvent — a read-only Event's
   // Reminders section is live precisely because this diff, and the save
   // path below, never go anywhere near an Event field (#211).
-  const remindersDraft: Reminder[] = reminders.map((r) => ({
-    offsetMinutes: r.offsetMinutes,
-    channel: r.channel,
-  }));
+  const remindersDraft: Reminder[] = fromReminderDrafts(reminders);
   const remindersChanged = !remindersEqual(remindersDraft, initial.reminders);
 
   async function handleSave() {
@@ -1349,30 +1320,12 @@ export function EventModal(props: EventModalProps) {
                     {/* Reminders are personal state, never an Event write
                       (ADR-0064) — live and interactive even when every other
                       field on this Event is disabled (#211). */}
-                    {reminders.length > 0 && (
-                      <div className="flex flex-col gap-2">
-                        {reminders.map((reminder) => (
-                          <ReminderRow
-                            key={reminder.draftId}
-                            reminder={reminder}
-                            emailAvailable={emailAvailable}
-                            onChange={(next) =>
-                              handleReminderChange(reminder.draftId, next)
-                            }
-                            onRemove={() =>
-                              handleRemoveReminder(reminder.draftId)
-                            }
-                          />
-                        ))}
-                      </div>
-                    )}
-                    <button
-                      type="button"
-                      onClick={handleAddReminder}
-                      className="mt-1.5 cursor-pointer text-label-sm text-accent hover:underline"
-                    >
-                      Add reminder
-                    </button>
+                    <ReminderListEditor
+                      reminders={reminders}
+                      onChange={setReminders}
+                      emailAvailable={emailAvailable}
+                      defaultOffsetMinutes={allDay ? 1440 : 10}
+                    />
                   </IconFieldRow>
 
                   <IconFieldRow

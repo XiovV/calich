@@ -85,6 +85,13 @@ func New(logger *slog.Logger, authHandler *handlers.AuthHandler, calendarHandler
 			r.Get("/{id}/ics/oversized-attachments", calendarHandler.ICSOversizedAttachments)
 			r.Post("/{id}/refresh", calendarHandler.Refresh)
 
+			// Default reminders (ADR-0064): the caller's own timed/all-day
+			// default lists on this Calendar, beside their colour override
+			// (folded into Update above) — open to any User with Access, not
+			// Owner-only, same posture as the colour override.
+			r.Get("/{id}/default-reminders", calendarHandler.GetDefaultReminders)
+			r.Put("/{id}/default-reminders", calendarHandler.SetDefaultReminders)
+
 			// Sharing (ADR-0034): grant/revoke/list are Owner-only,
 			// enforced by CalendarService rather than here; leave needs no
 			// such check.

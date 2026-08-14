@@ -20,6 +20,12 @@ type EventLister interface {
 // *repository.FiredReminderRepository.
 type Ledger interface {
 	MarkFired(ctx context.Context, reminderID, userID int64, occurrenceStart, firedAt time.Time) (bool, error)
+	// MarkDefaultFired is MarkFired's counterpart for a Reminder that fires
+	// by Calendar-default resolution (ADR-0064) — its exactly-once key is
+	// (defaultReminderID, eventID, occurrenceStart) rather than
+	// (reminderID, occurrenceStart), since one default list fires
+	// independently across every Event it resolves onto.
+	MarkDefaultFired(ctx context.Context, defaultReminderID int64, eventID string, userID int64, occurrenceStart, firedAt time.Time) (bool, error)
 }
 
 // Scheduler is the background ticker that fires due Reminders (ADR-0021). A
@@ -75,7 +81,13 @@ func (s *Scheduler) Tick(ctx context.Context) error {
 	}
 
 	for _, d := range due {
-		isNew, err := s.ledger.MarkFired(ctx, d.ReminderID, d.UserID, d.OccurrenceStart, to)
+		var isNew bool
+		var err error
+		if d.DefaultReminderID != 0 {
+			isNew, err = s.ledger.MarkDefaultFired(ctx, d.DefaultReminderID, d.EventID, d.UserID, d.OccurrenceStart, to)
+		} else {
+			isNew, err = s.ledger.MarkFired(ctx, d.ReminderID, d.UserID, d.OccurrenceStart, to)
+		}
 		if err != nil {
 			// lastTick deliberately hasn't advanced yet: the next tick
 			// retries this whole window. MarkFired is idempotent for

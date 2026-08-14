@@ -41,7 +41,7 @@ func newTestWorkspaceInviteHarnessWithAttendees(t *testing.T) (*WorkspaceService
 	calendarRepo := repository.NewCalendarRepository(sqlDB)
 	shareRepo := repository.NewCalendarShareRepository(sqlDB)
 	workspaces := NewWorkspaceService(sqlDB, workspaceRepo, inviteRepo, calendarRepo, shareRepo)
-	calendars := NewCalendarService(calendarRepo, shareRepo, users, repository.NewEventReminderRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo, repository.NewCalendarGroupShareRepository(sqlDB), repository.NewGroupRepository(sqlDB))
+	calendars := NewCalendarService(calendarRepo, shareRepo, users, repository.NewEventReminderRepository(sqlDB), repository.NewCalendarDefaultReminderRepository(sqlDB), repository.NewEventReminderExplicitRepository(sqlDB), repository.NewCalendarUserColorRepository(sqlDB), workspaceRepo, repository.NewCalendarGroupShareRepository(sqlDB), repository.NewGroupRepository(sqlDB))
 	attendeeRepo := repository.NewAttendeeRepository(sqlDB)
 	auth := NewAuthService(users, sessions, workspaces, inviteRepo, calendars, attendeeRepo, []byte("test-secret"), "", "", "", false)
 	eventRepo := repository.NewEventRepository(sqlDB)

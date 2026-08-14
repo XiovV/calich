@@ -375,6 +375,42 @@ CREATE TABLE event_reminders (
 
 CREATE INDEX idx_event_reminders_event_id ON event_reminders(event_id, user_id);
 
+-- calendar_default_reminders is a User's own Default reminders on a
+-- Calendar (ADR-0064): two independent lists per (User, Calendar), timed and
+-- all-day, since an all-day Reminder's offset counts back from 09:00 on the
+-- date rather than midnight (ADR-0020) — a single "30 minutes before" would
+-- otherwise resolve to after the bins have gone. Applies to every Event on
+-- the Calendar where that User has saved no list of their own; resolved
+-- when Reminders are read, never copied onto an Event (see
+-- event_reminders_explicit below for the "I have none, on purpose" marker).
+-- Wholesale-replaced per (calendar_id, user_id, all_day) on a write, same
+-- shape as event_reminders.
+CREATE TABLE calendar_default_reminders (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    calendar_id TEXT NOT NULL REFERENCES calendars(id) ON DELETE CASCADE,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    all_day INTEGER NOT NULL DEFAULT 0,
+    offset_minutes INTEGER NOT NULL,
+    channel TEXT NOT NULL
+);
+
+CREATE INDEX idx_calendar_default_reminders_calendar_user ON calendar_default_reminders(calendar_id, user_id, all_day);
+
+-- event_reminders_explicit is ADR-0064's one bit of resolution state: a
+-- (User, Event) row here means that User's Reminder list on this Event is
+-- explicit, even if it's currently empty, so their Calendar default no
+-- longer applies to it. Written whenever a User saves their Reminder list
+-- via its own write path (event_reminders_explicit.Mark) — including an
+-- empty save, which is what "no Reminders on this one Event" means in
+-- practice, since deleting the last row is the only UI for it. Never
+-- written by an Event field write (Create/Update/CalDAV PUT/ICS import),
+-- which is not a Reminder save.
+CREATE TABLE event_reminders_explicit (
+    event_id TEXT NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    PRIMARY KEY (event_id, user_id)
+);
+
 -- The firing engine's exactly-once ledger (ADR-0021): a Reminder+Occurrence
 -- pair is recorded here the first time it fires, and never again — the
 -- UNIQUE constraint is what makes a repeated tick or a process restart a
@@ -388,6 +424,24 @@ CREATE TABLE fired_reminders (
     occurrence_start TIMESTAMP NOT NULL,
     fired_at TIMESTAMP NOT NULL,
     UNIQUE (reminder_id, occurrence_start)
+);
+
+-- fired_default_reminders is fired_reminders' counterpart for a Reminder
+-- that fires by Calendar-default resolution rather than from the User's own
+-- event_reminders row (ADR-0064) — it needs its own ledger because a
+-- default_reminder_id names a (Calendar, User, timed/all-day) list, not one
+-- Event, so the same default reminder fires independently across every
+-- Event it resolves onto: the exactly-once key is (default_reminder_id,
+-- event_id, occurrence_start), not just (default_reminder_id,
+-- occurrence_start).
+CREATE TABLE fired_default_reminders (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    default_reminder_id INTEGER NOT NULL REFERENCES calendar_default_reminders(id) ON DELETE CASCADE,
+    event_id TEXT NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    occurrence_start TIMESTAMP NOT NULL,
+    fired_at TIMESTAMP NOT NULL,
+    UNIQUE (default_reminder_id, event_id, occurrence_start)
 );
 
 -- A Notification is the persistent in-app record of something that

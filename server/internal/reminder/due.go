@@ -23,11 +23,20 @@ type DueReminder struct {
 	// ReminderID identifies the fired Reminder's own row — the ledger's
 	// exactly-once key is (ReminderID, OccurrenceStart): a Reminder id
 	// already implies its own User, so no two Users can ever share one
-	// (ADR-0064).
-	ReminderID      int64
-	OccurrenceStart time.Time
-	OffsetMinutes   int
-	Channel         string
+	// (ADR-0064). Zero when this Reminder was resolved from a Calendar
+	// default rather than read from the User's own row — DefaultReminderID
+	// is set instead, and the two are mutually exclusive.
+	ReminderID int64
+	// DefaultReminderID identifies the resolving calendar_default_reminders
+	// row when this Reminder fires by Calendar-default resolution
+	// (ADR-0064) — zero for an explicit Reminder. The ledger's exactly-once
+	// key for a default fire is (DefaultReminderID, EventID,
+	// OccurrenceStart), since one default list fires independently across
+	// every Event it resolves onto.
+	DefaultReminderID int64
+	OccurrenceStart   time.Time
+	OffsetMinutes     int
+	Channel           string
 }
 
 // anchor is the instant a Reminder's offset counts back from: an
@@ -84,13 +93,14 @@ func Due(event repository.EventWithOwner, from, to time.Time) ([]DueReminder, er
 				at := anchor(event.Event, start)
 				if at.After(triggerFrom) && !at.After(triggerTo) {
 					due = append(due, DueReminder{
-						EventID:         event.ID,
-						UserID:          userID,
-						Title:           event.Title,
-						ReminderID:      reminder.ID,
-						OccurrenceStart: start,
-						OffsetMinutes:   reminder.OffsetMinutes,
-						Channel:         reminder.Channel,
+						EventID:           event.ID,
+						UserID:            userID,
+						Title:             event.Title,
+						ReminderID:        reminder.ID,
+						DefaultReminderID: reminder.DefaultReminderID,
+						OccurrenceStart:   start,
+						OffsetMinutes:     reminder.OffsetMinutes,
+						Channel:           reminder.Channel,
 					})
 				}
 			}
