@@ -3,6 +3,7 @@ import { useAuthStore } from "./authStore";
 import { calendarsApi, type GroupShare, type Role, type Share } from "./calendarsApi";
 import { useEventsStore } from "./eventsStore";
 import { getCalendarById, type Calendar } from "./calendar";
+import { makeOptimisticWrite } from "./optimisticWrite";
 import { toast } from "./toast";
 
 interface CalendarsState {
@@ -114,6 +115,14 @@ export async function accessChangeMessage(calendarId: string): Promise<string> {
     : "Your access to this calendar has changed. Refreshing calendars.";
 }
 
+// Every optimistic write in this store goes through here (ADR-0067). Its
+// Access-change policy is this file's own accessChangeMessage, passed rather
+// than imported — optimisticWrite must not reach back into a store that
+// calls it. The server-first writes below (subscribe, refresh, share,
+// revoke) deliberately do not use it: their result comes back from the
+// server, and their caller shows the failure inline.
+const write = makeOptimisticWrite(accessChangeMessage);
+
 export const useCalendarsStore = create<CalendarsState>((set, get) => ({
   calendars: [],
 
@@ -122,97 +131,106 @@ export const useCalendarsStore = create<CalendarsState>((set, get) => ({
     set({ calendars });
   },
 
-  addCalendar: async (calendar) => {
-    set((state) => ({ calendars: [...state.calendars, calendar] }));
-
-    try {
-      await calendarsApi.create(requireAccessToken(), calendar);
-      return true;
-    } catch {
-      set((state) => ({
-        calendars: state.calendars.filter((c) => c.id !== calendar.id),
-      }));
-      toast.error(`Failed to create calendar "${calendar.name}".`);
-      return false;
-    }
-  },
+  addCalendar: async (calendar) =>
+    // No calendarId: this Calendar is being created, so there is no prior
+    // Access to have changed underneath the caller (ADR-0067).
+    write({
+      apply: () => set((state) => ({ calendars: [...state.calendars, calendar] })),
+      revert: () =>
+        set((state) => ({
+          calendars: state.calendars.filter((c) => c.id !== calendar.id),
+        })),
+      dispatch: async () => {
+        await calendarsApi.create(requireAccessToken(), calendar);
+      },
+      fallbackMessage: `Failed to create calendar "${calendar.name}".`,
+    }),
 
   updateCalendar: async (id, changes) => {
     const previousCalendars = get().calendars;
-    // url is optimistically applied from the server's response, not from
-    // changes itself — the User typed a raw (possibly password-bearing)
-    // URL, and every surface showing a Subscription URL must show the
-    // masked form the server returns instead (#88, ADR-0032).
+    // url is applied from the server's response, not from changes itself —
+    // the User typed a raw (possibly password-bearing) URL, and every
+    // surface showing a Subscription URL must show the masked form the
+    // server returns instead (#88, ADR-0032). That second apply is the one
+    // thing this site has beyond painting, so it is an onSuccess.
     const { url, ...displayChanges } = changes;
-    set((state) => ({
-      calendars: state.calendars.map((calendar) =>
-        calendar.id === id ? { ...calendar, ...displayChanges } : calendar,
-      ),
-    }));
+    let updated: Calendar | undefined;
 
-    try {
-      const updated = await calendarsApi.update(requireAccessToken(), id, changes);
-      if (url !== undefined) {
+    await write({
+      apply: () =>
+        set((state) => ({
+          calendars: state.calendars.map((calendar) =>
+            calendar.id === id ? { ...calendar, ...displayChanges } : calendar,
+          ),
+        })),
+      revert: () => set({ calendars: previousCalendars }),
+      dispatch: async () => {
+        updated = await calendarsApi.update(requireAccessToken(), id, changes);
+      },
+      onSuccess: () => {
+        const masked = updated;
+        if (url === undefined || !masked) return;
         set((state) => ({
           calendars: state.calendars.map((calendar) =>
             calendar.id === id
-              ? { ...calendar, sourceUrl: updated.sourceUrl }
+              ? { ...calendar, sourceUrl: masked.sourceUrl }
               : calendar,
           ),
         }));
-      }
-    } catch {
-      set({ calendars: previousCalendars });
-      toast.error("Failed to update calendar.");
-    }
+      },
+      calendarId: id,
+      fallbackMessage: "Failed to update calendar.",
+    });
   },
 
   setCalendarColor: async (id, color) => {
     const previousCalendars = get().calendars;
-    set((state) => ({
-      calendars: state.calendars.map((calendar) =>
-        calendar.id === id ? { ...calendar, color } : calendar,
-      ),
-    }));
-
-    try {
-      await calendarsApi.updateColor(requireAccessToken(), id, color);
-    } catch {
-      set({ calendars: previousCalendars });
-      toast.error("Failed to update calendar color.");
-    }
+    await write({
+      apply: () =>
+        set((state) => ({
+          calendars: state.calendars.map((calendar) =>
+            calendar.id === id ? { ...calendar, color } : calendar,
+          ),
+        })),
+      revert: () => set({ calendars: previousCalendars }),
+      dispatch: async () => {
+        await calendarsApi.updateColor(requireAccessToken(), id, color);
+      },
+      calendarId: id,
+      fallbackMessage: "Failed to update calendar color.",
+    });
   },
 
   removeCalendar: async (id) => {
     const previousCalendars = get().calendars;
-    set((state) => ({
-      calendars: state.calendars.filter((calendar) => calendar.id !== id),
-    }));
-
-    try {
-      await calendarsApi.remove(requireAccessToken(), id);
-      return true;
-    } catch {
-      set({ calendars: previousCalendars });
-      toast.error("Failed to delete calendar.");
-      return false;
-    }
+    return write({
+      apply: () =>
+        set((state) => ({
+          calendars: state.calendars.filter((calendar) => calendar.id !== id),
+        })),
+      revert: () => set({ calendars: previousCalendars }),
+      dispatch: async () => {
+        await calendarsApi.remove(requireAccessToken(), id);
+      },
+      calendarId: id,
+      fallbackMessage: "Failed to delete calendar.",
+    });
   },
 
   leaveCalendar: async (id) => {
     const previousCalendars = get().calendars;
-    set((state) => ({
-      calendars: state.calendars.filter((calendar) => calendar.id !== id),
-    }));
-
-    try {
-      await calendarsApi.leave(requireAccessToken(), id);
-      return true;
-    } catch {
-      set({ calendars: previousCalendars });
-      toast.error("Failed to leave calendar.");
-      return false;
-    }
+    return write({
+      apply: () =>
+        set((state) => ({
+          calendars: state.calendars.filter((calendar) => calendar.id !== id),
+        })),
+      revert: () => set({ calendars: previousCalendars }),
+      dispatch: async () => {
+        await calendarsApi.leave(requireAccessToken(), id);
+      },
+      calendarId: id,
+      fallbackMessage: "Failed to leave calendar.",
+    });
   },
 
   subscribeCalendar: async (url, name, color, keepAlarms) => {

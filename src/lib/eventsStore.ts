@@ -1,7 +1,7 @@
 import { create } from "zustand";
-import { ApiError } from "./apiClient";
 import { useAuthStore } from "./authStore";
 import { accessChangeMessage } from "./calendarsStore";
+import { makeOptimisticWrite } from "./optimisticWrite";
 import type { Event, Reminder } from "./event";
 import { eventsApi } from "./eventsApi";
 import { resolveMaster, type Occurrence } from "./occurrence";
@@ -13,7 +13,6 @@ import {
   planEditOccurrence,
   type MasterFieldChanges,
 } from "./seriesOperation";
-import { toast } from "./toast";
 
 type EventChanges = Partial<Omit<Event, "id">>;
 
@@ -77,37 +76,12 @@ interface EventsState {
   setEventReminders: (eventId: string, reminders: Reminder[]) => Promise<void>;
 }
 
-// isAccessChangeError reports whether error is the shape the server uses for
-// a write refused because the caller's Access changed underneath them — the
-// Calendar's Share was revoked or downgraded (403 "forbidden") or the Event
-// itself is gone (404 "not found") — as opposed to validation or network
-// failure, which stay a generic "failed to ..." toast (#116).
-function isAccessChangeError(error: unknown): boolean {
-  return (
-    error instanceof ApiError && (error.status === 403 || error.status === 404)
-  );
-}
-
-// handleWriteFailure is every write action's shared catch-block tail, after
-// its own optimistic-state rollback: an access-change error explains itself
-// by naming the Calendar and refetches Calendars (#116); anything else
-// (validation, network) keeps the action's own generic message. calendarId
-// is undefined only for removeEvent's already-gone-locally edge case, which
-// falls back to the generic message since there's nothing to name. The
-// Event dialog that triggered the write already closes unconditionally on
-// its own, regardless of success or failure, so no separate dismissal is
-// needed here.
-async function handleWriteFailure(
-  error: unknown,
-  calendarId: string | undefined,
-  fallbackMessage: string,
-): Promise<void> {
-  if (calendarId && isAccessChangeError(error)) {
-    toast.error(await accessChangeMessage(calendarId));
-  } else {
-    toast.error(fallbackMessage);
-  }
-}
+// Every optimistic write in this store goes through here (ADR-0067). The
+// Access-change policy is bound once: a 403/404 names the Calendar and
+// refetches Calendars (#116), anything else keeps the site's own message.
+// The Event dialog that triggered a write already closes unconditionally on
+// its own, regardless of success or failure, so no dismissal happens here.
+const write = makeOptimisticWrite(accessChangeMessage);
 
 function requireAccessToken(): string {
   const accessToken = useAuthStore.getState().accessToken;
@@ -152,30 +126,32 @@ export const useEventsStore = create<EventsState>((set, get) => ({
 
   addEvent: async (event, attendees) => {
     if (!hasStagedAttendees(attendees)) {
-      set((state) => ({ events: [...state.events, event] }));
-
-      try {
-        await eventsApi.create(requireAccessToken(), event);
-        await setInitialReminders(requireAccessToken(), event);
-      } catch (error) {
-        set((state) => ({
-          events: state.events.filter((e) => e.id !== event.id),
-        }));
-        await handleWriteFailure(
-          error,
-          event.calendarId,
-          `Failed to create event "${event.title}".`,
-        );
-      }
+      await write({
+        apply: () => set((state) => ({ events: [...state.events, event] })),
+        // Removes just this Event rather than restoring the whole array:
+        // this path is fire-and-forget, so another write may have landed in
+        // the meantime and must not be discarded (ADR-0067).
+        revert: () =>
+          set((state) => ({
+            events: state.events.filter((e) => e.id !== event.id),
+          })),
+        dispatch: async () => {
+          await eventsApi.create(requireAccessToken(), event);
+          await setInitialReminders(requireAccessToken(), event);
+        },
+        calendarId: event.calendarId,
+        fallbackMessage: `Failed to create event "${event.title}".`,
+      });
       return;
     }
 
-    // Attendees staged: await the create before painting anything on the
-    // grid, so a rejected explicit target never shows an Event whose
-    // invites silently didn't go out, and never discards what the user
-    // typed by rolling back an optimistic insert (#187, ADR-0055). A
-    // rejection is rethrown rather than toasted — EventModal shows its own
-    // banner and keeps the dialog open.
+    // Attendees staged: server-first, not optimistic (ADR-0067) — the create
+    // is awaited before anything is painted on the grid, so a rejected
+    // explicit target never shows an Event whose invites silently didn't go
+    // out, and never discards what the user typed by rolling back an
+    // optimistic insert (#187, ADR-0055). The rejection is rethrown rather
+    // than toasted: EventModal shows its own banner and keeps the dialog
+    // open.
     await eventsApi.create(requireAccessToken(), { ...event, ...attendees });
     await setInitialReminders(requireAccessToken(), event);
     set((state) => ({ events: [...state.events, event] }));
@@ -187,62 +163,61 @@ export const useEventsStore = create<EventsState>((set, get) => ({
     if (!current) return;
 
     const updated: Event = { ...current, ...changes };
-    set((state) => ({
-      events: state.events.map((event) => (event.id === id ? updated : event)),
-    }));
-
-    try {
-      await eventsApi.update(requireAccessToken(), id, {
-        calendarId: updated.calendarId,
-        title: updated.title,
-        start: updated.start,
-        end: updated.end,
-        allDay: updated.allDay,
-        rrule: updated.rrule,
-        tzid: updated.tzid,
-        description: updated.description,
-        location: updated.location,
-        url: updated.url,
-        color: updated.color,
-      });
-      // Reminders have their own write path, never the update payload
-      // (ADR-0064) — present in changes only when the caller actually
-      // touched them (EventModal gates this), so an untouched save never
-      // resets their fired-history for no reason.
-      if (changes.reminders !== undefined) {
-        await eventsApi.setReminders(
-          requireAccessToken(),
-          id,
-          changes.reminders,
-        );
-      }
-    } catch (error) {
-      set({ events: previousEvents });
-      await handleWriteFailure(
-        error,
-        updated.calendarId,
-        "Failed to update event.",
-      );
-    }
+    await write({
+      apply: () =>
+        set((state) => ({
+          events: state.events.map((event) =>
+            event.id === id ? updated : event,
+          ),
+        })),
+      revert: () => set({ events: previousEvents }),
+      dispatch: async () => {
+        await eventsApi.update(requireAccessToken(), id, {
+          calendarId: updated.calendarId,
+          title: updated.title,
+          start: updated.start,
+          end: updated.end,
+          allDay: updated.allDay,
+          rrule: updated.rrule,
+          tzid: updated.tzid,
+          description: updated.description,
+          location: updated.location,
+          url: updated.url,
+          color: updated.color,
+        });
+        // Reminders have their own write path, never the update payload
+        // (ADR-0064) — present in changes only when the caller actually
+        // touched them (EventModal gates this), so an untouched save never
+        // resets their fired-history for no reason.
+        if (changes.reminders !== undefined) {
+          await eventsApi.setReminders(
+            requireAccessToken(),
+            id,
+            changes.reminders,
+          );
+        }
+      },
+      calendarId: updated.calendarId,
+      fallbackMessage: "Failed to update event.",
+    });
   },
 
   removeEvent: async (id) => {
     const previousEvents = get().events;
     const current = previousEvents.find((event) => event.id === id);
-    set((state) => ({
-      events: state.events.filter((event) => event.id !== id),
-    }));
 
-    try {
-      await eventsApi.remove(requireAccessToken(), id);
-    } catch (error) {
-      set({ events: previousEvents });
-      await handleWriteFailure(
-        error,
-        current?.calendarId,
-        "Failed to delete event.",
-      );
-    }
+    await write({
+      apply: () =>
+        set((state) => ({
+          events: state.events.filter((event) => event.id !== id),
+        })),
+      revert: () => set({ events: previousEvents }),
+      dispatch: () => eventsApi.remove(requireAccessToken(), id),
+      // Undefined only when the Event is already gone locally, which leaves
+      // nothing to name — the generic message stands.
+      calendarId: current?.calendarId,
+      fallbackMessage: "Failed to delete event.",
+    });
   },
 
   removeEventsByCalendarId: (calendarId) =>
@@ -265,35 +240,33 @@ export const useEventsStore = create<EventsState>((set, get) => ({
       scope,
       changes,
     });
-    set((state) => ({ events: applySeriesOps(state.events, ops) }));
 
-    try {
-      await dispatchSeriesOps(accessToken, ops);
-      // The acting User's own Reminders draft, if they touched it, lands on
-      // whichever row now represents this Occurrence for the chosen scope
-      // (ADR-0064) — never through the series ops themselves.
-      if (reminders !== undefined) {
-        await eventsApi.setReminders(
-          accessToken,
-          reminderTargetEventId,
-          reminders,
-        );
-        set((state) => ({
-          events: state.events.map((event) =>
-            event.id === reminderTargetEventId
-              ? { ...event, reminders }
-              : event,
-          ),
-        }));
-      }
-    } catch (error) {
-      set({ events: previousEvents });
-      await handleWriteFailure(
-        error,
-        master.calendarId,
-        "Failed to update event.",
-      );
-    }
+    await write({
+      apply: () => set((state) => ({ events: applySeriesOps(state.events, ops) })),
+      revert: () => set({ events: previousEvents }),
+      dispatch: async () => {
+        await dispatchSeriesOps(accessToken, ops);
+        // The acting User's own Reminders draft, if they touched it, lands
+        // on whichever row now represents this Occurrence for the chosen
+        // scope (ADR-0064) — never through the series ops themselves.
+        if (reminders !== undefined) {
+          await eventsApi.setReminders(
+            accessToken,
+            reminderTargetEventId,
+            reminders,
+          );
+          set((state) => ({
+            events: state.events.map((event) =>
+              event.id === reminderTargetEventId
+                ? { ...event, reminders }
+                : event,
+            ),
+          }));
+        }
+      },
+      calendarId: master.calendarId,
+      fallbackMessage: "Failed to update event.",
+    });
   },
 
   deleteOccurrence: async (occurrence, scope) => {
@@ -311,39 +284,33 @@ export const useEventsStore = create<EventsState>((set, get) => ({
       originalStart,
       scope,
     });
-    set((state) => ({ events: applySeriesOps(state.events, ops) }));
 
-    try {
-      await dispatchSeriesOps(accessToken, ops);
-    } catch (error) {
-      set({ events: previousEvents });
-      await handleWriteFailure(
-        error,
-        master.calendarId,
-        "Failed to delete event.",
-      );
-    }
+    await write({
+      apply: () => set((state) => ({ events: applySeriesOps(state.events, ops) })),
+      revert: () => set({ events: previousEvents }),
+      dispatch: () => dispatchSeriesOps(accessToken, ops),
+      calendarId: master.calendarId,
+      fallbackMessage: "Failed to delete event.",
+    });
   },
 
   setEventReminders: async (eventId, reminders) => {
     const previousEvents = get().events;
     const current = previousEvents.find((event) => event.id === eventId);
 
-    set((state) => ({
-      events: state.events.map((event) =>
-        event.id === eventId ? { ...event, reminders } : event,
-      ),
-    }));
-
-    try {
-      await eventsApi.setReminders(requireAccessToken(), eventId, reminders);
-    } catch (error) {
-      set({ events: previousEvents });
-      await handleWriteFailure(
-        error,
-        current?.calendarId,
-        "Failed to update reminders.",
-      );
-    }
+    await write({
+      apply: () =>
+        set((state) => ({
+          events: state.events.map((event) =>
+            event.id === eventId ? { ...event, reminders } : event,
+          ),
+        })),
+      revert: () => set({ events: previousEvents }),
+      dispatch: async () => {
+        await eventsApi.setReminders(requireAccessToken(), eventId, reminders);
+      },
+      calendarId: current?.calendarId,
+      fallbackMessage: "Failed to update reminders.",
+    });
   },
 }));

@@ -32,6 +32,7 @@ const { toast } = await import("./toast");
 const { useAuthStore } = await import("./authStore");
 const { useCalendarsStore } = await import("./calendarsStore");
 const { useEventsStore } = await import("./eventsStore");
+const { ApiError } = await import("./apiClient");
 
 const personal = { id: "cal-1", name: "Personal", color: "peacock" as const };
 const work = { id: "cal-2", name: "Work", color: "tomato" as const };
@@ -209,6 +210,39 @@ describe("removeCalendar", () => {
 
     expect(useCalendarsStore.getState().calendars).toEqual([personal]);
     expect(toast.error).toHaveBeenCalledWith("Failed to delete calendar.");
+  });
+
+  // ADR-0067 brought #116's Access-change handling to Calendar writes, which
+  // previously said only "Failed to delete calendar." and refetched nothing,
+  // leaving a sidebar that still showed a Calendar the caller had lost.
+  it("names the calendar and refetches when access changed underneath", async () => {
+    useCalendarsStore.setState({ calendars: [personal] });
+    vi.mocked(calendarsApi.remove).mockRejectedValue(
+      new ApiError(403, "forbidden", "Forbidden"),
+    );
+    vi.mocked(calendarsApi.list).mockResolvedValue([]);
+
+    const succeeded = await useCalendarsStore.getState().removeCalendar("cal-1");
+
+    expect(succeeded).toBe(false);
+    // The name resolves from the rolled-back state, before the refetch that
+    // may well drop the Calendar entirely.
+    expect(toast.error).toHaveBeenCalledWith(
+      'Your access to "Personal" has changed. Refreshing calendars.',
+    );
+    expect(calendarsApi.list).toHaveBeenCalled();
+  });
+
+  it("keeps the generic message when the failure is not an access change", async () => {
+    useCalendarsStore.setState({ calendars: [personal] });
+    vi.mocked(calendarsApi.remove).mockRejectedValue(
+      new ApiError(500, "internal", "Server error"),
+    );
+
+    await useCalendarsStore.getState().removeCalendar("cal-1");
+
+    expect(toast.error).toHaveBeenCalledWith("Failed to delete calendar.");
+    expect(calendarsApi.list).not.toHaveBeenCalled();
   });
 });
 

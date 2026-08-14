@@ -2,7 +2,7 @@ import { create } from "zustand";
 import { useAuthStore } from "./authStore";
 import type { Notification as AppNotification } from "./notification";
 import { notificationsApi } from "./notificationsApi";
-import { toast } from "./toast";
+import { makeOptimisticWrite } from "./optimisticWrite";
 
 interface NotificationsState {
   notifications: AppNotification[];
@@ -46,6 +46,10 @@ function showBrowserNotification(notification: AppNotification) {
   }
 }
 
+// Binds no Access-change policy (ADR-0067): a Notification has no Calendar
+// to name, so a refused write keeps the generic message.
+const write = makeOptimisticWrite();
+
 export const useNotificationsStore = create<NotificationsState>((set, get) => ({
   notifications: [],
   initialized: false,
@@ -70,15 +74,16 @@ export const useNotificationsStore = create<NotificationsState>((set, get) => ({
 
   markAllSeen: async () => {
     const previousNotifications = get().notifications;
-    set({
-      notifications: previousNotifications.map((n) => ({ ...n, seen: true })),
+    await write({
+      apply: () =>
+        set({
+          notifications: previousNotifications.map((n) => ({ ...n, seen: true })),
+        }),
+      revert: () => set({ notifications: previousNotifications }),
+      dispatch: async () => {
+        await notificationsApi.markSeen(requireAccessToken());
+      },
+      fallbackMessage: "Failed to mark notifications as seen.",
     });
-
-    try {
-      await notificationsApi.markSeen(requireAccessToken());
-    } catch {
-      set({ notifications: previousNotifications });
-      toast.error("Failed to mark notifications as seen.");
-    }
   },
 }));
