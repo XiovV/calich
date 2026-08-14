@@ -24,6 +24,7 @@ import {
 import type { DraftBlock } from "../lib/gridTime";
 import type { Attachment, Event, Reminder } from "../lib/event";
 import { hasSecondaryEventFields } from "../lib/eventDisclosure";
+import { shouldShowAttachmentsRow } from "../lib/attachmentsSection";
 import { followableUrl } from "../lib/followableUrl";
 import { attachmentsApi } from "../lib/attachmentsApi";
 import { downloadBlob } from "../lib/downloadBlob";
@@ -1328,52 +1329,57 @@ export function EventModal(props: EventModalProps) {
                     />
                   </IconFieldRow>
 
-                  <IconFieldRow
-                    icon={<Paperclip className="size-4" />}
-                    align="start"
-                    startOffset="mt-1.5"
-                  >
-                    {attachmentDrafts.length > 0 && (
-                      <div className="flex flex-col gap-2">
-                        {attachmentDrafts.map((draft) => (
-                          <AttachmentRow
-                            key={draft.draftId}
-                            draft={draft}
-                            showUploader={showAttachmentUploader}
-                            onDownload={() =>
-                              draft.status === "uploaded" &&
-                              handleDownloadAttachment(draft.attachment)
-                            }
-                            onRemove={() => handleRemoveAttachment(draft)}
-                            onRetry={() => handleRetryAttachment(draft)}
-                            disabled={isReadOnlyEvent}
+                  {shouldShowAttachmentsRow(
+                    isReadOnlyEvent,
+                    attachmentDrafts.length,
+                  ) && (
+                    <IconFieldRow
+                      icon={<Paperclip className="size-4" />}
+                      align="start"
+                      startOffset="mt-1.5"
+                    >
+                      {attachmentDrafts.length > 0 && (
+                        <div className="flex flex-col gap-2">
+                          {attachmentDrafts.map((draft) => (
+                            <AttachmentRow
+                              key={draft.draftId}
+                              draft={draft}
+                              showUploader={showAttachmentUploader}
+                              onDownload={() =>
+                                draft.status === "uploaded" &&
+                                handleDownloadAttachment(draft.attachment)
+                              }
+                              onRemove={() => handleRemoveAttachment(draft)}
+                              onRetry={() => handleRetryAttachment(draft)}
+                              disabled={isReadOnlyEvent}
+                            />
+                          ))}
+                        </div>
+                      )}
+                      {!isReadOnlyEvent && (
+                        <>
+                          <input
+                            ref={attachmentInputRef}
+                            type="file"
+                            multiple
+                            className="hidden"
+                            onChange={(event) => {
+                              if (event.target.files)
+                                handleAddAttachmentFiles(event.target.files);
+                              event.target.value = "";
+                            }}
                           />
-                        ))}
-                      </div>
-                    )}
-                    {!isReadOnlyEvent && (
-                      <>
-                        <input
-                          ref={attachmentInputRef}
-                          type="file"
-                          multiple
-                          className="hidden"
-                          onChange={(event) => {
-                            if (event.target.files)
-                              handleAddAttachmentFiles(event.target.files);
-                            event.target.value = "";
-                          }}
-                        />
-                        <button
-                          type="button"
-                          onClick={() => attachmentInputRef.current?.click()}
-                          className="mt-1.5 cursor-pointer text-label-sm text-accent hover:underline"
-                        >
-                          Add attachment
-                        </button>
-                      </>
-                    )}
-                  </IconFieldRow>
+                          <button
+                            type="button"
+                            onClick={() => attachmentInputRef.current?.click()}
+                            className="mt-1.5 cursor-pointer text-label-sm text-accent hover:underline"
+                          >
+                            Add attachment
+                          </button>
+                        </>
+                      )}
+                    </IconFieldRow>
+                  )}
 
                   <IconFieldRow
                     icon={<UsersRound className="size-4" />}
