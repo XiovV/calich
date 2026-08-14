@@ -105,3 +105,19 @@ func placeholders(n int) string {
 	}
 	return string(out)
 }
+
+// userFilter is the optional `user_id IN (...)` half of a Reminder-resolution
+// read (ADR-0064): the three tables resolution reads all answer either for one
+// User or for every User, and do it over one query each rather than a scoped
+// and an unscoped variant of the same question. A nil userIDs means every
+// User — an empty slice is not a way to ask for nobody, and no caller has one.
+func userFilter(userIDs []int64) (clause string, args []any) {
+	if len(userIDs) == 0 {
+		return "", nil
+	}
+	args = make([]any, len(userIDs))
+	for i, id := range userIDs {
+		args[i] = id
+	}
+	return ` AND user_id IN (` + placeholders(len(userIDs)) + `)`, args
+}

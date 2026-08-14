@@ -71,19 +71,20 @@ func newTestDefaultReminderLedger(t *testing.T) (ledger *repository.FiredReminde
 func TestScheduler_Tick_FiresADefaultResolvedReminderPerEventIndependently(t *testing.T) {
 	ledger, defaultReminderID, userID := newTestDefaultReminderLedger(t)
 
-	makeEvent := func(id string) repository.EventWithOwner {
-		return repository.EventWithOwner{
-			Event: repository.Event{ID: id, Start: at(2026, 1, 1, 9, 0), End: at(2026, 1, 1, 9, 30)},
-			RemindersByUser: map[int64][]repository.Reminder{
-				userID: {{DefaultReminderID: defaultReminderID, OffsetMinutes: 10, Channel: "notification"}},
-			},
-		}
+	makeEvent := func(id string) repository.Event {
+		return repository.Event{ID: id, Start: at(2026, 1, 1, 9, 0), End: at(2026, 1, 1, 9, 30)}
+	}
+	byUser := map[int64][]repository.Reminder{
+		userID: {{DefaultReminderID: defaultReminderID, OffsetMinutes: 10, Channel: "notification"}},
 	}
 
 	dispatcher := &fakeDispatcher{}
 	c := &clock{t: at(2026, 1, 1, 8, 40)}
 	scheduler := NewScheduler(
-		fakeEventLister{events: []repository.EventWithOwner{makeEvent("evt-1"), makeEvent("evt-2")}},
+		fakeEventLister{
+			events:   []repository.Event{makeEvent("evt-1"), makeEvent("evt-2")},
+			resolved: repository.ResolvedReminders{"evt-1": byUser, "evt-2": byUser},
+		},
 		ledger, dispatcher, c.now,
 	)
 
@@ -110,16 +111,14 @@ func TestScheduler_Tick_FiresADefaultResolvedReminderPerEventIndependently(t *te
 // exactly-once exactly like MarkFired's does for an explicit Reminder.
 func TestScheduler_Tick_DefaultResolvedReminderExactlyOnce(t *testing.T) {
 	ledger, defaultReminderID, userID := newTestDefaultReminderLedger(t)
-	event := repository.EventWithOwner{
-		Event: repository.Event{ID: "evt-1", Start: at(2026, 1, 1, 9, 0), End: at(2026, 1, 1, 9, 30)},
-		RemindersByUser: map[int64][]repository.Reminder{
-			userID: {{DefaultReminderID: defaultReminderID, OffsetMinutes: 10, Channel: "notification"}},
-		},
+	event := repository.Event{ID: "evt-1", Start: at(2026, 1, 1, 9, 0), End: at(2026, 1, 1, 9, 30)}
+	byUser := map[int64][]repository.Reminder{
+		userID: {{DefaultReminderID: defaultReminderID, OffsetMinutes: 10, Channel: "notification"}},
 	}
 
 	dispatcher := &fakeDispatcher{}
 	c := &clock{t: at(2026, 1, 1, 8, 40)}
-	scheduler := NewScheduler(fakeEventLister{events: []repository.EventWithOwner{event}}, ledger, dispatcher, c.now)
+	scheduler := NewScheduler(listing(event, byUser), ledger, dispatcher, c.now)
 	c.set(at(2026, 1, 1, 8, 55))
 	if err := scheduler.Tick(context.Background()); err != nil {
 		t.Fatalf("first tick: %v", err)
@@ -127,7 +126,7 @@ func TestScheduler_Tick_DefaultResolvedReminderExactlyOnce(t *testing.T) {
 
 	dispatcher2 := &fakeDispatcher{}
 	c2 := &clock{t: at(2026, 1, 1, 8, 40)}
-	scheduler2 := NewScheduler(fakeEventLister{events: []repository.EventWithOwner{event}}, ledger, dispatcher2, c2.now)
+	scheduler2 := NewScheduler(listing(event, byUser), ledger, dispatcher2, c2.now)
 	c2.set(at(2026, 1, 1, 8, 55))
 	if err := scheduler2.Tick(context.Background()); err != nil {
 		t.Fatalf("second tick: %v", err)

@@ -402,9 +402,10 @@ CREATE INDEX idx_calendar_default_reminders_calendar_user ON calendar_default_re
 -- longer applies to it. Written whenever a User saves their Reminder list
 -- via its own write path (event_reminders_explicit.Mark) — including an
 -- empty save, which is what "no Reminders on this one Event" means in
--- practice, since deleting the last row is the only UI for it. Never
--- written by an Event field write (Create/Update/CalDAV PUT/ICS import),
--- which is not a Reminder save.
+-- practice, since deleting the last row is the only UI for it. A CalDAV PUT
+-- counts as one of those saves: its VALARM set is the PUTting principal's own
+-- Reminder list, empty set included. Never written by an Event field write
+-- that carries no Reminder list at all (Create/Update/ICS import).
 CREATE TABLE event_reminders_explicit (
     event_id TEXT NOT NULL REFERENCES events(id) ON DELETE CASCADE,
     user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,

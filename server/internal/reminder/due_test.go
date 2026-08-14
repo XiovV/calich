@@ -11,26 +11,11 @@ func at(year int, month time.Month, day, hour, minute int) time.Time {
 	return time.Date(year, month, day, hour, minute, 0, 0, time.UTC)
 }
 
-// withOwner pairs event with a single User's own Reminders — event.Reminders
-// (the Event struct's own field, unused by Due) becomes that User's rows in
-// RemindersByUser, the only thing Due actually reads (ADR-0064).
-func withOwner(event repository.Event) repository.EventWithOwner {
-	return withUser(event, 1)
-}
-
-// withUser is withOwner, naming an arbitrary userID rather than always 1.
-func withUser(event repository.Event, userID int64) repository.EventWithOwner {
-	reminders := event.Reminders
-	event.Reminders = nil
-	return repository.EventWithOwner{Event: event, RemindersByUser: map[int64][]repository.Reminder{userID: reminders}}
-}
-
-func withOwners(events []repository.Event) []repository.EventWithOwner {
-	out := make([]repository.EventWithOwner, len(events))
-	for i, e := range events {
-		out[i] = withOwner(e)
-	}
-	return out
+// ownerOf keys reminders to a single arbitrary User — most cases here are about
+// when a Reminder fires rather than whose it is, and Due reads one resolution's
+// entry for one Event (ADR-0064).
+func ownerOf(reminders ...repository.Reminder) map[int64][]repository.Reminder {
+	return map[int64][]repository.Reminder{1: reminders}
 }
 
 func TestDue_NonRecurringEvent_FiresWhenItsTriggerFallsInTheWindow(t *testing.T) {
@@ -39,13 +24,11 @@ func TestDue_NonRecurringEvent_FiresWhenItsTriggerFallsInTheWindow(t *testing.T)
 		Title: "Standup",
 		Start: at(2026, 1, 1, 9, 0),
 		End:   at(2026, 1, 1, 9, 30),
-		Reminders: []repository.Reminder{
-			{ID: 100, OffsetMinutes: 10, Channel: "notification"},
-		},
 	}
+	reminders := ownerOf(repository.Reminder{ID: 100, OffsetMinutes: 10, Channel: "notification"})
 
 	// The trigger is 08:50 (10 minutes before the 09:00 start).
-	due, err := Due(withOwner(event), at(2026, 1, 1, 8, 45), at(2026, 1, 1, 8, 55))
+	due, err := Due(event, reminders, at(2026, 1, 1, 8, 45), at(2026, 1, 1, 8, 55))
 	if err != nil {
 		t.Fatalf("due: %v", err)
 	}
@@ -65,12 +48,10 @@ func TestDue_NonRecurringEvent_DoesNotFireOutsideTheWindow(t *testing.T) {
 		ID:    "evt-1",
 		Start: at(2026, 1, 1, 9, 0),
 		End:   at(2026, 1, 1, 9, 30),
-		Reminders: []repository.Reminder{
-			{ID: 100, OffsetMinutes: 10, Channel: "notification"},
-		},
 	}
+	reminders := ownerOf(repository.Reminder{ID: 100, OffsetMinutes: 10, Channel: "notification"})
 
-	due, err := Due(withOwner(event), at(2026, 1, 1, 8, 0), at(2026, 1, 1, 8, 30))
+	due, err := Due(event, reminders, at(2026, 1, 1, 8, 0), at(2026, 1, 1, 8, 30))
 	if err != nil {
 		t.Fatalf("due: %v", err)
 	}
@@ -86,12 +67,10 @@ func TestDue_WindowIsExclusiveOfFromAndInclusiveOfTo(t *testing.T) {
 		ID:    "evt-1",
 		Start: at(2026, 1, 1, 9, 0),
 		End:   at(2026, 1, 1, 9, 30),
-		Reminders: []repository.Reminder{
-			{ID: 100, OffsetMinutes: 0, Channel: "notification"},
-		},
 	}
+	reminders := ownerOf(repository.Reminder{ID: 100, OffsetMinutes: 0, Channel: "notification"})
 
-	onFrom, err := Due(withOwner(event), at(2026, 1, 1, 9, 0), at(2026, 1, 1, 9, 5))
+	onFrom, err := Due(event, reminders, at(2026, 1, 1, 9, 0), at(2026, 1, 1, 9, 5))
 	if err != nil {
 		t.Fatalf("due: %v", err)
 	}
@@ -99,7 +78,7 @@ func TestDue_WindowIsExclusiveOfFromAndInclusiveOfTo(t *testing.T) {
 		t.Fatalf("expected a trigger exactly on `from` to not be due yet, got %+v", onFrom)
 	}
 
-	onTo, err := Due(withOwner(event), at(2026, 1, 1, 8, 55), at(2026, 1, 1, 9, 0))
+	onTo, err := Due(event, reminders, at(2026, 1, 1, 8, 55), at(2026, 1, 1, 9, 0))
 	if err != nil {
 		t.Fatalf("due: %v", err)
 	}
@@ -114,13 +93,11 @@ func TestDue_RecurringEvent_ExpandsEachOccurrencesTrigger(t *testing.T) {
 		Start: at(2026, 1, 1, 9, 0),
 		End:   at(2026, 1, 1, 9, 30),
 		Rrule: "FREQ=DAILY",
-		Reminders: []repository.Reminder{
-			{ID: 100, OffsetMinutes: 10, Channel: "notification"},
-		},
 	}
+	reminders := ownerOf(repository.Reminder{ID: 100, OffsetMinutes: 10, Channel: "notification"})
 
 	// The third daily occurrence (Jan 3, 09:00) triggers at 08:50.
-	due, err := Due(withOwner(event), at(2026, 1, 3, 8, 45), at(2026, 1, 3, 8, 55))
+	due, err := Due(event, reminders, at(2026, 1, 3, 8, 45), at(2026, 1, 3, 8, 55))
 	if err != nil {
 		t.Fatalf("due: %v", err)
 	}
@@ -136,12 +113,10 @@ func TestDue_RecurringEvent_SkipsAnExdatedOccurrence(t *testing.T) {
 		End:     at(2026, 1, 1, 9, 30),
 		Rrule:   "FREQ=DAILY",
 		Exdates: []time.Time{at(2026, 1, 3, 9, 0)},
-		Reminders: []repository.Reminder{
-			{ID: 100, OffsetMinutes: 10, Channel: "notification"},
-		},
 	}
+	reminders := ownerOf(repository.Reminder{ID: 100, OffsetMinutes: 10, Channel: "notification"})
 
-	due, err := Due(withOwner(event), at(2026, 1, 3, 8, 45), at(2026, 1, 3, 8, 55))
+	due, err := Due(event, reminders, at(2026, 1, 3, 8, 45), at(2026, 1, 3, 8, 55))
 	if err != nil {
 		t.Fatalf("due: %v", err)
 	}
@@ -156,13 +131,12 @@ func TestDue_AllDayEvent_AnchorsAt9AMOnTheOccurrenceDateInsteadOfMidnight(t *tes
 		Start:  at(2026, 1, 1, 0, 0), // stored midnight, per ADR-0017.
 		End:    at(2026, 1, 2, 0, 0),
 		AllDay: true,
-		Reminders: []repository.Reminder{
-			{ID: 100, OffsetMinutes: 0, Channel: "notification"}, // "at time of event"
-		},
 	}
+	// "at time of event".
+	reminders := ownerOf(repository.Reminder{ID: 100, OffsetMinutes: 0, Channel: "notification"})
 
 	// Nothing fires at midnight...
-	atMidnight, err := Due(withOwner(event), at(2025, 12, 31, 23, 55), at(2026, 1, 1, 0, 0))
+	atMidnight, err := Due(event, reminders, at(2025, 12, 31, 23, 55), at(2026, 1, 1, 0, 0))
 	if err != nil {
 		t.Fatalf("due: %v", err)
 	}
@@ -171,7 +145,7 @@ func TestDue_AllDayEvent_AnchorsAt9AMOnTheOccurrenceDateInsteadOfMidnight(t *tes
 	}
 
 	// ...it fires at 09:00 instead.
-	at9am, err := Due(withOwner(event), at(2026, 1, 1, 8, 55), at(2026, 1, 1, 9, 0))
+	at9am, err := Due(event, reminders, at(2026, 1, 1, 8, 55), at(2026, 1, 1, 9, 0))
 	if err != nil {
 		t.Fatalf("due: %v", err)
 	}
@@ -186,13 +160,12 @@ func TestDue_AllDayEvent_OneDayBeforeFiresTheMorningBefore(t *testing.T) {
 		Start:  at(2026, 1, 2, 0, 0),
 		End:    at(2026, 1, 3, 0, 0),
 		AllDay: true,
-		Reminders: []repository.Reminder{
-			{ID: 100, OffsetMinutes: 1440, Channel: "notification"}, // 1 day before
-		},
 	}
+	// 1 day before.
+	reminders := ownerOf(repository.Reminder{ID: 100, OffsetMinutes: 1440, Channel: "notification"})
 
 	// 09:00 on Jan 2 minus 1 day = 09:00 on Jan 1.
-	due, err := Due(withOwner(event), at(2026, 1, 1, 8, 55), at(2026, 1, 1, 9, 0))
+	due, err := Due(event, reminders, at(2026, 1, 1, 8, 55), at(2026, 1, 1, 9, 0))
 	if err != nil {
 		t.Fatalf("due: %v", err)
 	}
@@ -206,14 +179,14 @@ func TestDue_MultipleRemindersOnOneEvent_EachEvaluatedIndependently(t *testing.T
 		ID:    "evt-1",
 		Start: at(2026, 1, 1, 9, 0),
 		End:   at(2026, 1, 1, 9, 30),
-		Reminders: []repository.Reminder{
-			{ID: 100, OffsetMinutes: 10, Channel: "notification"},
-			{ID: 101, OffsetMinutes: 1440, Channel: "email"},
-		},
 	}
+	reminders := ownerOf(
+		repository.Reminder{ID: 100, OffsetMinutes: 10, Channel: "notification"},
+		repository.Reminder{ID: 101, OffsetMinutes: 1440, Channel: "email"},
+	)
 
 	// Only the 1-day-before (email) reminder's trigger falls in this window.
-	due, err := Due(withOwner(event), at(2025, 12, 31, 8, 55), at(2025, 12, 31, 9, 0))
+	due, err := Due(event, reminders, at(2025, 12, 31, 8, 55), at(2025, 12, 31, 9, 0))
 	if err != nil {
 		t.Fatalf("due: %v", err)
 	}
@@ -226,21 +199,19 @@ func TestDue_MultipleRemindersOnOneEvent_EachEvaluatedIndependently(t *testing.T
 // their own stored offset and Channel — no fan-out to a User who has none,
 // no substitution, no collapse rule (ADR-0064).
 func TestDue_MultipleUsersOnOneEvent_EachFiresTheirOwnRowsIndependently(t *testing.T) {
-	event := repository.EventWithOwner{
-		Event: repository.Event{
-			ID:    "evt-1",
-			Start: at(2026, 1, 1, 9, 0),
-			End:   at(2026, 1, 1, 9, 30),
-		},
-		RemindersByUser: map[int64][]repository.Reminder{
-			1: {{ID: 100, OffsetMinutes: 10, Channel: "notification"}},
-			2: {{ID: 200, OffsetMinutes: 120, Channel: "email"}},
-		},
+	event := repository.Event{
+		ID:    "evt-1",
+		Start: at(2026, 1, 1, 9, 0),
+		End:   at(2026, 1, 1, 9, 30),
+	}
+	byUser := map[int64][]repository.Reminder{
+		1: {{ID: 100, OffsetMinutes: 10, Channel: "notification"}},
+		2: {{ID: 200, OffsetMinutes: 120, Channel: "email"}},
 	}
 
 	// User 2's own 2-hour-before trigger (07:00) — user 1's 10-minute
 	// Reminder doesn't fire here.
-	due, err := Due(event, at(2026, 1, 1, 6, 55), at(2026, 1, 1, 7, 0))
+	due, err := Due(event, byUser, at(2026, 1, 1, 6, 55), at(2026, 1, 1, 7, 0))
 	if err != nil {
 		t.Fatalf("due: %v", err)
 	}
@@ -251,7 +222,7 @@ func TestDue_MultipleUsersOnOneEvent_EachFiresTheirOwnRowsIndependently(t *testi
 	// User 1's own 10-minute-before trigger (08:50) — user 2's Reminder
 	// doesn't fire here, and user 1's own row is entirely unaffected by user
 	// 2's different offset and Channel.
-	due, err = Due(event, at(2026, 1, 1, 8, 45), at(2026, 1, 1, 8, 55))
+	due, err = Due(event, byUser, at(2026, 1, 1, 8, 45), at(2026, 1, 1, 8, 55))
 	if err != nil {
 		t.Fatalf("due: %v", err)
 	}
@@ -260,22 +231,20 @@ func TestDue_MultipleUsersOnOneEvent_EachFiresTheirOwnRowsIndependently(t *testi
 	}
 }
 
-// A User absent from RemindersByUser — someone else with Access to the
+// A User absent from a resolution — someone else with Access to the
 // Calendar, or invited as an Attendee — is never considered: no fan-out, no
 // substitution (ADR-0064).
 func TestDue_UserWithNoReminders_NeverFires(t *testing.T) {
-	event := repository.EventWithOwner{
-		Event: repository.Event{
-			ID:    "evt-1",
-			Start: at(2026, 1, 1, 9, 0),
-			End:   at(2026, 1, 1, 9, 30),
-		},
-		RemindersByUser: map[int64][]repository.Reminder{
-			1: {{ID: 100, OffsetMinutes: 10, Channel: "notification"}},
-		},
+	event := repository.Event{
+		ID:    "evt-1",
+		Start: at(2026, 1, 1, 9, 0),
+		End:   at(2026, 1, 1, 9, 30),
+	}
+	byUser := map[int64][]repository.Reminder{
+		1: {{ID: 100, OffsetMinutes: 10, Channel: "notification"}},
 	}
 
-	due, err := Due(event, at(2026, 1, 1, 8, 45), at(2026, 1, 1, 8, 55))
+	due, err := Due(event, byUser, at(2026, 1, 1, 8, 45), at(2026, 1, 1, 8, 55))
 	if err != nil {
 		t.Fatalf("due: %v", err)
 	}
@@ -300,15 +269,13 @@ func TestDue_ZonedRecurringEvent_KeepsWallClockAcrossDST(t *testing.T) {
 		End:   start.Add(30 * time.Minute),
 		Rrule: "FREQ=DAILY",
 		Tzid:  &tzid,
-		Reminders: []repository.Reminder{
-			{ID: 100, OffsetMinutes: 0, Channel: "notification"},
-		},
 	}
+	reminders := ownerOf(repository.Reminder{ID: 100, OffsetMinutes: 0, Channel: "notification"})
 
 	// March 30's occurrence should still trigger at 10:00 Berlin time (which
 	// is 08:00 UTC post-transition, not 09:00 as it would be pre-transition).
 	postTransition := time.Date(2026, 3, 30, 10, 0, 0, 0, loc)
-	due, err := Due(withOwner(event), postTransition.Add(-5*time.Minute), postTransition)
+	due, err := Due(event, reminders, postTransition.Add(-5*time.Minute), postTransition)
 	if err != nil {
 		t.Fatalf("due: %v", err)
 	}
@@ -328,25 +295,22 @@ func TestDueAll_OverriddenOccurrence_FiresOnlyTheOverridesOwnReminder(t *testing
 		Start: at(2026, 1, 1, 9, 0),
 		End:   at(2026, 1, 1, 9, 30),
 		Rrule: "FREQ=DAILY",
-		Reminders: []repository.Reminder{
-			{ID: 100, OffsetMinutes: 10, Channel: "notification"},
-		},
 	}
+	masterReminders := ownerOf(repository.Reminder{ID: 100, OffsetMinutes: 10, Channel: "notification"})
 	override := repository.Event{
 		ID:           "override-1",
 		ParentID:     &master.ID,
 		RecurrenceID: &recurrenceID,
 		Start:        at(2026, 1, 3, 14, 0), // moved to a different time of day
 		End:          at(2026, 1, 3, 14, 30),
-		Reminders: []repository.Reminder{
-			{ID: 200, OffsetMinutes: 5, Channel: "email"},
-		},
 	}
+	overrideReminders := ownerOf(repository.Reminder{ID: 200, OffsetMinutes: 5, Channel: "email"})
 	events := []repository.Event{master, override}
+	resolved := repository.ResolvedReminders{master.ID: masterReminders, override.ID: overrideReminders}
 
 	// The Master's stale slot (its own Reminder, 10 min before 09:00 = 08:50)
 	// must not fire...
-	staleWindow, err := DueAll(withOwners(events), at(2026, 1, 3, 8, 45), at(2026, 1, 3, 8, 55))
+	staleWindow, err := DueAll(events, resolved, at(2026, 1, 3, 8, 45), at(2026, 1, 3, 8, 55))
 	if err != nil {
 		t.Fatalf("due all: %v", err)
 	}
@@ -355,7 +319,7 @@ func TestDueAll_OverriddenOccurrence_FiresOnlyTheOverridesOwnReminder(t *testing
 	}
 
 	// ...only the Override's own Reminder, at its own (moved) time, does.
-	overrideWindow, err := DueAll(withOwners(events), at(2026, 1, 3, 13, 50), at(2026, 1, 3, 13, 55))
+	overrideWindow, err := DueAll(events, resolved, at(2026, 1, 3, 13, 50), at(2026, 1, 3, 13, 55))
 	if err != nil {
 		t.Fatalf("due all: %v", err)
 	}

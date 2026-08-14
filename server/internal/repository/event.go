@@ -309,25 +309,13 @@ func filterRecurringByWindow(events []Event, from, to time.Time) ([]Event, error
 	return filtered, nil
 }
 
-// EventWithOwner pairs an Event with every User's own Reminders on it — the
-// firing engine's read path (ADR-0021, ADR-0064). Not a repository.Event
-// field: this is purely ListAllWithReminders' join result. The name is
-// historical (ADR-0036's Owner-fan-out); kept rather than churned across
-// every caller for what's now just "an Event plus its Reminders".
-type EventWithOwner struct {
-	Event
-	// RemindersByUser is every User who has at least one Reminder on this
-	// Event, each keyed to their own rows — a User with none is simply
-	// absent, never substituted or fanned out to (ADR-0064).
-	RemindersByUser map[int64][]Reminder
-}
-
-// ListAllWithReminders returns every Event across every Calendar that
-// carries at least one Reminder, each paired with every User's own Reminder
-// rows on it — the firing engine's read path (ADR-0021, ADR-0064), which
-// runs as a single background process serving every account, unlike
-// ListByCalendarIDs' per-caller scoping.
-func (r *EventRepository) ListAllWithReminders(ctx context.Context) ([]EventWithOwner, error) {
+// ListAllWithAnyReminder returns every Event across every Calendar carrying at
+// least one User's own Reminder row — half of the firing engine's candidate set
+// (ADR-0021), which runs as a single background process serving every account,
+// unlike ListByCalendarIDs' per-caller scoping. Whose Reminders those are, and
+// which of them survive resolution, is the resolution module's answer, not
+// this scan's (ADR-0064).
+func (r *EventRepository) ListAllWithAnyReminder(ctx context.Context) ([]Event, error) {
 	rows, err := r.db.QueryContext(ctx,
 		`SELECT id, calendar_id, title, "start", "end", all_day, rrule, parent_id, recurrence_id, tzid, description, location, url, color, external_uid, created_by, created_at, change_seq, sequence
 		 FROM events
@@ -339,29 +327,16 @@ func (r *EventRepository) ListAllWithReminders(ctx context.Context) ([]EventWith
 	}
 	defer rows.Close()
 
-	events := []EventWithOwner{}
+	events := []Event{}
 	for rows.Next() {
-		var e EventWithOwner
-		if err := scanEventRow(rows, &e.Event); err != nil {
+		var e Event
+		if err := scanEventRow(rows, &e); err != nil {
 			return nil, fmt.Errorf("scan event: %w", err)
 		}
 		events = append(events, e)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate events: %w", err)
-	}
-
-	ids := make([]string, len(events))
-	for i, e := range events {
-		ids[i] = e.ID
-	}
-	remindersByEvent, err := bindEventReminderRepository(r.db).ListAllByEventIDs(ctx, ids)
-	if err != nil {
-		return nil, fmt.Errorf("list reminders: %w", err)
-	}
-
-	for i := range events {
-		events[i].RemindersByUser = remindersByEvent[events[i].ID]
 	}
 
 	return events, nil

@@ -9,15 +9,22 @@ import (
 	"github.com/XiovV/calendar/server/internal/repository"
 )
 
-// fakeEventLister returns a fixed set of events, standing in for the
-// EventService's real (DB-backed) ListAllWithReminders in scheduler tests
-// that don't need real event persistence.
+// fakeEventLister returns a fixed set of events and their resolution, standing
+// in for the EventService's real (DB-backed) ListAllWithReminders in scheduler
+// tests that don't need real event persistence.
 type fakeEventLister struct {
-	events []repository.EventWithOwner
+	events   []repository.Event
+	resolved repository.ResolvedReminders
 }
 
-func (f fakeEventLister) ListAllWithReminders(context.Context) ([]repository.EventWithOwner, error) {
-	return f.events, nil
+func (f fakeEventLister) ListAllWithReminders(context.Context) ([]repository.Event, repository.ResolvedReminders, error) {
+	return f.events, f.resolved, nil
+}
+
+// listing is the read a scheduler test hands the engine: one Event, plus the
+// resolution naming who fires which Reminders on it (ADR-0064).
+func listing(event repository.Event, byUser map[int64][]repository.Reminder) fakeEventLister {
+	return fakeEventLister{events: []repository.Event{event}, resolved: repository.ResolvedReminders{event.ID: byUser}}
 }
 
 // fakeDispatcher records every DueReminder it's asked to dispatch, so a test
@@ -71,12 +78,7 @@ func newTestLedger(t *testing.T) (ledger *repository.FiredReminderRepository, re
 	if err := remindersRepo.ReplaceByEventID(ctx, user.ID, "evt-1", []repository.Reminder{{OffsetMinutes: 10, Channel: "notification"}}); err != nil {
 		t.Fatalf("replace by event id: %v", err)
 	}
-	byEvent, err := remindersRepo.ListByEventIDs(ctx, user.ID, []string{"evt-1"})
-	if err != nil {
-		t.Fatalf("list by event ids: %v", err)
-	}
-
-	return repository.NewFiredReminderRepository(sqlDB), byEvent["evt-1"][0].ID
+	return repository.NewFiredReminderRepository(sqlDB), firstReminderID(t, remindersRepo, user.ID, "evt-1")
 }
 
 // newTestLedgerWithSecondUser is newTestLedger plus a second real User in
@@ -131,16 +133,23 @@ func newTestLedgerWithSecondUser(t *testing.T) (ledger *repository.FiredReminder
 	if err := remindersRepo.ReplaceByEventID(ctx, other.ID, "evt-1", []repository.Reminder{{OffsetMinutes: 10, Channel: "notification"}}); err != nil {
 		t.Fatalf("replace by event id (other): %v", err)
 	}
-	ownerByEvent, err := remindersRepo.ListByEventIDs(ctx, owner.ID, []string{"evt-1"})
-	if err != nil {
-		t.Fatalf("list by event ids (owner): %v", err)
-	}
-	otherByEvent, err := remindersRepo.ListByEventIDs(ctx, other.ID, []string{"evt-1"})
-	if err != nil {
-		t.Fatalf("list by event ids (other): %v", err)
-	}
+	return repository.NewFiredReminderRepository(sqlDB), firstReminderID(t, remindersRepo, owner.ID, "evt-1"), firstReminderID(t, remindersRepo, other.ID, "evt-1"), owner.ID, other.ID
+}
 
-	return repository.NewFiredReminderRepository(sqlDB), ownerByEvent["evt-1"][0].ID, otherByEvent["evt-1"][0].ID, owner.ID, other.ID
+// firstReminderID reads back the id of userID's own single Reminder row on
+// eventID — the fired ledger's foreign key needs a real one.
+func firstReminderID(t *testing.T, reminders *repository.EventReminderRepository, userID int64, eventID string) int64 {
+	t.Helper()
+
+	byEventUser, err := reminders.ListByEventIDs(context.Background(), []string{eventID}, []int64{userID})
+	if err != nil {
+		t.Fatalf("list by event ids: %v", err)
+	}
+	rows := byEventUser[eventID][userID]
+	if len(rows) == 0 {
+		t.Fatalf("expected a Reminder row for user %d on %s", userID, eventID)
+	}
+	return rows[0].ID
 }
 
 // clock is a manually-advanceable time source for deterministic scheduler tests.
@@ -155,13 +164,11 @@ func TestScheduler_Tick_DispatchesAReminderThatBecomesDueInTheWindow(t *testing.
 		ID:    "evt-1",
 		Start: at(2026, 1, 1, 9, 0),
 		End:   at(2026, 1, 1, 9, 30),
-		Reminders: []repository.Reminder{
-			{ID: reminderID, OffsetMinutes: 10, Channel: "notification"},
-		},
 	}
+	reminders := ownerOf(repository.Reminder{ID: reminderID, OffsetMinutes: 10, Channel: "notification"})
 	dispatcher := &fakeDispatcher{}
 	c := &clock{t: at(2026, 1, 1, 8, 40)}
-	scheduler := NewScheduler(fakeEventLister{events: []repository.EventWithOwner{withOwner(event)}}, ledger, dispatcher, c.now)
+	scheduler := NewScheduler(listing(event, reminders), ledger, dispatcher, c.now)
 
 	// The trigger (08:50) falls in this tick's window.
 	c.set(at(2026, 1, 1, 8, 55))
@@ -180,13 +187,11 @@ func TestScheduler_Tick_DoesNotDispatchATriggerOutsideTheWindow(t *testing.T) {
 		ID:    "evt-1",
 		Start: at(2026, 1, 1, 9, 0),
 		End:   at(2026, 1, 1, 9, 30),
-		Reminders: []repository.Reminder{
-			{ID: reminderID, OffsetMinutes: 10, Channel: "notification"},
-		},
 	}
+	reminders := ownerOf(repository.Reminder{ID: reminderID, OffsetMinutes: 10, Channel: "notification"})
 	dispatcher := &fakeDispatcher{}
 	c := &clock{t: at(2026, 1, 1, 6, 0)}
-	scheduler := NewScheduler(fakeEventLister{events: []repository.EventWithOwner{withOwner(event)}}, ledger, dispatcher, c.now)
+	scheduler := NewScheduler(listing(event, reminders), ledger, dispatcher, c.now)
 
 	c.set(at(2026, 1, 1, 6, 5))
 	if err := scheduler.Tick(context.Background()); err != nil {
@@ -208,13 +213,11 @@ func TestScheduler_Tick_ExactlyOnceAcrossRepeatedTicks(t *testing.T) {
 		ID:    "evt-1",
 		Start: at(2026, 1, 1, 9, 0),
 		End:   at(2026, 1, 1, 9, 30),
-		Reminders: []repository.Reminder{
-			{ID: reminderID, OffsetMinutes: 10, Channel: "notification"},
-		},
 	}
+	reminders := ownerOf(repository.Reminder{ID: reminderID, OffsetMinutes: 10, Channel: "notification"})
 	dispatcher := &fakeDispatcher{}
 	c := &clock{t: at(2026, 1, 1, 8, 40)}
-	scheduler := NewScheduler(fakeEventLister{events: []repository.EventWithOwner{withOwner(event)}}, ledger, dispatcher, c.now)
+	scheduler := NewScheduler(listing(event, reminders), ledger, dispatcher, c.now)
 
 	c.set(at(2026, 1, 1, 8, 55))
 	if err := scheduler.Tick(context.Background()); err != nil {
@@ -225,7 +228,7 @@ func TestScheduler_Tick_ExactlyOnceAcrossRepeatedTicks(t *testing.T) {
 	// whose window covers the same trigger again, backed by the same ledger.
 	dispatcher2 := &fakeDispatcher{}
 	c2 := &clock{t: at(2026, 1, 1, 8, 40)}
-	scheduler2 := NewScheduler(fakeEventLister{events: []repository.EventWithOwner{withOwner(event)}}, ledger, dispatcher2, c2.now)
+	scheduler2 := NewScheduler(listing(event, reminders), ledger, dispatcher2, c2.now)
 	c2.set(at(2026, 1, 1, 8, 55))
 	if err := scheduler2.Tick(context.Background()); err != nil {
 		t.Fatalf("second tick: %v", err)
@@ -249,21 +252,19 @@ func TestScheduler_Restart_NeverCatchesUpAMissedTrigger(t *testing.T) {
 		ID:    "evt-1",
 		Start: at(2026, 1, 1, 9, 0), // trigger at 08:50 (10 minutes before)
 		End:   at(2026, 1, 1, 9, 30),
-		Reminders: []repository.Reminder{
-			{ID: reminderID, OffsetMinutes: 10, Channel: "notification"},
-		},
 	}
+	reminders := ownerOf(repository.Reminder{ID: reminderID, OffsetMinutes: 10, Channel: "notification"})
 	dispatcher := &fakeDispatcher{}
 	// The old process's last tick was well before the trigger; it then went
 	// down and never ticked again.
 	c := &clock{t: at(2026, 1, 1, 6, 0)}
-	oldScheduler := NewScheduler(fakeEventLister{events: []repository.EventWithOwner{withOwner(event)}}, ledger, dispatcher, c.now)
+	oldScheduler := NewScheduler(listing(event, reminders), ledger, dispatcher, c.now)
 	_ = oldScheduler // downtime starts here; no further Tick call.
 
 	// The new process starts long after the trigger passed.
 	restartDispatcher := &fakeDispatcher{}
 	restartClock := &clock{t: at(2026, 1, 2, 0, 0)}
-	restarted := NewScheduler(fakeEventLister{events: []repository.EventWithOwner{withOwner(event)}}, ledger, restartDispatcher, restartClock.now)
+	restarted := NewScheduler(listing(event, reminders), ledger, restartDispatcher, restartClock.now)
 
 	restartClock.set(at(2026, 1, 2, 0, 1))
 	if err := restarted.Tick(context.Background()); err != nil {
@@ -280,21 +281,19 @@ func TestScheduler_Restart_NeverCatchesUpAMissedTrigger(t *testing.T) {
 // (ADR-0064).
 func TestScheduler_Tick_FiresEachUsersOwnReminderIndependently(t *testing.T) {
 	ledger, ownerReminderID, otherReminderID, ownerID, otherUserID := newTestLedgerWithSecondUser(t)
-	event := repository.EventWithOwner{
-		Event: repository.Event{
-			ID:    "evt-1",
-			Start: at(2026, 1, 1, 9, 0),
-			End:   at(2026, 1, 1, 9, 30),
-		},
-		RemindersByUser: map[int64][]repository.Reminder{
-			ownerID:     {{ID: ownerReminderID, OffsetMinutes: 10, Channel: "notification"}},
-			otherUserID: {{ID: otherReminderID, OffsetMinutes: 10, Channel: "notification"}},
-		},
+	event := repository.Event{
+		ID:    "evt-1",
+		Start: at(2026, 1, 1, 9, 0),
+		End:   at(2026, 1, 1, 9, 30),
+	}
+	byUser := map[int64][]repository.Reminder{
+		ownerID:     {{ID: ownerReminderID, OffsetMinutes: 10, Channel: "notification"}},
+		otherUserID: {{ID: otherReminderID, OffsetMinutes: 10, Channel: "notification"}},
 	}
 	dispatcher := &fakeDispatcher{}
 	c := &clock{t: at(2026, 1, 1, 8, 40)}
 	scheduler := NewScheduler(
-		fakeEventLister{events: []repository.EventWithOwner{event}},
+		listing(event, byUser),
 		ledger, dispatcher, c.now,
 	)
 
@@ -325,21 +324,19 @@ func TestScheduler_Tick_ExactlyOncePerUser_OneUsersReminderAlreadyFiredDoesNotSu
 		t.Fatalf("pre-mark owner fired: %v", err)
 	}
 
-	event := repository.EventWithOwner{
-		Event: repository.Event{
-			ID:    "evt-1",
-			Start: occurrenceStart,
-			End:   at(2026, 1, 1, 9, 30),
-		},
-		RemindersByUser: map[int64][]repository.Reminder{
-			ownerID:     {{ID: ownerReminderID, OffsetMinutes: 10, Channel: "notification"}},
-			otherUserID: {{ID: otherReminderID, OffsetMinutes: 10, Channel: "notification"}},
-		},
+	event := repository.Event{
+		ID:    "evt-1",
+		Start: occurrenceStart,
+		End:   at(2026, 1, 1, 9, 30),
+	}
+	byUser := map[int64][]repository.Reminder{
+		ownerID:     {{ID: ownerReminderID, OffsetMinutes: 10, Channel: "notification"}},
+		otherUserID: {{ID: otherReminderID, OffsetMinutes: 10, Channel: "notification"}},
 	}
 	dispatcher := &fakeDispatcher{}
 	c := &clock{t: at(2026, 1, 1, 8, 40)}
 	scheduler := NewScheduler(
-		fakeEventLister{events: []repository.EventWithOwner{event}},
+		listing(event, byUser),
 		ledger, dispatcher, c.now,
 	)
 

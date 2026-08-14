@@ -28,6 +28,24 @@ type Reminder struct {
 	DefaultReminderID int64
 }
 
+// ResolvedReminders is one resolution's answer (ADR-0064): for each Event,
+// every User with at least one Reminder on it — their own rows, or their
+// Calendar's Default resolved onto it — keyed by event id then user id. A
+// (Event, User) pair that resolves to nothing is absent rather than empty.
+//
+// The single representation of a resolved set, replacing EventWithOwner: the
+// Reminders a User has on an Event live here or on Event.Reminders (one
+// viewer's, the projection below), never on one value as both. No repository
+// method returns it — the rows the three resolution reads return are not yet
+// resolved; only EventService's resolution module composes one.
+type ResolvedReminders map[string]map[int64][]Reminder
+
+// For projects userID's own resolved Reminders on eventID out of a resolution
+// — the single-viewer read, not a second query.
+func (r ResolvedReminders) For(eventID string, userID int64) []Reminder {
+	return r[eventID][userID]
+}
+
 // EventReminderRepository stores Reminders (ADR-0020) — many per (User,
 // Event), unconstrained, replaced wholesale on Event update.
 type EventReminderRepository struct {
@@ -35,14 +53,6 @@ type EventReminderRepository struct {
 }
 
 func NewEventReminderRepository(db *sql.DB) *EventReminderRepository {
-	return &EventReminderRepository{db: db}
-}
-
-// bindEventReminderRepository shares an already-open DBTX with a new
-// EventReminderRepository — for a same-package caller that already holds
-// one (EventRepository.ListAllWithReminders' join, ADR-0064) rather than a
-// caller with its own *sql.DB to construct one from scratch.
-func bindEventReminderRepository(db DBTX) *EventReminderRepository {
 	return &EventReminderRepository{db: db}
 }
 
@@ -106,25 +116,28 @@ func (r *EventReminderRepository) DeleteByUserAndCalendar(ctx context.Context, u
 	return nil
 }
 
-// ListAllByEventIDs returns every User's Reminders on eventIDs, keyed first
-// by event id and then by the User whose rows they are, unscoped to any one
-// User — the firing engine's batched read path (ADR-0021, ADR-0064), since
-// every recipient's own rows must be found and fired independently.
-func (r *EventReminderRepository) ListAllByEventIDs(ctx context.Context, eventIDs []string) (map[string]map[int64][]Reminder, error) {
+// ListByEventIDs returns the Reminders on eventIDs belonging to userIDs, keyed
+// by event id and then by the User whose rows they are — the shape resolution
+// answers in (ADR-0064), whether it answers for one viewer or for every User
+// the firing engine must fire independently (ADR-0021). A nil userIDs asks for
+// every User; a (Event, User) pair with no rows is simply absent.
+func (r *EventReminderRepository) ListByEventIDs(ctx context.Context, eventIDs []string, userIDs []int64) (map[string]map[int64][]Reminder, error) {
 	result := make(map[string]map[int64][]Reminder)
 	if len(eventIDs) == 0 {
 		return result, nil
 	}
 
-	query := `SELECT id, event_id, user_id, offset_minutes, channel FROM event_reminders WHERE event_id IN (` + placeholders(len(eventIDs)) + `)`
-	args := make([]any, len(eventIDs))
-	for i, id := range eventIDs {
-		args[i] = id
+	users, userArgs := userFilter(userIDs)
+	query := `SELECT id, event_id, user_id, offset_minutes, channel FROM event_reminders WHERE event_id IN (` + placeholders(len(eventIDs)) + `)` + users
+	args := make([]any, 0, len(eventIDs)+len(userArgs))
+	for _, id := range eventIDs {
+		args = append(args, id)
 	}
+	args = append(args, userArgs...)
 
 	rows, err := r.db.QueryContext(ctx, query, args...)
 	if err != nil {
-		return nil, fmt.Errorf("list all reminders: %w", err)
+		return nil, fmt.Errorf("list reminders: %w", err)
 	}
 	defer rows.Close()
 
@@ -139,43 +152,6 @@ func (r *EventReminderRepository) ListAllByEventIDs(ctx context.Context, eventID
 			result[eventID] = make(map[int64][]Reminder)
 		}
 		result[eventID][userID] = append(result[eventID][userID], reminder)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate reminders: %w", err)
-	}
-
-	return result, nil
-}
-
-// ListByEventIDs returns each event's Reminders belonging to userID, keyed
-// by event_id (ADR-0064). Events with no Reminders for userID are simply
-// absent from the map.
-func (r *EventReminderRepository) ListByEventIDs(ctx context.Context, userID int64, eventIDs []string) (map[string][]Reminder, error) {
-	result := make(map[string][]Reminder)
-	if len(eventIDs) == 0 {
-		return result, nil
-	}
-
-	query := `SELECT id, event_id, offset_minutes, channel FROM event_reminders WHERE user_id = ? AND event_id IN (` + placeholders(len(eventIDs)) + `)`
-	args := make([]any, 0, len(eventIDs)+1)
-	args = append(args, userID)
-	for _, id := range eventIDs {
-		args = append(args, id)
-	}
-
-	rows, err := r.db.QueryContext(ctx, query, args...)
-	if err != nil {
-		return nil, fmt.Errorf("list reminders: %w", err)
-	}
-	defer rows.Close()
-
-	for rows.Next() {
-		var eventID string
-		var reminder Reminder
-		if err := rows.Scan(&reminder.ID, &eventID, &reminder.OffsetMinutes, &reminder.Channel); err != nil {
-			return nil, fmt.Errorf("scan reminder: %w", err)
-		}
-		result[eventID] = append(result[eventID], reminder)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate reminders: %w", err)

@@ -68,11 +68,11 @@ func TestEventReminderExplicitRepository_MarkIsIdempotent(t *testing.T) {
 		t.Fatalf("mark again: %v", err)
 	}
 
-	markers, err := explicit.ListByEventIDsForUser(ctx, userID, []string{eventID})
+	markers, err := explicit.ListByEventIDs(ctx, []string{eventID}, []int64{userID})
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
-	if !markers[eventID] {
+	if !markers[eventID][userID] {
 		t.Fatalf("expected eventID marked explicit for userID")
 	}
 }
@@ -85,16 +85,16 @@ func TestEventReminderExplicitRepository_ScopedPerUser(t *testing.T) {
 		t.Fatalf("mark: %v", err)
 	}
 
-	markers, err := explicit.ListByEventIDsForUser(ctx, otherUserID, []string{eventID})
+	markers, err := explicit.ListByEventIDs(ctx, []string{eventID}, []int64{otherUserID})
 	if err != nil {
 		t.Fatalf("list for otherUserID: %v", err)
 	}
-	if markers[eventID] {
+	if markers[eventID][otherUserID] {
 		t.Fatalf("otherUserID must not see userID's explicit marker")
 	}
 }
 
-func TestEventReminderExplicitRepository_ListByEventIDs_Unscoped(t *testing.T) {
+func TestEventReminderExplicitRepository_ListByEventIDs_EveryUser(t *testing.T) {
 	_, explicit, userID, otherUserID, eventID, _, _ := newTestEventReminderExplicitRepository(t)
 	ctx := context.Background()
 
@@ -105,7 +105,7 @@ func TestEventReminderExplicitRepository_ListByEventIDs_Unscoped(t *testing.T) {
 		t.Fatalf("mark otherUserID: %v", err)
 	}
 
-	markers, err := explicit.ListByEventIDs(ctx, []string{eventID})
+	markers, err := explicit.ListByEventIDs(ctx, []string{eventID}, nil)
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
@@ -129,7 +129,7 @@ func TestEventReminderExplicitRepository_CopyByEventID(t *testing.T) {
 		t.Fatalf("copy: %v", err)
 	}
 
-	markers, err := explicit.ListByEventIDs(ctx, []string{otherEventID})
+	markers, err := explicit.ListByEventIDs(ctx, []string{otherEventID}, nil)
 	if err != nil {
 		t.Fatalf("list copied markers: %v", err)
 	}
@@ -153,11 +153,11 @@ func TestEventReminderExplicitRepository_DeleteByUserAndCalendar(t *testing.T) {
 		t.Fatalf("delete: %v", err)
 	}
 
-	markers, err := explicit.ListByEventIDsForUser(ctx, userID, []string{eventID, otherEventID})
+	markers, err := explicit.ListByEventIDs(ctx, []string{eventID, otherEventID}, []int64{userID})
 	if err != nil {
 		t.Fatalf("list after delete: %v", err)
 	}
-	if markers[eventID] || markers[otherEventID] {
+	if markers[eventID][userID] || markers[otherEventID][userID] {
 		t.Fatalf("expected all markers cleared, got %+v", markers)
 	}
 }

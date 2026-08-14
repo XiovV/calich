@@ -9,11 +9,12 @@ import (
 // EventReminderExplicitRepository stores ADR-0064's one bit of resolution
 // state: a (event_id, user_id) row means that User's Reminder list on that
 // Event is explicit — even when currently empty — so their Calendar default
-// no longer applies to it. Written only by a Reminder save
-// (EventService.SetReminders) and by copying a Master's markers onto a new
-// Override or split Master (mirroring EventReminderRepository.CopyByEventID)
-// — never by an ordinary Event field write, which carries no Reminder
-// intent of its own.
+// no longer applies to it. Written by a Reminder save (EventService.SetReminders),
+// by a CalDAV PUT (EventService.PutSeries), whose VALARM set is the PUTting
+// principal's own Reminder save, and by copying a Master's markers onto a new
+// Override or split Master (mirroring EventReminderRepository.CopyByEventID).
+// Never by an Event field write that carries no Reminder intent of its own —
+// Create, Update and ICS import alike.
 type EventReminderExplicitRepository struct {
 	db DBTX
 }
@@ -40,56 +41,24 @@ func (r *EventReminderExplicitRepository) Mark(ctx context.Context, userID int64
 	return nil
 }
 
-// ListByEventIDsForUser returns, for the given eventIDs, whether userID has
-// explicitly saved a Reminder list on it (even an empty one) — the
-// single-User resolution path's "don't apply the default here" check.
-// Events absent an explicit marker are simply absent from the result.
-func (r *EventReminderExplicitRepository) ListByEventIDsForUser(ctx context.Context, userID int64, eventIDs []string) (map[string]bool, error) {
-	result := make(map[string]bool)
-	if len(eventIDs) == 0 {
-		return result, nil
-	}
-
-	query := `SELECT event_id FROM event_reminders_explicit WHERE user_id = ? AND event_id IN (` + placeholders(len(eventIDs)) + `)`
-	args := make([]any, 0, len(eventIDs)+1)
-	args = append(args, userID)
-	for _, id := range eventIDs {
-		args = append(args, id)
-	}
-
-	rows, err := r.db.QueryContext(ctx, query, args...)
-	if err != nil {
-		return nil, fmt.Errorf("list explicit reminder markers: %w", err)
-	}
-	defer rows.Close()
-
-	for rows.Next() {
-		var eventID string
-		if err := rows.Scan(&eventID); err != nil {
-			return nil, fmt.Errorf("scan explicit reminder marker: %w", err)
-		}
-		result[eventID] = true
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate explicit reminder markers: %w", err)
-	}
-	return result, nil
-}
-
-// ListByEventIDs returns, for the given eventIDs, every User who has
-// explicitly saved a Reminder list on it — the firing engine's batched,
-// unscoped counterpart to ListByEventIDsForUser.
-func (r *EventReminderExplicitRepository) ListByEventIDs(ctx context.Context, eventIDs []string) (map[string]map[int64]bool, error) {
+// ListByEventIDs returns, for the given eventIDs, which of userIDs have
+// explicitly saved a Reminder list on each (even an empty one) — resolution's
+// "don't apply the default here" check, answered for one viewer or for every
+// User over one query. A nil userIDs asks for every User; a (Event, User) pair
+// with no marker is simply absent.
+func (r *EventReminderExplicitRepository) ListByEventIDs(ctx context.Context, eventIDs []string, userIDs []int64) (map[string]map[int64]bool, error) {
 	result := make(map[string]map[int64]bool)
 	if len(eventIDs) == 0 {
 		return result, nil
 	}
 
-	query := `SELECT event_id, user_id FROM event_reminders_explicit WHERE event_id IN (` + placeholders(len(eventIDs)) + `)`
-	args := make([]any, len(eventIDs))
-	for i, id := range eventIDs {
-		args[i] = id
+	users, userArgs := userFilter(userIDs)
+	query := `SELECT event_id, user_id FROM event_reminders_explicit WHERE event_id IN (` + placeholders(len(eventIDs)) + `)` + users
+	args := make([]any, 0, len(eventIDs)+len(userArgs))
+	for _, id := range eventIDs {
+		args = append(args, id)
 	}
+	args = append(args, userArgs...)
 
 	rows, err := r.db.QueryContext(ctx, query, args...)
 	if err != nil {

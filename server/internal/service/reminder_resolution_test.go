@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"reflect"
 	"testing"
 	"time"
 
@@ -189,6 +190,123 @@ func TestCreate_ResolvesCreatorsOwnDefault(t *testing.T) {
 	}
 }
 
+// The one thing #216 buys: for a given (User, Event), what the grid shows and
+// what the scheduler fires on come from one resolution, so they cannot drift.
+// Each case exercises one arm of ADR-0064's rule.
+func TestResolution_ViewerReadAndFiringReadAgree(t *testing.T) {
+	timed := []repository.Reminder{{OffsetMinutes: 10, Channel: "notification"}}
+	allDay := []repository.Reminder{{OffsetMinutes: 540, Channel: "notification"}}
+
+	cases := []struct {
+		name string
+		// event's kind decides which of the two Default lists can resolve
+		// onto it — they are separately useless to each other (ADR-0064).
+		eventIsAllDay bool
+		set           func(t *testing.T, svc *EventService, memberID int64, calendarID, eventID string)
+		wantOffset    int
+		wantIsDefault bool
+		wantNone      bool
+	}{
+		{
+			name: "their own rows",
+			set: func(t *testing.T, svc *EventService, memberID int64, calendarID, eventID string) {
+				setDefaults(t, svc, memberID, calendarID, timed, nil)
+				if _, err := svc.SetReminders(context.Background(), memberID, eventID, []repository.Reminder{{OffsetMinutes: 5, Channel: "email"}}); err != nil {
+					t.Fatalf("set own reminders: %v", err)
+				}
+			},
+			wantOffset: 5,
+		},
+		{
+			name: "their explicit-empty marker",
+			set: func(t *testing.T, svc *EventService, memberID int64, calendarID, eventID string) {
+				setDefaults(t, svc, memberID, calendarID, timed, nil)
+				if _, err := svc.SetReminders(context.Background(), memberID, eventID, nil); err != nil {
+					t.Fatalf("opt out: %v", err)
+				}
+			},
+			wantNone: true,
+		},
+		{
+			name: "their Calendar's timed default",
+			set: func(t *testing.T, svc *EventService, memberID int64, calendarID, eventID string) {
+				setDefaults(t, svc, memberID, calendarID, timed, allDay)
+			},
+			wantOffset:    10,
+			wantIsDefault: true,
+		},
+		{
+			name:          "their Calendar's all-day default",
+			eventIsAllDay: true,
+			set: func(t *testing.T, svc *EventService, memberID int64, calendarID, eventID string) {
+				setDefaults(t, svc, memberID, calendarID, timed, allDay)
+			},
+			wantOffset:    540,
+			wantIsDefault: true,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			svc, ownerID, memberID, calendarID := newTestReminderResolutionFixture(t)
+			ctx := context.Background()
+
+			write := EventWrite{CalendarID: calendarID, Title: "Bin day", Start: time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC), End: time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC)}
+			if tc.eventIsAllDay {
+				day := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+				write.Start, write.End, write.AllDay = day, day.AddDate(0, 0, 1), true
+			}
+			event, err := svc.Create(ctx, ownerID, "evt-1", write)
+			if err != nil {
+				t.Fatalf("create event: %v", err)
+			}
+			tc.set(t, svc, memberID, calendarID, event.ID)
+
+			viewer, err := svc.GetReminders(ctx, memberID, event.ID)
+			if err != nil {
+				t.Fatalf("get reminders: %v", err)
+			}
+			_, resolved, err := svc.ListAllWithReminders(ctx)
+			if err != nil {
+				t.Fatalf("list all with reminders: %v", err)
+			}
+			firing := resolved.For(event.ID, memberID)
+
+			if !reflect.DeepEqual(viewer, firing) {
+				t.Fatalf("the viewer read and the firing read disagree: viewer=%+v firing=%+v", viewer, firing)
+			}
+
+			// ...and they agree on the right answer, not vacuously on nothing.
+			if tc.wantNone {
+				if len(viewer) != 0 {
+					t.Fatalf("expected no Reminders to resolve, got %+v", viewer)
+				}
+				return
+			}
+			if len(viewer) != 1 || viewer[0].OffsetMinutes != tc.wantOffset {
+				t.Fatalf("expected one Reminder at offset %d, got %+v", tc.wantOffset, viewer)
+			}
+			if isDefault := viewer[0].DefaultReminderID != 0; isDefault != tc.wantIsDefault {
+				t.Fatalf("expected DefaultReminderID set=%v, got %+v", tc.wantIsDefault, viewer[0])
+			}
+		})
+	}
+}
+
+// setDefaults writes memberID's two Default reminder lists on calendarID —
+// either may be nil, meaning "no default of that kind".
+func setDefaults(t *testing.T, svc *EventService, memberID int64, calendarID string, timed, allDay []repository.Reminder) {
+	t.Helper()
+
+	ctx := context.Background()
+	if _, err := svc.calendars.SetDefaultReminders(ctx, memberID, calendarID, false, timed); err != nil {
+		t.Fatalf("set timed default: %v", err)
+	}
+	if _, err := svc.calendars.SetDefaultReminders(ctx, memberID, calendarID, true, allDay); err != nil {
+		t.Fatalf("set all-day default: %v", err)
+	}
+}
+
 func TestListAllWithReminders_ResolvesDefaultsForFiring(t *testing.T) {
 	svc, ownerID, memberID, calendarID := newTestReminderResolutionFixture(t)
 	ctx := context.Background()
@@ -203,27 +321,32 @@ func TestListAllWithReminders_ResolvesDefaultsForFiring(t *testing.T) {
 		t.Fatalf("create event: %v", err)
 	}
 
-	events, err := svc.ListAllWithReminders(ctx)
+	events, resolved, err := svc.ListAllWithReminders(ctx)
 	if err != nil {
 		t.Fatalf("list all with reminders: %v", err)
 	}
 
-	var found *repository.EventWithOwner
-	for i := range events {
-		if events[i].ID == event.ID {
-			found = &events[i]
-		}
-	}
-	if found == nil {
+	if !containsEventID(events, event.ID) {
 		t.Fatalf("expected event %s to carry a resolved default, events=%+v", event.ID, events)
 	}
-	memberReminders := found.RemindersByUser[memberID]
+	memberReminders := resolved.For(event.ID, memberID)
 	if len(memberReminders) != 1 || memberReminders[0].OffsetMinutes != 10 || memberReminders[0].DefaultReminderID == 0 {
 		t.Fatalf("expected member's resolved default, got %+v", memberReminders)
 	}
-	if len(found.RemindersByUser[ownerID]) != 0 {
-		t.Fatalf("owner set no default and no explicit rows, expected none, got %+v", found.RemindersByUser[ownerID])
+	if len(resolved.For(event.ID, ownerID)) != 0 {
+		t.Fatalf("owner set no default and no explicit rows, expected none, got %+v", resolved.For(event.ID, ownerID))
 	}
+}
+
+// containsEventID reports whether the firing read returned eventID at all — an
+// Event resolving nothing for anybody is dropped before it reaches the engine.
+func containsEventID(events []repository.Event, eventID string) bool {
+	for _, e := range events {
+		if e.ID == eventID {
+			return true
+		}
+	}
+	return false
 }
 
 func TestListAllWithReminders_ExplicitEmptyOptsOutOfFiring(t *testing.T) {
@@ -243,16 +366,12 @@ func TestListAllWithReminders_ExplicitEmptyOptsOutOfFiring(t *testing.T) {
 		t.Fatalf("opt out: %v", err)
 	}
 
-	events, err := svc.ListAllWithReminders(ctx)
+	_, resolved, err := svc.ListAllWithReminders(ctx)
 	if err != nil {
 		t.Fatalf("list all with reminders: %v", err)
 	}
-	for i := range events {
-		if events[i].ID == event.ID {
-			if len(events[i].RemindersByUser[memberID]) != 0 {
-				t.Fatalf("expected member's explicit opt-out to suppress firing, got %+v", events[i].RemindersByUser[memberID])
-			}
-		}
+	if len(resolved.For(event.ID, memberID)) != 0 {
+		t.Fatalf("expected member's explicit opt-out to suppress firing, got %+v", resolved.For(event.ID, memberID))
 	}
 }
 

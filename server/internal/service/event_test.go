@@ -1095,12 +1095,12 @@ func TestEventService_Delete_CascadesReminders(t *testing.T) {
 		t.Fatalf("delete: %v", err)
 	}
 
-	byEvent, err := svc.reminders.ListByEventIDs(ctx, userID, []string{"evt-1"})
+	byEvent, err := svc.reminders.ListByEventIDs(ctx, []string{"evt-1"}, []int64{userID})
 	if err != nil {
 		t.Fatalf("list by event ids: %v", err)
 	}
-	if len(byEvent["evt-1"]) != 0 {
-		t.Fatalf("expected reminders to be cascade-deleted with their event, got %+v", byEvent["evt-1"])
+	if len(byEvent["evt-1"][userID]) != 0 {
+		t.Fatalf("expected reminders to be cascade-deleted with their event, got %+v", byEvent["evt-1"][userID])
 	}
 }
 

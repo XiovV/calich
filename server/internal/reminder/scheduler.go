@@ -9,11 +9,12 @@ import (
 	"github.com/XiovV/calendar/server/internal/repository"
 )
 
-// EventLister is the scheduler's read path: every Event across every user
-// that carries at least one Reminder (ADR-0021). Satisfied by
-// *service.EventService.
+// EventLister is the scheduler's read path: every Event across every user that
+// fires at least one Reminder, and the resolution naming who fires each of them
+// (ADR-0021, ADR-0064). Satisfied by *service.EventService, whose resolution is
+// the same one every other read path goes through (#216).
 type EventLister interface {
-	ListAllWithReminders(ctx context.Context) ([]repository.EventWithOwner, error)
+	ListAllWithReminders(ctx context.Context) ([]repository.Event, repository.ResolvedReminders, error)
 }
 
 // Ledger is the scheduler's exactly-once seam. Satisfied by
@@ -70,12 +71,12 @@ func NewScheduler(events EventLister, ledger Ledger, dispatcher Dispatcher, now 
 func (s *Scheduler) Tick(ctx context.Context) error {
 	from, to := s.lastTick, s.now()
 
-	events, err := s.events.ListAllWithReminders(ctx)
+	events, resolved, err := s.events.ListAllWithReminders(ctx)
 	if err != nil {
 		return fmt.Errorf("list events with reminders: %w", err)
 	}
 
-	due, err := DueAll(events, from, to)
+	due, err := DueAll(events, resolved, from, to)
 	if err != nil {
 		return fmt.Errorf("compute due reminders: %w", err)
 	}

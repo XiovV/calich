@@ -204,17 +204,22 @@ type EventService struct {
 	// all-day default lists per Calendar, explicitReminders records that a
 	// User's Reminder list on one Event is explicit (even if empty), so
 	// resolution knows when to stop at "nothing" instead of falling back to
-	// the default (resolveReminders, ListAllWithReminders).
+	// the default. Held here for the write paths; every *read* of a Reminder
+	// goes through reminderResolution instead.
 	calendarDefaults  *repository.CalendarDefaultReminderRepository
 	explicitReminders *repository.EventReminderExplicitRepository
-	sync              *repository.SyncRepository
-	calendars         *CalendarService
-	users             *repository.UserRepository
-	attachments       *repository.AttachmentRepository
-	attendees         *repository.AttendeeRepository
-	workspaces        *repository.WorkspaceRepository
-	groups            *repository.GroupRepository
-	notifications     *repository.NotificationRepository
+	// reminderResolution is the one place ADR-0064's resolution rule is
+	// stated (#216) — the viewer read and the firing engine's every-User read
+	// are one call each into it.
+	reminderResolution *reminderResolver
+	sync               *repository.SyncRepository
+	calendars          *CalendarService
+	users              *repository.UserRepository
+	attachments        *repository.AttachmentRepository
+	attendees          *repository.AttendeeRepository
+	workspaces         *repository.WorkspaceRepository
+	groups             *repository.GroupRepository
+	notifications      *repository.NotificationRepository
 	// outbox queues an Invitation alongside every Attendee row a User is
 	// named on (ADR-0059, ADR-0060) — nil when this deployment has no SMTP
 	// transport configured, in which case inviteUser and expandGroupMembers
@@ -230,7 +235,7 @@ type EventService struct {
 }
 
 func NewEventService(db *sql.DB, events *repository.EventRepository, exceptions *repository.EventExceptionRepository, reminders *repository.EventReminderRepository, calendarDefaults *repository.CalendarDefaultReminderRepository, explicitReminders *repository.EventReminderExplicitRepository, sync *repository.SyncRepository, calendars *CalendarService, users *repository.UserRepository, attachments *repository.AttachmentRepository, attendees *repository.AttendeeRepository, workspaces *repository.WorkspaceRepository, groups *repository.GroupRepository, notifications *repository.NotificationRepository, outbox *repository.OutboxRepository, inviteRateLimitPerHour int) *EventService {
-	return &EventService{db: db, events: events, exceptions: exceptions, reminders: reminders, calendarDefaults: calendarDefaults, explicitReminders: explicitReminders, sync: sync, calendars: calendars, users: users, attachments: attachments, attendees: attendees, workspaces: workspaces, groups: groups, notifications: notifications, outbox: outbox, inviteRateLimitPerHour: inviteRateLimitPerHour}
+	return &EventService{db: db, events: events, exceptions: exceptions, reminders: reminders, calendarDefaults: calendarDefaults, explicitReminders: explicitReminders, reminderResolution: &reminderResolver{reminders: reminders, explicit: explicitReminders, calendarDefaults: calendarDefaults}, sync: sync, calendars: calendars, users: users, attachments: attachments, attendees: attendees, workspaces: workspaces, groups: groups, notifications: notifications, outbox: outbox, inviteRateLimitPerHour: inviteRateLimitPerHour}
 }
 
 // calendarByID resolves calendarID via s.calendars.Get, translating
@@ -357,11 +362,11 @@ func (s *EventService) GetReminders(ctx context.Context, userID int64, eventID s
 		return nil, err
 	}
 
-	resolved, err := s.resolveReminders(ctx, []repository.Event{event}, userID)
+	resolved, err := s.reminderResolution.Resolve(ctx, []repository.Event{event}, []int64{userID})
 	if err != nil {
 		return nil, fmt.Errorf("get reminders: %w", err)
 	}
-	return resolved[eventID], nil
+	return resolved.For(eventID, userID), nil
 }
 
 // SetReminders replaces userID's own Reminders on eventID wholesale
@@ -814,97 +819,58 @@ func (s *EventService) attachCalendarMeta(ctx context.Context, rows []*repositor
 }
 
 // ListAllWithReminders returns every Event that fires at least one Reminder,
-// across every Calendar, each paired with every User's own Reminders on it —
-// resolved (ADR-0064): a User's explicit rows if they have any (or have
-// explicitly saved an empty list), otherwise their matching Calendar
-// default. The firing engine's read path (ADR-0021).
-func (s *EventService) ListAllWithReminders(ctx context.Context) ([]repository.EventWithOwner, error) {
-	explicit, err := s.events.ListAllWithReminders(ctx)
+// across every Calendar, alongside the resolution naming every User who fires
+// one on it (ADR-0064) — the firing engine's read path (ADR-0021). The same
+// resolution the web app, CalDAV and ICS export read through, answered for
+// everyUser instead of one viewer, so the two cannot drift (#216).
+func (s *EventService) ListAllWithReminders(ctx context.Context) ([]repository.Event, repository.ResolvedReminders, error) {
+	// candidates accumulates every Event that might fire a Reminder: those
+	// carrying a Reminder row of somebody's, plus every Event on a Calendar
+	// carrying at least one User's default, since any of those could resolve
+	// one even with zero event_reminders rows of its own.
+	candidates, err := s.events.ListAllWithAnyReminder(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("list events with reminders: %w", err)
-	}
-
-	// merged/order accumulate the union of every Event that might fire a
-	// Reminder: explicit's own set, plus (below) every Event on a Calendar
-	// carrying at least one User's default, since any of those could newly
-	// resolve one even with zero event_reminders rows of its own.
-	merged := make(map[string]repository.EventWithOwner, len(explicit))
-	order := make([]string, 0, len(explicit))
-	for _, e := range explicit {
-		merged[e.ID] = e
-		order = append(order, e.ID)
+		return nil, nil, fmt.Errorf("list events with reminders: %w", err)
 	}
 
 	calendarIDs, err := s.calendarDefaults.CalendarIDsWithAny(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("list calendars with default reminders: %w", err)
+		return nil, nil, fmt.Errorf("list calendars with default reminders: %w", err)
 	}
 	if len(calendarIDs) > 0 {
-		candidates, err := s.events.ListByCalendarIDs(ctx, calendarIDs, nil, nil)
+		onCalendarsWithDefaults, err := s.events.ListByCalendarIDs(ctx, calendarIDs, nil, nil)
 		if err != nil {
-			return nil, fmt.Errorf("list events for default reminders: %w", err)
+			return nil, nil, fmt.Errorf("list events for default reminders: %w", err)
 		}
-		for _, e := range candidates {
-			if _, ok := merged[e.ID]; ok {
-				continue
-			}
-			merged[e.ID] = repository.EventWithOwner{Event: e, RemindersByUser: map[int64][]repository.Reminder{}}
-			order = append(order, e.ID)
-		}
-
-		timedByCalendar, allDayByCalendar, err := s.calendarDefaults.ListAllByCalendarIDs(ctx, calendarIDs)
-		if err != nil {
-			return nil, fmt.Errorf("list default reminders: %w", err)
-		}
-		markers, err := s.explicitReminders.ListByEventIDs(ctx, order)
-		if err != nil {
-			return nil, fmt.Errorf("list explicit reminder markers: %w", err)
-		}
-
-		for _, id := range order {
-			e := merged[id]
-			byUser := timedByCalendar[e.CalendarID]
-			if e.AllDay {
-				byUser = allDayByCalendar[e.CalendarID]
-			}
-			for userID, defaults := range byUser {
-				if _, hasOwn := e.RemindersByUser[userID]; hasOwn {
-					continue
-				}
-				if markers[e.ID][userID] {
-					continue
-				}
-				resolved := make([]repository.Reminder, len(defaults))
-				for i, d := range defaults {
-					resolved[i] = repository.Reminder{DefaultReminderID: d.ID, OffsetMinutes: d.OffsetMinutes, Channel: d.Channel}
-				}
-				e.RemindersByUser[userID] = resolved
-			}
-			merged[id] = e
-		}
+		candidates = mergeEventsByID(candidates, onCalendarsWithDefaults)
 	}
 
-	events := make([]repository.EventWithOwner, 0, len(order))
-	for _, id := range order {
-		if e := merged[id]; len(e.RemindersByUser) > 0 {
+	resolved, err := s.reminderResolution.Resolve(ctx, candidates, everyUser)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	events := make([]repository.Event, 0, len(candidates))
+	for _, e := range candidates {
+		if len(resolved[e.ID]) > 0 {
 			events = append(events, e)
 		}
 	}
 
-	rows := make([]*repository.Event, len(events))
-	for i := range events {
-		rows[i] = &events[i].Event
+	// Exdates alone: the engine reads nothing else off these rows, and unlike
+	// every other read path they reach nobody, so they carry no viewer's
+	// fields and name no hydration recipe (#215).
+	if err := s.attachExdates(ctx, eventPointers(events)); err != nil {
+		return nil, nil, err
 	}
-	if err := s.hydrateEvents(ctx, rows, noViewer, firingEventFields); err != nil {
-		return nil, err
-	}
-	return events, nil
+	return events, resolved, nil
 }
 
-// mergeEventsByID appends b's Events not already present in a (by id) —
-// List's Calendar-Access and Attendee halves can overlap when a caller has
-// both to the same Event (ADR-0046), and the merged result must carry each
-// Event exactly once.
+// mergeEventsByID appends b's Events not already present in a (by id), for the
+// two reads assembled from halves that can overlap: List's Calendar-Access and
+// Attendee sets, when a caller has both to the same Event (ADR-0046), and
+// ListAllWithReminders' Reminder-row and Calendar-default candidates. Either
+// way the merged result must carry each Event exactly once.
 func mergeEventsByID(a, b []repository.Event) []repository.Event {
 	seen := make(map[string]bool, len(a))
 	for _, e := range a {
@@ -953,12 +919,16 @@ func rowIDs(rows []*repository.Event) []string {
 }
 
 // eventFields is a hydration recipe: which of an Event's derived fields
-// hydrateEvents fills in. Every read path names one of the recipes below
-// rather than assembling its own sequence, so "which fields does an Event
-// carry here" has one answer per recipe instead of one per call site (#215).
-// Two of them serve the paths that hand an Event to somebody —
-// restEventFields the Event API, seriesEventFields the iCalendar codec — and
-// between them that is every Event anyone ever sees.
+// hydrateEvents fills in. Every read path that hands an Event to somebody names
+// one of the two recipes below rather than assembling its own sequence, so
+// "which fields does an Event carry here" has one answer per recipe instead of
+// one per call site (#215) — restEventFields the Event API, seriesEventFields
+// the iCalendar codec, and between them that is every Event anyone ever sees.
+//
+// ListAllWithReminders is the one read that names neither, and it is the
+// exception the rule is drawn around: its rows reach nobody, so it fills in the
+// single field the firing engine reads off them (Exdates) directly rather than
+// naming a recipe that would have to say "and none of the rest" (#216).
 type eventFields struct {
 	calendarMeta           bool
 	exdates                bool
@@ -1005,18 +975,6 @@ var seriesEventFields = eventFields{
 	attachments:            true,
 	organizersAndAttendees: true,
 }
-
-// firingEventFields is what the Reminder firing engine's own read
-// (ListAllWithReminders) needs, and is deliberately not one of the two Event
-// recipes: those rows never reach anybody, and the engine reads nothing off
-// them but the Exdates telling it which Occurrences don't exist. Its
-// Reminders are already resolved per User, so hydrating one viewer's over
-// them would be wrong here, not merely wasteful (ADR-0021, ADR-0064).
-var firingEventFields = eventFields{exdates: true}
-
-// noViewer is the viewerID a recipe asking for no viewer-scoped field passes,
-// since there is no one asking — firingEventFields' case.
-const noViewer int64 = 0
 
 // hydrateEvents fills in the fields the recipe names on rows, as viewerID
 // sees them — the one place an Event acquires any derived field, so a path that
@@ -1132,98 +1090,24 @@ func (s *EventService) attachAttendeeCounts(ctx context.Context, rows []*reposit
 }
 
 // attachResolvedViewerReminders fills in Reminders on rows with viewerID's
-// resolved Reminders (ADR-0064) — their own explicit rows if any exist or
-// they've explicitly saved an empty list, otherwise their matching
-// (timed/all-day) Calendar default. Both recipes' Reminder step, so a
-// Reminder that exists only by Calendar-default resolution appears as a
-// VALARM exactly like an explicit one (#213): CalDAV/ICS export do not stay
-// scoped to explicit rows alone.
+// resolved Reminders — one call into the resolution module (ADR-0064, #216),
+// projected to the one User asking. Both recipes' Reminder step, so a Reminder
+// that exists only by Calendar-default resolution appears as a VALARM exactly
+// like an explicit one (#213): CalDAV/ICS export do not stay scoped to explicit
+// rows alone.
 func (s *EventService) attachResolvedViewerReminders(ctx context.Context, rows []*repository.Event, viewerID int64) error {
 	values := make([]repository.Event, len(rows))
 	for i, e := range rows {
 		values[i] = *e
 	}
-	resolved, err := s.resolveReminders(ctx, values, viewerID)
+	resolved, err := s.reminderResolution.Resolve(ctx, values, []int64{viewerID})
 	if err != nil {
 		return err
 	}
 	for _, e := range rows {
-		e.Reminders = resolved[e.ID]
+		e.Reminders = resolved.For(e.ID, viewerID)
 	}
 	return nil
-}
-
-// resolveReminders returns viewerID's own Reminders on each of events,
-// resolved (ADR-0064): their explicit rows if any exist or they've
-// explicitly saved an empty list for that Event (event_reminders_explicit),
-// otherwise their matching Calendar default — timed or all-day, per each
-// Event's own AllDay flag — resolved fresh on every read rather than copied
-// onto the Event. Absent from the result when neither applies. Every read
-// path, CalDAV/ICS export included, resolves through this (#213).
-func (s *EventService) resolveReminders(ctx context.Context, events []repository.Event, viewerID int64) (map[string][]repository.Reminder, error) {
-	ids := eventIDs(events)
-
-	explicit, err := s.reminders.ListByEventIDs(ctx, viewerID, ids)
-	if err != nil {
-		return nil, fmt.Errorf("list reminders: %w", err)
-	}
-
-	var needsDefault []repository.Event
-	for _, e := range events {
-		if len(explicit[e.ID]) == 0 {
-			needsDefault = append(needsDefault, e)
-		}
-	}
-	if len(needsDefault) == 0 {
-		return explicit, nil
-	}
-
-	calendarIDs := uniqueCalendarIDs(needsDefault)
-	timedByCalendar, allDayByCalendar, err := s.calendarDefaults.ListByCalendarIDsForUser(ctx, viewerID, calendarIDs)
-	if err != nil {
-		return nil, fmt.Errorf("list calendar default reminders: %w", err)
-	}
-
-	markers, err := s.explicitReminders.ListByEventIDsForUser(ctx, viewerID, eventIDs(needsDefault))
-	if err != nil {
-		return nil, fmt.Errorf("list explicit reminder markers: %w", err)
-	}
-
-	for _, e := range needsDefault {
-		if markers[e.ID] {
-			continue
-		}
-		defaults := timedByCalendar[e.CalendarID]
-		if e.AllDay {
-			defaults = allDayByCalendar[e.CalendarID]
-		}
-		if len(defaults) == 0 {
-			continue
-		}
-		resolved := make([]repository.Reminder, len(defaults))
-		for i, d := range defaults {
-			resolved[i] = repository.Reminder{DefaultReminderID: d.ID, OffsetMinutes: d.OffsetMinutes, Channel: d.Channel}
-		}
-		explicit[e.ID] = resolved
-	}
-
-	return explicit, nil
-}
-
-// uniqueCalendarIDs returns the distinct Calendar ids events span, in first-
-// seen order — resolveReminders' batched default lookup needs each Calendar
-// once, regardless of how many Events on it are being resolved.
-func uniqueCalendarIDs(events []repository.Event) []string {
-	seen := make(map[string]bool, len(events))
-	ids := make([]string, 0, len(events))
-	for _, e := range events {
-		if seen[e.CalendarID] {
-			continue
-		}
-		seen[e.CalendarID] = true
-		ids = append(ids, e.CalendarID)
-	}
-	return ids
 }
 
 // attachAttachments fills in Attachments on each Master in rows (an

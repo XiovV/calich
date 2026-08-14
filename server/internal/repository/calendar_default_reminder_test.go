@@ -98,7 +98,9 @@ func TestCalendarDefaultReminderRepository_ScopedPerUser(t *testing.T) {
 	}
 }
 
-func TestCalendarDefaultReminderRepository_ListAllByCalendarIDs(t *testing.T) {
+// A nil userIDs asks for every User's defaults — the firing engine's audience
+// (ADR-0021, ADR-0064).
+func TestCalendarDefaultReminderRepository_ListByCalendarIDs_EveryUser(t *testing.T) {
 	repo, userID, otherUserID, calendarID := newTestCalendarDefaultReminderRepository(t)
 	ctx := context.Background()
 
@@ -109,9 +111,9 @@ func TestCalendarDefaultReminderRepository_ListAllByCalendarIDs(t *testing.T) {
 		t.Fatalf("replace all-day for otherUserID: %v", err)
 	}
 
-	timedByCalendarUser, allDayByCalendarUser, err := repo.ListAllByCalendarIDs(ctx, []string{calendarID})
+	timedByCalendarUser, allDayByCalendarUser, err := repo.ListByCalendarIDs(ctx, []string{calendarID}, nil)
 	if err != nil {
-		t.Fatalf("list all: %v", err)
+		t.Fatalf("list by calendar ids: %v", err)
 	}
 	if len(timedByCalendarUser[calendarID][userID]) != 1 {
 		t.Fatalf("expected userID's timed default, got %+v", timedByCalendarUser)

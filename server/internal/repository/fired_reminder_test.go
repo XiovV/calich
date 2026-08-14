@@ -57,10 +57,7 @@ func newTestFiredReminderRepositoryWithUsers(t *testing.T) (ledger *FiredReminde
 	if err := remindersRepo.ReplaceByEventID(ctx, user.ID, "evt-1", []Reminder{{OffsetMinutes: 10, Channel: "notification"}}); err != nil {
 		t.Fatalf("replace by event id: %v", err)
 	}
-	byEvent, err := remindersRepo.ListByEventIDs(ctx, user.ID, []string{"evt-1"})
-	if err != nil {
-		t.Fatalf("list by event ids: %v", err)
-	}
+	byEvent := remindersOf(t, remindersRepo, user.ID, "evt-1")
 	if len(byEvent["evt-1"]) != 1 {
 		t.Fatalf("expected 1 reminder, got %+v", byEvent["evt-1"])
 	}
@@ -143,10 +140,7 @@ func TestFiredReminderRepository_MarkFired_DifferentUsersOwnReminderIsIndependen
 	if err := remindersRepo.ReplaceByEventID(ctx, otherUser.ID, eventID, []Reminder{{OffsetMinutes: 10, Channel: "notification"}}); err != nil {
 		t.Fatalf("replace by event id (other user): %v", err)
 	}
-	otherByEvent, err := remindersRepo.ListByEventIDs(ctx, otherUser.ID, []string{eventID})
-	if err != nil {
-		t.Fatalf("list by event ids (other user): %v", err)
-	}
+	otherByEvent := remindersOf(t, remindersRepo, otherUser.ID, eventID)
 	otherReminderID := otherByEvent[eventID][0].ID
 
 	isNew, err := ledger.MarkFired(ctx, otherReminderID, otherUser.ID, occurrenceStart, time.Now().UTC())

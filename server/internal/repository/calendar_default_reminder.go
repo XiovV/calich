@@ -52,80 +52,40 @@ func (r *CalendarDefaultReminderRepository) ReplaceByCalendarID(ctx context.Cont
 
 // ListByCalendarID returns userID's own default Reminders on calendarID,
 // split into the timed and all-day lists — the Calendar edit modal's read
-// path. A thin single-Calendar wrapper over ListByCalendarIDsForUser, since
-// one Calendar is just that method's batch of one.
+// path. A thin single-Calendar, single-User projection of ListByCalendarIDs,
+// since one Calendar is just that method's batch of one.
 func (r *CalendarDefaultReminderRepository) ListByCalendarID(ctx context.Context, userID int64, calendarID string) (timed, allDay []Reminder, err error) {
-	timedByCalendar, allDayByCalendar, err := r.ListByCalendarIDsForUser(ctx, userID, []string{calendarID})
+	timedByCalendar, allDayByCalendar, err := r.ListByCalendarIDs(ctx, []string{calendarID}, []int64{userID})
 	if err != nil {
 		return nil, nil, err
 	}
-	return timedByCalendar[calendarID], allDayByCalendar[calendarID], nil
+	return timedByCalendar[calendarID][userID], allDayByCalendar[calendarID][userID], nil
 }
 
-// ListByCalendarIDsForUser returns userID's own default Reminders across
-// calendarIDs, keyed by calendar id and split into timed/all-day — the
-// single-User resolution path (EventService.resolveReminders) batches
-// across every Calendar an Event set spans.
-func (r *CalendarDefaultReminderRepository) ListByCalendarIDsForUser(ctx context.Context, userID int64, calendarIDs []string) (timedByCalendar, allDayByCalendar map[string][]Reminder, err error) {
-	timedByCalendar = make(map[string][]Reminder)
-	allDayByCalendar = make(map[string][]Reminder)
-	if len(calendarIDs) == 0 {
-		return timedByCalendar, allDayByCalendar, nil
-	}
-
-	query := `SELECT id, calendar_id, all_day, offset_minutes, channel FROM calendar_default_reminders WHERE user_id = ? AND calendar_id IN (` + placeholders(len(calendarIDs)) + `) ORDER BY id`
-	args := make([]any, 0, len(calendarIDs)+1)
-	args = append(args, userID)
-	for _, id := range calendarIDs {
-		args = append(args, id)
-	}
-
-	rows, err := r.db.QueryContext(ctx, query, args...)
-	if err != nil {
-		return nil, nil, fmt.Errorf("list calendar default reminders: %w", err)
-	}
-	defer rows.Close()
-
-	for rows.Next() {
-		var calendarID string
-		var isAllDay bool
-		var reminder Reminder
-		if err := rows.Scan(&reminder.ID, &calendarID, &isAllDay, &reminder.OffsetMinutes, &reminder.Channel); err != nil {
-			return nil, nil, fmt.Errorf("scan calendar default reminder: %w", err)
-		}
-		if isAllDay {
-			allDayByCalendar[calendarID] = append(allDayByCalendar[calendarID], reminder)
-		} else {
-			timedByCalendar[calendarID] = append(timedByCalendar[calendarID], reminder)
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return nil, nil, fmt.Errorf("iterate calendar default reminders: %w", err)
-	}
-	return timedByCalendar, allDayByCalendar, nil
-}
-
-// ListAllByCalendarIDs returns every User's default Reminders across
-// calendarIDs, keyed first by calendar id and then by the User whose rows
-// they are, split into timed/all-day — the firing engine's batched read
-// path (ADR-0021, ADR-0064), unscoped to any one User since every User with
-// a default must be resolved independently.
-func (r *CalendarDefaultReminderRepository) ListAllByCalendarIDs(ctx context.Context, calendarIDs []string) (timedByCalendarUser, allDayByCalendarUser map[string]map[int64][]Reminder, err error) {
+// ListByCalendarIDs returns userIDs' default Reminders across calendarIDs,
+// keyed by calendar id and then by the User whose rows they are, split into
+// timed/all-day — the shape resolution answers in (ADR-0064), whether it
+// answers for one viewer or for every User the firing engine must resolve
+// independently (ADR-0021). A nil userIDs asks for every User; a (Calendar,
+// User) pair with no default on that list is simply absent.
+func (r *CalendarDefaultReminderRepository) ListByCalendarIDs(ctx context.Context, calendarIDs []string, userIDs []int64) (timedByCalendarUser, allDayByCalendarUser map[string]map[int64][]Reminder, err error) {
 	timedByCalendarUser = make(map[string]map[int64][]Reminder)
 	allDayByCalendarUser = make(map[string]map[int64][]Reminder)
 	if len(calendarIDs) == 0 {
 		return timedByCalendarUser, allDayByCalendarUser, nil
 	}
 
-	query := `SELECT id, calendar_id, user_id, all_day, offset_minutes, channel FROM calendar_default_reminders WHERE calendar_id IN (` + placeholders(len(calendarIDs)) + `)`
-	args := make([]any, len(calendarIDs))
-	for i, id := range calendarIDs {
-		args[i] = id
+	users, userArgs := userFilter(userIDs)
+	query := `SELECT id, calendar_id, user_id, all_day, offset_minutes, channel FROM calendar_default_reminders WHERE calendar_id IN (` + placeholders(len(calendarIDs)) + `)` + users + ` ORDER BY id`
+	args := make([]any, 0, len(calendarIDs)+len(userArgs))
+	for _, id := range calendarIDs {
+		args = append(args, id)
 	}
+	args = append(args, userArgs...)
 
 	rows, err := r.db.QueryContext(ctx, query, args...)
 	if err != nil {
-		return nil, nil, fmt.Errorf("list all calendar default reminders: %w", err)
+		return nil, nil, fmt.Errorf("list calendar default reminders: %w", err)
 	}
 	defer rows.Close()
 
@@ -147,7 +107,7 @@ func (r *CalendarDefaultReminderRepository) ListAllByCalendarIDs(ctx context.Con
 		byCalendarUser[calendarID][userID] = append(byCalendarUser[calendarID][userID], reminder)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, nil, fmt.Errorf("iterate all calendar default reminders: %w", err)
+		return nil, nil, fmt.Errorf("iterate calendar default reminders: %w", err)
 	}
 	return timedByCalendarUser, allDayByCalendarUser, nil
 }

@@ -630,10 +630,11 @@ func TestEventRepository_DeleteChildrenOf(t *testing.T) {
 	}
 }
 
-// ListAllWithReminders is the firing engine's read path (ADR-0021): it spans
-// every Calendar, unlike ListByCalendarIDs, only returns events that
-// actually carry a Reminder, and pairs each with its Calendar's Owner.
-func TestEventRepository_ListAllWithReminders(t *testing.T) {
+// ListAllWithAnyReminder is half the firing engine's candidate set (ADR-0021):
+// it spans every Calendar, unlike ListByCalendarIDs, and returns exactly the
+// Events carrying somebody's Reminder row — whose they are is resolution's
+// answer, not this scan's (ADR-0064).
+func TestEventRepository_ListAllWithAnyReminder(t *testing.T) {
 	sqlDB, err := db.OpenInMemory()
 	if err != nil {
 		t.Fatalf("open in-memory db: %v", err)
@@ -690,176 +691,17 @@ func TestEventRepository_ListAllWithReminders(t *testing.T) {
 		t.Fatalf("replace by event id: %v", err)
 	}
 
-	events, err := repo.ListAllWithReminders(ctx)
+	events, err := repo.ListAllWithAnyReminder(ctx)
 	if err != nil {
-		t.Fatalf("list all with reminders: %v", err)
+		t.Fatalf("list all with any reminder: %v", err)
 	}
 
-	remindersByID := make(map[string]map[int64][]Reminder, len(events))
 	ids := make([]string, len(events))
 	for i, e := range events {
 		ids[i] = e.ID
-		remindersByID[e.ID] = e.RemindersByUser
 	}
-	if len(ids) != 2 {
-		t.Fatalf("expected 2 events with reminders across both users, got %v", ids)
-	}
-	if _, ok := remindersByID["with-reminder"][userA.ID]; !ok {
-		t.Fatalf("expected with-reminder's Reminders to belong to user a, got %v", remindersByID["with-reminder"])
-	}
-	if _, ok := remindersByID["other-users-reminder"][userB.ID]; !ok {
-		t.Fatalf("expected other-users-reminder's Reminders to belong to user b, got %v", remindersByID["other-users-reminder"])
-	}
-}
-
-// RemindersByUser carries only the Users who actually set their own
-// Reminders on an Event — a User with Access (Editor or Viewer alike) but no
-// Reminders of their own never appears: no fan-out (ADR-0064).
-func TestEventRepository_ListAllWithReminders_RemindersByUserOnlyIncludesUsersWithTheirOwnReminders(t *testing.T) {
-	sqlDB, err := db.OpenInMemory()
-	if err != nil {
-		t.Fatalf("open in-memory db: %v", err)
-	}
-	t.Cleanup(func() { sqlDB.Close() })
-	ctx := context.Background()
-
-	users := NewUserRepository(sqlDB)
-	owner, err := users.Create(ctx, "owner", "owner@example.com", "hash", false)
-	if err != nil {
-		t.Fatalf("create owner: %v", err)
-	}
-	editor, err := users.Create(ctx, "editor", "editor@example.com", "hash", false)
-	if err != nil {
-		t.Fatalf("create editor: %v", err)
-	}
-	viewer, err := users.Create(ctx, "viewer", "viewer@example.com", "hash", false)
-	if err != nil {
-		t.Fatalf("create viewer: %v", err)
-	}
-
-	workspaces := NewWorkspaceRepository(sqlDB)
-	ownerWorkspace, err := workspaces.Create(ctx, "workspace-owner", owner.ID)
-	if err != nil {
-		t.Fatalf("create owner workspace: %v", err)
-	}
-	if err := workspaces.AddMember(ctx, ownerWorkspace.ID, owner.ID, WorkspaceRoleOwner); err != nil {
-		t.Fatalf("add owner workspace member: %v", err)
-	}
-
-	calendars := NewCalendarRepository(sqlDB)
-	shared, err := calendars.Create(ctx, owner.ID, ownerWorkspace.ID, "cal-shared", CalendarFields{Name: "Family", Color: "peacock"})
-	if err != nil {
-		t.Fatalf("create shared calendar: %v", err)
-	}
-
-	shares := NewCalendarShareRepository(sqlDB)
-	if _, err := shares.Upsert(ctx, shared.ID, editor.ID, RoleEditor); err != nil {
-		t.Fatalf("share with editor: %v", err)
-	}
-	if _, err := shares.Upsert(ctx, shared.ID, viewer.ID, RoleViewer); err != nil {
-		t.Fatalf("share with viewer: %v", err)
-	}
-
-	repo := NewEventRepository(sqlDB)
-	reminders := NewEventReminderRepository(sqlDB)
-	mustCreateEvent(t, repo, "shared-event", owner.ID, shared.ID, "2026-01-01T09:00:00Z", "2026-01-01T10:00:00Z")
-	// Only the owner and the editor set their own Reminders — the viewer has
-	// Access but none of their own, and must not appear at all.
-	if err := reminders.ReplaceByEventID(ctx, owner.ID, "shared-event", []Reminder{{OffsetMinutes: 10, Channel: "notification"}}); err != nil {
-		t.Fatalf("replace by event id: %v", err)
-	}
-	if err := reminders.ReplaceByEventID(ctx, editor.ID, "shared-event", []Reminder{{OffsetMinutes: 30, Channel: "email"}}); err != nil {
-		t.Fatalf("replace by event id: %v", err)
-	}
-
-	events, err := repo.ListAllWithReminders(ctx)
-	if err != nil {
-		t.Fatalf("list all with reminders: %v", err)
-	}
-	if len(events) != 1 {
-		t.Fatalf("expected 1 event, got %v", events)
-	}
-
-	byUser := events[0].RemindersByUser
-	if len(byUser) != 2 {
-		t.Fatalf("expected exactly the owner and the editor to have their own Reminders, got %v", byUser)
-	}
-	if len(byUser[owner.ID]) != 1 || byUser[owner.ID][0].OffsetMinutes != 10 {
-		t.Fatalf("expected the owner's own Reminder, got %v", byUser[owner.ID])
-	}
-	if len(byUser[editor.ID]) != 1 || byUser[editor.ID][0].OffsetMinutes != 30 {
-		t.Fatalf("expected the editor's own Reminder, got %v", byUser[editor.ID])
-	}
-	if _, ok := byUser[viewer.ID]; ok {
-		t.Fatalf("expected the viewer (Access but no Reminders of their own) to be absent, got %v", byUser)
-	}
-}
-
-// An Attendee's own Reminders on the Event they're invited to appear in
-// RemindersByUser exactly like an Access-holder's, independent of whether
-// they hold any Calendar Access at all (ADR-0046, ADR-0064).
-func TestEventRepository_ListAllWithReminders_RemindersByUserIncludesAttendeesWithoutAccess(t *testing.T) {
-	sqlDB, err := db.OpenInMemory()
-	if err != nil {
-		t.Fatalf("open in-memory db: %v", err)
-	}
-	t.Cleanup(func() { sqlDB.Close() })
-	ctx := context.Background()
-
-	users := NewUserRepository(sqlDB)
-	owner, err := users.Create(ctx, "owner", "owner@example.com", "hash", false)
-	if err != nil {
-		t.Fatalf("create owner: %v", err)
-	}
-	attendee, err := users.Create(ctx, "attendee", "attendee@example.com", "hash", false)
-	if err != nil {
-		t.Fatalf("create attendee: %v", err)
-	}
-
-	workspaces := NewWorkspaceRepository(sqlDB)
-	workspace, err := workspaces.Create(ctx, "workspace-owner", owner.ID)
-	if err != nil {
-		t.Fatalf("create workspace: %v", err)
-	}
-	if err := workspaces.AddMember(ctx, workspace.ID, owner.ID, WorkspaceRoleOwner); err != nil {
-		t.Fatalf("add owner workspace member: %v", err)
-	}
-	if err := workspaces.AddMember(ctx, workspace.ID, attendee.ID, WorkspaceRoleMember); err != nil {
-		t.Fatalf("add attendee workspace member: %v", err)
-	}
-
-	calendars := NewCalendarRepository(sqlDB)
-	cal, err := calendars.Create(ctx, owner.ID, workspace.ID, "cal-1", CalendarFields{Name: "Personal", Color: "peacock"})
-	if err != nil {
-		t.Fatalf("create calendar: %v", err)
-	}
-
-	repo := NewEventRepository(sqlDB)
-	reminders := NewEventReminderRepository(sqlDB)
-	mustCreateEvent(t, repo, "attendee-event", owner.ID, cal.ID, "2026-01-01T09:00:00Z", "2026-01-01T10:00:00Z")
-	if err := reminders.ReplaceByEventID(ctx, owner.ID, "attendee-event", []Reminder{{OffsetMinutes: 10, Channel: "notification"}}); err != nil {
-		t.Fatalf("replace by event id: %v", err)
-	}
-	if err := reminders.ReplaceByEventID(ctx, attendee.ID, "attendee-event", []Reminder{{OffsetMinutes: 5, Channel: "notification"}}); err != nil {
-		t.Fatalf("replace by event id: %v", err)
-	}
-
-	attendees := NewAttendeeRepository(sqlDB)
-	if _, err := attendees.Add(ctx, "attendee-event", attendee.ID); err != nil {
-		t.Fatalf("add attendee: %v", err)
-	}
-
-	events, err := repo.ListAllWithReminders(ctx)
-	if err != nil {
-		t.Fatalf("list all with reminders: %v", err)
-	}
-	if len(events) != 1 {
-		t.Fatalf("expected 1 event, got %v", events)
-	}
-
-	byUser := events[0].RemindersByUser
-	if len(byUser) != 2 || len(byUser[owner.ID]) != 1 || len(byUser[attendee.ID]) != 1 {
-		t.Fatalf("expected both the owner's and the Attendee's own Reminders, got %v", byUser)
+	if len(ids) != 2 || ids[0] != "other-users-reminder" || ids[1] != "with-reminder" {
+		t.Fatalf("expected exactly the two events carrying a Reminder, got %v", ids)
 	}
 }
 
