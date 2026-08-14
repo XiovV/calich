@@ -223,3 +223,43 @@ func TestSyncCollection_AfterCalDAVDelete_ReportsDeletedHrefAsNotFound(t *testin
 		t.Fatalf("expected the deleted object reported with a 404 status, got:\n%s", body)
 	}
 }
+
+// TestSyncCollection_ObjectWithAttachment_MatchesGetAttachAndETag is #215's
+// regression test: a sync-collection REPORT asking for calendar-data used to
+// build its objects from Masters SyncSince never hydrated Attachments onto,
+// so ATTACH was missing and the ETag computed over the object disagreed with
+// the one GET reports for the same resource — leaving an incrementally
+// syncing client with a copy missing the file, under an ETag no other CalDAV
+// operation ever returns (ADR-0025, ADR-0040).
+func TestSyncCollection_ObjectWithAttachment_MatchesGetAttachAndETag(t *testing.T) {
+	env := newTestCalDAVEnv(t)
+	master := createTestMaster(t, env, "evt-1")
+	objectPath := calendarObjectPath(env.userID, env.calendarID, master.ID)
+
+	addResp := postAction(t, env, objectPath, "action=attachment-add", "text/plain", "notes.txt", "hello world")
+	managedID := addResp.Header.Get("Cal-Managed-ID")
+	addResp.Body.Close()
+
+	getResp := getObject(t, env, objectPath)
+	getBody := readBody(t, getResp)
+	getETag := strings.Trim(getResp.Header.Get("ETag"), `"`)
+	getResp.Body.Close()
+	wantURI := env.srv.URL + attachmentDownloadPath(managedID)
+	if !strings.Contains(getBody, wantURI) {
+		t.Fatalf("expected GET to carry ATTACH %q, got:\n%s", wantURI, getBody)
+	}
+	if getETag == "" {
+		t.Fatalf("expected GET to report an ETag, got none")
+	}
+
+	resp := report(t, env.srv, calendarPath(env.userID, env.calendarID), "admin@example.com", env.appPasswordSecret, syncCollectionInitial)
+	defer resp.Body.Close()
+	body := readBody(t, resp)
+
+	if !strings.Contains(body, wantURI) {
+		t.Fatalf("expected sync-collection calendar-data to carry the same ATTACH %q as GET, got:\n%s", wantURI, body)
+	}
+	if !strings.Contains(body, ">&#34;"+getETag+"&#34;<") && !strings.Contains(body, `>"`+getETag+`"<`) {
+		t.Fatalf("expected sync-collection to report GET's ETag %q, got:\n%s", getETag, body)
+	}
+}

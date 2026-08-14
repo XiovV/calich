@@ -336,9 +336,9 @@ func TestPutSeries_EmptyRemindersMarksExplicit(t *testing.T) {
 }
 
 // TestListSeriesByCalendar_ResolvesDefaults confirms the ICS-export/CalDAV
-// collection-listing read path (ListSeriesByCalendar ->
-// attachOverridesAndReminders -> attachResolvedViewerRemindersTo) resolves
-// Calendar defaults too, not just the single-object GetSeries path (#213).
+// collection-listing read path (ListSeriesByCalendar -> hydrateEvents with
+// seriesEventFields) resolves Calendar defaults too, not just the
+// single-object GetSeries path (#213).
 func TestListSeriesByCalendar_ResolvesDefaults(t *testing.T) {
 	svc, ownerID, memberID, calendarID := newTestReminderResolutionFixture(t)
 	ctx := context.Background()

@@ -591,3 +591,30 @@ func TestEventService_List_StampsCalendarMetaForAttendeeOnlyEvent(t *testing.T) 
 		t.Fatalf("expected Get to carry the same calendar meta, got {%q, %q}", fetched.CalendarName, fetched.CalendarColor)
 	}
 }
+
+// Create and Update answer with the same field set Get does (#215), so an
+// Event the caller has just written renders its Calendar's name and colour
+// without a follow-up read. Both fields are additive and omitempty — the
+// web app already parses them as optional.
+func TestEventService_CreateAndUpdate_StampCalendarMeta(t *testing.T) {
+	svc, _, _, ownerID, _, _, calendarID := newTestAttendeeService(t)
+	ctx := context.Background()
+
+	created := createTestEvent(t, svc, ownerID, calendarID, "evt-1")
+	if created.CalendarName != "Personal" || created.CalendarColor != "peacock" {
+		t.Fatalf("expected Create to stamp calendar meta {Personal, peacock}, got {%q, %q}", created.CalendarName, created.CalendarColor)
+	}
+
+	updated, err := svc.Update(ctx, ownerID, created.ID, EventWrite{
+		CalendarID: calendarID,
+		Title:      "Discuss tech stack, again",
+		Start:      created.Start,
+		End:        created.End,
+	})
+	if err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	if updated.CalendarName != "Personal" || updated.CalendarColor != "peacock" {
+		t.Fatalf("expected Update to stamp calendar meta {Personal, peacock}, got {%q, %q}", updated.CalendarName, updated.CalendarColor)
+	}
+}
