@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type KeyboardEvent } from "react";
+import { useEffect, useState, type KeyboardEvent } from "react";
 import { Dialog } from "@base-ui/react/dialog";
 import { canManageCalendar, isSubscribedCalendar, type Calendar } from "../../lib/calendar";
 import { getNextUnusedColor } from "../../lib/calendarColors";
@@ -15,7 +15,6 @@ import {
   toReminderDrafts,
   type ReminderDraft,
 } from "../../calendar-grid/ReminderListEditor";
-import { CalendarSharingSection } from "./CalendarSharingSection";
 import { ColorSwatchPicker } from "./ColorSwatchPicker";
 import { Button } from "../ui/Button";
 import { buttonClasses } from "../ui/buttonClasses";
@@ -25,16 +24,7 @@ import { fieldLabelClass } from "../ui/fieldStyles";
 
 type CalendarModalProps =
   | { mode: "create"; onClose: () => void }
-  | {
-      mode: "edit";
-      calendar: Calendar;
-      onClose: () => void;
-      // initialFocus: "sharing" scrolls straight to the sharing section on
-      // open (#126) — the sidebar's share-count badge answers "who can see
-      // my stuff", and clicking through to a dialog that opens scrolled
-      // somewhere else wouldn't feel like an answer.
-      initialFocus?: "sharing";
-    };
+  | { mode: "edit"; calendar: Calendar; onClose: () => void };
 
 export function CalendarModal(props: CalendarModalProps) {
   const { mode, onClose } = props;
@@ -92,10 +82,9 @@ export function CalendarModal(props: CalendarModalProps) {
   // canManage decides whose colour this dialog is editing (ADR-0038, #122):
   // an Owner's picker is the Calendar's colour and the default everyone
   // inherits; anyone else's is their own personal override alone (auto-
-  // assigned on first view per ADR-0057). Name, Subscription URL, KeepAlarms
-  // and sharing stay Owner-only, so a non-Owner sees only the colour picker.
+  // assigned on first view per ADR-0057). Name, Subscription URL and
+  // KeepAlarms stay Owner-only, so a non-Owner sees only the colour picker.
   const canManage = mode === "create" || canManageCalendar(props.calendar);
-  const showSharing = mode === "edit" && canManage;
   // initialUrl is the masked value the dialog opened with (#88, ADR-0032:
   // a password in an edited URL is masked here, same as everywhere else a
   // Subscription URL is shown) — captured once so Save can tell whether
@@ -103,16 +92,6 @@ export function CalendarModal(props: CalendarModalProps) {
   const initialUrl =
     mode === "edit" ? (props.calendar.sourceUrl ?? "") : "";
   const [url, setUrl] = useState(initialUrl);
-  const sharingSectionRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (mode === "edit" && props.initialFocus === "sharing") {
-      sharingSectionRef.current?.scrollIntoView({ block: "nearest" });
-    }
-    // Only ever run on mount — a re-render must not re-scroll the dialog
-    // out from under someone editing it.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
 
   const canSave =
     mode === "edit" && !canManage
@@ -198,7 +177,7 @@ export function CalendarModal(props: CalendarModalProps) {
         <Dialog.Backdrop className="fixed inset-0 z-40 bg-ink/20" />
         <Dialog.Popup
           onKeyDown={handleEnterToSave}
-          className={`fixed top-1/2 left-1/2 z-50 ${isSubscribed || showSharing ? "w-96" : "w-80"} -translate-x-1/2 -translate-y-1/2 rounded-shell-lg bg-surface p-5 shadow-elevation-3`}
+          className="fixed top-1/2 left-1/2 z-50 w-96 -translate-x-1/2 -translate-y-1/2 rounded-shell-lg bg-surface p-5 shadow-elevation-3"
         >
           <Dialog.Title className="text-heading font-medium text-ink">
             {mode === "edit" ? "Edit calendar" : "New calendar"}
@@ -287,12 +266,6 @@ export function CalendarModal(props: CalendarModalProps) {
                 this instance will send
               </span>
             </label>
-          )}
-
-          {showSharing && (
-            <div ref={sharingSectionRef}>
-              <CalendarSharingSection calendar={props.calendar} />
-            </div>
           )}
 
           <div className="mt-5 flex justify-end gap-2">

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { Dialog } from "@base-ui/react/dialog";
 import { Trash2 } from "lucide-react";
 import {
   calendarsApi,
@@ -15,9 +16,9 @@ import { errorMessage } from "../../lib/errorMessage";
 import { toast } from "../../lib/toast";
 import type { Calendar } from "../../lib/calendar";
 import { Button } from "../ui/Button";
+import { buttonClasses } from "../ui/buttonClasses";
 import { IconButton } from "../ui/IconButton";
 import { Select } from "../ui/Select";
-import { fieldLabelClass } from "../ui/fieldStyles";
 
 const ROLE_OPTIONS: { value: Role; label: string }[] = [
   { value: "viewer", label: "Viewer" },
@@ -36,17 +37,22 @@ function groupTargetKey(groupId: number): TargetKey {
   return `group:${groupId}`;
 }
 
-interface CalendarSharingSectionProps {
+interface ShareCalendarModalProps {
   calendar: Calendar;
+  onClose: () => void;
 }
 
-// CalendarSharingSection is the Owner-only sharing management surface
-// (#113, ADR-0034; #159, ADR-0045) inside CalendarModal: who — User or
-// Group — has Access to this Calendar and with what Role, granting a new
-// Share, changing an existing one's Role in place, and revoking one.
-// Renders only when a caller with canManageCalendar mounts it — see
-// CalendarModal.
-export function CalendarSharingSection({ calendar }: CalendarSharingSectionProps) {
+// ShareCalendarModal is the Owner-only sharing management surface (#113,
+// ADR-0034; #159, ADR-0045; #221, ADR-0068): who — User or Group — has
+// Access to this Calendar and with what Role, granting a new Share,
+// changing an existing one's Role in place, and revoking one.
+//
+// Its own dialog rather than a section of the Edit modal, footered with a
+// lone Done: every control below commits on click (ADR-0067's server-first
+// discipline), so there has never been anything here for a Save to commit
+// or a Cancel to undo. Rendered only by a caller that has already checked
+// canManageCalendar — see CalendarList.
+export function ShareCalendarModal({ calendar, onClose }: ShareCalendarModalProps) {
   const accessToken = useAuthStore((state) => state.accessToken);
   const shareCalendar = useCalendarsStore((state) => state.shareCalendar);
   const revokeCalendarShare = useCalendarsStore((state) => state.revokeCalendarShare);
@@ -209,106 +215,131 @@ export function CalendarSharingSection({ calendar }: CalendarSharingSectionProps
   const loading = shares === null || groupShares === null;
 
   return (
-    <div className="mt-5 border-t border-border pt-4">
-      <p className={fieldLabelClass}>Sharing</p>
+    <Dialog.Root
+      open
+      onOpenChange={(open) => {
+        if (!open) onClose();
+      }}
+    >
+      <Dialog.Portal>
+        <Dialog.Backdrop className="fixed inset-0 z-40 bg-ink/20" />
+        <Dialog.Popup className="fixed top-1/2 left-1/2 z-50 w-96 -translate-x-1/2 -translate-y-1/2 rounded-shell-lg bg-surface p-5 shadow-elevation-3">
+          {/* The dialog carries no field naming the Calendar, so the title
+              has to — the same reason DeleteCalendarConfirmation names it
+              and CalendarModal does not. */}
+          <Dialog.Title className="text-heading font-medium text-ink">
+            Share &quot;{calendar.name}&quot;
+          </Dialog.Title>
 
-      {loading ? (
-        <p className="mt-2 text-label-sm text-ink-muted">Loading…</p>
-      ) : (
-        <>
-          {shares.length > 0 || groupShares.length > 0 ? (
-            <ul className="mt-2 flex max-h-40 flex-col gap-1.5 overflow-y-auto">
-              {shares.map((share) => (
-                <li key={`user-${share.userId}`} className="flex items-center gap-2">
-                  <span className="min-w-0 flex-1 truncate text-body text-ink">
-                    {share.name}
-                  </span>
+          {loading ? (
+            <p className="mt-2 text-label-sm text-ink-muted">Loading…</p>
+          ) : (
+            <>
+              {shares.length > 0 || groupShares.length > 0 ? (
+                <ul className="mt-2 flex max-h-40 flex-col gap-1.5 overflow-y-auto">
+                  {shares.map((share) => (
+                    <li key={`user-${share.userId}`} className="flex items-center gap-2">
+                      <span className="min-w-0 flex-1 truncate text-body text-ink">
+                        {share.name}
+                      </span>
+                      <Select
+                        value={share.role}
+                        onValueChange={(role) => handleUserRoleChange(share, role)}
+                        options={ROLE_OPTIONS}
+                        aria-label={`${share.name}'s role`}
+                        className="shrink-0"
+                      />
+                      <IconButton
+                        size="tiny"
+                        onClick={() => handleRevokeUser(share)}
+                        disabled={revokingKey === userTargetKey(share.userId)}
+                        aria-label={`Remove ${share.name}'s access`}
+                      >
+                        <Trash2 className="size-3.5" />
+                      </IconButton>
+                    </li>
+                  ))}
+                  {groupShares.map((share) => (
+                    <li key={`group-${share.groupId}`} className="flex items-center gap-2">
+                      <span className="min-w-0 flex-1 truncate text-body text-ink">
+                        {share.groupName} <span className="text-ink-muted">(group)</span>
+                      </span>
+                      <Select
+                        value={share.role}
+                        onValueChange={(role) => handleGroupRoleChange(share, role)}
+                        options={ROLE_OPTIONS}
+                        aria-label={`${share.groupName}'s role`}
+                        className="shrink-0"
+                      />
+                      <IconButton
+                        size="tiny"
+                        onClick={() => handleRevokeGroup(share)}
+                        disabled={revokingKey === groupTargetKey(share.groupId)}
+                        aria-label={`Remove ${share.groupName}'s access`}
+                      >
+                        <Trash2 className="size-3.5" />
+                      </IconButton>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="mt-2 text-label-sm text-ink-muted">
+                  Nobody else has Access to this calendar yet.
+                </p>
+              )}
+
+              {targetOptions.length > 0 ? (
+                <div className="mt-3 flex items-center gap-2">
                   <Select
-                    value={share.role}
-                    onValueChange={(role) => handleUserRoleChange(share, role)}
+                    value={effectiveTarget}
+                    onValueChange={setSelectedTarget}
+                    options={targetOptions}
+                    aria-label="Person or group to share with"
+                    className="min-w-0 flex-1"
+                  />
+                  <Select
+                    value={selectedRole}
+                    onValueChange={setSelectedRole}
                     options={ROLE_OPTIONS}
-                    aria-label={`${share.name}'s role`}
+                    aria-label="Role"
                     className="shrink-0"
                   />
-                  <IconButton
-                    size="tiny"
-                    onClick={() => handleRevokeUser(share)}
-                    disabled={revokingKey === userTargetKey(share.userId)}
-                    aria-label={`Remove ${share.name}'s access`}
+                  <Button
+                    size="small"
+                    onClick={handleGrant}
+                    disabled={!effectiveTarget || isGranting}
+                    loading={isGranting}
                   >
-                    <Trash2 className="size-3.5" />
-                  </IconButton>
-                </li>
-              ))}
-              {groupShares.map((share) => (
-                <li key={`group-${share.groupId}`} className="flex items-center gap-2">
-                  <span className="min-w-0 flex-1 truncate text-body text-ink">
-                    {share.groupName} <span className="text-ink-muted">(group)</span>
-                  </span>
-                  <Select
-                    value={share.role}
-                    onValueChange={(role) => handleGroupRoleChange(share, role)}
-                    options={ROLE_OPTIONS}
-                    aria-label={`${share.groupName}'s role`}
-                    className="shrink-0"
-                  />
-                  <IconButton
-                    size="tiny"
-                    onClick={() => handleRevokeGroup(share)}
-                    disabled={revokingKey === groupTargetKey(share.groupId)}
-                    aria-label={`Remove ${share.groupName}'s access`}
-                  >
-                    <Trash2 className="size-3.5" />
-                  </IconButton>
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <p className="mt-2 text-label-sm text-ink-muted">
-              Nobody else has Access to this calendar yet.
-            </p>
+                    Add
+                  </Button>
+                </div>
+              ) : (
+                <p className="mt-3 text-label-sm text-ink-muted">
+                  {availableUsers.length === 0 && availableGroups.length === 0
+                    ? "Nobody else in this workspace to share with yet."
+                    : "Everyone and every group in this workspace already has Access."}
+                </p>
+              )}
+
+              {grantError && (
+                <p className="mt-2 text-label-sm text-danger" role="alert">
+                  {grantError}
+                </p>
+              )}
+            </>
           )}
 
-          {targetOptions.length > 0 ? (
-            <div className="mt-3 flex items-center gap-2">
-              <Select
-                value={effectiveTarget}
-                onValueChange={setSelectedTarget}
-                options={targetOptions}
-                aria-label="Person or group to share with"
-                className="min-w-0 flex-1"
-              />
-              <Select
-                value={selectedRole}
-                onValueChange={setSelectedRole}
-                options={ROLE_OPTIONS}
-                aria-label="Role"
-                className="shrink-0"
-              />
-              <Button
-                size="small"
-                onClick={handleGrant}
-                disabled={!effectiveTarget || isGranting}
-                loading={isGranting}
-              >
-                Add
-              </Button>
-            </div>
-          ) : (
-            <p className="mt-3 text-label-sm text-ink-muted">
-              {availableUsers.length === 0 && availableGroups.length === 0
-                ? "Nobody else in this workspace to share with yet."
-                : "Everyone and every group in this workspace already has Access."}
-            </p>
-          )}
-
-          {grantError && (
-            <p className="mt-2 text-label-sm text-danger" role="alert">
-              {grantError}
-            </p>
-          )}
-        </>
-      )}
-    </div>
+          {/* Done dismisses and nothing else — a Dialog.Close rather than a
+              Button, since there is no action behind it: every control above
+              already committed on click, so there is no Save to offer and no
+              Cancel that could take one back (ADR-0068). */}
+          <div className="mt-5 flex justify-end">
+            <Dialog.Close className={buttonClasses({ size: "small" })}>
+              Done
+            </Dialog.Close>
+          </div>
+        </Dialog.Popup>
+      </Dialog.Portal>
+    </Dialog.Root>
   );
 }

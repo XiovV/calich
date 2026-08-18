@@ -62,7 +62,7 @@ interface CalendarsState {
   // afterward so shareCount on the sidebar badge (#126) moves without a
   // reload — the caller is looking straight at it while granting, so a
   // count that doesn't move reads as a failed grant. Rethrows on failure so
-  // CalendarSharingSection can show the specific error inline.
+  // ShareCalendarModal can show the specific error inline.
   shareCalendar: (id: string, email: string, role: Role) => Promise<Share>;
   // revokeCalendarShare removes a Share (#113, ADR-0034), Owner-only — the
   // counterpart to leaveCalendar. Re-fetches Calendars afterward for the

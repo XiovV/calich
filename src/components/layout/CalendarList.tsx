@@ -21,6 +21,7 @@ import { CalendarToggle } from "./CalendarToggle";
 import { SubscribeCalendarModal } from "./SubscribeCalendarModal";
 import { DeleteCalendarConfirmation } from "./DeleteCalendarConfirmation";
 import { LeaveCalendarConfirmation } from "./LeaveCalendarConfirmation";
+import { ShareCalendarModal } from "./ShareCalendarModal";
 
 // The row's action menu items share this shape so every row type — a click
 // away from Edit-only, Edit+Export+Delete, or Edit+Refresh+Unsubscribe — is
@@ -53,16 +54,13 @@ export function CalendarList() {
   const refreshCalendar = useCalendarsStore((state) => state.refreshCalendar);
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [isSubscribeOpen, setIsSubscribeOpen] = useState(false);
-  // focus: the share-count badge (#126) opens the same edit dialog as the
-  // Edit menu item, but scrolled to its sharing section — the badge exists
-  // to answer "who can see my stuff" at a glance, and clicking through to
-  // anywhere else in the dialog wouldn't answer it. Bundled with calendar
-  // in one state, rather than a parallel boolean, so the two can't drift
-  // out of sync across the three places that set them.
-  const [editModalTarget, setEditModalTarget] = useState<{
-    calendar: Calendar;
-    focus?: "sharing";
-  } | null>(null);
+  const [editModalTarget, setEditModalTarget] = useState<Calendar | null>(null);
+  // Held as an id rather than a captured Calendar, matching deletingCalendarId
+  // and leavingCalendarId: the Share modal's own grants call fetchCalendars(),
+  // which replaces every object in the array, so a captured one is stale by
+  // construction. editModalTarget can stay an object — CalendarModal copies
+  // its props into state on mount.
+  const [sharingCalendarId, setSharingCalendarId] = useState<string | null>(null);
   const [deletingCalendarId, setDeletingCalendarId] = useState<string | null>(
     null,
   );
@@ -97,6 +95,9 @@ export function CalendarList() {
   );
   const leavingCalendar = calendars.find(
     (calendar) => calendar.id === leavingCalendarId,
+  );
+  const sharingCalendar = calendars.find(
+    (calendar) => calendar.id === sharingCalendarId,
   );
 
   function handleConfirmDelete() {
@@ -216,13 +217,15 @@ export function CalendarList() {
         </span>
         {/* Always visible, unlike the hover-only action buttons below — an
             at-a-glance answer to "who can see my stuff" that you'd have to
-            hover to see wouldn't be at a glance (#126). Absent on a
-            shared-in row (canManage is false there): that row already says
-            "Shared by {owner}" instead. */}
+            hover to see wouldn't be at a glance (#126). Opens the Share
+            modal directly (#221): the badge asks who has Access, and Share
+            is where that is both answered and changed. Absent on a shared-in
+            row (canManage is false there): that row already says "Shared by
+            {owner}" instead. */}
         {canManage && (calendar.shareCount ?? 0) > 0 && (
           <button
             type="button"
-            onClick={() => setEditModalTarget({ calendar, focus: "sharing" })}
+            onClick={() => setSharingCalendarId(calendar.id)}
             title={shareCountTooltip(calendar.shareCount ?? 0)}
             aria-label={shareCountTooltip(calendar.shareCount ?? 0)}
             className="flex shrink-0 items-center gap-0.5 rounded-shell-pill px-1 py-0.5 text-label-sm text-ink-muted hover:bg-surface-hover hover:text-ink"
@@ -231,11 +234,12 @@ export function CalendarList() {
             {calendar.shareCount}
           </button>
         )}
-        {/* Edit, then whichever of Refresh/Export the row qualifies for
-            (mutually exclusive per ADR-0032), then a divider, then the
-            destructive action last — Edit stays first because it's the
-            only item every row type has, keeping the menu's first and last
-            items in fixed positions no matter which row this is (#189). */}
+        {/* Edit, then Share, then whichever of Refresh/Export the row
+            qualifies for (mutually exclusive per ADR-0032), then a divider,
+            then the destructive action last — Edit stays first because it's
+            the only item every row type has, keeping the menu's first and
+            last items in fixed positions no matter which row this is
+            (#189). */}
         <Menu.Root>
           <Menu.Trigger
             aria-label={`${calendar.name} actions`}
@@ -256,11 +260,26 @@ export function CalendarList() {
                     colour is theirs to set on any Calendar they can see,
                     not just the ones they own. */}
                 <Menu.Item
-                  onClick={() => setEditModalTarget({ calendar })}
+                  onClick={() => setEditModalTarget(calendar)}
                   className={menuItemClasses}
                 >
                   Edit
                 </Menu.Item>
+                {/* Owner-only (ADR-0034), and absent rather than disabled on
+                    a shared-in row: sharing isn't a thing that row's viewer
+                    could gain by upgrading something, so a greyed item would
+                    only advertise a door that is never theirs. An owned
+                    *Subscribed* Calendar does get it — the read-only clamp
+                    is on its Events, not on who may be given Access to it
+                    (#111, ADR-0034). */}
+                {canManage && (
+                  <Menu.Item
+                    onClick={() => setSharingCalendarId(calendar.id)}
+                    className={menuItemClasses}
+                  >
+                    Share
+                  </Menu.Item>
+                )}
                 {isSubscribed && canManage && (
                   <Menu.Item
                     onClick={() => handleRefresh(calendar)}
@@ -359,9 +378,14 @@ export function CalendarList() {
       {editModalTarget && (
         <CalendarModal
           mode="edit"
-          calendar={editModalTarget.calendar}
-          initialFocus={editModalTarget.focus}
+          calendar={editModalTarget}
           onClose={() => setEditModalTarget(null)}
+        />
+      )}
+      {sharingCalendar && (
+        <ShareCalendarModal
+          calendar={sharingCalendar}
+          onClose={() => setSharingCalendarId(null)}
         />
       )}
       {deletingCalendar && (

@@ -20,7 +20,7 @@ const RESPONSE_LABEL: Record<AttendeeResponse, string> = {
 
 // TargetKey encodes the invite picker's entries as "user:<id>" or
 // "group:<id>" so one Select can offer both, mirroring
-// CalendarSharingSection's own TargetKey (#159) — minus a Role, since an
+// ShareCalendarModal's own TargetKey (#159) — minus a Role, since an
 // Attendee has none.
 type TargetKey = `user:${number}` | `group:${number}`;
 
@@ -162,7 +162,7 @@ export function EventAttendeesSection({
         // scoped to the active Workspace (ADR-0045): a Calendar the caller
         // can write Events to is never in a Workspace other than the active
         // one. calendarsApi.shareTargets is the calendar-id-scoped
-        // alternative CalendarSharingSection uses, but it's Owner-only —
+        // alternative ShareCalendarModal uses, but it's Owner-only —
         // it would 403 for an Editor who can manage Attendees but not
         // Sharing (attendeeManagementCalendar accepts Editor, not just
         // Owner), so it's the wrong fit here despite scoping more precisely.
