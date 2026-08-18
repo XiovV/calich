@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/XiovV/calendar/server/internal/repository"
+	"github.com/XiovV/calich/server/internal/repository"
 )
 
 // Delete dispositions for a self-deleted User's owned Calendars (ADR-0037,

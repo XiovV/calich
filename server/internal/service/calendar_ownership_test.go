@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/XiovV/calendar/server/internal/repository"
+	"github.com/XiovV/calich/server/internal/repository"
 )
 
 // TestCalendarService_OwnershipMeta_UnclampedByAccess is #111's core

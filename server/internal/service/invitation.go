@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/XiovV/calendar/server/internal/icalendar"
-	"github.com/XiovV/calendar/server/internal/repository"
+	"github.com/XiovV/calich/server/internal/icalendar"
+	"github.com/XiovV/calich/server/internal/repository"
 )
 
 // InvitationMailer sends an Invitation or Cancellation email — the outbox

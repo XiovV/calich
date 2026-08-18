@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/XiovV/calendar/server/internal/repository"
+	"github.com/XiovV/calich/server/internal/repository"
 )
 
 // notificationFeedLimit caps how many recent Notifications the feed panel

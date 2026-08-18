@@ -14,11 +14,11 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/XiovV/calendar/server/internal/apptest"
-	"github.com/XiovV/calendar/server/internal/httpauth"
-	"github.com/XiovV/calendar/server/internal/icalendar"
-	"github.com/XiovV/calendar/server/internal/repository"
-	"github.com/XiovV/calendar/server/internal/service"
+	"github.com/XiovV/calich/server/internal/apptest"
+	"github.com/XiovV/calich/server/internal/httpauth"
+	"github.com/XiovV/calich/server/internal/icalendar"
+	"github.com/XiovV/calich/server/internal/repository"
+	"github.com/XiovV/calich/server/internal/service"
 )
 
 // icsTestEnv wires both /api/events and /api/calendars (including their ICS

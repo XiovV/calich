@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/XiovV/calendar/server/internal/repository"
+	"github.com/XiovV/calich/server/internal/repository"
 )
 
 // newTestShareService returns a CalendarService plus its UserRepository (so

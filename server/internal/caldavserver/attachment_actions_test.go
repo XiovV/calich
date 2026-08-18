@@ -11,8 +11,8 @@ import (
 
 	"github.com/emersion/go-ical"
 
-	"github.com/XiovV/calendar/server/internal/repository"
-	"github.com/XiovV/calendar/server/internal/service"
+	"github.com/XiovV/calich/server/internal/repository"
+	"github.com/XiovV/calich/server/internal/service"
 )
 
 // parseCalendarBody decodes resp's body as an iCalendar object, for tests

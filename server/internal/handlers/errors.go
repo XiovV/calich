@@ -4,7 +4,7 @@ import (
 	"errors"
 	"net/http"
 
-	"github.com/XiovV/calendar/server/internal/httpresponse"
+	"github.com/XiovV/calich/server/internal/httpresponse"
 )
 
 // errorResponse is how one service sentinel is rendered to a client.

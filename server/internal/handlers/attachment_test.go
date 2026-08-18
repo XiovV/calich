@@ -13,10 +13,10 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/XiovV/calendar/server/internal/apptest"
-	"github.com/XiovV/calendar/server/internal/httpauth"
-	"github.com/XiovV/calendar/server/internal/repository"
-	"github.com/XiovV/calendar/server/internal/service"
+	"github.com/XiovV/calich/server/internal/apptest"
+	"github.com/XiovV/calich/server/internal/httpauth"
+	"github.com/XiovV/calich/server/internal/repository"
+	"github.com/XiovV/calich/server/internal/service"
 )
 
 // attachmentTestServer is Attachments' REST fixture (#132, ADR-0040): an

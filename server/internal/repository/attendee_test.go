@@ -9,7 +9,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/XiovV/calendar/server/internal/db"
+	"github.com/XiovV/calich/server/internal/db"
 )
 
 // newTestAttendeeRepository returns an AttendeeRepository plus a real

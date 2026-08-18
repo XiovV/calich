@@ -4,8 +4,8 @@ import (
 	"context"
 	"testing"
 
-	"github.com/XiovV/calendar/server/internal/db"
-	"github.com/XiovV/calendar/server/internal/repository"
+	"github.com/XiovV/calich/server/internal/db"
+	"github.com/XiovV/calich/server/internal/repository"
 )
 
 // newTestDefaultReminderLedger returns a real, DB-backed FiredReminderRepository

@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/XiovV/calendar/server/internal/service"
+	"github.com/XiovV/calich/server/internal/service"
 )
 
 const propfindCurrentUserPrivilegeSet = `<?xml version="1.0" encoding="UTF-8"?>

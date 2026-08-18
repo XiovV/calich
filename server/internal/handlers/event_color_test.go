@@ -10,7 +10,7 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/XiovV/calendar/server/internal/service"
+	"github.com/XiovV/calich/server/internal/service"
 )
 
 func TestEventHandler_RoundTripsColor(t *testing.T) {

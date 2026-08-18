@@ -12,11 +12,11 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
-	"github.com/XiovV/calendar/server/internal/attachmentstore"
-	"github.com/XiovV/calendar/server/internal/httpauth"
-	"github.com/XiovV/calendar/server/internal/httpresponse"
-	"github.com/XiovV/calendar/server/internal/repository"
-	"github.com/XiovV/calendar/server/internal/service"
+	"github.com/XiovV/calich/server/internal/attachmentstore"
+	"github.com/XiovV/calich/server/internal/httpauth"
+	"github.com/XiovV/calich/server/internal/httpresponse"
+	"github.com/XiovV/calich/server/internal/repository"
+	"github.com/XiovV/calich/server/internal/service"
 )
 
 type EventHandler struct {

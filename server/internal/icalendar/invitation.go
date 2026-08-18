@@ -15,7 +15,7 @@ import (
 
 	"github.com/emersion/go-ical"
 
-	"github.com/XiovV/calendar/server/internal/repository"
+	"github.com/XiovV/calich/server/internal/repository"
 )
 
 // MethodRequest is a fresh (or re-issued) invite. MethodCancel is a

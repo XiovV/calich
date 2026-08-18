@@ -13,10 +13,10 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
-	"github.com/XiovV/calendar/server/internal/httpauth"
-	"github.com/XiovV/calendar/server/internal/httpresponse"
-	"github.com/XiovV/calendar/server/internal/icalendar"
-	"github.com/XiovV/calendar/server/internal/repository"
+	"github.com/XiovV/calich/server/internal/httpauth"
+	"github.com/XiovV/calich/server/internal/httpresponse"
+	"github.com/XiovV/calich/server/internal/icalendar"
+	"github.com/XiovV/calich/server/internal/repository"
 )
 
 // maxOversizedSamples caps how many oversized Attachments an export

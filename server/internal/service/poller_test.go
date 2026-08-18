@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/XiovV/calendar/server/internal/repository"
+	"github.com/XiovV/calich/server/internal/repository"
 )
 
 // fakeDueSubscriptionLister returns a fixed set of due Calendars, standing

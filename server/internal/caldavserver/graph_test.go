@@ -3,9 +3,9 @@ package caldavserver
 import (
 	"testing"
 
-	"github.com/XiovV/calendar/server/internal/apptest"
-	"github.com/XiovV/calendar/server/internal/config"
-	"github.com/XiovV/calendar/server/internal/service"
+	"github.com/XiovV/calich/server/internal/apptest"
+	"github.com/XiovV/calich/server/internal/config"
+	"github.com/XiovV/calich/server/internal/service"
 )
 
 // newTestGraph builds the repositories and services the CalDAV Backend

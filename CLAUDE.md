@@ -2,7 +2,7 @@
 
 ### Issue tracker
 
-Issues live in GitHub Issues (XiovV/calendar), via the `gh` CLI. See `docs/agents/issue-tracker.md`.
+Issues live in GitHub Issues (XiovV/calich), via the `gh` CLI. See `docs/agents/issue-tracker.md`.
 
 ### Domain docs
 

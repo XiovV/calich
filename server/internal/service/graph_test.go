@@ -3,8 +3,8 @@ package service
 import (
 	"testing"
 
-	"github.com/XiovV/calendar/server/internal/apptest"
-	"github.com/XiovV/calendar/server/internal/config"
+	"github.com/XiovV/calich/server/internal/apptest"
+	"github.com/XiovV/calich/server/internal/config"
 )
 
 // newTestGraph builds this package's repositories and services over a fresh

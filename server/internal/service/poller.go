@@ -13,7 +13,7 @@ import (
 	"log"
 	"time"
 
-	"github.com/XiovV/calendar/server/internal/repository"
+	"github.com/XiovV/calich/server/internal/repository"
 )
 
 // DueSubscriptionLister is Poller's read path: every Subscribed Calendar,

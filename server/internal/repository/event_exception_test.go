@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/XiovV/calendar/server/internal/db"
+	"github.com/XiovV/calich/server/internal/db"
 )
 
 // newTestEventExceptionRepository returns an EventRepository and

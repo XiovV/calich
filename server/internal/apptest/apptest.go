@@ -14,7 +14,7 @@ package apptest
 import (
 	"testing"
 
-	"github.com/XiovV/calendar/server/internal/config"
+	"github.com/XiovV/calich/server/internal/config"
 )
 
 // Config returns the settings a test's graph is built from: a Data

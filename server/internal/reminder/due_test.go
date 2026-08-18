@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/XiovV/calendar/server/internal/repository"
+	"github.com/XiovV/calich/server/internal/repository"
 )
 
 func at(year int, month time.Month, day, hour, minute int) time.Time {

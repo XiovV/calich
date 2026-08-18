@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/XiovV/calendar/server/internal/repository"
+	"github.com/XiovV/calich/server/internal/repository"
 )
 
 // TestResolveAccess is a table over ownership x Subscription (ADR-0034):

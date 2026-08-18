@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/XiovV/calendar/server/internal/service"
+	"github.com/XiovV/calich/server/internal/service"
 )
 
 func report(t *testing.T, srv *httptest.Server, path, username, password, body string) *http.Response {

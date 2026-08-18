@@ -20,9 +20,9 @@ import (
 	"github.com/emersion/go-webdav"
 	"github.com/emersion/go-webdav/caldav"
 
-	"github.com/XiovV/calendar/server/internal/icalendar"
-	"github.com/XiovV/calendar/server/internal/repository"
-	"github.com/XiovV/calendar/server/internal/service"
+	"github.com/XiovV/calich/server/internal/icalendar"
+	"github.com/XiovV/calich/server/internal/repository"
+	"github.com/XiovV/calich/server/internal/service"
 )
 
 // rawPutAsUser is rawPut generalized to any principal's credentials, so a

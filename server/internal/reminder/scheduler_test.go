@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/XiovV/calendar/server/internal/db"
-	"github.com/XiovV/calendar/server/internal/repository"
+	"github.com/XiovV/calich/server/internal/db"
+	"github.com/XiovV/calich/server/internal/repository"
 )
 
 // fakeEventLister returns a fixed set of events and their resolution, standing

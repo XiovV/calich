@@ -6,7 +6,7 @@ import (
 
 	gorrule "github.com/teambition/rrule-go"
 
-	"github.com/XiovV/calendar/server/internal/repository"
+	"github.com/XiovV/calich/server/internal/repository"
 )
 
 // anchorLocation is the zone an Event's recurrence expands in — its own

@@ -9,7 +9,7 @@ import (
 
 	"github.com/emersion/go-ical"
 
-	"github.com/XiovV/calendar/server/internal/icalendar"
+	"github.com/XiovV/calich/server/internal/icalendar"
 )
 
 // RawMessage is one fetched, not-yet-classified message: its IMAP UID (for

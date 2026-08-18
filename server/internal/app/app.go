@@ -23,14 +23,14 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/XiovV/calendar/server/internal/caldavserver"
-	"github.com/XiovV/calendar/server/internal/config"
-	"github.com/XiovV/calendar/server/internal/handlers"
-	"github.com/XiovV/calendar/server/internal/mailer"
-	"github.com/XiovV/calendar/server/internal/outbox"
-	"github.com/XiovV/calendar/server/internal/reminder"
-	"github.com/XiovV/calendar/server/internal/reply"
-	"github.com/XiovV/calendar/server/internal/service"
+	"github.com/XiovV/calich/server/internal/caldavserver"
+	"github.com/XiovV/calich/server/internal/config"
+	"github.com/XiovV/calich/server/internal/handlers"
+	"github.com/XiovV/calich/server/internal/mailer"
+	"github.com/XiovV/calich/server/internal/outbox"
+	"github.com/XiovV/calich/server/internal/reminder"
+	"github.com/XiovV/calich/server/internal/reply"
+	"github.com/XiovV/calich/server/internal/service"
 )
 
 // App is the whole server as a value: the repositories and services of the

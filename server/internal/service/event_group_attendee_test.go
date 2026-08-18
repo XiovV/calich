@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/XiovV/calendar/server/internal/repository"
+	"github.com/XiovV/calich/server/internal/repository"
 )
 
 // groupAttendeeFixture is #162's fixture: an Owner's Calendar inside a

@@ -27,7 +27,7 @@ export function TopBar() {
 
   return (
     <div className="flex h-full items-center gap-4 px-4">
-      <span className="text-heading font-medium text-ink">Calendar</span>
+      <span className="text-heading font-medium text-ink">Calich</span>
 
       <Button
         variant="outline"

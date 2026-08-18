@@ -9,7 +9,7 @@ package service
 import (
 	"time"
 
-	"github.com/XiovV/calendar/server/internal/repository"
+	"github.com/XiovV/calich/server/internal/repository"
 )
 
 // ExistingSeries is one series a Subscribed Calendar already stores, as

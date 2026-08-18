@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/XiovV/calendar/server/internal/repository"
+	"github.com/XiovV/calich/server/internal/repository"
 )
 
 // createAttendeeFixture mirrors groupAttendeeFixture (event_group_attendee_test.go):

@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/XiovV/calendar/server/internal/repository"
+	"github.com/XiovV/calich/server/internal/repository"
 )
 
 // everyUser is the audience a resolution names when it answers for all of

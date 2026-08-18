@@ -8,9 +8,9 @@ import (
 
 	"github.com/emersion/go-ical"
 
-	"github.com/XiovV/calendar/server/internal/icalendar"
-	"github.com/XiovV/calendar/server/internal/repository"
-	"github.com/XiovV/calendar/server/internal/service"
+	"github.com/XiovV/calich/server/internal/icalendar"
+	"github.com/XiovV/calich/server/internal/repository"
+	"github.com/XiovV/calich/server/internal/service"
 )
 
 // putSeriesStatus PUTs one series and reports the raw status, so the mapping

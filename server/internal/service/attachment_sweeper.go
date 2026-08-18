@@ -6,8 +6,8 @@ import (
 	"log"
 	"time"
 
-	"github.com/XiovV/calendar/server/internal/attachmentstore"
-	"github.com/XiovV/calendar/server/internal/repository"
+	"github.com/XiovV/calich/server/internal/attachmentstore"
+	"github.com/XiovV/calich/server/internal/repository"
 )
 
 // AttachmentSweeper reclaims Attachment bytes with no matching row (#132,

@@ -8,7 +8,7 @@ package reminder
 import (
 	"time"
 
-	"github.com/XiovV/calendar/server/internal/repository"
+	"github.com/XiovV/calich/server/internal/repository"
 )
 
 // DueReminder is one Reminder that becomes due within a window, paired with

@@ -14,8 +14,8 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/XiovV/calendar/server/internal/attachmentstore"
-	"github.com/XiovV/calendar/server/internal/repository"
+	"github.com/XiovV/calich/server/internal/attachmentstore"
+	"github.com/XiovV/calich/server/internal/repository"
 )
 
 var (

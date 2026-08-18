@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/XiovV/calendar/server/internal/db"
+	"github.com/XiovV/calich/server/internal/db"
 )
 
 func newTestSessionRepository(t *testing.T) (*SessionRepository, *UserRepository) {

@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/XiovV/calendar/server/internal/repository"
+	"github.com/XiovV/calich/server/internal/repository"
 )
 
 // newTestSubscribeService returns a SubscribeService plus a real user id,

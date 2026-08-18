@@ -7,7 +7,7 @@ import (
 
 	"github.com/emersion/go-ical"
 
-	"github.com/XiovV/calendar/server/internal/repository"
+	"github.com/XiovV/calich/server/internal/repository"
 )
 
 func mustParse(t *testing.T, master repository.Event, overrides []repository.Event) *ParsedSeries {

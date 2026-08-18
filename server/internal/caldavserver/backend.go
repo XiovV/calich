@@ -22,11 +22,11 @@ import (
 	"github.com/emersion/go-webdav/caldav"
 	"github.com/go-chi/chi/v5"
 
-	"github.com/XiovV/calendar/server/internal/httpauth"
-	"github.com/XiovV/calendar/server/internal/icalendar"
-	"github.com/XiovV/calendar/server/internal/recurrence"
-	"github.com/XiovV/calendar/server/internal/repository"
-	"github.com/XiovV/calendar/server/internal/service"
+	"github.com/XiovV/calich/server/internal/httpauth"
+	"github.com/XiovV/calich/server/internal/icalendar"
+	"github.com/XiovV/calich/server/internal/recurrence"
+	"github.com/XiovV/calich/server/internal/repository"
+	"github.com/XiovV/calich/server/internal/service"
 )
 
 const pathPrefix = "/dav"

@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/XiovV/calendar/server/internal/db"
+	"github.com/XiovV/calich/server/internal/db"
 )
 
 func newTestSyncRepository(t *testing.T) (sync *SyncRepository, events *EventRepository, userID int64, calendarID string) {

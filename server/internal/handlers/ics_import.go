@@ -10,9 +10,9 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/XiovV/calendar/server/internal/httpauth"
-	"github.com/XiovV/calendar/server/internal/httpresponse"
-	"github.com/XiovV/calendar/server/internal/service"
+	"github.com/XiovV/calich/server/internal/httpauth"
+	"github.com/XiovV/calich/server/internal/httpresponse"
+	"github.com/XiovV/calich/server/internal/service"
 )
 
 // maxImportUploadBytes caps an import upload at 10MB (#77), enforced via

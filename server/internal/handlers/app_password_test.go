@@ -11,7 +11,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/XiovV/calendar/server/internal/httpauth"
+	"github.com/XiovV/calich/server/internal/httpauth"
 )
 
 func newAppPasswordTestServer(t *testing.T) (*httptest.Server, string) {

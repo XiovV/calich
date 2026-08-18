@@ -10,7 +10,7 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/XiovV/calendar/server/internal/repository"
+	"github.com/XiovV/calich/server/internal/repository"
 )
 
 func TestCalendarHandler_Update_NonOwnerSetsPersonalColorOnly(t *testing.T) {

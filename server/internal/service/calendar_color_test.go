@@ -10,7 +10,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/XiovV/calendar/server/internal/repository"
+	"github.com/XiovV/calich/server/internal/repository"
 )
 
 func TestCalendarService_SetColorOverride_ResolvesForThatUserOnly(t *testing.T) {

@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/XiovV/calendar/server/internal/icalendar"
-	"github.com/XiovV/calendar/server/internal/repository"
+	"github.com/XiovV/calich/server/internal/icalendar"
+	"github.com/XiovV/calich/server/internal/repository"
 )
 
 // replyFixture mirrors newTestEventService but also exposes the User

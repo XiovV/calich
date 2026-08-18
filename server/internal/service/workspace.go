@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/XiovV/calendar/server/internal/repository"
+	"github.com/XiovV/calich/server/internal/repository"
 )
 
 // WorkspaceService creates Workspaces, resolves which ones a User belongs to,

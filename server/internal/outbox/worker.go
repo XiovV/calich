@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/XiovV/calendar/server/internal/repository"
+	"github.com/XiovV/calich/server/internal/repository"
 )
 
 // Store is the Worker's persistence seam. Satisfied by

@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/XiovV/calendar/server/internal/repository"
-	"github.com/XiovV/calendar/server/internal/service"
+	"github.com/XiovV/calich/server/internal/repository"
+	"github.com/XiovV/calich/server/internal/service"
 )
 
 func proppatch(t *testing.T, srv *httptest.Server, path, username, password, body string) *http.Response {

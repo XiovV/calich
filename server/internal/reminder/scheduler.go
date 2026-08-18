@@ -6,7 +6,7 @@ import (
 	"log"
 	"time"
 
-	"github.com/XiovV/calendar/server/internal/repository"
+	"github.com/XiovV/calich/server/internal/repository"
 )
 
 // EventLister is the scheduler's read path: every Event across every user that

@@ -11,7 +11,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/XiovV/calendar/server/internal/repository"
+	"github.com/XiovV/calich/server/internal/repository"
 )
 
 // TestCalendarService_ResolveDisplayColor_AvoidsCollisionWithVisibleCalendars

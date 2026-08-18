@@ -6,7 +6,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/XiovV/calendar/server/internal/repository"
+	"github.com/XiovV/calich/server/internal/repository"
 )
 
 // newTestGroupService returns a GroupService plus a WorkspaceService sharing

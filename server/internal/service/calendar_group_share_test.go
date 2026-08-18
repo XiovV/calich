@@ -9,7 +9,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/XiovV/calendar/server/internal/repository"
+	"github.com/XiovV/calich/server/internal/repository"
 )
 
 // groupShareFixture is #159's fixture: an Owner's Calendar, a Group inside

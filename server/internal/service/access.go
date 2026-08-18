@@ -1,6 +1,6 @@
 package service
 
-import "github.com/XiovV/calendar/server/internal/repository"
+import "github.com/XiovV/calich/server/internal/repository"
 
 // Access is the resolved answer to "what may this User do with this
 // Calendar" (ADR-0034, CONTEXT.md): Owner, Editor, Viewer, or None. Ordered

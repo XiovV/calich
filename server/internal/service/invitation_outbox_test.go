@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/XiovV/calendar/server/internal/apptest"
-	"github.com/XiovV/calendar/server/internal/repository"
+	"github.com/XiovV/calich/server/internal/apptest"
+	"github.com/XiovV/calich/server/internal/repository"
 )
 
 // outboxUserID builds a *int64 test OutboxMessages can assign to

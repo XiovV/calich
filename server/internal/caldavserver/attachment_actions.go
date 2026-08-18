@@ -14,9 +14,9 @@ import (
 	"mime"
 	"net/http"
 
-	"github.com/XiovV/calendar/server/internal/httpresponse"
-	"github.com/XiovV/calendar/server/internal/repository"
-	"github.com/XiovV/calendar/server/internal/service"
+	"github.com/XiovV/calich/server/internal/httpresponse"
+	"github.com/XiovV/calich/server/internal/repository"
+	"github.com/XiovV/calich/server/internal/service"
 )
 
 // ridSeriesToken is RFC 8607's rid=M — "the master instance", which this app

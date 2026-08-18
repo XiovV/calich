@@ -5,8 +5,8 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/XiovV/calendar/server/internal/icalendar"
-	"github.com/XiovV/calendar/server/internal/repository"
+	"github.com/XiovV/calich/server/internal/icalendar"
+	"github.com/XiovV/calich/server/internal/repository"
 )
 
 // replyMessage builds a minimal RFC 822 message carrying a METHOD:REPLY

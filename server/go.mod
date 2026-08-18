@@ -1,4 +1,4 @@
-module github.com/XiovV/calendar/server
+module github.com/XiovV/calich/server
 
 go 1.26.5
 

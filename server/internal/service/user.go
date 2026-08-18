@@ -3,7 +3,7 @@ package service
 import (
 	"context"
 
-	"github.com/XiovV/calendar/server/internal/repository"
+	"github.com/XiovV/calich/server/internal/repository"
 )
 
 // UserService is the User directory (#113): who else has an account, open

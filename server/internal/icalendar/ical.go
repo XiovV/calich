@@ -19,8 +19,8 @@ import (
 
 	"github.com/emersion/go-ical"
 
-	"github.com/XiovV/calendar/server/internal/recurrence"
-	"github.com/XiovV/calendar/server/internal/repository"
+	"github.com/XiovV/calich/server/internal/recurrence"
+	"github.com/XiovV/calich/server/internal/repository"
 )
 
 // ProdID is the PRODID emitted on every VCALENDAR this app produces,

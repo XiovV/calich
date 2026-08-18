@@ -6,7 +6,7 @@ import (
 	"log"
 	"time"
 
-	"github.com/XiovV/calendar/server/internal/repository"
+	"github.com/XiovV/calich/server/internal/repository"
 )
 
 // Dispatcher delivers a DueReminder that the scheduler has just newly marked

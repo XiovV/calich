@@ -6,7 +6,7 @@
 	fmt vet \
 	docker-build docker-run docker-clean
 
-DOCKER_IMAGE := calendar-server
+DOCKER_IMAGE := calich-server
 DATA_DIR := ./data
 
 help:
@@ -40,7 +40,7 @@ dev-backend:
 	cd server && DATA_DIR=$(abspath $(DATA_DIR)) PORT=8080 go run ./cmd/server
 
 build-backend:
-	cd server && go build -o bin/calendar-server ./cmd/server
+	cd server && go build -o bin/calich-server ./cmd/server
 
 test-backend:
 	cd server && go test ./...

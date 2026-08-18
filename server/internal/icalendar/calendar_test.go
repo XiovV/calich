@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/XiovV/calendar/server/internal/repository"
+	"github.com/XiovV/calich/server/internal/repository"
 )
 
 func mustEncodeCalendar(t *testing.T, name, color string, masters []repository.Event, overridesByParent map[string][]repository.Event) string {

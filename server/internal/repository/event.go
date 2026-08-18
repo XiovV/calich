@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/XiovV/calendar/server/internal/recurrence"
+	"github.com/XiovV/calich/server/internal/recurrence"
 )
 
 type Event struct {

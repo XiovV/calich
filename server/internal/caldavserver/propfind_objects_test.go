@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/XiovV/calendar/server/internal/service"
+	"github.com/XiovV/calich/server/internal/service"
 )
 
 const propfindObjectList = `<?xml version="1.0" encoding="UTF-8"?>

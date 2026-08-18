@@ -84,7 +84,7 @@ Every response carries `Content-Disposition: attachment`, `X-Content-Type-Option
 
 ## Consequences
 
-- **The Data directory now holds data the database cannot describe.** Until now, `calendar.db` was the backup story (ADR-0030 says so explicitly). It no longer is on its own — a backup that copies the database and not `attachments/` silently loses every file. This needs saying in the README.
+- **The Data directory now holds data the database cannot describe.** Until now, `calich.db` was the backup story (ADR-0030 says so explicitly). It no longer is on its own — a backup that copies the database and not `attachments/` silently loses every file. This needs saying in the README.
 - **Uploads happen after the Event exists.** The web app mints the Event UUID client-side already, but the row must exist before an upload can reference it, so the modal holds `File` objects in memory and uploads them after the create POST succeeds. Cancelling uploads nothing; a failed upload against a saved Event is reported per-file and retried in place. No staging area, and so no second place bytes can live and no sweeper for modals nobody submitted.
 - **One upload path uses `XMLHttpRequest` rather than `fetch`.** A deliberate deviation, recorded so nobody "fixes" it: `fetch` cannot report upload progress in Safari or Firefox, and a 25MB upload runs tens of seconds on a home connection — an indeterminate spinner that long reads as a hang and gets the modal closed mid-upload. It is the only such call in the app.
 - **The event modal gains a scroll container.** It is a fixed-width popup with no `max-height` today, so a recurring Event with several Reminders already overflows the viewport unrecoverably. Attachments make a latent bug acute rather than causing a new one.

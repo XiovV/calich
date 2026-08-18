@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/XiovV/calendar/server/internal/db"
+	"github.com/XiovV/calich/server/internal/db"
 )
 
 // newTestEventRepository returns an EventRepository plus a real user id and

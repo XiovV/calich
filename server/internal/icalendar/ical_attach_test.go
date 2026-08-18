@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/XiovV/calendar/server/internal/repository"
+	"github.com/XiovV/calich/server/internal/repository"
 )
 
 // staticOpener is an AttachmentOpener test double: id resolves to content,

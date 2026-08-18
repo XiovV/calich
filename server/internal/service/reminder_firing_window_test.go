@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/XiovV/calendar/server/internal/reminder"
-	"github.com/XiovV/calendar/server/internal/repository"
+	"github.com/XiovV/calich/server/internal/reminder"
+	"github.com/XiovV/calich/server/internal/repository"
 )
 
 // The firing engine's candidate read is bounded by the tick's own window

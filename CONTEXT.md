@@ -1,4 +1,4 @@
-# Calendar
+# Calich
 
 Domain vocabulary for the calendar app — navigation chrome, view state, and the sidebar calendar list.
 

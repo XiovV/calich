@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/XiovV/calendar/server/internal/apptest"
-	"github.com/XiovV/calendar/server/internal/repository"
+	"github.com/XiovV/calich/server/internal/apptest"
+	"github.com/XiovV/calich/server/internal/repository"
 )
 
 // attachmentTestFixture mirrors eventShareFixture (event_share_test.go): an

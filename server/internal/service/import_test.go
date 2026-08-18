@@ -12,9 +12,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/XiovV/calendar/server/internal/apptest"
-	"github.com/XiovV/calendar/server/internal/attachmentstore"
-	"github.com/XiovV/calendar/server/internal/repository"
+	"github.com/XiovV/calich/server/internal/apptest"
+	"github.com/XiovV/calich/server/internal/attachmentstore"
+	"github.com/XiovV/calich/server/internal/repository"
 )
 
 // testMaxAttachmentSize and testMaxAttachmentsPerEvent are this package's

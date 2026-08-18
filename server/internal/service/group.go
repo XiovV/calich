@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/XiovV/calendar/server/internal/repository"
+	"github.com/XiovV/calich/server/internal/repository"
 )
 
 // GroupService creates and manages Groups — named sets of a Workspace's

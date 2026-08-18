@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/XiovV/calendar/server/internal/db"
+	"github.com/XiovV/calich/server/internal/db"
 )
 
 // newTestFiredReminderRepository returns a FiredReminderRepository plus a

@@ -8,8 +8,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/XiovV/calendar/server/internal/app"
-	"github.com/XiovV/calendar/server/internal/apptest"
+	"github.com/XiovV/calich/server/internal/app"
+	"github.com/XiovV/calich/server/internal/apptest"
 )
 
 func newTestRouter(t *testing.T) http.Handler {

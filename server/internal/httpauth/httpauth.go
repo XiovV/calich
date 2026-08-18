@@ -8,7 +8,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/XiovV/calendar/server/internal/httpresponse"
+	"github.com/XiovV/calich/server/internal/httpresponse"
 )
 
 type contextKey int

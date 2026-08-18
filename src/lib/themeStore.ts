@@ -3,7 +3,7 @@ import { create } from "zustand";
 export type ThemePreference = "light" | "dark" | "system";
 
 // Keep in sync with the pre-paint script in index.html.
-const STORAGE_KEY = "calendar-theme";
+const STORAGE_KEY = "calich-theme";
 
 const darkQuery = window.matchMedia("(prefers-color-scheme: dark)");
 

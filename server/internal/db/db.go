@@ -14,7 +14,7 @@ import (
 //go:embed migrations/*.sql
 var migrations embed.FS
 
-// Open opens (creating if necessary) the SQLite database at $dataDir/calendar.db
+// Open opens (creating if necessary) the SQLite database at $dataDir/calich.db
 // and runs any pending migrations against it.
 func Open(dataDir string) (*sql.DB, error) {
 	if err := os.MkdirAll(dataDir, 0o755); err != nil {
@@ -22,7 +22,7 @@ func Open(dataDir string) (*sql.DB, error) {
 	}
 
 	// Attachments' bytes (#132, ADR-0040) live under here too, so a backup
-	// of dataDir now needs more than calendar.db — see the README.
+	// of dataDir now needs more than calich.db — see the README.
 	if err := os.MkdirAll(filepath.Join(dataDir, "attachments"), 0o755); err != nil {
 		return nil, fmt.Errorf("create attachments dir: %w", err)
 	}
@@ -30,7 +30,7 @@ func Open(dataDir string) (*sql.DB, error) {
 	// SQLite disables foreign key enforcement per-connection by default —
 	// without this, the ON DELETE CASCADE constraints in our schema (e.g.
 	// events cascading off their calendar) would silently do nothing.
-	dsn := filepath.Join(dataDir, "calendar.db") + "?_pragma=foreign_keys(1)"
+	dsn := filepath.Join(dataDir, "calich.db") + "?_pragma=foreign_keys(1)"
 
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {

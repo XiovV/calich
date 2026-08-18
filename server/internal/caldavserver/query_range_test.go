@@ -8,7 +8,7 @@ import (
 	"github.com/emersion/go-ical"
 	"github.com/emersion/go-webdav/caldav"
 
-	"github.com/XiovV/calendar/server/internal/service"
+	"github.com/XiovV/calich/server/internal/service"
 )
 
 // queryRange runs a calendar-query REPORT filtered to [from, to) and returns

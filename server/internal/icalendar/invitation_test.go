@@ -8,7 +8,7 @@ import (
 
 	"github.com/emersion/go-ical"
 
-	"github.com/XiovV/calendar/server/internal/repository"
+	"github.com/XiovV/calich/server/internal/repository"
 )
 
 // attendeeUserID builds a *int64 test Attendees can assign to UserID —

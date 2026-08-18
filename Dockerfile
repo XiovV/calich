@@ -13,9 +13,9 @@ COPY server/go.mod server/go.sum ./
 RUN go mod download
 COPY server/ ./
 COPY --from=frontend /app/dist ./internal/static/dist
-RUN CGO_ENABLED=0 go build -o /calendar-server ./cmd/server
+RUN CGO_ENABLED=0 go build -o /calich-server ./cmd/server
 
 FROM gcr.io/distroless/static-debian12
-COPY --from=backend /calendar-server /calendar-server
+COPY --from=backend /calich-server /calich-server
 EXPOSE 8080
-ENTRYPOINT ["/calendar-server"]
+ENTRYPOINT ["/calich-server"]

@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/XiovV/calendar/server/internal/httpresponse"
+	"github.com/XiovV/calich/server/internal/httpresponse"
 )
 
 type workspaceIDKeyType int

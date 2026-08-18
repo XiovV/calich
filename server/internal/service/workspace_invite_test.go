@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/XiovV/calendar/server/internal/repository"
+	"github.com/XiovV/calich/server/internal/repository"
 )
 
 // newTestWorkspaceInviteHarness wires a WorkspaceService and an AuthService

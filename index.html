@@ -4,13 +4,13 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>calendar</title>
+    <title>Calich</title>
     <script>
       // Apply the stored theme preference before first paint to avoid a flash.
       // Mirrors src/lib/themeStore.ts — keep the storage key in sync.
       (function () {
         try {
-          var pref = localStorage.getItem("calendar-theme");
+          var pref = localStorage.getItem("calich-theme");
           var dark =
             pref === "dark" ||
             ((pref === null || pref === "system") &&

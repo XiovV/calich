@@ -21,10 +21,10 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/XiovV/calendar/server/internal/attachmentstore"
-	"github.com/XiovV/calendar/server/internal/config"
-	"github.com/XiovV/calendar/server/internal/db"
-	"github.com/XiovV/calendar/server/internal/repository"
+	"github.com/XiovV/calich/server/internal/attachmentstore"
+	"github.com/XiovV/calich/server/internal/config"
+	"github.com/XiovV/calich/server/internal/db"
+	"github.com/XiovV/calich/server/internal/repository"
 )
 
 // Graph is every repository and service this server runs on, built once

@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/XiovV/calendar/server/internal/db"
+	"github.com/XiovV/calich/server/internal/db"
 )
 
 func newTestAppPasswordRepository(t *testing.T) (*AppPasswordRepository, *UserRepository) {

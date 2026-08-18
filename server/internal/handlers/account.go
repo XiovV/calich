@@ -5,9 +5,9 @@ import (
 	"errors"
 	"net/http"
 
-	"github.com/XiovV/calendar/server/internal/httpauth"
-	"github.com/XiovV/calendar/server/internal/httpresponse"
-	"github.com/XiovV/calendar/server/internal/service"
+	"github.com/XiovV/calich/server/internal/httpauth"
+	"github.com/XiovV/calich/server/internal/httpresponse"
+	"github.com/XiovV/calich/server/internal/service"
 )
 
 // AccountHandler is self-service account lifecycle (ADR-0044): a User

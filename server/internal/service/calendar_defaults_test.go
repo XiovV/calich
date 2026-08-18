@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/XiovV/calendar/server/internal/repository"
+	"github.com/XiovV/calich/server/internal/repository"
 )
 
 func newTestCalendarServiceForUser(t *testing.T) (svc *CalendarService, userID, workspaceID int64) {

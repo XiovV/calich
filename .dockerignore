@@ -1,4 +1,4 @@
 node_modules
 dist
-server/calendar-server
+server/calich-server
 .git

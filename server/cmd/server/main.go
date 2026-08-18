@@ -9,10 +9,10 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/XiovV/calendar/server/internal/app"
-	"github.com/XiovV/calendar/server/internal/config"
-	"github.com/XiovV/calendar/server/internal/db"
-	"github.com/XiovV/calendar/server/internal/router"
+	"github.com/XiovV/calich/server/internal/app"
+	"github.com/XiovV/calich/server/internal/config"
+	"github.com/XiovV/calich/server/internal/db"
+	"github.com/XiovV/calich/server/internal/router"
 )
 
 // reminderTickInterval is how often the firing engine checks for due
