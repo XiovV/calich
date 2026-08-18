@@ -325,7 +325,11 @@ export const calendarsApi = {
     });
     if (!response.ok) throw await errorFromResponse(response);
 
-    return (await response.json()) as DefaultReminders;
+    // Both lists are normalised to arrays: a server that serves null for a
+    // list nobody has set yet (every Calendar, until someone saves a default)
+    // must not reach a caller that maps over it.
+    const wire = (await response.json()) as Partial<DefaultReminders> | null;
+    return { timed: wire?.timed ?? [], allDay: wire?.allDay ?? [] };
   },
 
   // setDefaultReminders replaces the caller's own default Reminder list —

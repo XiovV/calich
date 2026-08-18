@@ -494,3 +494,44 @@ describe("calendarsApi.revokeShare", () => {
     });
   });
 });
+
+describe("calendarsApi.getDefaultReminders", () => {
+  it("returns both lists for a calendar with defaults set", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(200, {
+        timed: [{ offsetMinutes: 10, channel: "notification" }],
+        allDay: [{ offsetMinutes: 1440, channel: "email" }],
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const defaults = await calendarsApi.getDefaultReminders("token-123", "cal-1");
+
+    expect(defaults).toEqual({
+      timed: [{ offsetMinutes: 10, channel: "notification" }],
+      allDay: [{ offsetMinutes: 1440, channel: "email" }],
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/calendars/cal-1/default-reminders",
+      expect.objectContaining({
+        credentials: "include",
+        headers: { Authorization: "Bearer token-123" },
+      }),
+    );
+  });
+
+  // An older server serves null rather than [] for a list nobody has ever
+  // set (ADR-0064) — the untouched-Calendar case, which is every Calendar
+  // until someone opens the edit dialog and saves one. Callers map over
+  // both lists, so a null has to arrive here as an empty list.
+  it("returns empty lists when the server serves nulls for an untouched calendar", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(jsonResponse(200, { timed: null, allDay: null }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const defaults = await calendarsApi.getDefaultReminders("token-123", "cal-1");
+
+    expect(defaults).toEqual({ timed: [], allDay: [] });
+  });
+});

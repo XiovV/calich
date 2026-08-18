@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -88,6 +89,51 @@ func newDefaultRemindersTestServer(t *testing.T) defaultRemindersTestServer {
 		userID:      bootstrapUser.ID,
 		calendarID:  cal.ID,
 		events:      events,
+	}
+}
+
+// TestCalendarHandler_GetDefaultReminders_UntouchedCalendarServesEmptyLists
+// pins the wire shape a Calendar nobody has set a default on serves: two
+// empty JSON arrays, not nulls (ADR-0064 — "empty, not an error, if they've
+// never set either"). Asserted against the raw body rather than a decoded
+// struct, because Go decodes `null` and `[]` into the same nil slice and a
+// client mapping over the list sees the difference.
+func TestCalendarHandler_GetDefaultReminders_UntouchedCalendarServesEmptyLists(t *testing.T) {
+	s := newDefaultRemindersTestServer(t)
+
+	req, err := http.NewRequest(http.MethodGet, s.baseURL+"/api/calendars/"+s.calendarID+"/default-reminders", nil)
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+s.accessToken)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("do request: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+
+	var raw struct {
+		Timed  json.RawMessage `json:"timed"`
+		AllDay json.RawMessage `json:"allDay"`
+	}
+	if err := json.Unmarshal(body, &raw); err != nil {
+		t.Fatalf("unmarshal body %q: %v", body, err)
+	}
+
+	if string(raw.Timed) != "[]" {
+		t.Errorf("expected timed to be [], got %s", raw.Timed)
+	}
+	if string(raw.AllDay) != "[]" {
+		t.Errorf("expected allDay to be [], got %s", raw.AllDay)
 	}
 }
 

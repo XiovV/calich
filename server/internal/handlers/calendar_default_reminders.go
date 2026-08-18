@@ -14,6 +14,7 @@ import (
 
 	"github.com/XiovV/calendar/server/internal/httpauth"
 	"github.com/XiovV/calendar/server/internal/httpresponse"
+	"github.com/XiovV/calendar/server/internal/repository"
 	"github.com/XiovV/calendar/server/internal/service"
 )
 
@@ -29,6 +30,20 @@ var defaultRemindersErrorsWithNotFound = alsoHandling(defaultRemindersErrors, ca
 type defaultRemindersResponse struct {
 	Timed  []reminderWire `json:"timed"`
 	AllDay []reminderWire `json:"allDay"`
+}
+
+// reminderList is toReminderWire for a response field that is always a list
+// rather than an optional one: a User who has never set a default has an
+// empty list, and an empty list serializes as [] here, not null. toReminderWire
+// returns a nil slice for empty, which is right where the field is omitempty-
+// shaped (an Event's reminders) and wrong here, where the client maps over
+// whatever arrives.
+func reminderList(reminders []repository.Reminder) []reminderWire {
+	wire := toReminderWire(reminders)
+	if wire == nil {
+		return []reminderWire{}
+	}
+	return wire
 }
 
 // GetDefaultReminders serves GET /api/calendars/{id}/default-reminders: the
@@ -48,7 +63,7 @@ func (h *CalendarHandler) GetDefaultReminders(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	httpresponse.JSON(w, http.StatusOK, defaultRemindersResponse{Timed: toReminderWire(timed), AllDay: toReminderWire(allDay)})
+	httpresponse.JSON(w, http.StatusOK, defaultRemindersResponse{Timed: reminderList(timed), AllDay: reminderList(allDay)})
 }
 
 type setDefaultRemindersRequest struct {
