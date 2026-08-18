@@ -235,8 +235,14 @@ export function ShareCalendarModal({ calendar, onClose }: ShareCalendarModalProp
             <p className="mt-2 text-label-sm text-ink-muted">Loading…</p>
           ) : (
             <>
+              {/* py-0.5 on the roster is clearance, not spacing: each row's
+                  Role Select draws its border as a ring — a box-shadow
+                  outside the trigger's border box — and a scroll container
+                  clips descendant shadows at its padding box. Without it the
+                  first and last rows' pills lose their top and bottom edge,
+                  and lose more of it at ring-2 while one is open. */}
               {shares.length > 0 || groupShares.length > 0 ? (
-                <ul className="mt-2 flex max-h-40 flex-col gap-1.5 overflow-y-auto">
+                <ul className="mt-2 flex max-h-40 flex-col gap-1.5 overflow-y-auto py-0.5">
                   {shares.map((share) => (
                     <li key={`user-${share.userId}`} className="flex items-center gap-2">
                       <span className="min-w-0 flex-1 truncate text-body text-ink">
