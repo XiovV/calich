@@ -6,8 +6,16 @@ import { useCalendarsStore } from "../lib/calendarsStore";
 import { useEventsStore } from "../lib/eventsStore";
 import { errorMessage } from "../lib/errorMessage";
 import { icsApi, type ExportSummary } from "../lib/icsApi";
-import { importApi, type ImportSummary, type ImportTarget } from "../lib/importApi";
-import { formatImportSummaryLine, formatReminderLine, summarizeImport } from "../lib/importSummary";
+import {
+  importApi,
+  type ImportSummary,
+  type ImportTarget,
+} from "../lib/importApi";
+import {
+  formatImportSummaryLine,
+  formatReminderLine,
+  summarizeImport,
+} from "../lib/importSummary";
 import { toast } from "../lib/toast";
 import { readZipEntryNames } from "../lib/zipEntryNames";
 import { ExportSummaryDialog } from "../components/ExportSummaryDialog";
@@ -50,8 +58,11 @@ export function ImportExportSection() {
   const [isExporting, setIsExporting] = useState(false);
   const [isPreviewing, setIsPreviewing] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
-  const [pendingImport, setPendingImport] = useState<PendingImport | null>(null);
-  const [pendingExportSummary, setPendingExportSummary] = useState<ExportSummary | null>(null);
+  const [pendingImport, setPendingImport] = useState<PendingImport | null>(
+    null,
+  );
+  const [pendingExportSummary, setPendingExportSummary] =
+    useState<ExportSummary | null>(null);
 
   async function downloadAllCalendars() {
     if (!accessToken) return;
@@ -69,7 +80,8 @@ export function ImportExportSection() {
 
     setIsExporting(true);
     try {
-      const summary = await icsApi.allCalendarsOversizedAttachments(accessToken);
+      const summary =
+        await icsApi.allCalendarsOversizedAttachments(accessToken);
       if (summary.count === 0) {
         await downloadAllCalendars();
       } else {
@@ -109,7 +121,10 @@ export function ImportExportSection() {
         return;
       }
 
-      const targets: ImportTarget[] = filenames.map((filename) => ({ filename, action: "new" }));
+      const targets: ImportTarget[] = filenames.map((filename) => ({
+        filename,
+        action: "new",
+      }));
       const summary = await importApi.preview(accessToken, file, targets);
       setPendingImport({ file, isZip, summary });
     } catch (err) {
@@ -145,11 +160,17 @@ export function ImportExportSection() {
 
     setIsImporting(true);
     try {
-      const summary = await importApi.commit(accessToken, pendingImport.file, targets);
+      const summary = await importApi.commit(
+        accessToken,
+        pendingImport.file,
+        targets,
+      );
       await Promise.all([fetchCalendars(), fetchEvents()]);
       setPendingImport(null);
       const totals = summarizeImport(summary);
-      toast.success(`${formatImportSummaryLine(totals)} · ${formatReminderLine(totals.reminders)}`);
+      toast.success(
+        `${formatImportSummaryLine(totals)} · ${formatReminderLine(totals.reminders)}`,
+      );
     } catch (err) {
       toast.error(errorMessage(err));
     } finally {
@@ -161,11 +182,9 @@ export function ImportExportSection() {
     <section>
       <h2 className="text-heading font-medium text-ink">Import & export</h2>
       <p className="mt-1 text-body text-ink-muted">
-        Download every calendar you own as a .zip of .ics files — Subscribed Calendars aren't
-        included, since re-subscribing elsewhere is what actually moves them; their URLs are
-        listed in the archive instead. Or import a .ics or .zip export from another app.
-        Importing the same file twice creates duplicate events — and a duplicate copy of every
-        attachment — if an import goes wrong, undo it by deleting the calendar it created.
+        Export every calendar you own as a .zip of .ics files, or import one
+        from another app. Re-importing a file duplicates its events and
+        attachments — delete the calendar it made to undo it.
       </p>
 
       <Button
