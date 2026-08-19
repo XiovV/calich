@@ -9,6 +9,7 @@ import {
   type RecurrenceUnit,
 } from "../lib/customRecurrence";
 import { ORDINALS, nthWeekdayOfMonth } from "../lib/rruleParts";
+import { useWeekStartsOn } from "../hooks/useWeekStartsOn";
 import { Select } from "../components/ui/Select";
 import { Input } from "../components/ui/Input";
 import { Button } from "../components/ui/Button";
@@ -22,7 +23,9 @@ interface CustomRecurrenceDialogProps {
 }
 
 const UNIT_ORDER: RecurrenceUnit[] = ["day", "week", "month", "year"];
-// Sunday-first, to match the grid's week. Single letters need full aria labels.
+// Indexed by Date.getDay() (0 = Sunday), same as `weekdays`. Display order
+// alone rotates to the viewer's Week start (below) — this is never read in
+// that order. Single letters need full aria labels.
 const WEEKDAY_CHIPS = [
   { index: 0, letter: "S", name: "Sunday" },
   { index: 1, letter: "M", name: "Monday" },
@@ -53,6 +56,11 @@ export function CustomRecurrenceDialog({
   onConfirm,
   onClose,
 }: CustomRecurrenceDialogProps) {
+  const weekStartsOn = useWeekStartsOn();
+  const orderedWeekdayChips = [
+    ...WEEKDAY_CHIPS.slice(weekStartsOn),
+    ...WEEKDAY_CHIPS.slice(0, weekStartsOn),
+  ];
   const [repeatInterval, setRepeatInterval] = useState(initial.interval);
   const [unit, setUnit] = useState<RecurrenceUnit>(initial.unit);
   const [weekdays, setWeekdays] = useState<number[]>(initial.weekdays);
@@ -139,7 +147,7 @@ export function CustomRecurrenceDialog({
             <div className="mt-4">
               <p className="mb-1.5 text-label-sm text-ink-muted">Repeat on</p>
               <div className="flex gap-1.5">
-                {WEEKDAY_CHIPS.map((chip) => {
+                {orderedWeekdayChips.map((chip) => {
                   const selected = weekdays.includes(chip.index);
                   return (
                     <button
