@@ -4,7 +4,8 @@
 	test test-backend test-frontend \
 	lint lint-backend lint-frontend \
 	fmt vet \
-	docker-build docker-run docker-clean
+	docker-build docker-run docker-clean \
+	qa-up qa-down qa-reset qa-status
 
 DOCKER_IMAGE := calich-server
 DATA_DIR := ./data
@@ -84,3 +85,20 @@ docker-run:
 
 docker-clean:
 	docker rm -f $(DOCKER_IMAGE)
+
+# --- Browser QA ---
+# A disposable backend+frontend pair on their own ports and their own SQLite
+# database under .qa/, so browser QA never touches $(DATA_DIR) and never
+# fights dev-backend/dev-frontend for a port. See docs/agents/browser-qa.md.
+
+qa-up:
+	scripts/qa-env.sh up
+
+qa-down:
+	scripts/qa-env.sh down
+
+qa-reset:
+	scripts/qa-env.sh reset
+
+qa-status:
+	scripts/qa-env.sh status

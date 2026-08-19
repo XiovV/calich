@@ -27,6 +27,7 @@
   "devDependencies": {
     "@babel/core": "^7.29.7",
     "@eslint/js": "^10.0.1",
+    "@playwright/mcp": "^0.0.79",
     "@rolldown/plugin-babel": "^0.2.3",
     "@testing-library/dom": "^10.4.1",
     "@testing-library/jest-dom": "^7.0.1",

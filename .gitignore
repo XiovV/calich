@@ -5,3 +5,4 @@ node_modules
 /server/bin
 .claude/settings.local.json
 .claude/settings.local.json.backup
+/.qa

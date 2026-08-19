@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "playwright": {
+      "command": "./node_modules/.bin/playwright-mcp",
+      "args": [
+        "--browser=chromium",
+        "--isolated",
+        "--viewport-size=1440,900",
+        "--output-dir=.qa/output"
+      ]
+    }
+  }
+}
