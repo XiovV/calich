@@ -40,7 +40,7 @@ export function AllDayLane({
 
   return (
     <div className="flex border-t border-border">
-      <div className="w-14 shrink-0" />
+      <div className="w-18 shrink-0" />
       {daysToShow.map((day) => {
         const dayOccurrences = occurrences.filter((occurrence) =>
           isSameDay(occurrence.start, day),

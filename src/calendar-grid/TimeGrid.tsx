@@ -258,7 +258,7 @@ export function TimeGrid({
           style={{ zIndex: GRID_Z_HEADER }}
         >
           <div className="flex">
-            <div className="w-14 shrink-0" />
+            <div className="w-18 shrink-0" />
             {daysToShow.map((day) => (
               <div
                 key={day.toISOString()}
