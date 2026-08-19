@@ -152,7 +152,7 @@ The per-User settings that shape how the calendar is displayed to one User — W
 _Avoid_: settings (Settings is the modal these live in, not the concept), config, options, profile
 
 **Week start**:
-The weekday a displayed week begins on — the first column of the Month grid, the first day of the Week view, and the leftmost column of the mini calendars. Stored as a day index 0–6 (Sunday–Saturday). A viewer's Preference and nothing more: it never reaches an Event's Recurrence rule, whose `WKST` stays at the iCalendar default, so one Event yields the same Occurrences for every viewer and for every CalDAV client. See ADR-0039.
+The weekday a displayed week begins on — the first column of the Month grid, the first day of the Week view, the leftmost column of the mini calendars, and the leading chip in the Custom recurrence dialog's "Repeat on" picker. Stored as a day index 0–6 (Sunday–Saturday). A viewer's Preference and nothing more: it never reaches an Event's Recurrence rule, whose `WKST` stays at the iCalendar default, so one Event yields the same Occurrences for every viewer and for every CalDAV client. See ADR-0039.
 _Avoid_: first day, week offset, WKST (that belongs to the rule, not the viewer)
 
 **Default view**:
