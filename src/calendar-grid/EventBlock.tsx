@@ -6,6 +6,7 @@ import { getOccurrenceBlockStyle } from "../lib/calendarColors";
 import { useCalendarsStore } from "../lib/calendarsStore";
 import { columnLayoutToBox } from "../lib/eventBlockGeometry";
 import { EventVisual } from "./EventVisual";
+import { GRID_Z_OCCURRENCE_EDGE } from "./gridStacking";
 
 export type EventDragKind = "move" | "resize-start" | "resize-end";
 
@@ -84,7 +85,8 @@ export function EventBlock({
       {!isReadOnly && (
         <div
           onMouseDown={(domEvent) => handleEdgeMouseDown(domEvent, "resize-start")}
-          className="absolute inset-x-0 top-0 z-10 h-1.5 cursor-ns-resize"
+          className="absolute inset-x-0 top-0 h-1.5 cursor-ns-resize"
+          style={{ zIndex: GRID_Z_OCCURRENCE_EDGE }}
         />
       )}
       <EventVisual
@@ -98,7 +100,8 @@ export function EventBlock({
       {!isReadOnly && (
         <div
           onMouseDown={(domEvent) => handleEdgeMouseDown(domEvent, "resize-end")}
-          className="absolute inset-x-0 bottom-0 z-10 h-1.5 cursor-ns-resize"
+          className="absolute inset-x-0 bottom-0 h-1.5 cursor-ns-resize"
+          style={{ zIndex: GRID_Z_OCCURRENCE_EDGE }}
         />
       )}
     </button>

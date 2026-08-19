@@ -25,6 +25,7 @@ import { DayColumn, type EventDragPreviewData } from "./DayColumn";
 import type { EventDragKind } from "./EventBlock";
 import { ScopePicker } from "./ScopePicker";
 import { useOccurrenceDragCommit } from "./useOccurrenceDragCommit";
+import { GRID_Z_HEADER } from "./gridStacking";
 
 const NOW_REFRESH_INTERVAL_MS = 60_000;
 
@@ -253,7 +254,8 @@ export function TimeGrid({
       <div ref={scrollRef} className="flex-1 overflow-y-auto">
         <div
           ref={headerRef}
-          className="sticky top-0 z-10 border-b border-border bg-surface"
+          className="sticky top-0 border-b border-border bg-surface"
+          style={{ zIndex: GRID_Z_HEADER }}
         >
           <div className="flex">
             <div className="w-14 shrink-0" />
