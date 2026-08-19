@@ -251,7 +251,7 @@ export function TimeGrid({
 
   return (
     <div className="flex h-full flex-col">
-      <div ref={scrollRef} className="flex-1 overflow-y-auto">
+      <div ref={scrollRef} className="isolate flex-1 overflow-y-auto">
         <div
           ref={headerRef}
           className="sticky top-0 border-b border-border bg-surface"
