@@ -281,6 +281,18 @@ func TestRegister_FirstAccountSucceedsEvenWithSignupsDisabled(t *testing.T) {
 	}
 }
 
+// TestSignupsEnabled_ReflectsConfig covers #235: the frontend's setup-status
+// call needs the raw ENABLE_SIGNUPS value, independent of HasAnyAccounts, to
+// decide whether to offer registration once an account already exists.
+func TestSignupsEnabled_ReflectsConfig(t *testing.T) {
+	if newTestAuthServiceWithSignups(t, "", "", false).SignupsEnabled() {
+		t.Fatalf("expected SignupsEnabled to be false")
+	}
+	if !newTestAuthServiceWithSignups(t, "", "", true).SignupsEnabled() {
+		t.Fatalf("expected SignupsEnabled to be true")
+	}
+}
+
 // TestRegister_SignupsDisabled_BlocksASecondRegistration covers #153's
 // acceptance criterion that ENABLE_SIGNUPS=false rejects any registration
 // attempt beyond the first account.

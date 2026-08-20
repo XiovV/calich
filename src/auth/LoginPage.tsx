@@ -7,6 +7,7 @@ import { Input } from "../components/ui/Input";
 
 export function LoginPage() {
   const status = useAuthStore((state) => state.status);
+  const signupsEnabled = useAuthStore((state) => state.signupsEnabled);
   const login = useAuthStore((state) => state.login);
   const navigate = useNavigate();
 
@@ -81,9 +82,11 @@ export function LoginPage() {
           {isSubmitting ? "Signing in…" : "Sign in"}
         </Button>
 
-        <p className="mt-4 text-label-sm text-ink-muted">
-          No account yet? <Link to="/register" className="text-accent">Create one</Link>
-        </p>
+        {signupsEnabled && (
+          <p className="mt-4 text-label-sm text-ink-muted">
+            No account yet? <Link to="/register" className="text-accent">Create one</Link>
+          </p>
+        )}
       </form>
     </div>
   );

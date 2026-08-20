@@ -59,6 +59,7 @@ function resetStore() {
     user: null,
     pendingEmail: null,
     accessToken: null,
+    signupsEnabled: true,
   });
 }
 
@@ -66,12 +67,15 @@ beforeEach(() => {
   vi.clearAllMocks();
   resetStore();
   useShellStore.setState({ activeView: "week" });
+  // bootstrap fetches setup-status unconditionally now (#235), so give every
+  // test a default it can ignore; tests that care override it themselves.
+  vi.mocked(authApi.setupStatus).mockResolvedValue({ hasAccounts: true, signupsEnabled: true });
 });
 
 describe("bootstrap", () => {
   it("goes to unauthenticated when refresh fails but the instance has accounts", async () => {
     vi.mocked(authApi.refresh).mockRejectedValue(new ApiError(401, "unauthorized", "no session"));
-    vi.mocked(authApi.setupStatus).mockResolvedValue({ hasAccounts: true });
+    vi.mocked(authApi.setupStatus).mockResolvedValue({ hasAccounts: true, signupsEnabled: true });
 
     await useAuthStore.getState().bootstrap();
 
@@ -84,12 +88,36 @@ describe("bootstrap", () => {
   // ProtectedRoute/LoginPage redirect to Register instead of Sign-in.
   it("goes to needs-setup when refresh fails and the instance has no accounts", async () => {
     vi.mocked(authApi.refresh).mockRejectedValue(new ApiError(401, "unauthorized", "no session"));
-    vi.mocked(authApi.setupStatus).mockResolvedValue({ hasAccounts: false });
+    vi.mocked(authApi.setupStatus).mockResolvedValue({ hasAccounts: false, signupsEnabled: false });
 
     await useAuthStore.getState().bootstrap();
 
     expect(useAuthStore.getState().status).toBe("needs-setup");
     expect(useAuthStore.getState().accessToken).toBeNull();
+  });
+
+  // #235: signupsEnabled is fetched alongside hasAccounts so Sign-in/Register
+  // know whether to offer registration once an account already exists.
+  it("stores signupsEnabled from setup-status when refresh fails", async () => {
+    vi.mocked(authApi.refresh).mockRejectedValue(new ApiError(401, "unauthorized", "no session"));
+    vi.mocked(authApi.setupStatus).mockResolvedValue({ hasAccounts: true, signupsEnabled: false });
+
+    await useAuthStore.getState().bootstrap();
+
+    expect(useAuthStore.getState().signupsEnabled).toBe(false);
+  });
+
+  // signupsEnabled must still be correct for a caller who reaches
+  // "unauthenticated" later via logout — which never re-runs bootstrap — so
+  // it's fetched even down the refresh-succeeds path, not only on failure.
+  it("stores signupsEnabled from setup-status even when refresh succeeds", async () => {
+    vi.mocked(authApi.refresh).mockResolvedValue({ accessToken: "token-123" });
+    vi.mocked(authApi.me).mockResolvedValue(adminUser);
+    vi.mocked(authApi.setupStatus).mockResolvedValue({ hasAccounts: true, signupsEnabled: false });
+
+    await useAuthStore.getState().bootstrap();
+
+    expect(useAuthStore.getState().signupsEnabled).toBe(false);
   });
 
   it("falls back to unauthenticated if setup-status itself fails", async () => {

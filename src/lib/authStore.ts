@@ -21,6 +21,15 @@ interface AuthState {
   // available yet. Cleared once authenticated.
   pendingEmail: string | null;
   accessToken: string | null;
+  // Whether ENABLE_SIGNUPS is set on this instance (#235) — fetched once at
+  // bootstrap and cached for the rest of the session (it's an instance-wide
+  // config value, not a per-user one). Sign-in and Register read this to
+  // decide whether to offer registration at all once an account already
+  // exists; while status is "needs-setup" it's irrelevant, since Register
+  // always allows the very first account regardless of this flag. Defaults
+  // true so nothing is hidden before bootstrap resolves — status stays
+  // "loading" until then, so neither page renders off this default.
+  signupsEnabled: boolean;
   bootstrap: () => Promise<void>;
   login: (email: string, password: string) => Promise<void>;
   register: (name: string, email: string, password: string) => Promise<void>;
@@ -88,8 +97,16 @@ export const useAuthStore = create<AuthState>((set, get) => {
   return {
     ...unauthenticated(),
     status: "loading",
+    signupsEnabled: true,
 
     bootstrap: async () => {
+      // Fetched unconditionally, in parallel with refresh below, rather than
+      // only on refresh failure: signupsEnabled must still be correct for a
+      // caller who lands on "unauthenticated" later in the same session via
+      // logout/disableAccount/deleteAccount, none of which re-run bootstrap
+      // (#235).
+      const setupStatus = authApi.setupStatus().catch(() => null);
+
       let accessToken: string;
       try {
         ({ accessToken } = await authApi.refresh());
@@ -97,14 +114,14 @@ export const useAuthStore = create<AuthState>((set, get) => {
         // Not logged in — but resolve "no accounts yet at all" before
         // painting Sign-in, so a first-run visitor never sees it flash
         // before the redirect to Register (#169, ADR-0047).
-        try {
-          const { hasAccounts } = await authApi.setupStatus();
-          set(hasAccounts ? unauthenticated() : needsSetup());
-        } catch {
-          set(unauthenticated());
-        }
+        const result = await setupStatus;
+        if (result) set({ signupsEnabled: result.signupsEnabled });
+        set(result && !result.hasAccounts ? needsSetup() : unauthenticated());
         return;
       }
+
+      const setupResult = await setupStatus;
+      if (setupResult) set({ signupsEnabled: setupResult.signupsEnabled });
 
       try {
         const user = await authApi.me(accessToken);

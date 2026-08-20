@@ -106,13 +106,21 @@ var changePasswordErrors = []errorCase{
 
 type setupStatusResponse struct {
 	HasAccounts bool `json:"has_accounts"`
+	// SignupsEnabled mirrors ENABLE_SIGNUPS (ADR-0044, #235) — the frontend
+	// uses it to decide whether to offer self-registration (the login page's
+	// "Create one" link, /register's form) once HasAccounts is true. It's
+	// irrelevant while HasAccounts is false: Register always allows the very
+	// first account regardless of this flag.
+	SignupsEnabled bool `json:"signups_enabled"`
 }
 
 // SetupStatus reports whether the instance has any accounts yet (#169,
-// ADR-0047) — public and unauthenticated, since it must be answerable before
-// anyone has signed in, and it says nothing about who's asking. The frontend
-// uses this to redirect a first-run visitor straight to Register instead of
-// showing a Sign-in screen there are no accounts to sign in to.
+// ADR-0047) and whether self-registration is open (#235) — public and
+// unauthenticated, since it must be answerable before anyone has signed in,
+// and it says nothing about who's asking. The frontend uses HasAccounts to
+// redirect a first-run visitor straight to Register instead of showing a
+// Sign-in screen there are no accounts to sign in to, and SignupsEnabled to
+// decide whether to offer registration at all thereafter.
 func (h *AuthHandler) SetupStatus(w http.ResponseWriter, r *http.Request) {
 	hasAccounts, err := h.auth.HasAnyAccounts(r.Context())
 	if err != nil {
@@ -120,7 +128,10 @@ func (h *AuthHandler) SetupStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	httpresponse.JSON(w, http.StatusOK, setupStatusResponse{HasAccounts: hasAccounts})
+	httpresponse.JSON(w, http.StatusOK, setupStatusResponse{
+		HasAccounts:    hasAccounts,
+		SignupsEnabled: h.auth.SignupsEnabled(),
+	})
 }
 
 func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {

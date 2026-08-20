@@ -46,6 +46,7 @@ func newAuthTestServerWithMail(t *testing.T, smtpConfigured, imapConfigured bool
 	h := NewAuthHandler(auth, smtpConfigured, imapConfigured)
 
 	r := chi.NewRouter()
+	r.Get("/api/auth/setup-status", h.SetupStatus)
 	r.Post("/api/auth/login", h.Login)
 	r.Post("/api/auth/refresh", h.Refresh)
 	r.Post("/api/auth/logout", h.Logout)
@@ -1437,5 +1438,86 @@ func TestLogout_ClearsCookieAndInvalidatesSession(t *testing.T) {
 
 	if refreshResp.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("expected 401 refreshing with a logged-out session, got %d", refreshResp.StatusCode)
+	}
+}
+
+func mustGetSetupStatus(t *testing.T, srv *httptest.Server) setupStatusResponse {
+	t.Helper()
+
+	resp, err := http.Get(srv.URL + "/api/auth/setup-status")
+	if err != nil {
+		t.Fatalf("GET /api/auth/setup-status: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	var body setupStatusResponse
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode setup-status response: %v", err)
+	}
+	return body
+}
+
+// TestSetupStatus_AccountExistsAndSignupsDisabled covers #235: this is what
+// a default self-host looks like once bootstrapped — ENABLE_SIGNUPS unset,
+// one account already created — the shape the frontend uses to hide
+// registration.
+func TestSetupStatus_AccountExistsAndSignupsDisabled(t *testing.T) {
+	srv := newAuthTestServer(t)
+
+	body := mustGetSetupStatus(t, srv)
+	if !body.HasAccounts {
+		t.Fatalf("expected has_accounts true")
+	}
+	if body.SignupsEnabled {
+		t.Fatalf("expected signups_enabled false")
+	}
+}
+
+// TestSetupStatus_AccountExistsAndSignupsEnabled covers #235's "signups
+// enabled" acceptance criterion: the link and form are back once
+// ENABLE_SIGNUPS is true, even with accounts already on the instance.
+func TestSetupStatus_AccountExistsAndSignupsEnabled(t *testing.T) {
+	cfg := apptest.Config(t)
+	cfg.EnableSignups = true
+	g := newTestGraphWithConfig(t, cfg)
+	if _, _, err := g.Auth.Bootstrap(context.Background()); err != nil {
+		t.Fatalf("bootstrap: %v", err)
+	}
+
+	h := NewAuthHandler(g.Auth, false, false)
+	r := chi.NewRouter()
+	r.Get("/api/auth/setup-status", h.SetupStatus)
+	srv := httptest.NewServer(r)
+	t.Cleanup(srv.Close)
+
+	body := mustGetSetupStatus(t, srv)
+	if !body.HasAccounts {
+		t.Fatalf("expected has_accounts true (apptest.Config seeds a bootstrap account)")
+	}
+	if !body.SignupsEnabled {
+		t.Fatalf("expected signups_enabled true")
+	}
+}
+
+// TestSetupStatus_NoAccountsYet covers the fresh-instance case: no accounts
+// at all, so signups_enabled is irrelevant — RegisterPage always shows the
+// bootstrap form regardless of it (ADR-0044, #235).
+func TestSetupStatus_NoAccountsYet(t *testing.T) {
+	cfg := apptest.Config(t)
+	cfg.InitialName, cfg.InitialEmail, cfg.InitialPassword = "", "", ""
+	g := newTestGraphWithConfig(t, cfg)
+
+	h := NewAuthHandler(g.Auth, false, false)
+	r := chi.NewRouter()
+	r.Get("/api/auth/setup-status", h.SetupStatus)
+	srv := httptest.NewServer(r)
+	t.Cleanup(srv.Close)
+
+	body := mustGetSetupStatus(t, srv)
+	if body.HasAccounts {
+		t.Fatalf("expected has_accounts false")
 	}
 }

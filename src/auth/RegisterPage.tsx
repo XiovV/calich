@@ -6,12 +6,16 @@ import { Button } from "../components/ui/Button";
 import { Input } from "../components/ui/Input";
 
 // The first-run bootstrap form and self-registration page (ADR-0044): the
-// server decides whether the request is allowed — the very first account on
-// the instance always succeeds, and any later one only while ENABLE_SIGNUPS
-// is true — so this form doesn't need to know which case it's in, only show
-// the "self-registration is disabled" error the server returns otherwise.
+// very first account on the instance always succeeds, and any later one
+// only while ENABLE_SIGNUPS is true. The server is still the authority that
+// enforces this (registerErrors' ErrSignupsDisabled) regardless of what this
+// page does — but #235 wants the closed case to look closed rather than
+// asking a User to fill in a form that only fails at the very end, so this
+// page mirrors that gate client-side too (via signupsEnabled) rather than
+// just surfacing the server's rejection after the fact.
 export function RegisterPage() {
   const status = useAuthStore((state) => state.status);
+  const signupsEnabled = useAuthStore((state) => state.signupsEnabled);
   const register = useAuthStore((state) => state.register);
   const navigate = useNavigate();
 
@@ -26,6 +30,27 @@ export function RegisterPage() {
 
   if (status === "authenticated" || status === "must-change-password") {
     return <Navigate to="/" replace />;
+  }
+
+  // "needs-setup" is the very first account, which Register always allows
+  // regardless of ENABLE_SIGNUPS (ADR-0044) — only a later visit, once an
+  // account already exists, is gated on signupsEnabled (#235).
+  if (status !== "needs-setup" && !signupsEnabled) {
+    return (
+      <div className="flex h-screen items-center justify-center bg-surface-sunken">
+        <div className="w-80 rounded-shell-lg bg-surface p-6 shadow-elevation-2">
+          <h1 className="text-heading font-medium text-ink">Registration is closed</h1>
+          <p className="mt-1 text-body text-ink-muted">
+            This instance isn't accepting new accounts. Ask an existing member for a Workspace
+            invite, or sign in if you already have an account.
+          </p>
+
+          <p className="mt-4 text-label-sm text-ink-muted">
+            <Link to="/login" className="text-accent">Sign in</Link>
+          </p>
+        </div>
+      </div>
+    );
   }
 
   const canSubmit = name.trim() !== "" && email.trim() !== "" && password.trim() !== "";

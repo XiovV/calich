@@ -85,15 +85,19 @@ function fromMeWire(wire: MeWire): User {
 }
 
 export const authApi = {
-  // Reports whether the instance has any accounts yet (#169, ADR-0047) —
-  // public and unauthenticated, so it's answerable before anyone has signed
-  // in. Drives the first-run redirect to Register instead of Sign-in.
-  async setupStatus(): Promise<{ hasAccounts: boolean }> {
+  // Reports whether the instance has any accounts yet (#169, ADR-0047) and
+  // whether self-registration is open (#235) — public and unauthenticated,
+  // so it's answerable before anyone has signed in. hasAccounts drives the
+  // first-run redirect to Register instead of Sign-in; signupsEnabled drives
+  // whether Sign-in and Register offer registration at all thereafter (it's
+  // irrelevant while hasAccounts is false — Register always allows the very
+  // first account regardless of ENABLE_SIGNUPS).
+  async setupStatus(): Promise<{ hasAccounts: boolean; signupsEnabled: boolean }> {
     const response = await fetch("/api/auth/setup-status", { credentials: "include" });
     if (!response.ok) throw await errorFromResponse(response);
 
-    const body = (await response.json()) as { has_accounts: boolean };
-    return { hasAccounts: body.has_accounts };
+    const body = (await response.json()) as { has_accounts: boolean; signups_enabled: boolean };
+    return { hasAccounts: body.has_accounts, signupsEnabled: body.signups_enabled };
   },
 
   async login(email: string, password: string): Promise<LoginResult> {

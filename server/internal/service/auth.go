@@ -251,6 +251,14 @@ func (s *AuthService) HasAnyAccounts(ctx context.Context) (bool, error) {
 	return count > 0, nil
 }
 
+// SignupsEnabled reports the raw ENABLE_SIGNUPS setting (ADR-0044) — the
+// frontend uses it to decide whether to offer self-registration at all.
+// It says nothing about the very-first-account exception Register itself
+// grants: HasAnyAccounts is what callers combine it with for that.
+func (s *AuthService) SignupsEnabled() bool {
+	return s.enableSignups
+}
+
 // workspaceNameFor is the default name a Workspace gets when Bootstrap or
 // Register creates one automatically, rather than leaving it blank — the
 // User can rename it later (ADR-0044).
