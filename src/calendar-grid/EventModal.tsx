@@ -428,6 +428,19 @@ export function EventModal(props: EventModalProps) {
   const [startTime, setStartTime] = useState(initial.startTime);
   const [endTime, setEndTime] = useState(initial.endTime);
   const [calendarId, setCalendarId] = useState(initial.calendarId);
+  // #233: calendarId can go stale once selected — most concretely, the
+  // Calendar it names was created from this modal's own "Create a
+  // calendar" flow and that create's optimistic write then rolled back
+  // (ADR-0067), removing it from calendarOptions with no re-render of
+  // calendarId itself to follow. Every consumer that means "the writable
+  // Calendar currently picked" reads this instead of calendarId, so a name
+  // calendarOptions no longer offers is treated as unselected rather than
+  // silently carried through to Save. The one deliberate exception is a
+  // read-only session's own (unwritable, so never in calendarOptions)
+  // Calendar — see resolvedEventColor below.
+  const selectedCalendarId = calendarOptions.some((c) => c.id === calendarId)
+    ? calendarId
+    : "";
   const [allDay, setAllDay] = useState(initial.allDay);
   const [repeat, setRepeat] = useState<RepeatChoice>(initial.repeat);
   const [customRule, setCustomRule] = useState<string | undefined>(
@@ -464,9 +477,17 @@ export function EventModal(props: EventModalProps) {
 
   // The Calendar row's swatch (#193): this Event's own color if it has one,
   // else its Calendar's — the same ADR-0043 resolution the grid itself uses.
+  // A read-only session's calendarId is trustworthy as-is: the Select is
+  // never rendered there, so nothing ever sets it away from the actual
+  // (if unwritable) Calendar being viewed, and that Calendar is routinely
+  // absent from calendarOptions/selectedCalendarId on purpose (#111,
+  // ADR-0034) — those two only ever name a *writable* target. Everywhere
+  // else, selectedCalendarId is what keeps the swatch in step with the
+  // picker and Save once calendarId itself can go stale (#233).
   const resolvedEventColor = resolveOccurrenceColor(
     { color },
-    getCalendarById(calendars, calendarId) ?? attendeeOnlyCalendarColor,
+    getCalendarById(calendars, isReadOnlyEvent ? calendarId : selectedCalendarId) ??
+      attendeeOnlyCalendarColor,
   );
 
   // Preset labels are derived from the event's start date, so e.g. "Weekly on
@@ -675,7 +696,7 @@ export function EventModal(props: EventModalProps) {
   // is the day itself, end the exclusive next day (ADR-0017) — multi-day
   // all-day is out of scope, so `endDay` is ignored while `allDay`.
   const draftChanges: MasterFieldChanges = {
-    calendarId,
+    calendarId: selectedCalendarId,
     title: title.trim(),
     start: startForRule,
     end: allDay ? addDays(startOfDay(day), 1) : timeStringToDate(endDay, endTime),
@@ -743,6 +764,20 @@ export function EventModal(props: EventModalProps) {
   // the submit handler, so the two cannot disagree about whether this form
   // can be saved (ADR-0066).
   const savePlan = planEventSave(buildSaveInput(), { newId: () => newEventId });
+  // #233: planEventSave's own BlockedReason stays a test-surface field, not
+  // UI (ADR-0066) — this reads the form's own selectedCalendarId instead,
+  // the one blocking condition the empty-state "Create a calendar" flow can
+  // leave silently unmet. Reuses the empty-state copy when that's actually
+  // why (calendarEmptyReason set) so the tooltip never names an action —
+  // "select a calendar" — that has no picker on screen to perform it with;
+  // the generic line covers the other way selectedCalendarId can be empty,
+  // a stale pick surviving a rolled-back "Create a calendar" (see above).
+  const saveDisabledReason =
+    savePlan.kind === "blocked" && selectedCalendarId === ""
+      ? (calendarEmptyReason
+          ? CALENDAR_EMPTY_STATE_COPY[calendarEmptyReason]
+          : "Select a calendar to save this event.")
+      : undefined;
 
   async function runSavePlan(plan: SavePlan): Promise<void> {
     switch (plan.kind) {
@@ -1162,8 +1197,9 @@ export function EventModal(props: EventModalProps) {
                   ) : (
                     <Select
                       aria-label="Calendar"
-                      value={calendarId}
+                      value={selectedCalendarId}
                       onValueChange={setCalendarId}
+                      placeholder="Select a calendar"
                       options={calendarOptions.map((calendar) => ({
                         value: calendar.id,
                         label: calendarPickerLabel(calendar),
@@ -1397,7 +1433,9 @@ export function EventModal(props: EventModalProps) {
                     <EventAttendeesSection
                       eventId={attendeeEventId}
                       canManage={
-                        mode === "edit" ? !isReadOnlyEvent : calendarId !== ""
+                        mode === "edit"
+                          ? !isReadOnlyEvent
+                          : selectedCalendarId !== ""
                       }
                       organizerName={organizerName}
                       allowEmailInvite={emailAvailable}
@@ -1472,6 +1510,7 @@ export function EventModal(props: EventModalProps) {
                         size="small"
                         disabled={savePlan.kind === "blocked"}
                         loading={isSavingWithAttendees}
+                        title={saveDisabledReason}
                       >
                         Save
                       </Button>
@@ -1487,6 +1526,7 @@ export function EventModal(props: EventModalProps) {
         <CalendarModal
           mode="create"
           onClose={() => setIsCreateCalendarOpen(false)}
+          onCreated={setCalendarId}
         />
       )}
       {isCustomDialogOpen && (

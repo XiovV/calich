@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { User } from "../lib/authApi";
 import type { Calendar } from "../lib/calendar";
@@ -21,7 +21,9 @@ vi.mock("../lib/eventsApi", () => ({
     setReminders: vi.fn(),
   },
 }));
-vi.mock("../lib/calendarsApi", () => ({ calendarsApi: { list: vi.fn() } }));
+vi.mock("../lib/calendarsApi", () => ({
+  calendarsApi: { list: vi.fn(), create: vi.fn() },
+}));
 vi.mock("../lib/attendeesApi", () => ({
   attendeesApi: {
     list: vi.fn(),
@@ -48,6 +50,7 @@ vi.mock("../lib/toast", () => ({
 }));
 
 const { eventsApi } = await import("../lib/eventsApi");
+const { calendarsApi } = await import("../lib/calendarsApi");
 const { attendeesApi } = await import("../lib/attendeesApi");
 const { groupsApi } = await import("../lib/groupsApi");
 const { workspaceMembersApi } = await import("../lib/workspaceMembersApi");
@@ -128,6 +131,7 @@ beforeEach(() => {
   vi.mocked(eventsApi.create).mockResolvedValue(makeEvent());
   vi.mocked(eventsApi.update).mockResolvedValue(makeEvent());
   vi.mocked(eventsApi.setReminders).mockResolvedValue([]);
+  vi.mocked(calendarsApi.create).mockResolvedValue(owned);
   seed([]);
 });
 
@@ -180,6 +184,115 @@ describe("EventModal — create", () => {
       expect.objectContaining({ title: "Retro", calendarId: "cal-1" }),
     );
     expect(onClose).toHaveBeenCalled();
+  });
+});
+
+describe("EventModal — creating a calendar from the empty state (#233)", () => {
+  it("explains why Save is disabled while no Calendar is selected", async () => {
+    seed([], []);
+    renderCreate();
+
+    expect(
+      screen.getByText("You don't have any calendars yet."),
+    ).toBeInTheDocument();
+    await userEvent.type(screen.getByLabelText("Title"), "Retro");
+
+    expect(saveButton()).toBeDisabled();
+    // Matches the empty-state copy already on screen, rather than naming an
+    // action ("select a calendar") with no picker present to perform it.
+    expect(saveButton()).toHaveAttribute(
+      "title",
+      "You don't have any calendars yet.",
+    );
+  });
+
+  it("adopts the newly created Calendar and enables Save", async () => {
+    seed([], []);
+    renderCreate();
+
+    await userEvent.type(screen.getByLabelText("Title"), "Retro");
+    await userEvent.click(
+      screen.getByRole("button", { name: "Create a calendar" }),
+    );
+
+    const createDialog = within(
+      screen.getByRole("dialog", { name: "New calendar" }),
+    );
+    await userEvent.type(createDialog.getByLabelText("Name"), "Personal");
+    await userEvent.click(createDialog.getByRole("button", { name: "Save" }));
+
+    expect(
+      screen.queryByRole("dialog", { name: "New calendar" }),
+    ).not.toBeInTheDocument();
+
+    const picker = screen.getByRole("combobox", { name: "Calendar" });
+    expect(picker).toHaveTextContent("Personal");
+    expect(saveButton()).toBeEnabled();
+
+    await userEvent.click(saveButton());
+
+    expect(eventsApi.create).toHaveBeenCalledWith(
+      "token-123",
+      expect.objectContaining({ title: "Retro" }),
+    );
+    const created = vi.mocked(eventsApi.create).mock.calls[0]?.[1];
+    expect(created?.calendarId).not.toBe("");
+  });
+
+  it("un-selects the Calendar again if its optimistic create is rejected by the server", async () => {
+    vi.mocked(calendarsApi.create).mockRejectedValueOnce(new Error("boom"));
+    seed([], []);
+    renderCreate();
+
+    await userEvent.type(screen.getByLabelText("Title"), "Retro");
+    await userEvent.click(
+      screen.getByRole("button", { name: "Create a calendar" }),
+    );
+
+    const createDialog = within(
+      screen.getByRole("dialog", { name: "New calendar" }),
+    );
+    await userEvent.type(createDialog.getByLabelText("Name"), "Personal");
+    await userEvent.click(createDialog.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => {
+      expect(
+        screen.getByText("You don't have any calendars yet."),
+      ).toBeInTheDocument();
+    });
+    expect(saveButton()).toBeDisabled();
+    expect(saveButton()).toHaveAttribute(
+      "title",
+      "You don't have any calendars yet.",
+    );
+
+    await userEvent.click(saveButton());
+    expect(eventsApi.create).not.toHaveBeenCalled();
+  });
+
+  it("cancelling the New calendar dialog leaves the empty state in place", async () => {
+    seed([], []);
+    renderCreate();
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "Create a calendar" }),
+    );
+    const createDialog = within(
+      screen.getByRole("dialog", { name: "New calendar" }),
+    );
+    await userEvent.click(
+      createDialog.getByRole("button", { name: "Cancel" }),
+    );
+
+    expect(
+      screen.queryByRole("dialog", { name: "New calendar" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByText("You don't have any calendars yet."),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Create a calendar" }),
+    ).toBeInTheDocument();
   });
 });
 

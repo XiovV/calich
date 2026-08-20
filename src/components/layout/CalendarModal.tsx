@@ -23,7 +23,15 @@ import { Input } from "../ui/Input";
 import { fieldLabelClass } from "../ui/fieldStyles";
 
 type CalendarModalProps =
-  | { mode: "create"; onClose: () => void }
+  | {
+      mode: "create";
+      onClose: () => void;
+      // Fired with the new Calendar's id right after it's created (#233) —
+      // synchronously known via crypto.randomUUID(), so a caller like the
+      // Event modal's empty-state "Create a calendar" can adopt it as its
+      // own selection without waiting on the write to reach the server.
+      onCreated?: (calendarId: string) => void;
+    }
   | { mode: "edit"; calendar: Calendar; onClose: () => void };
 
 export function CalendarModal(props: CalendarModalProps) {
@@ -146,6 +154,7 @@ export function CalendarModal(props: CalendarModalProps) {
       // isOwner, so without it the New-event modal's Calendar picker treats
       // the brand-new Calendar as unwritable and hides it until reload.
       createCalendarCascade({ id, name: name.trim(), color, isOwner: true, access: "owner" });
+      props.onCreated?.(id);
     }
     onClose();
   }

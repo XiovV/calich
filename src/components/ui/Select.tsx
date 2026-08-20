@@ -15,6 +15,11 @@ interface SelectProps<T extends string> {
   label?: string;
   "aria-label"?: string;
   disabled?: boolean;
+  // Shown in place of a label when `value` matches none of `options` — e.g.
+  // the Event modal's Calendar picker, whose selected id can be pulled out
+  // from under it if that Calendar's own optimistic create rolls back
+  // (#233) — so the trigger never renders empty with no text at all.
+  placeholder?: string;
   // Merged onto the trigger; pass `min-w-0` + a flex-basis utility to let a
   // row of Selects shrink and truncate instead of wrapping onto a new line.
   className?: string;
@@ -30,6 +35,7 @@ export function Select<T extends string>({
   label,
   "aria-label": ariaLabel,
   disabled,
+  placeholder,
   className,
 }: SelectProps<T>) {
   const labelId = useId();
@@ -50,7 +56,10 @@ export function Select<T extends string>({
         className={`flex cursor-pointer items-center gap-1.5 rounded-shell-pill bg-surface-sunken px-4 py-1.5 text-body text-ink ring-1 ring-border transition-colors outline-none hover:bg-surface-hover data-[popup-open]:ring-2 data-[popup-open]:ring-accent data-[disabled]:cursor-not-allowed data-[disabled]:opacity-60 data-[disabled]:hover:bg-surface-sunken ${className ?? ""}`}
       >
         <BaseSelect.Value className="min-w-0 truncate">
-          {(selected: T) => options.find((option) => option.value === selected)?.label}
+          {(selected: T) =>
+            options.find((option) => option.value === selected)?.label ??
+            placeholder
+          }
         </BaseSelect.Value>
         <BaseSelect.Icon>
           <ChevronDown className="size-4 text-ink-muted" />
