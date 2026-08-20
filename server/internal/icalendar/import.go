@@ -27,7 +27,9 @@ import (
 	"github.com/XiovV/calich/server/internal/repository"
 )
 
-// Skip reasons an import summary reports (ADR-0030).
+// Skip reasons an import summary reports for a series this package could
+// not decode (ADR-0030). A series that decodes cleanly and still cannot be
+// stored is skipped one layer up, under service's own reasons.
 const (
 	SkipUnparseable      = "unparseable"
 	SkipMissingDTStart   = "missing DTSTART"
@@ -43,6 +45,13 @@ type ImportedSeries struct {
 	ParsedSeries
 	FloatingDowngrades int
 	DroppedAlarms      int
+	// ZeroLengthTimed and ZeroLengthAllDay count the Events in this series
+	// — Master and Overrides alike — that arrived zero-length and were
+	// given a duration this app can store: ZeroLengthTimedDuration for a
+	// timed one, a day for an all-day one (#228). An Event must end after
+	// it starts here, so the alternative is skipping an Event the file
+	// states perfectly clearly; ADR-0030 degrades and reports instead.
+	ZeroLengthTimed, ZeroLengthAllDay int
 	// Attachments are the inline ATTACH bytes decoded for this series'
 	// Master, deduplicated across every VEVENT (master and Overrides alike)
 	// that carried the same one — a file this app exports (#134) repeats the
@@ -224,6 +233,7 @@ func parseSeriesGroup(events []ical.Event, maxAttachmentSize int64, maxAttachmen
 	}
 
 	imported := ImportedSeries{ParsedSeries: *parsed, FloatingDowngrades: floatingDowngrades}
+	imported.ZeroLengthTimed, imported.ZeroLengthAllDay = expandZeroLengthEvents(&imported.ParsedSeries)
 	imported.DroppedAlarms = droppedAlarms(master, imported.Master.Reminders)
 	imported.Attachments, imported.AttachmentsTooLarge, imported.AttachmentsTooMany, imported.AttachmentsIgnoredURI =
 		parseSeriesAttachments(events, maxAttachmentSize, maxAttachmentsPerEvent)
@@ -241,6 +251,45 @@ func parseSeriesGroup(events []ical.Event, maxAttachmentSize int64, maxAttachmen
 	}
 
 	return &imported, nil
+}
+
+// ZeroLengthTimedDuration is what a zero-length timed Event is given on
+// import. RFC 5545's own answer is zero, which this app cannot store (an
+// Event ends after it starts, and the grid draws duration as height, so a
+// zero-length one would be invisible), and half an hour is the same default
+// the app already applies to an Event created by a click rather than a drag.
+// Exported because the Import summary has to state this figure to the user,
+// and a summary that names a different duration than the one applied would
+// be exactly the silent lossiness ADR-0030 exists to prevent.
+const ZeroLengthTimedDuration = 30 * time.Minute
+
+// expandZeroLengthEvents gives every zero-length Event in series — its
+// Master and each of its Overrides — a duration this app can store, and
+// reports how many it touched, split by kind so the Import summary can say
+// which default it applied (#228). An Event whose end precedes its start is
+// left exactly as the file wrote it: that is broken data rather than a
+// stated zero duration, and the writer skips it with a reason instead of
+// quietly inventing a time range for it.
+func expandZeroLengthEvents(series *ParsedSeries) (timed, allDay int) {
+	events := make([]*ParsedEvent, 0, 1+len(series.Overrides))
+	events = append(events, &series.Master)
+	for i := range series.Overrides {
+		events = append(events, &series.Overrides[i].ParsedEvent)
+	}
+
+	for _, e := range events {
+		if !e.End.Equal(e.Start) {
+			continue
+		}
+		if e.AllDay {
+			e.End = e.Start.AddDate(0, 0, 1)
+			allDay++
+			continue
+		}
+		e.End = e.Start.Add(ZeroLengthTimedDuration)
+		timed++
+	}
+	return timed, allDay
 }
 
 // stripUnresolvableTzids deletes the TZID param from v's DTSTART, DTEND,

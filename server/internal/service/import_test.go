@@ -444,24 +444,170 @@ END:VEVENT
 END:VCALENDAR
 `
 
-func TestImportService_DryRun_ReportsSameValidationErrorAsRealRun(t *testing.T) {
-	svc, _, _, _, userID, workspaceID, _ := newTestImportService(t)
+func TestImportService_UnstorableSeries_SkippedInBothDryAndRealRun(t *testing.T) {
+	svc, events, _, _, userID, workspaceID, _ := newTestImportService(t)
 	ctx := context.Background()
 
 	target := []ImportTarget{{Filename: "invite.ics", Action: ImportTargetNew}}
 
-	_, dryErr := svc.Import(ctx, userID, workspaceID, "invite.ics", []byte(crlf(blankTitleICS)), target, true)
-	if !errors.Is(dryErr, ErrInvalidTitle) {
-		t.Fatalf("expected a dry run to surface ErrInvalidTitle, got %v", dryErr)
+	dry, err := svc.Import(ctx, userID, workspaceID, "invite.ics", []byte(crlf(blankTitleICS)), target, true)
+	if err != nil {
+		t.Fatalf("dry run: %v", err)
+	}
+	assertSkipped(t, dry.Files[0], SkipMissingTitle, 1)
+	if dry.Files[0].EventCount != 0 {
+		t.Fatalf("expected no importable events, got %d", dry.Files[0].EventCount)
 	}
 
-	_, realErr := svc.Import(ctx, userID, workspaceID, "invite.ics", []byte(crlf(blankTitleICS)), target, false)
-	if !errors.Is(realErr, ErrInvalidTitle) {
-		t.Fatalf("expected a real run to surface ErrInvalidTitle, got %v", realErr)
+	real, err := svc.Import(ctx, userID, workspaceID, "invite.ics", []byte(crlf(blankTitleICS)), target, false)
+	if err != nil {
+		t.Fatalf("real run: %v", err)
+	}
+	assertSkipped(t, real.Files[0], SkipMissingTitle, 1)
+
+	all, err := events.List(ctx, userID, nil, nil)
+	if err != nil {
+		t.Fatalf("list events: %v", err)
+	}
+	if len(all) != 0 {
+		t.Fatalf("expected the untitled event not to be written, got %+v", all)
 	}
 }
 
-func TestImportService_LaterFileInvalid_EarlierFileNotWritten(t *testing.T) {
+// oneBadEventICS is #228's own file: a VEVENT this app cannot model sits
+// between two it can, and the whole file used to fail on it.
+const oneBadEventICS = `BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//test//EN
+BEGIN:VEVENT
+UID:good-1
+DTSTART:20260601T090000Z
+DTEND:20260601T093000Z
+SUMMARY:Standup
+END:VEVENT
+BEGIN:VEVENT
+UID:backwards
+DTSTART:20260601T090000Z
+DTEND:20260601T080000Z
+SUMMARY:Backwards
+END:VEVENT
+BEGIN:VEVENT
+UID:good-2
+DTSTART:20260602T100000Z
+DTEND:20260602T110000Z
+SUMMARY:Planning
+END:VEVENT
+END:VCALENDAR
+`
+
+func TestImportService_OneUnstorableEvent_RestOfFileStillImports(t *testing.T) {
+	svc, events, _, _, userID, workspaceID, _ := newTestImportService(t)
+	ctx := context.Background()
+
+	summary, err := svc.Import(ctx, userID, workspaceID, "mixed.ics", []byte(crlf(oneBadEventICS)), []ImportTarget{
+		{Filename: "mixed.ics", Action: ImportTargetNew},
+	}, false)
+	if err != nil {
+		t.Fatalf("import: %v", err)
+	}
+
+	fileSummary := summary.Files[0]
+	if fileSummary.EventCount != 2 {
+		t.Fatalf("expected the 2 modellable events to import, got %d", fileSummary.EventCount)
+	}
+	assertSkipped(t, fileSummary, SkipEndBeforeStart, 1)
+	if samples := fileSummary.Skipped[0].Samples; len(samples) != 1 || samples[0] != "Backwards" {
+		t.Fatalf("expected the skipped event named as a sample, got %+v", samples)
+	}
+
+	all, err := events.List(ctx, userID, nil, nil)
+	if err != nil {
+		t.Fatalf("list events: %v", err)
+	}
+	if len(all) != 2 {
+		t.Fatalf("expected 2 written events, got %d: %+v", len(all), all)
+	}
+	for _, e := range all {
+		if e.Title == "Backwards" {
+			t.Fatalf("expected the unstorable event not to be written, got %+v", e)
+		}
+	}
+}
+
+// dtstartOnlyICS carries the case #228 was found on: a VEVENT with DTSTART
+// and no DTEND, valid iCalendar that used to fail the whole import.
+const dtstartOnlyICS = `BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//test//EN
+BEGIN:VEVENT
+UID:no-dtend
+DTSTART:20260601T090000Z
+SUMMARY:Bare start
+END:VEVENT
+BEGIN:VEVENT
+UID:no-dtend-all-day
+DTSTART;VALUE=DATE:20260603
+SUMMARY:Bank holiday
+END:VEVENT
+END:VCALENDAR
+`
+
+func TestImportService_DTStartWithoutDTEnd_ImportsWithADefaultDuration(t *testing.T) {
+	svc, events, _, _, userID, workspaceID, _ := newTestImportService(t)
+	ctx := context.Background()
+
+	summary, err := svc.Import(ctx, userID, workspaceID, "bare.ics", []byte(crlf(dtstartOnlyICS)), []ImportTarget{
+		{Filename: "bare.ics", Action: ImportTargetNew},
+	}, false)
+	if err != nil {
+		t.Fatalf("import: %v", err)
+	}
+
+	fileSummary := summary.Files[0]
+	if fileSummary.EventCount != 2 {
+		t.Fatalf("expected both events to import, got %d (skipped %+v)", fileSummary.EventCount, fileSummary.Skipped)
+	}
+	if len(fileSummary.Skipped) != 0 {
+		t.Fatalf("expected nothing skipped, got %+v", fileSummary.Skipped)
+	}
+	// Only the timed one is an adjustment: RFC 5545 states the all-day
+	// event's one-day duration outright, so importing it loses nothing.
+	if len(fileSummary.Adjusted) != 1 ||
+		fileSummary.Adjusted[0].Reason != AdjustedZeroLengthTimed ||
+		fileSummary.Adjusted[0].Count != 1 {
+		t.Fatalf("expected 1 zero-length timed adjustment, got %+v", fileSummary.Adjusted)
+	}
+
+	all, err := events.List(ctx, userID, nil, nil)
+	if err != nil {
+		t.Fatalf("list events: %v", err)
+	}
+	byTitle := make(map[string]repository.Event, len(all))
+	for _, e := range all {
+		byTitle[e.Title] = e
+	}
+
+	timed, ok := byTitle["Bare start"]
+	if !ok {
+		t.Fatalf("expected the timed event to be written, got %+v", all)
+	}
+	if want := timed.Start.Add(30 * time.Minute); !timed.End.Equal(want) {
+		t.Fatalf("expected a 30-minute event, got %v to %v", timed.Start, timed.End)
+	}
+
+	allDay, ok := byTitle["Bank holiday"]
+	if !ok {
+		t.Fatalf("expected the all-day event to be written, got %+v", all)
+	}
+	if !allDay.AllDay {
+		t.Fatalf("expected an all-day event, got %+v", allDay)
+	}
+	if want := allDay.Start.AddDate(0, 0, 1); !allDay.End.Equal(want) {
+		t.Fatalf("expected a one-day event, got %v to %v", allDay.Start, allDay.End)
+	}
+}
+
+func TestImportService_LaterFileUnstorableSeries_EarlierFileStillWritten(t *testing.T) {
 	svc, events, calendars, _, userID, workspaceID, _ := newTestImportService(t)
 	ctx := context.Background()
 
@@ -480,27 +626,42 @@ func TestImportService_LaterFileInvalid_EarlierFileNotWritten(t *testing.T) {
 		t.Fatalf("close zip: %v", err)
 	}
 
-	_, err := svc.Import(ctx, userID, workspaceID, "export.zip", buf.Bytes(), []ImportTarget{
+	summary, err := svc.Import(ctx, userID, workspaceID, "export.zip", buf.Bytes(), []ImportTarget{
 		{Filename: "a.ics", Action: ImportTargetNew},
 		{Filename: "b.ics", Action: ImportTargetNew},
 	}, false)
-	if !errors.Is(err, ErrInvalidTitle) {
-		t.Fatalf("expected ErrInvalidTitle from the second entry, got %v", err)
+	if err != nil {
+		t.Fatalf("import: %v", err)
+	}
+
+	for _, fileSummary := range summary.Files {
+		if fileSummary.Filename == "b.ics" {
+			assertSkipped(t, fileSummary, SkipMissingTitle, 1)
+		}
 	}
 
 	cals, err := calendars.List(ctx, userID)
 	if err != nil {
 		t.Fatalf("list calendars: %v", err)
 	}
-	if len(cals) != 1 { // just the pre-existing "Existing" calendar
-		t.Fatalf("expected no calendar created for either zip entry, got %+v", cals)
+	if len(cals) != 3 { // the pre-existing "Existing" calendar plus one per entry
+		t.Fatalf("expected a calendar per zip entry, got %+v", cals)
 	}
 	all, err := events.List(ctx, userID, nil, nil)
 	if err != nil {
 		t.Fatalf("list events: %v", err)
 	}
-	if len(all) != 0 {
-		t.Fatalf("expected nothing written for the first entry once the second fails validation, got %+v", all)
+	if len(all) != 1 || all[0].Title != "Standup" {
+		t.Fatalf("expected the modellable entry to be written, got %+v", all)
+	}
+}
+
+// assertSkipped asserts summary reports exactly one skip group, for reason
+// and count.
+func assertSkipped(t *testing.T, summary FileSummary, reason string, count int) {
+	t.Helper()
+	if len(summary.Skipped) != 1 || summary.Skipped[0].Reason != reason || summary.Skipped[0].Count != count {
+		t.Fatalf("expected %d skipped for %q, got %+v", count, reason, summary.Skipped)
 	}
 }
 
@@ -814,21 +975,22 @@ END:VCALENDAR
 	}
 }
 
-// TestImportService_FailedTransaction_LeavesNoAttachmentRows mirrors
-// TestImportService_LaterFileInvalid_EarlierFileNotWritten with an
-// attachment on the entry that would otherwise succeed: ADR-0030's
-// "validate everything before writing anything" means a bad second entry's
-// validation error is returned before EventService.ImportSeries is ever
-// called for the first entry, so the first entry's ATTACH is never even
-// saved to disk (#135) — nothing for the sweeper to reclaim, since nothing
-// was written in the first place.
+// TestImportService_FailedTransaction_LeavesNoAttachmentRows exercises
+// ADR-0030's "validate everything before writing anything" with an
+// attachment on the entry that would otherwise succeed: the second entry
+// names no target at all, which is a fact about the request rather than
+// about any one Event, so it is still fatal to the whole upload (unlike an
+// unstorable series, which #228 skips). The error is returned before
+// EventService.ImportSeries is ever called for the first entry, so the
+// first entry's ATTACH is never even saved to disk (#135) — nothing for the
+// sweeper to reclaim, since nothing was written in the first place.
 func TestImportService_FailedTransaction_LeavesNoAttachmentRows(t *testing.T) {
 	svc, events, calendars, store, userID, workspaceID, _ := newTestImportService(t)
 	ctx := context.Background()
 
 	var buf bytes.Buffer
 	zw := zip.NewWriter(&buf)
-	for name, content := range map[string]string{"a.ics": singleEventWithAttachICS, "b.ics": blankTitleICS} {
+	for name, content := range map[string]string{"a.ics": singleEventWithAttachICS, "b.ics": singleEventICS} {
 		entry, err := zw.Create(name)
 		if err != nil {
 			t.Fatalf("create zip entry: %v", err)
@@ -843,10 +1005,9 @@ func TestImportService_FailedTransaction_LeavesNoAttachmentRows(t *testing.T) {
 
 	_, err := svc.Import(ctx, userID, workspaceID, "export.zip", buf.Bytes(), []ImportTarget{
 		{Filename: "a.ics", Action: ImportTargetNew},
-		{Filename: "b.ics", Action: ImportTargetNew},
 	}, false)
-	if !errors.Is(err, ErrInvalidTitle) {
-		t.Fatalf("expected ErrInvalidTitle from the second entry, got %v", err)
+	if !errors.Is(err, ErrImportTargetMissing) {
+		t.Fatalf("expected ErrImportTargetMissing from the second entry, got %v", err)
 	}
 
 	cals, err := calendars.List(ctx, userID)
@@ -861,7 +1022,7 @@ func TestImportService_FailedTransaction_LeavesNoAttachmentRows(t *testing.T) {
 		t.Fatalf("list events: %v", err)
 	}
 	if len(all) != 0 {
-		t.Fatalf("expected nothing written for either entry once the second fails validation, got %+v", all)
+		t.Fatalf("expected nothing written for either entry once the second is rejected, got %+v", all)
 	}
 
 	// Sweeping with an empty "known" set removes anything orphaned on disk;
@@ -937,5 +1098,62 @@ func TestEventServiceImportSeries_WriteTimeFailure_OrphansBytesReclaimedBySweepe
 	}
 	if _, err := store.Open(attachmentID); err == nil {
 		t.Fatalf("expected Sweep to have reclaimed the orphaned bytes")
+	}
+}
+
+// unstorableOverrideICS has a perfectly storable Master whose Override ends
+// before it starts.
+const unstorableOverrideICS = `BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//test//EN
+BEGIN:VEVENT
+UID:recurring-1
+DTSTART:20260601T090000Z
+DTEND:20260601T093000Z
+RRULE:FREQ=DAILY;COUNT=3
+SUMMARY:Standup
+END:VEVENT
+BEGIN:VEVENT
+UID:recurring-1
+RECURRENCE-ID:20260602T090000Z
+DTSTART:20260602T100000Z
+DTEND:20260602T080000Z
+SUMMARY:Standup (moved)
+END:VEVENT
+BEGIN:VEVENT
+UID:other-1
+DTSTART:20260603T100000Z
+DTEND:20260603T110000Z
+SUMMARY:Planning
+END:VEVENT
+END:VCALENDAR
+`
+
+// A series is the unit a skip costs (ADR-0030: "failures are per-series"),
+// so an Override this app cannot store takes its Master with it — the file's
+// other series still import, and the summary says one series was skipped.
+func TestImportService_UnstorableOverride_CostsItsOwnSeriesOnly(t *testing.T) {
+	svc, events, _, _, userID, workspaceID, _ := newTestImportService(t)
+	ctx := context.Background()
+
+	summary, err := svc.Import(ctx, userID, workspaceID, "recurring.ics", []byte(crlf(unstorableOverrideICS)), []ImportTarget{
+		{Filename: "recurring.ics", Action: ImportTargetNew},
+	}, false)
+	if err != nil {
+		t.Fatalf("import: %v", err)
+	}
+
+	fileSummary := summary.Files[0]
+	if fileSummary.EventCount != 1 {
+		t.Fatalf("expected only the unaffected series to import, got %d", fileSummary.EventCount)
+	}
+	assertSkipped(t, fileSummary, SkipEndBeforeStart, 1)
+
+	all, err := events.List(ctx, userID, nil, nil)
+	if err != nil {
+		t.Fatalf("list events: %v", err)
+	}
+	if len(all) != 1 || all[0].Title != "Planning" {
+		t.Fatalf("expected the Master to go with its unstorable Override, got %+v", all)
 	}
 }

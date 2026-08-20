@@ -436,8 +436,14 @@ func (s *SubscribeService) doRefresh(ctx context.Context, userID int64, calendar
 		return RefreshResult{}, refreshSyncOutcome{}, fmt.Errorf("%w: %s", ErrSubscribeUnparseable, MaskURL(*calendar.SourceURL))
 	}
 
-	incoming := make([]IncomingSeries, 0, len(parsed.Series))
-	for _, w := range buildWrites(parsed, calendar.KeepAlarms) {
+	// dropUnstorableSeries records each series it drops on parsed.Skipped
+	// under its own UID, so the unparseable set below covers both a series
+	// this fetch couldn't decode and one it decoded but can't store: either
+	// way the feed still lists that UID, and ReconcileSeries must leave the
+	// stored row alone rather than tombstone it (#228, ADR-0033).
+	writes := dropUnstorableSeries(parsed, buildWrites(parsed, calendar.KeepAlarms))
+	incoming := make([]IncomingSeries, 0, len(writes))
+	for _, w := range writes {
 		incoming = append(incoming, IncomingSeries{ExternalUID: w.ExternalUID, Write: w})
 	}
 	unparseable := make(map[string]bool, len(parsed.Skipped))
@@ -575,8 +581,9 @@ func seriesEventIDs(masters []repository.Event, overridesByParent map[string][]r
 }
 
 // fetchAndParse is Preview and Subscribe's shared prefix: normalize, fetch,
-// parse, and build+validate the writes the feed would produce. Returns the
-// normalized URL alongside so Subscribe doesn't need to normalize twice.
+// parse, and build the writes the feed would produce, minus any series this
+// app cannot store. Returns the normalized URL alongside so Subscribe
+// doesn't need to normalize twice.
 func (s *SubscribeService) fetchAndParse(ctx context.Context, rawURL string, keepAlarms bool) ([]SeriesWrite, *icalendar.ParsedFile, string, error) {
 	normalized, err := normalizeSubscribeURL(rawURL)
 	if err != nil {
@@ -596,10 +603,11 @@ func (s *SubscribeService) fetchAndParse(ctx context.Context, rawURL string, kee
 		return nil, nil, "", fmt.Errorf("%w: %s", ErrSubscribeUnparseable, MaskURL(normalized))
 	}
 
-	writes := buildWrites(parsed, keepAlarms)
-	if err := validateSeriesWrites(writes); err != nil {
-		return nil, nil, "", err
-	}
+	// A series the feed states clearly but this app cannot store costs
+	// itself and nothing more (#228) — the alternative is a Subscription a
+	// publisher can break wholesale with one bad VEVENT nobody subscribing
+	// can edit.
+	writes := dropUnstorableSeries(parsed, buildWrites(parsed, keepAlarms))
 
 	return writes, parsed, normalized, nil
 }

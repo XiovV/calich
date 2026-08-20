@@ -1,4 +1,4 @@
-import type { ImportSummary } from "./importApi";
+import type { ImportFileSummary, ImportSummary } from "./importApi";
 
 export interface ImportTotals {
   eventCount: number;
@@ -56,4 +56,28 @@ export function formatImportSummaryLine(totals: ImportTotals): string {
  * confirming (issue #79). */
 export function formatReminderLine(reminders: ImportTotals["reminders"]): string {
   return `${reminders.notification.toLocaleString()} notification${reminders.notification === 1 ? "" : "s"} · ${reminders.email.toLocaleString()} email${reminders.email === 1 ? "" : "s"}`;
+}
+
+function ignoredTotal(file: ImportFileSummary): number {
+  return file.ignored.vtodo + file.ignored.vjournal + file.ignored.vfreebusy;
+}
+
+function hasAttachmentDetails(file: ImportFileSummary): boolean {
+  const a = file.attachments;
+  return a.imported > 0 || a.tooLarge > 0 || a.tooMany > 0 || a.ignoredUri > 0;
+}
+
+/** Whether one file has anything to say beyond its one-line totals. */
+export function hasImportDetails(file: ImportFileSummary): boolean {
+  return (
+    file.skipped.length > 0 ||
+    file.adjusted.length > 0 ||
+    ignoredTotal(file) > 0 ||
+    hasAttachmentDetails(file)
+  );
+}
+
+/** Whether any file in the summary has details worth rendering. */
+export function hasAnyImportDetails(summary: ImportSummary): boolean {
+  return summary.files.some(hasImportDetails);
 }

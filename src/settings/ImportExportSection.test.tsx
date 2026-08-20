@@ -120,6 +120,37 @@ describe("ImportExportSection", () => {
     );
   });
 
+  // The Import summary is a user's only view of a lossy translation
+  // (ADR-0030), so what an import left out has to survive the moment the
+  // dialog closes — the toast's counts alone can't say why (#228).
+  it("states why an event was skipped in the post-import result", async () => {
+    const withSkip = summaryFor("personal.ics", "Personal");
+    withSkip.files[0].skipped = [
+      { reason: "end before start", count: 1, samples: ["Backwards"] },
+    ];
+    withSkip.files[0].adjusted = [
+      { reason: "zero-length event given a 30-minute duration", count: 1 },
+    ];
+    vi.mocked(importApi.preview).mockResolvedValue(withSkip);
+    vi.mocked(importApi.commit).mockResolvedValue(withSkip);
+    render(<ImportExportSection />);
+
+    chooseFile(fileInput(), icsFile());
+    await screen.findByRole("dialog", { name: "Import preview" });
+    await userEvent.click(screen.getByRole("button", { name: "Import" }));
+
+    await waitFor(() =>
+      expect(
+        screen.getByText(/Skipped 1 — end before start \(Backwards\)/),
+      ).toBeInTheDocument(),
+    );
+    expect(
+      screen.getByText(
+        /Adjusted 1 — zero-length event given a 30-minute duration/,
+      ),
+    ).toBeInTheDocument();
+  });
+
   it("previews a .zip picked through Choose file", async () => {
     vi.mocked(readZipEntryNames).mockResolvedValue(["work.ics"]);
     vi.mocked(importApi.preview).mockResolvedValue(summaryFor("work.ics", "Work"));

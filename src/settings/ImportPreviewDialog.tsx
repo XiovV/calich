@@ -3,7 +3,13 @@ import { format } from "date-fns";
 import { Dialog } from "@base-ui/react/dialog";
 import { calendarPickerLabel, canWriteCalendarEvents, type Calendar } from "../lib/calendar";
 import type { ImportFileSummary, ImportSummary, ImportTarget } from "../lib/importApi";
-import { formatImportSummaryLine, formatReminderLine, summarizeImport } from "../lib/importSummary";
+import {
+  formatImportSummaryLine,
+  formatReminderLine,
+  hasAnyImportDetails,
+  summarizeImport,
+} from "../lib/importSummary";
+import { ImportSummaryDetails } from "./ImportSummaryDetails";
 import { Button } from "../components/ui/Button";
 import { buttonClasses } from "../components/ui/buttonClasses";
 import { Checkbox } from "../components/ui/Checkbox";
@@ -33,21 +39,6 @@ function initialDrafts(files: ImportFileSummary[]): EntryDraft[] {
 function formatRange(file: ImportFileSummary): string {
   if (!file.rangeStart || !file.rangeEnd) return "No events";
   return `${format(file.rangeStart, "MMM d, yyyy")} – ${format(file.rangeEnd, "MMM d, yyyy")}`;
-}
-
-function ignoredTotal(file: ImportFileSummary): number {
-  return file.ignored.vtodo + file.ignored.vjournal + file.ignored.vfreebusy;
-}
-
-function hasAttachmentDetails(file: ImportFileSummary): boolean {
-  const a = file.attachments;
-  return a.imported > 0 || a.tooLarge > 0 || a.tooMany > 0 || a.ignoredUri > 0;
-}
-
-function hasDetails(file: ImportFileSummary): boolean {
-  return (
-    file.skipped.length > 0 || file.adjusted.length > 0 || ignoredTotal(file) > 0 || hasAttachmentDetails(file)
-  );
 }
 
 const NEW_CALENDAR_VALUE = "__new__";
@@ -87,7 +78,7 @@ export function ImportPreviewDialog({
 
   const totals = summarizeImport(summary);
   const summaryLine = formatImportSummaryLine(totals);
-  const showDetails = summary.files.some(hasDetails);
+  const showDetails = hasAnyImportDetails(summary);
 
   function updateDraft(index: number, changes: Partial<EntryDraft>) {
     setDrafts((current) => current.map((draft, i) => (i === index ? { ...draft, ...changes } : draft)));
@@ -132,67 +123,8 @@ export function ImportPreviewDialog({
           {showDetails && (
             <details className="mt-2">
               <summary className="cursor-pointer text-label-sm text-accent">Details</summary>
-              <div className="mt-2 flex flex-col gap-2 text-label-sm text-ink-muted">
-                {summary.files.filter(hasDetails).map((entrySummary) => (
-                  <div key={entrySummary.filename}>
-                    {isZip && <p className="font-medium text-ink">{entrySummary.filename}</p>}
-                    {entrySummary.skipped.map((group) => (
-                      <p key={`skipped-${group.reason}`}>
-                        Skipped {group.count} — {group.reason}
-                        {group.samples && group.samples.length > 0
-                          ? ` (${group.samples.join(", ")})`
-                          : ""}
-                      </p>
-                    ))}
-                    {entrySummary.adjusted.map((group) => (
-                      <p key={`adjusted-${group.reason}`}>
-                        Adjusted {group.count} — {group.reason}
-                      </p>
-                    ))}
-                    {entrySummary.ignored.vtodo > 0 && (
-                      <p>
-                        Ignored {entrySummary.ignored.vtodo} to-do
-                        {entrySummary.ignored.vtodo === 1 ? "" : "s"}
-                      </p>
-                    )}
-                    {entrySummary.ignored.vjournal > 0 && (
-                      <p>
-                        Ignored {entrySummary.ignored.vjournal} journal entr
-                        {entrySummary.ignored.vjournal === 1 ? "y" : "ies"}
-                      </p>
-                    )}
-                    {entrySummary.ignored.vfreebusy > 0 && (
-                      <p>
-                        Ignored {entrySummary.ignored.vfreebusy} free/busy block
-                        {entrySummary.ignored.vfreebusy === 1 ? "" : "s"}
-                      </p>
-                    )}
-                    {entrySummary.attachments.imported > 0 && (
-                      <p>
-                        Imported {entrySummary.attachments.imported} attachment
-                        {entrySummary.attachments.imported === 1 ? "" : "s"}
-                      </p>
-                    )}
-                    {entrySummary.attachments.tooLarge > 0 && (
-                      <p>
-                        Skipped {entrySummary.attachments.tooLarge} attachment
-                        {entrySummary.attachments.tooLarge === 1 ? "" : "s"} — too large
-                      </p>
-                    )}
-                    {entrySummary.attachments.tooMany > 0 && (
-                      <p>
-                        Skipped {entrySummary.attachments.tooMany} attachment
-                        {entrySummary.attachments.tooMany === 1 ? "" : "s"} — too many on one event
-                      </p>
-                    )}
-                    {entrySummary.attachments.ignoredUri > 0 && (
-                      <p>
-                        Ignored {entrySummary.attachments.ignoredUri} linked attachment
-                        {entrySummary.attachments.ignoredUri === 1 ? "" : "s"} — not fetched
-                      </p>
-                    )}
-                  </div>
-                ))}
+              <div className="mt-2">
+                <ImportSummaryDetails summary={summary} showFilenames={isZip} />
               </div>
             </details>
           )}

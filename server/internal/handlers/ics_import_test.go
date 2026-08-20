@@ -262,3 +262,63 @@ func TestCalendarHandler_Import_RequiresAuth(t *testing.T) {
 		t.Fatalf("expected 401, got %d", resp.StatusCode)
 	}
 }
+
+// importTestBadEventICS is #228's file: a VEVENT with DTSTART and no DTEND
+// (valid iCalendar), one whose end precedes its start (which this app has
+// no way to model), and one ordinary event.
+const importTestBadEventICS = `BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//test//EN
+X-WR-CALNAME:Imported Calendar
+BEGIN:VEVENT
+UID:foreign-uid-1
+DTSTART:20260601T090000Z
+SUMMARY:Bare start
+END:VEVENT
+BEGIN:VEVENT
+UID:foreign-uid-2
+DTSTART:20260601T090000Z
+DTEND:20260601T080000Z
+SUMMARY:Backwards
+END:VEVENT
+BEGIN:VEVENT
+UID:foreign-uid-3
+DTSTART:20260602T100000Z
+DTEND:20260602T110000Z
+SUMMARY:Planning
+END:VEVENT
+END:VCALENDAR
+`
+
+// TestCalendarHandler_Import_UnstorableEvent_ReportedNotRejected pins the
+// contract at the wire: one event this app can't model costs its own series
+// and is accounted for in the summary, rather than failing the request and
+// leaving the user with a bare error toast and nothing imported (#228).
+func TestCalendarHandler_Import_UnstorableEvent_ReportedNotRejected(t *testing.T) {
+	baseURL, accessToken, workspaceID := newCalendarTestServer(t)
+
+	for _, path := range []string{"/api/calendars/import?dryRun=1", "/api/calendars/import"} {
+		resp := importRequest(t, baseURL, accessToken, workspaceID, path, "mixed.ics", []byte(crlf(importTestBadEventICS)),
+			`{"entries":[{"filename":"mixed.ics","action":"new"}]}`)
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			body, _ := io.ReadAll(resp.Body)
+			t.Fatalf("%s: expected 200, got %d: %s", path, resp.StatusCode, body)
+		}
+
+		var summary importSummaryResponse
+		if err := json.NewDecoder(resp.Body).Decode(&summary); err != nil {
+			t.Fatalf("%s: decode: %v", path, err)
+		}
+		file := summary.Files[0]
+		if file.EventCount != 2 {
+			t.Fatalf("%s: expected the 2 modellable events, got %d", path, file.EventCount)
+		}
+		if len(file.Skipped) != 1 || file.Skipped[0].Count != 1 || file.Skipped[0].Reason == "" {
+			t.Fatalf("%s: expected 1 skip with a stated reason, got %+v", path, file.Skipped)
+		}
+		if len(file.Adjusted) != 1 || file.Adjusted[0].Count != 1 || file.Adjusted[0].Reason == "" {
+			t.Fatalf("%s: expected 1 adjustment with a stated reason, got %+v", path, file.Adjusted)
+		}
+	}
+}

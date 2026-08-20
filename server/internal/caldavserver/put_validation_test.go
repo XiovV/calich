@@ -217,3 +217,76 @@ func TestDeleteCalendarObject_SubscribedCalendarIsForbidden(t *testing.T) {
 		t.Fatalf("expected 403, got %d", resp.StatusCode)
 	}
 }
+
+// putRawVEvent PUTs a hand-built one-VEVENT calendar object, so a test can
+// send properties SeriesToICal never emits — such as a VEVENT with no DTEND
+// at all.
+func putRawVEvent(t *testing.T, env testCalDAVEnv, uid string, props func(*ical.Event)) int {
+	t.Helper()
+
+	cal := ical.NewCalendar()
+	cal.Props.SetText(ical.PropProductID, icalendar.ProdID)
+	cal.Props.SetText(ical.PropVersion, "2.0")
+
+	v := ical.NewEvent()
+	v.Props.SetText(ical.PropUID, uid)
+	v.Props.SetDateTime(ical.PropDateTimeStamp, time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC))
+	v.Props.SetText(ical.PropSummary, "Bank holiday")
+	props(v)
+	cal.Children = append(cal.Children, v.Component)
+
+	resp := rawPut(t, env, calendarObjectPath(env.userID, env.calendarID, uid), cal, "")
+	defer resp.Body.Close()
+	return resp.StatusCode
+}
+
+// A VEVENT with DTSTART and no DTEND is valid iCalendar, so the shared codec
+// resolves its end the way RFC 5545 does — DURATION where the device sent
+// one, else one day for a date-valued DTSTART (#228). This is the same decode
+// ICS import uses, and a device's PUT gets the same answer rather than a 400.
+func TestPutCalendarObject_DTStartWithoutDTEnd_ResolvedPerRFC5545(t *testing.T) {
+	env := newTestCalDAVEnv(t)
+
+	dateProp := ical.NewProp(ical.PropDateTimeStart)
+	dateProp.SetValueType(ical.ValueDate)
+	dateProp.Value = "20260601"
+	if got := putRawVEvent(t, env, "all-day-no-dtend", func(v *ical.Event) {
+		v.Props.Add(dateProp)
+	}); got != http.StatusCreated && got != http.StatusNoContent {
+		t.Fatalf("expected the all-day VEVENT to be stored, got %d", got)
+	}
+
+	if got := putRawVEvent(t, env, "timed-with-duration", func(v *ical.Event) {
+		v.Props.SetDateTime(ical.PropDateTimeStart, time.Date(2026, 6, 2, 9, 0, 0, 0, time.UTC))
+		duration := ical.NewProp(ical.PropDuration)
+		duration.Value = "PT45M"
+		v.Props.Add(duration)
+	}); got != http.StatusCreated && got != http.StatusNoContent {
+		t.Fatalf("expected the DURATION VEVENT to be stored, got %d", got)
+	}
+
+	masters, _, err := env.eventService.ListSeriesByCalendar(t.Context(), env.userID, env.calendarID)
+	if err != nil {
+		t.Fatalf("list series: %v", err)
+	}
+	byID := make(map[string]repository.Event, len(masters))
+	for _, m := range masters {
+		byID[m.ID] = m
+	}
+
+	allDay, ok := byID["all-day-no-dtend"]
+	if !ok {
+		t.Fatalf("expected the all-day series to be stored, got %+v", masters)
+	}
+	if !allDay.AllDay || !allDay.End.Equal(allDay.Start.AddDate(0, 0, 1)) {
+		t.Fatalf("expected a one-day all-day Event, got %+v", allDay)
+	}
+
+	timed, ok := byID["timed-with-duration"]
+	if !ok {
+		t.Fatalf("expected the DURATION series to be stored, got %+v", masters)
+	}
+	if want := timed.Start.Add(45 * time.Minute); !timed.End.Equal(want) {
+		t.Fatalf("expected end %v from DURATION, got %v", want, timed.End)
+	}
+}

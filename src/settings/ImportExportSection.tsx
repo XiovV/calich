@@ -14,15 +14,26 @@ import {
 import {
   formatImportSummaryLine,
   formatReminderLine,
+  hasAnyImportDetails,
   summarizeImport,
 } from "../lib/importSummary";
 import { toast } from "../lib/toast";
 import { readZipEntryNames } from "../lib/zipEntryNames";
 import { ExportSummaryDialog } from "../components/ExportSummaryDialog";
 import { ImportPreviewDialog } from "./ImportPreviewDialog";
+import { ImportSummaryDetails } from "./ImportSummaryDetails";
 
 interface PendingImport {
   file: File;
+  isZip: boolean;
+  summary: ImportSummary;
+}
+
+/** The Import summary of the import that just ran, kept on the page after
+ * the dialog closes. The toast states the totals and is gone in seconds;
+ * what an import skipped, and why, is the whole point of the summary
+ * (ADR-0030), so it stays until the next import replaces it (#228). */
+interface CompletedImport {
   isZip: boolean;
   summary: ImportSummary;
 }
@@ -58,6 +69,8 @@ export function ImportExportSection() {
   const [isExporting, setIsExporting] = useState(false);
   const [isPreviewing, setIsPreviewing] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
+  const [completedImport, setCompletedImport] =
+    useState<CompletedImport | null>(null);
   const [pendingImport, setPendingImport] = useState<PendingImport | null>(
     null,
   );
@@ -171,6 +184,7 @@ export function ImportExportSection() {
         targets,
       );
       await Promise.all([fetchCalendars(), fetchEvents()]);
+      setCompletedImport({ isZip: pendingImport.isZip, summary });
       setPendingImport(null);
       const totals = summarizeImport(summary);
       toast.success(
@@ -232,6 +246,18 @@ export function ImportExportSection() {
           onChange={handleInputChange}
         />
       </div>
+
+      {completedImport && hasAnyImportDetails(completedImport.summary) && (
+        <div className="mt-4 rounded-shell-md border border-border p-4">
+          <p className="text-label-sm font-medium text-ink">What the last import left out</p>
+          <div className="mt-2">
+            <ImportSummaryDetails
+              summary={completedImport.summary}
+              showFilenames={completedImport.isZip}
+            />
+          </div>
+        </div>
+      )}
 
       {pendingImport && (
         <ImportPreviewDialog

@@ -1647,3 +1647,120 @@ func TestSubscribeService_UpdateSourceURL_RejectsInvalidURL(t *testing.T) {
 		t.Fatalf("expected ErrSubscribeInvalidURL, got %v", err)
 	}
 }
+
+// badEventFeedICS mixes a VEVENT this app cannot model — its end precedes
+// its start — into a feed of ones it can (#228).
+const badEventFeedICS = `BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//test//EN
+BEGIN:VEVENT
+UID:feed-good-1
+DTSTART:20260601T090000Z
+DTEND:20260601T093000Z
+SUMMARY:Standup
+END:VEVENT
+BEGIN:VEVENT
+UID:feed-backwards
+DTSTART:20260601T090000Z
+DTEND:20260601T080000Z
+SUMMARY:Backwards
+END:VEVENT
+BEGIN:VEVENT
+UID:feed-good-2
+DTSTART:20260602T100000Z
+DTEND:20260602T110000Z
+SUMMARY:Planning
+END:VEVENT
+END:VCALENDAR
+`
+
+func TestSubscribeService_Preview_UnstorableSeriesNotCounted(t *testing.T) {
+	svc, _, _, userID, _ := newTestSubscribeService(t)
+	srv := icsServer(t, badEventFeedICS)
+	ctx := context.Background()
+
+	preview, err := svc.Preview(ctx, userID, srv.URL+"/feed.ics")
+	if err != nil {
+		t.Fatalf("preview: %v", err)
+	}
+	if preview.EventCount != 2 {
+		t.Fatalf("expected the 2 modellable series to be counted, got %d", preview.EventCount)
+	}
+}
+
+func TestSubscribeService_Subscribe_UnstorableSeriesSkippedRestImported(t *testing.T) {
+	svc, events, _, userID, workspaceID := newTestSubscribeService(t)
+	srv := icsServer(t, badEventFeedICS)
+	ctx := context.Background()
+
+	if _, err := svc.Subscribe(ctx, userID, workspaceID, srv.URL+"/feed.ics", "Feed", "#8E44ADFF", false); err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+
+	all, err := events.List(ctx, userID, nil, nil)
+	if err != nil {
+		t.Fatalf("list events: %v", err)
+	}
+	if len(all) != 2 {
+		t.Fatalf("expected the 2 modellable series to be written, got %+v", all)
+	}
+	for _, e := range all {
+		if e.Title == "Backwards" {
+			t.Fatalf("expected the unstorable series not to be written, got %+v", e)
+		}
+	}
+}
+
+func TestSubscribeService_Refresh_UnstorableSeriesLeftAloneNotTombstoned(t *testing.T) {
+	svc, events, _, userID, workspaceID := newTestSubscribeService(t)
+	ctx := context.Background()
+
+	body := twoSeriesFeed("Standup", true, true)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/calendar")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(crlfSub(body)))
+	}))
+	t.Cleanup(srv.Close)
+
+	cal, err := svc.Subscribe(ctx, userID, workspaceID, srv.URL+"/feed.ics", "Feed", "#8E44ADFF", false)
+	if err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+
+	before, err := events.events.ListMastersByCalendar(ctx, cal.ID)
+	if err != nil {
+		t.Fatalf("list masters: %v", err)
+	}
+	var standupID string
+	for _, m := range before {
+		if m.Title == "Standup" {
+			standupID = m.ID
+		}
+	}
+	if standupID == "" {
+		t.Fatalf("expected a Standup master to have been created, got %+v", before)
+	}
+
+	// series-a still parses, but its SUMMARY is now blank — decodable and
+	// unstorable, which must cost that series alone.
+	body = twoSeriesFeed("", true, true)
+	result, err := svc.Refresh(ctx, userID, cal.ID, true)
+	if err != nil {
+		t.Fatalf("refresh: %v", err)
+	}
+	if result.Unparseable != 1 {
+		t.Fatalf("expected 1 unstorable series, got %+v", result)
+	}
+	if result.Tombstoned != 0 {
+		t.Fatalf("expected the unstorable series to survive, not be tombstoned, got %+v", result)
+	}
+
+	still, err := events.events.GetByID(ctx, standupID)
+	if err != nil {
+		t.Fatalf("expected the unstorable series' existing row to survive: %v", err)
+	}
+	if still.Title != "Standup" {
+		t.Fatalf("expected the existing row untouched, got %q", still.Title)
+	}
+}

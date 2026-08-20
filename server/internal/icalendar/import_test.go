@@ -703,3 +703,181 @@ SUMMARY:Standup
 END:VEVENT
 END:VCALENDAR
 `
+
+func TestParseImportFile_TimedDTStartOnly_GetsAStorableDuration(t *testing.T) {
+	ics := `BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//test//EN
+BEGIN:VEVENT
+UID:no-dtend
+DTSTART:20260601T090000Z
+SUMMARY:Bare start
+END:VEVENT
+END:VCALENDAR
+`
+	f := mustParseFile(t, ics)
+
+	if len(f.Series) != 1 {
+		t.Fatalf("expected the series to import, got %d series: skipped=%+v", len(f.Series), f.Skipped)
+	}
+	s := f.Series[0]
+	wantStart := time.Date(2026, 6, 1, 9, 0, 0, 0, time.UTC)
+	if !s.Master.Start.Equal(wantStart) {
+		t.Fatalf("expected start %v, got %v", wantStart, s.Master.Start)
+	}
+	if want := wantStart.Add(30 * time.Minute); !s.Master.End.Equal(want) {
+		t.Fatalf("expected a 30-minute end %v, got %v", want, s.Master.End)
+	}
+	if s.ZeroLengthTimed != 1 || s.ZeroLengthAllDay != 0 {
+		t.Fatalf("expected 1 timed zero-length expansion, got timed=%d allDay=%d", s.ZeroLengthTimed, s.ZeroLengthAllDay)
+	}
+}
+
+func TestParseImportFile_AllDayDTStartOnly_LastsOneDay(t *testing.T) {
+	ics := `BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//test//EN
+BEGIN:VEVENT
+UID:all-day-no-dtend
+DTSTART;VALUE=DATE:20260601
+SUMMARY:Bank holiday
+END:VEVENT
+END:VCALENDAR
+`
+	f := mustParseFile(t, ics)
+
+	if len(f.Series) != 1 {
+		t.Fatalf("expected the series to import, got %d series: skipped=%+v", len(f.Series), f.Skipped)
+	}
+	s := f.Series[0]
+	if !s.Master.AllDay {
+		t.Fatalf("expected an all-day event")
+	}
+	wantStart := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
+	if want := wantStart.AddDate(0, 0, 1); !s.Master.End.Equal(want) {
+		t.Fatalf("expected the RFC 5545 one-day default end %v, got %v", want, s.Master.End)
+	}
+	// RFC 5545 states that duration outright, so nothing was adjusted.
+	if s.ZeroLengthTimed != 0 || s.ZeroLengthAllDay != 0 {
+		t.Fatalf("expected no zero-length expansion, got timed=%d allDay=%d", s.ZeroLengthTimed, s.ZeroLengthAllDay)
+	}
+}
+
+func TestParseImportFile_DurationInsteadOfDTEnd_SetsEndFromDuration(t *testing.T) {
+	ics := `BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//test//EN
+BEGIN:VEVENT
+UID:duration-only
+DTSTART:20260601T090000Z
+DURATION:PT45M
+SUMMARY:Retro
+END:VEVENT
+END:VCALENDAR
+`
+	f := mustParseFile(t, ics)
+
+	if len(f.Series) != 1 {
+		t.Fatalf("expected the series to import, got %d series: skipped=%+v", len(f.Series), f.Skipped)
+	}
+	s := f.Series[0]
+	want := time.Date(2026, 6, 1, 9, 45, 0, 0, time.UTC)
+	if !s.Master.End.Equal(want) {
+		t.Fatalf("expected end %v from DURATION, got %v", want, s.Master.End)
+	}
+	if s.ZeroLengthTimed != 0 || s.ZeroLengthAllDay != 0 {
+		t.Fatalf("expected no zero-length expansion, got timed=%d allDay=%d", s.ZeroLengthTimed, s.ZeroLengthAllDay)
+	}
+}
+
+func TestParseImportFile_ZeroLengthAllDay_LastsOneDay(t *testing.T) {
+	ics := `BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//test//EN
+BEGIN:VEVENT
+UID:all-day-same-dtend
+DTSTART;VALUE=DATE:20260601
+DTEND;VALUE=DATE:20260601
+SUMMARY:Bank holiday
+END:VEVENT
+END:VCALENDAR
+`
+	f := mustParseFile(t, ics)
+
+	if len(f.Series) != 1 {
+		t.Fatalf("expected the series to import, got %d series: skipped=%+v", len(f.Series), f.Skipped)
+	}
+	s := f.Series[0]
+	want := time.Date(2026, 6, 2, 0, 0, 0, 0, time.UTC)
+	if !s.Master.End.Equal(want) {
+		t.Fatalf("expected end %v, got %v", want, s.Master.End)
+	}
+	if s.ZeroLengthAllDay != 1 || s.ZeroLengthTimed != 0 {
+		t.Fatalf("expected 1 all-day zero-length expansion, got timed=%d allDay=%d", s.ZeroLengthTimed, s.ZeroLengthAllDay)
+	}
+}
+
+func TestParseImportFile_ZeroLengthOverride_Expanded(t *testing.T) {
+	ics := `BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//test//EN
+BEGIN:VEVENT
+UID:series-1
+DTSTART:20260601T090000Z
+DTEND:20260601T093000Z
+RRULE:FREQ=DAILY;COUNT=3
+SUMMARY:Standup
+END:VEVENT
+BEGIN:VEVENT
+UID:series-1
+RECURRENCE-ID:20260602T090000Z
+DTSTART:20260602T100000Z
+SUMMARY:Standup (moved)
+END:VEVENT
+END:VCALENDAR
+`
+	f := mustParseFile(t, ics)
+
+	if len(f.Series) != 1 {
+		t.Fatalf("expected the series to import, got %d series: skipped=%+v", len(f.Series), f.Skipped)
+	}
+	s := f.Series[0]
+	if len(s.Overrides) != 1 {
+		t.Fatalf("expected 1 override, got %d", len(s.Overrides))
+	}
+	want := time.Date(2026, 6, 2, 10, 30, 0, 0, time.UTC)
+	if !s.Overrides[0].End.Equal(want) {
+		t.Fatalf("expected the override's end %v, got %v", want, s.Overrides[0].End)
+	}
+	if s.ZeroLengthTimed != 1 {
+		t.Fatalf("expected 1 timed zero-length expansion, got %d", s.ZeroLengthTimed)
+	}
+}
+
+func TestParseImportFile_EndBeforeStart_LeftForTheWriterToSkip(t *testing.T) {
+	ics := `BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//test//EN
+BEGIN:VEVENT
+UID:backwards
+DTSTART:20260601T090000Z
+DTEND:20260601T080000Z
+SUMMARY:Backwards
+END:VEVENT
+END:VCALENDAR
+`
+	f := mustParseFile(t, ics)
+
+	if len(f.Series) != 1 {
+		t.Fatalf("expected the parse to keep the series, got %d series: skipped=%+v", len(f.Series), f.Skipped)
+	}
+	s := f.Series[0]
+	// Genuinely broken data is reported, not repaired: the end stays where
+	// the file put it, and the writer skips the series with a reason.
+	if want := time.Date(2026, 6, 1, 8, 0, 0, 0, time.UTC); !s.Master.End.Equal(want) {
+		t.Fatalf("expected end %v left untouched, got %v", want, s.Master.End)
+	}
+	if s.ZeroLengthTimed != 0 || s.ZeroLengthAllDay != 0 {
+		t.Fatalf("expected no zero-length expansion, got timed=%d allDay=%d", s.ZeroLengthTimed, s.ZeroLengthAllDay)
+	}
+}

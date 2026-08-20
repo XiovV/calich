@@ -2598,40 +2598,54 @@ func validateEventFields(title string, start, end time.Time, reminders []reposit
 	return title, nil
 }
 
-// validateSeriesWrites applies validateEventFields (trimming each title in
-// place) and the recurrence-rule check to every write and its Overrides,
-// stopping at the first failure without writing anything. Shared by
-// ImportSeries and ImportService.Import, which both need the same check to
-// run before any Calendar is created or any row written — including on a
-// dry run, so a preview reports exactly the errors a real run would hit
-// (ADR-0030).
+// validateSeriesWrites applies validateSeriesWrite to every write, stopping
+// at the first failure without writing anything — the writers' own
+// all-or-nothing guard, so a bad series in a large import fails before a
+// single row is written rather than partway through the transaction. An
+// importer that would rather skip one series than lose the file drops it
+// first with dropUnstorableSeries (#228); by the time writes reach here
+// they are expected to be storable, and one that isn't is a caller's bug
+// rather than a fact about the file.
 func validateSeriesWrites(writes []SeriesWrite) error {
-	for i, w := range writes {
-		title, err := validateEventFields(w.Title, w.Start, w.End, w.Reminders)
+	for i := range writes {
+		if err := validateSeriesWrite(&writes[i]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// validateSeriesWrite is validateSeriesWrites for one series: the whole
+// check for a single SeriesWrite and its Overrides, normalizing write in
+// place (trimmed title, canonical color) and stopping at the first failure.
+// Split out so an importer can ask series by series whether this app can
+// store one, and skip just that series rather than failing the whole file
+// on it (#228, ADR-0030's "failures are per-series, not per-file").
+func validateSeriesWrite(write *SeriesWrite) error {
+	title, err := validateEventFields(write.Title, write.Start, write.End, write.Reminders)
+	if err != nil {
+		return err
+	}
+	write.Title = title
+	if !isValidRecurrenceRule(write.Rrule) {
+		return ErrInvalidRecurrenceRule
+	}
+	color, err := normalizeEventColor(write.Color)
+	if err != nil {
+		return err
+	}
+	write.Color = color
+	for j, o := range write.Overrides {
+		trimmed, err := validateEventFields(o.Title, o.Start, o.End, o.Reminders)
 		if err != nil {
 			return err
 		}
-		writes[i].Title = title
-		if !isValidRecurrenceRule(w.Rrule) {
-			return ErrInvalidRecurrenceRule
-		}
-		color, err := normalizeEventColor(w.Color)
+		write.Overrides[j].Title = trimmed
+		overrideColor, err := normalizeEventColor(o.Color)
 		if err != nil {
 			return err
 		}
-		writes[i].Color = color
-		for j, o := range w.Overrides {
-			trimmed, err := validateEventFields(o.Title, o.Start, o.End, o.Reminders)
-			if err != nil {
-				return err
-			}
-			writes[i].Overrides[j].Title = trimmed
-			overrideColor, err := normalizeEventColor(o.Color)
-			if err != nil {
-				return err
-			}
-			writes[i].Overrides[j].Color = overrideColor
-		}
+		write.Overrides[j].Color = overrideColor
 	}
 	return nil
 }

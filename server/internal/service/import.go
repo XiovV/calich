@@ -163,7 +163,81 @@ const maxSkippedSamples = 5
 const (
 	AdjustedFloatingDowngrade = "unresolvable timezone downgraded to a Floating Event"
 	AdjustedAlarmsDropped     = "unsupported reminder dropped"
+	AdjustedZeroLengthAllDay  = "zero-length all-day event given a one-day duration"
 )
+
+// AdjustedZeroLengthTimed states the duration a zero-length timed Event was
+// given, read off the constant that gives it rather than repeating the
+// figure, so the two can never disagree — the Import summary is part of the
+// contract, not decoration (ADR-0030).
+var AdjustedZeroLengthTimed = fmt.Sprintf("zero-length event given a %d-minute duration",
+	int(icalendar.ZeroLengthTimedDuration/time.Minute))
+
+// Skip reasons for a series icalendar decoded cleanly and this app still
+// cannot store (#228), continuing the vocabulary icalendar's own skip
+// reasons start for a series that couldn't be decoded at all. Each names
+// what about the series has no place in this app's model, since the Import
+// summary is where a user learns why an Event they can see in their file
+// isn't in their Calendar (ADR-0030).
+const (
+	SkipMissingTitle              = "missing title"
+	SkipEndBeforeStart            = "end before start"
+	SkipUnsupportedRecurrenceRule = "unsupported recurrence rule"
+	SkipUnsupportedReminder       = "unsupported reminder"
+	SkipUnsupportedColor          = "unsupported color"
+	SkipUnstorable                = "cannot be stored"
+)
+
+// dropUnstorableSeries removes from writes — and, index for index, from
+// parsed.Series — every series this app cannot store, recording each on
+// parsed.Skipped with the reason it was dropped, and returns what survives.
+// One VEVENT this app has no way to model must cost its own series and
+// nothing more (#228): the file's other Events import, and the Import
+// summary accounts for what was left out, which ADR-0030 makes part of the
+// feature rather than a diagnostic. Keeping parsed in step with writes is
+// what lets fillFileSummary go on reading the two by the same index, and
+// what lets a Refresh tell "present in the feed but unstorable" apart from
+// "gone from the feed" (ADR-0033) — hence the series' own UID on each
+// record.
+func dropUnstorableSeries(parsed *icalendar.ParsedFile, writes []SeriesWrite) []SeriesWrite {
+	kept := writes[:0]
+	keptSeries := parsed.Series[:0]
+	for i := range writes {
+		if err := validateSeriesWrite(&writes[i]); err != nil {
+			parsed.Skipped = append(parsed.Skipped, icalendar.SkippedSeries{
+				Reason: skipReason(err),
+				Title:  strings.TrimSpace(writes[i].Title),
+				UID:    parsed.Series[i].UID,
+			})
+			continue
+		}
+		kept = append(kept, writes[i])
+		keptSeries = append(keptSeries, parsed.Series[i])
+	}
+	parsed.Series = keptSeries
+	return kept
+}
+
+// skipReason names, for the Import summary, what a write failed validation
+// on. An error with no reason of its own still reports one rather than
+// nothing, since a skip the summary can't explain is exactly the silence
+// ADR-0030 exists to prevent.
+func skipReason(err error) string {
+	switch {
+	case errors.Is(err, ErrInvalidTitle):
+		return SkipMissingTitle
+	case errors.Is(err, ErrInvalidTimeRange):
+		return SkipEndBeforeStart
+	case errors.Is(err, ErrInvalidRecurrenceRule):
+		return SkipUnsupportedRecurrenceRule
+	case errors.Is(err, ErrInvalidReminderChannel):
+		return SkipUnsupportedReminder
+	case errors.Is(err, ErrInvalidEventColor):
+		return SkipUnsupportedColor
+	default:
+		return SkipUnstorable
+	}
+}
 
 // IgnoredCounts tallies components a Calendar file may carry that this app
 // doesn't model at all (ADR-0030).
@@ -310,9 +384,7 @@ func (s *ImportService) Import(ctx context.Context, userID, workspaceID int64, f
 		for i, series := range parsed.Series {
 			writes[i] = seriesWriteFromImported(series)
 		}
-		if err := validateSeriesWrites(writes); err != nil {
-			return ImportSummary{}, err
-		}
+		writes = dropUnstorableSeries(parsed, writes)
 
 		fileSummary, color, err := s.proposeTarget(ctx, userID, file.Name, target, parsed, &rotation)
 		if err != nil {
@@ -455,10 +527,12 @@ func fillFileSummary(summary *FileSummary, parsed *icalendar.ParsedFile, writes 
 		VFreeBusy: parsed.IgnoredVFreeBusy,
 	}
 
-	var floatingDowngrades, droppedAlarms int
+	var floatingDowngrades, droppedAlarms, zeroLengthTimed, zeroLengthAllDay int
 	for i, series := range parsed.Series {
 		floatingDowngrades += series.FloatingDowngrades
 		droppedAlarms += series.DroppedAlarms
+		zeroLengthTimed += series.ZeroLengthTimed
+		zeroLengthAllDay += series.ZeroLengthAllDay
 		summary.Attachments.Imported += len(series.Attachments)
 		summary.Attachments.TooLarge += series.AttachmentsTooLarge
 		summary.Attachments.TooMany += series.AttachmentsTooMany
@@ -476,6 +550,12 @@ func fillFileSummary(summary *FileSummary, parsed *icalendar.ParsedFile, writes 
 	}
 	if droppedAlarms > 0 {
 		summary.Adjusted = append(summary.Adjusted, AdjustedGroup{Reason: AdjustedAlarmsDropped, Count: droppedAlarms})
+	}
+	if zeroLengthTimed > 0 {
+		summary.Adjusted = append(summary.Adjusted, AdjustedGroup{Reason: AdjustedZeroLengthTimed, Count: zeroLengthTimed})
+	}
+	if zeroLengthAllDay > 0 {
+		summary.Adjusted = append(summary.Adjusted, AdjustedGroup{Reason: AdjustedZeroLengthAllDay, Count: zeroLengthAllDay})
 	}
 
 	summary.Skipped = skippedGroups(parsed.Skipped)

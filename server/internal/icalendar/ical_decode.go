@@ -138,12 +138,9 @@ func parseVEvent(v ical.Event, isOverride bool) (ParsedEvent, string, error) {
 		return ParsedEvent{}, "", fmt.Errorf("parse dtstart: %w", err)
 	}
 
-	end := start
-	if endProp := v.Props.Get(ical.PropDateTimeEnd); endProp != nil {
-		end, _, _, err = parseEventTime(endProp)
-		if err != nil {
-			return ParsedEvent{}, "", fmt.Errorf("parse dtend: %w", err)
-		}
+	end, err := parseEventEnd(v, start, allDay)
+	if err != nil {
+		return ParsedEvent{}, "", err
 	}
 
 	title, err := v.Props.Text(ical.PropSummary)
@@ -191,6 +188,34 @@ func parseVEvent(v ical.Event, isOverride bool) (ParsedEvent, string, error) {
 		Reminders:   reminders,
 		Color:       parseEventColor(v),
 	}, rrule, nil
+}
+
+// parseEventEnd resolves when v ends, in RFC 5545's own order of
+// preference: DTEND if it carries one, else DTSTART plus DURATION, else the
+// default the spec gives DTSTART's value type — one day for a date-valued
+// DTSTART, zero for a date-time one. A VEVENT carrying only a DTSTART is
+// valid iCalendar and common in real exports (#228), so it decodes rather
+// than erroring; the zero-length instant it produces is this app's own
+// problem, dealt with where the Event is written, not here.
+func parseEventEnd(v ical.Event, start time.Time, allDay bool) (time.Time, error) {
+	if endProp := v.Props.Get(ical.PropDateTimeEnd); endProp != nil {
+		end, _, _, err := parseEventTime(endProp)
+		if err != nil {
+			return time.Time{}, fmt.Errorf("parse dtend: %w", err)
+		}
+		return end, nil
+	}
+	if durProp := v.Props.Get(ical.PropDuration); durProp != nil {
+		d, err := durProp.Duration()
+		if err != nil {
+			return time.Time{}, fmt.Errorf("parse duration: %w", err)
+		}
+		return start.Add(d), nil
+	}
+	if allDay {
+		return start.AddDate(0, 0, 1), nil
+	}
+	return start, nil
 }
 
 // parseEventColor decodes v's COLOR property (RFC 7986) into the exact hex
