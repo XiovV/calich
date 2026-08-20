@@ -134,19 +134,24 @@ export function ImportExportSection() {
     }
   }
 
+  // A FileList is live, so the picker's files have to be copied out before
+  // the input is reset — clearing the value empties the very list a captured
+  // reference points at, which left every Choose file import silently doing
+  // nothing (#226). The reset itself has to stay: without it, picking the
+  // same file twice in a row fires no second change event.
   function handleInputChange(domEvent: ChangeEvent<HTMLInputElement>) {
-    const files = domEvent.target.files;
+    const files = Array.from(domEvent.target.files ?? []);
     domEvent.target.value = "";
-    if (files) handleFileList(files);
+    handleFiles(files);
   }
 
   function handleDrop(domEvent: DragEvent<HTMLDivElement>) {
     domEvent.preventDefault();
     setIsDraggingOver(false);
-    handleFileList(domEvent.dataTransfer.files);
+    handleFiles(Array.from(domEvent.dataTransfer.files));
   }
 
-  function handleFileList(files: FileList) {
+  function handleFiles(files: File[]) {
     if (files.length === 0) return;
     if (files.length > 1) {
       toast.error("Select one file at a time.");
