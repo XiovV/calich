@@ -65,6 +65,25 @@ describe("occurrenceIntersectsDay", () => {
     expect(occurrenceIntersectsDay(occurrence, new Date(2026, 7, 13))).toBe(true);
     expect(occurrenceIntersectsDay(occurrence, new Date(2026, 7, 14))).toBe(false);
   });
+
+  it("is true on every day of a multi-day all-day Occurrence crossing a week boundary (#232)", () => {
+    // August 15, 2026 is a Saturday; the 16th is the Sunday that starts the
+    // next week row. An all-day span's `end` is the exclusive next date.
+    const occurrence = makeOccurrence("a", new Date(2026, 7, 14), new Date(2026, 7, 17));
+    expect(occurrenceIntersectsDay(occurrence, new Date(2026, 7, 14))).toBe(true);
+    expect(occurrenceIntersectsDay(occurrence, new Date(2026, 7, 15))).toBe(true);
+    expect(occurrenceIntersectsDay(occurrence, new Date(2026, 7, 16))).toBe(true);
+    // The half-open end: the Event ends on the 17th, so it does not render there.
+    expect(occurrenceIntersectsDay(occurrence, new Date(2026, 7, 17))).toBe(false);
+  });
+
+  it("is true on every day of a multi-day all-day Occurrence crossing a month boundary (#232)", () => {
+    const occurrence = makeOccurrence("a", new Date(2026, 7, 30), new Date(2026, 8, 2));
+    expect(occurrenceIntersectsDay(occurrence, new Date(2026, 7, 30))).toBe(true);
+    expect(occurrenceIntersectsDay(occurrence, new Date(2026, 7, 31))).toBe(true);
+    expect(occurrenceIntersectsDay(occurrence, new Date(2026, 8, 1))).toBe(true);
+    expect(occurrenceIntersectsDay(occurrence, new Date(2026, 8, 2))).toBe(false);
+  });
 });
 
 describe("occurrenceSegmentForDay", () => {

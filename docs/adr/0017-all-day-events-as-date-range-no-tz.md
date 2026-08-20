@@ -1,6 +1,6 @@
 # All-day Events as a half-open date range, serialized without timezone conversion
 
-Status: accepted
+Status: accepted — amended by ADR-0069 (multi-day all-day Events now render; the "Scope boundary" section below is historical)
 
 An Event may be marked **all-day** (`all_day` flag). All-day Events are modeled as *dates*, not instants: `start` is the date and `end` is the exclusive next day (iCalendar's half-open `DATE` convention). Only single-day all-day Events are in scope now; multi-day (spanning-bar) all-day Events are deferred.
 
@@ -21,6 +21,8 @@ Trade-off accepted: the serialization layer must branch on `allDay` (date-string
 - **Month view**: a single-day all-day Occurrence is an Event chip distinguished from timed chips (filled bar, no start-time prefix), flowing through the existing overflow logic.
 - **Drag-to-move**: Month Day cells, and the Week all-day lane across day columns (changes the date). No resize (stretching to multiple days would create a multi-day Event, out of scope). A recurring all-day Occurrence dragged fires the same scope picker as any other edit.
 
-## Scope boundary
+## Scope boundary (historical — see ADR-0069)
 
 Deferred: multi-day all-day Events (horizontal spanning bars, cross-week continuation, bar packing) — a layout problem independent of recurrence. Recurrence composes with all-day for free: an all-day Recurrence rule is expanded over dates like any other.
+
+ADR-0069 lifts this deferral for rendering: a multi-day all-day Event now shows in every day it touches, as a repeated per-day chip rather than a packed spanning bar. Creating one from the Event modal remains out of reach — that stays deferred.

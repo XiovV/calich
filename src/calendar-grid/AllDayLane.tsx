@@ -1,8 +1,8 @@
-import { isSameDay } from "date-fns";
 import { AttachmentIndicator } from "./AttachmentIndicator";
 import { canWriteCalendarEvents, getCalendarById } from "../lib/calendar";
 import { getOccurrenceBlockStyle } from "../lib/calendarColors";
 import { useCalendarsStore } from "../lib/calendarsStore";
+import { occurrenceIntersectsDay } from "../lib/occurrenceSegments";
 import { occurrenceKey, type Occurrence } from "../lib/occurrence";
 
 interface AllDayLaneProps {
@@ -11,6 +11,7 @@ interface AllDayLaneProps {
   onOccurrenceClick: (occurrence: Occurrence) => void;
   onOccurrenceDragStart: (
     occurrence: Occurrence,
+    dragStartDay: Date,
     clientX: number,
     clientY: number,
   ) => void;
@@ -21,10 +22,12 @@ interface AllDayLaneProps {
 /**
  * The all-day lane: a strip above the hourly grid in Day/Week view holding
  * all-day Occurrences as full-width chips, one column per visible day
- * (ADR-0017, CONTEXT.md's All-day lane). Renders nothing when there are no
- * all-day Occurrences to show. Each day column carries `data-allday-date` so
- * the drag handler (in TimeGrid) can resolve the date under the pointer the
- * same way MonthGrid resolves a Day cell — move only, no resize (ADR-0017).
+ * (ADR-0017, ADR-0069, CONTEXT.md's All-day lane). Renders nothing when there
+ * are no all-day Occurrences to show. An Occurrence spanning several dates
+ * gets a chip in every day column it touches (#232), each opening the same
+ * Event. Each day column carries `data-allday-date` so the drag handler (in
+ * TimeGrid) can resolve the date under the pointer the same way MonthGrid
+ * resolves a Day cell — move only, no resize (ADR-0017).
  */
 export function AllDayLane({
   daysToShow,
@@ -43,7 +46,7 @@ export function AllDayLane({
       <div className="w-18 shrink-0" />
       {daysToShow.map((day) => {
         const dayOccurrences = occurrences.filter((occurrence) =>
-          isSameDay(occurrence.start, day),
+          occurrenceIntersectsDay(occurrence, day),
         );
         const isDragHover = dragHoverDateKey === day.toDateString();
         return (
@@ -73,7 +76,7 @@ export function AllDayLane({
                   onMouseDown={(domEvent) => {
                     domEvent.stopPropagation();
                     if (isReadOnly) return;
-                    onOccurrenceDragStart(occurrence, domEvent.clientX, domEvent.clientY);
+                    onOccurrenceDragStart(occurrence, day, domEvent.clientX, domEvent.clientY);
                   }}
                   onClick={(domEvent) => {
                     // Real mouse clicks are handled by the mousedown/mouseup

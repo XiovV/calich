@@ -15,6 +15,7 @@ import {
   computeMovedEventTimes,
   computeResizedEventTimes,
   durationToHeight,
+  resolveDragTargetDate,
   timeToY,
   type DraftBlock,
 } from "../lib/gridTime";
@@ -39,6 +40,16 @@ interface EventDragPayload {
   occurrence: Occurrence;
   kind: EventDragKind;
   columnWidth: number;
+}
+
+/**
+ * An all-day drag's Occurrence plus the day column the gesture picked it up
+ * from — needed because a multi-day Occurrence (#232) renders a chip on
+ * every day it spans, not just its true start.
+ */
+interface AllDayDragPayload {
+  occurrence: Occurrence;
+  dragStartDay: Date;
 }
 
 function isLastDay(day: Date, daysToShow: Date[]): boolean {
@@ -214,20 +225,29 @@ export function TimeGrid({
       )
     : null;
 
-  const allDayDrag = usePointerDrag<Occurrence>({
-    onClick: (occurrence) => {
+  const allDayDrag = usePointerDrag<AllDayDragPayload>({
+    onClick: (payload) => {
       setAllDayHoverDateKey(null);
-      onOccurrenceClick(occurrence);
+      onOccurrenceClick(payload.occurrence);
     },
-    onDrag: (occurrence, state: DragState) => {
+    onDrag: (payload, state: DragState) => {
       setAllDayHoverDateKey(null);
       const targetDate = getAllDayDateAtPoint(daysToShow, state.position.x, state.position.y);
       if (targetDate) {
-        const { start, end } = computeMoveToDate(occurrence.start, occurrence.end, targetDate);
-        dragCommit.commit(occurrence, start, end);
+        const adjustedTarget = resolveDragTargetDate(
+          payload.occurrence.start,
+          payload.dragStartDay,
+          targetDate,
+        );
+        const { start, end } = computeMoveToDate(
+          payload.occurrence.start,
+          payload.occurrence.end,
+          adjustedTarget,
+        );
+        dragCommit.commit(payload.occurrence, start, end);
       }
     },
-    onMove: (_occurrence, state: DragState) => {
+    onMove: (_payload, state: DragState) => {
       const hoveredDay = getAllDayDateAtPoint(daysToShow, state.position.x, state.position.y);
       setAllDayHoverDateKey(hoveredDay ? hoveredDay.toDateString() : null);
     },
@@ -235,17 +255,18 @@ export function TimeGrid({
 
   function handleAllDayDragStart(
     occurrence: Occurrence,
+    dragStartDay: Date,
     clientX: number,
     clientY: number,
   ) {
-    allDayDrag.start(occurrence, clientX, clientY);
+    allDayDrag.start({ occurrence, dragStartDay }, clientX, clientY);
   }
 
   const allDayDragCalendar = allDayDrag.active
-    ? getCalendarById(calendars, allDayDrag.active.event.calendarId)
+    ? getCalendarById(calendars, allDayDrag.active.occurrence.event.calendarId)
     : undefined;
   const allDayDragBlockStyle = getOccurrenceBlockStyle(
-    allDayDrag.active?.event,
+    allDayDrag.active?.occurrence.event,
     allDayDragCalendar,
   );
 
@@ -275,7 +296,7 @@ export function TimeGrid({
             onOccurrenceClick={onOccurrenceClick}
             onOccurrenceDragStart={handleAllDayDragStart}
             draggingKey={
-              allDayDrag.active ? occurrenceKey(allDayDrag.active) : null
+              allDayDrag.active ? occurrenceKey(allDayDrag.active.occurrence) : null
             }
             dragHoverDateKey={allDayHoverDateKey}
           />
@@ -311,7 +332,7 @@ export function TimeGrid({
         <AllDayEventDragPreview
           x={allDayDrag.position.x}
           y={allDayDrag.position.y}
-          title={allDayDrag.active.event.title}
+          title={allDayDrag.active.occurrence.event.title}
           blockStyle={allDayDragBlockStyle}
         />
       )}

@@ -142,6 +142,26 @@ describe("getOccurrencesForDay", () => {
     expect(result.end).toEqual(new Date(2026, 7, 11, 1, 0));
   });
 
+  it("shows a multi-day all-day Occurrence in every Day cell it covers, across a week row boundary (#232)", () => {
+    // August 15, 2026 is a Saturday, the last cell of its grid row; the 16th
+    // is the Sunday that starts the next row. `end` is the exclusive next date.
+    const spanning = makeOccurrence("spanning", new Date(2026, 7, 14), new Date(2026, 7, 17));
+
+    expect(getOccurrencesForDay([spanning], new Date(2026, 7, 14))).toEqual([spanning]);
+    expect(getOccurrencesForDay([spanning], new Date(2026, 7, 15))).toEqual([spanning]);
+    expect(getOccurrencesForDay([spanning], new Date(2026, 7, 16))).toEqual([spanning]);
+    expect(getOccurrencesForDay([spanning], new Date(2026, 7, 17))).toEqual([]);
+  });
+
+  it("shows a multi-day all-day Occurrence in every Day cell it covers, across a month boundary (#232)", () => {
+    const spanning = makeOccurrence("spanning", new Date(2026, 7, 30), new Date(2026, 8, 2));
+
+    expect(getOccurrencesForDay([spanning], new Date(2026, 7, 30))).toEqual([spanning]);
+    expect(getOccurrencesForDay([spanning], new Date(2026, 7, 31))).toEqual([spanning]);
+    expect(getOccurrencesForDay([spanning], new Date(2026, 8, 1))).toEqual([spanning]);
+    expect(getOccurrencesForDay([spanning], new Date(2026, 8, 2))).toEqual([]);
+  });
+
   it("orders same-day occurrences by start time", () => {
     const day = new Date(2026, 7, 10);
     const late = makeOccurrence(

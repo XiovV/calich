@@ -1,3 +1,5 @@
+import { addDays, differenceInCalendarDays } from "date-fns";
+
 export const PIXELS_PER_HOUR = 48;
 export const HOURS_IN_DAY = 24;
 
@@ -116,6 +118,25 @@ export function computeMoveToDate(
   );
   const newEnd = new Date(newStart.getTime() + duration);
   return { start: newStart, end: newEnd };
+}
+
+/**
+ * The date `computeMoveToDate` should treat as the drop target, adjusted for
+ * a drag that started on a day other than the Occurrence's own start. A
+ * multi-day Occurrence renders on every day it spans (#232), so a drag can
+ * begin from any of them — shifting `targetDate` back by the same gap
+ * between `dragStartDay` and `occurrenceStart` keeps `computeMoveToDate`
+ * (which always anchors to the true start) moving the whole Occurrence by
+ * the distance the user actually dragged, rather than snapping its start to
+ * the drop point regardless of which day was picked up.
+ */
+export function resolveDragTargetDate(
+  occurrenceStart: Date,
+  dragStartDay: Date,
+  targetDate: Date,
+): Date {
+  const dayOffset = differenceInCalendarDays(dragStartDay, occurrenceStart);
+  return addDays(targetDate, -dayOffset);
 }
 
 export function computeResizedEventTimes(

@@ -68,7 +68,7 @@ What pressing Save on the Event modal compiles down to before anything is writte
 _Avoid_: save action, submit handler, intent, command
 
 **All-day Event**:
-An Event that occupies whole dates rather than a time range, flagged by `allDay`. Stored with the iCalendar half-open date convention — `start` is the date, `end` is the exclusive next day (a single-day all-day Event spans one day). Its start/end are wall-clock dates, serialized as date-only strings and never timezone-converted. Rendered in the all-day lane, not on the hourly grid. Multi-day all-day Events are out of scope for now.
+An Event that occupies whole dates rather than a time range, flagged by `allDay`. Stored with the iCalendar half-open date convention — `start` is the date, `end` is the exclusive next day (a single-day all-day Event spans one day; a multi-day one spans more). Its start/end are wall-clock dates, serialized as date-only strings and never timezone-converted. Rendered in the all-day lane, not on the hourly grid — a multi-day one gets a chip in every day it touches, in the lane and in Month view, clicking any of them opens the same Event. Creating one that spans more than a day is not yet reachable from the Event modal; only import and the API produce one today. See ADR-0017, ADR-0069.
 _Avoid_: full-day event, date event
 
 **All-day lane**:
