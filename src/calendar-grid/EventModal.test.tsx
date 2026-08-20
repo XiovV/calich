@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { User } from "../lib/authApi";
 import type { Calendar } from "../lib/calendar";
@@ -252,6 +252,113 @@ describe("EventModal — editing a recurring Occurrence", () => {
 
     expect(screen.queryByText("Edit recurring event")).not.toBeInTheDocument();
     expect(eventsApi.update).not.toHaveBeenCalled();
+    expect(onClose).toHaveBeenCalled();
+  });
+});
+
+describe("EventModal — an Event crossing midnight (#231)", () => {
+  it("defaults a drag-created draft's End date to the same day as its Start", () => {
+    renderCreate();
+
+    expect(screen.getByLabelText("Start date")).toHaveValue("2026-08-03");
+    expect(screen.getByLabelText("End date")).toHaveValue("2026-08-03");
+  });
+
+  it("saves an Event whose End date is later than its Start date", async () => {
+    const onClose = renderCreate();
+
+    await userEvent.type(screen.getByLabelText("Title"), "Night shift");
+    fireEvent.change(screen.getByLabelText("Start time"), {
+      target: { value: "23:00" },
+    });
+    fireEvent.change(screen.getByLabelText("End time"), {
+      target: { value: "01:00" },
+    });
+    fireEvent.change(screen.getByLabelText("End date"), {
+      target: { value: "2026-08-04" },
+    });
+    expect(saveButton()).toBeEnabled();
+    await userEvent.click(saveButton());
+
+    expect(eventsApi.create).toHaveBeenCalledWith(
+      "token-123",
+      expect.objectContaining({
+        title: "Night shift",
+        start: new Date(2026, 7, 3, 23, 0),
+        end: new Date(2026, 7, 4, 1, 0),
+      }),
+    );
+    expect(onClose).toHaveBeenCalled();
+  });
+
+  it("still refuses an end time at-or-before start time on the same date", () => {
+    renderCreate();
+
+    fireEvent.change(screen.getByLabelText("Start time"), {
+      target: { value: "10:00" },
+    });
+    fireEvent.change(screen.getByLabelText("End time"), {
+      target: { value: "09:00" },
+    });
+
+    expect(saveButton()).toBeDisabled();
+    expect(
+      screen.getByText("End time must be after start time."),
+    ).toBeInTheDocument();
+  });
+
+  it("refuses an End date earlier than the Start date, naming the date", () => {
+    renderCreate();
+
+    fireEvent.change(screen.getByLabelText("End date"), {
+      target: { value: "2026-08-02" },
+    });
+
+    expect(saveButton()).toBeDisabled();
+    expect(
+      screen.getByText("End date must be on or after the start date."),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText("End time must be after start time."),
+    ).not.toBeInTheDocument();
+  });
+
+  it("keeps the date range in state when All day is toggled off again", async () => {
+    renderCreate();
+
+    fireEvent.change(screen.getByLabelText("End date"), {
+      target: { value: "2026-08-05" },
+    });
+    await userEvent.click(screen.getByRole("checkbox"));
+    expect(screen.queryByLabelText("End date")).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("checkbox"));
+    expect(screen.getByLabelText("End date")).toHaveValue("2026-08-05");
+  });
+
+  it("shows both dates on an existing multi-day Event, and editing the End date round-trips", async () => {
+    const event = makeEvent({
+      start: new Date(2026, 7, 3, 23, 0),
+      end: new Date(2026, 7, 4, 1, 0),
+    });
+    const onClose = renderEdit(event);
+
+    expect(screen.getByLabelText("Start date")).toHaveValue("2026-08-03");
+    expect(screen.getByLabelText("End date")).toHaveValue("2026-08-04");
+
+    fireEvent.change(screen.getByLabelText("End date"), {
+      target: { value: "2026-08-06" },
+    });
+    await userEvent.click(saveButton());
+
+    expect(eventsApi.update).toHaveBeenCalledWith(
+      "token-123",
+      "evt-1",
+      expect.objectContaining({
+        start: new Date(2026, 7, 3, 23, 0),
+        end: new Date(2026, 7, 6, 1, 0),
+      }),
+    );
     expect(onClose).toHaveBeenCalled();
   });
 });

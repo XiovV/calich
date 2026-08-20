@@ -5,7 +5,7 @@ import {
   type KeyboardEvent,
   type ReactNode,
 } from "react";
-import { addDays, format, setHours, setMinutes, startOfDay } from "date-fns";
+import { addDays, format, startOfDay } from "date-fns";
 import { Dialog } from "@base-ui/react/dialog";
 import { Popover } from "@base-ui/react/popover";
 import {
@@ -22,6 +22,12 @@ import {
   X,
 } from "lucide-react";
 import type { DraftBlock } from "../lib/gridTime";
+import {
+  dateInputValueToDate,
+  dateToDateInputValue,
+  timeStringToDate,
+  validateEventTimeRange,
+} from "../lib/eventTimeRange";
 import type { Attachment, Event, Reminder } from "../lib/event";
 import { hasSecondaryEventFields } from "../lib/eventDisclosure";
 import { shouldShowAttachmentsRow } from "../lib/attachmentsSection";
@@ -118,6 +124,10 @@ type EventModalProps =
 
 interface InitialFormState {
   day: Date;
+  /** The date the Event ends on — equal to `day` unless it crosses midnight
+   * (issue #231). Ignored while `allDay`, whose end is always the day after
+   * `day` (multi-day all-day is out of scope, ADR-0017). */
+  endDay: Date;
   startTime: string;
   endTime: string;
   title: string;
@@ -136,11 +146,6 @@ interface InitialFormState {
   color: string | undefined;
 }
 
-function timeStringToDate(day: Date, time: string): Date {
-  const [hours, minutes] = time.split(":").map(Number);
-  return setMinutes(setHours(day, hours), minutes);
-}
-
 function deriveInitialFormState(
   props: EventModalProps,
   master: Event | undefined,
@@ -156,6 +161,7 @@ function deriveInitialFormState(
     const repeat: RepeatChoice = !rrule ? "none" : (matched ?? "custom");
     return {
       day: startOfDay(occurrence.start),
+      endDay: startOfDay(occurrence.end),
       startTime: format(occurrence.start, "HH:mm"),
       endTime: format(occurrence.end, "HH:mm"),
       title: event.title,
@@ -173,6 +179,7 @@ function deriveInitialFormState(
 
   return {
     day: props.day,
+    endDay: props.day,
     startTime: format(props.draft.start, "HH:mm"),
     endTime: format(props.draft.end, "HH:mm"),
     title: "",
@@ -353,7 +360,6 @@ export function EventModal(props: EventModalProps) {
   const [initial] = useState(() =>
     deriveInitialFormState(props, master, defaultCalendarId(checkedCalendars)),
   );
-  const { day } = initial;
 
   // Progressive disclosure (#193, ADR-0056): "auto-expand if populated",
   // recomputed once per open via useState's lazy initializer — never
@@ -417,6 +423,8 @@ export function EventModal(props: EventModalProps) {
     mode === "edit" ? master?.id : (createdEventId ?? undefined);
 
   const [title, setTitle] = useState(initial.title);
+  const [day, setDay] = useState(initial.day);
+  const [endDay, setEndDay] = useState(initial.endDay);
   const [startTime, setStartTime] = useState(initial.startTime);
   const [endTime, setEndTime] = useState(initial.endTime);
   const [calendarId, setCalendarId] = useState(initial.calendarId);
@@ -651,9 +659,12 @@ export function EventModal(props: EventModalProps) {
   }
 
   // All-day skips the time-range check entirely — there's no time inputs to
-  // validate (ADR-0017).
-  const isTimeRangeValid =
-    allDay || timeStringToDate(day, endTime) > timeStringToDate(day, startTime);
+  // validate (ADR-0017). A timed range crossing into a later End date is
+  // valid regardless of clock times — #231's whole point — so this can
+  // refuse for either an out-of-order date or a same-date out-of-order time,
+  // named distinctly by timeRangeValidation.message below.
+  const timeRangeValidation = validateEventTimeRange(day, startTime, endDay, endTime);
+  const isTimeRangeValid = allDay || timeRangeValidation.valid;
   // Reminders have their own write path (ADR-0064) — a read-only Event's
   // Reminders section is live precisely because the plan below, and the
   // write it resolves to, never go anywhere near an Event field (#211).
@@ -661,12 +672,13 @@ export function EventModal(props: EventModalProps) {
 
   // The form's fields, normalized into the shape the rest of the recurrence
   // code already speaks. An all-day Event's start/end are whole dates: start
-  // is the day itself, end the exclusive next day (ADR-0017).
+  // is the day itself, end the exclusive next day (ADR-0017) — multi-day
+  // all-day is out of scope, so `endDay` is ignored while `allDay`.
   const draftChanges: MasterFieldChanges = {
     calendarId,
     title: title.trim(),
     start: startForRule,
-    end: allDay ? addDays(startOfDay(day), 1) : timeStringToDate(day, endTime),
+    end: allDay ? addDays(startOfDay(day), 1) : timeStringToDate(endDay, endTime),
     allDay,
     rrule: repeat === "custom" ? customRule : buildRule(repeat, startForRule),
     description: description.trim(),
@@ -1055,7 +1067,18 @@ export function EventModal(props: EventModalProps) {
                 <>
                   <div className="mt-4 flex gap-3">
                     <Input
-                      label="Start"
+                      label="Start date"
+                      type="date"
+                      value={dateToDateInputValue(day)}
+                      onChange={(event) => {
+                        if (event.target.value === "") return;
+                        setDay(dateInputValueToDate(event.target.value));
+                      }}
+                      disabled={isReadOnlyEvent}
+                      className="flex-1"
+                    />
+                    <Input
+                      label="Start time"
                       type="time"
                       value={startTime}
                       onChange={(event) => setStartTime(event.target.value)}
@@ -1063,8 +1086,22 @@ export function EventModal(props: EventModalProps) {
                       disabled={isReadOnlyEvent}
                       className="flex-1"
                     />
+                  </div>
+                  <div className="mt-3 flex gap-3">
                     <Input
-                      label="End"
+                      label="End date"
+                      type="date"
+                      value={dateToDateInputValue(endDay)}
+                      onChange={(event) => {
+                        if (event.target.value === "") return;
+                        setEndDay(dateInputValueToDate(event.target.value));
+                      }}
+                      invalid={!isTimeRangeValid}
+                      disabled={isReadOnlyEvent}
+                      className="flex-1"
+                    />
+                    <Input
+                      label="End time"
                       type="time"
                       value={endTime}
                       onChange={(event) => setEndTime(event.target.value)}
@@ -1073,9 +1110,9 @@ export function EventModal(props: EventModalProps) {
                       className="flex-1"
                     />
                   </div>
-                  {!isTimeRangeValid && (
+                  {!isTimeRangeValid && timeRangeValidation.message && (
                     <p className="mt-1 text-label-sm text-danger">
-                      End time must be after start time.
+                      {timeRangeValidation.message}
                     </p>
                   )}
                 </>
