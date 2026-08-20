@@ -61,7 +61,14 @@ export function CustomRecurrenceDialog({
     ...WEEKDAY_CHIPS.slice(weekStartsOn),
     ...WEEKDAY_CHIPS.slice(0, weekStartsOn),
   ];
-  const [repeatInterval, setRepeatInterval] = useState(initial.interval);
+  const [repeatIntervalInput, setRepeatIntervalInput] = useState(
+    String(initial.interval),
+  );
+  const parsedInterval = Number(repeatIntervalInput);
+  const isIntervalValid =
+    repeatIntervalInput.trim() !== "" &&
+    Number.isInteger(parsedInterval) &&
+    parsedInterval >= 1;
   const [unit, setUnit] = useState<RecurrenceUnit>(initial.unit);
   const [weekdays, setWeekdays] = useState<number[]>(initial.weekdays);
   const [monthlyMode, setMonthlyMode] = useState<MonthlyMode>(
@@ -84,6 +91,8 @@ export function CustomRecurrenceDialog({
   }
 
   function handleDone() {
+    if (!isIntervalValid) return;
+
     const end: CustomEnd =
       endType === "never"
         ? { type: "never" }
@@ -92,7 +101,7 @@ export function CustomRecurrenceDialog({
           : { type: "after", count: Math.max(1, endCount) };
 
     const fields: CustomRecurrence = {
-      interval: Math.max(1, repeatInterval),
+      interval: parsedInterval,
       unit,
       weekdays,
       monthlyMode,
@@ -128,8 +137,9 @@ export function CustomRecurrenceDialog({
               label="Repeat every"
               type="number"
               min={1}
-              value={repeatInterval}
-              onChange={(event) => setRepeatInterval(Number(event.target.value))}
+              value={repeatIntervalInput}
+              invalid={!isIntervalValid}
+              onChange={(event) => setRepeatIntervalInput(event.target.value)}
               className="w-24"
             />
             <Select
@@ -138,10 +148,15 @@ export function CustomRecurrenceDialog({
               onValueChange={(value) => setUnit(value as RecurrenceUnit)}
               options={UNIT_ORDER.map((value) => ({
                 value,
-                label: unitLabel(value, repeatInterval),
+                label: unitLabel(value, parsedInterval),
               }))}
             />
           </div>
+          {!isIntervalValid && (
+            <p className="mt-1.5 text-label-sm text-danger" role="alert">
+              Enter a whole number of 1 or more.
+            </p>
+          )}
 
           {unit === "week" && (
             <div className="mt-4">
@@ -251,7 +266,7 @@ export function CustomRecurrenceDialog({
             >
               Cancel
             </Dialog.Close>
-            <Button size="small" onClick={handleDone}>
+            <Button size="small" disabled={!isIntervalValid} onClick={handleDone}>
               Done
             </Button>
           </div>
