@@ -182,21 +182,30 @@ export const useAuthStore = create<AuthState>((set, get) => {
     },
 
     changePassword: async (currentPassword, newPassword) => {
-      const { accessToken } = get();
+      const { accessToken, status } = get();
       if (!accessToken) throw new Error("Not authenticated.");
 
       // The backend re-issues the Session on a password change rather than
       // just clearing it (#123), so the fresh access token must replace the
-      // pre-change one before calling anything else with it.
+      // pre-change one before calling anything else with it. Stored the
+      // instant it's known, ahead of the me() below: the pre-change token is
+      // already dead server-side once changePassword resolves, so a me()
+      // hiccup must not leave the store stranded on it (#234).
       const changed = await authApi.changePassword(accessToken, currentPassword, newPassword);
+      set({ accessToken: changed.accessToken });
 
       const user = await authApi.me(changed.accessToken);
       set(authenticated(user, changed.accessToken));
-      // A forced password change completes the login that was blocked on it
-      // (mustChangePassword), so it seeds the shell the same way bootstrap
+      // A forced password change (mustChangePassword) completes the login
+      // that was blocked on it, so it seeds the shell the same way bootstrap
       // and login do (ADR-0039) — otherwise a User with a non-default
-      // Default view lands on the module-load "week" fallback instead.
-      useShellStore.getState().setActiveView(user.defaultView);
+      // Default view lands on the module-load "week" fallback instead. An
+      // already-authenticated caller (Settings → Account, #234) is mid-
+      // session, not logging in — reseeding here would silently yank them
+      // off whatever view they were actually looking at.
+      if (status !== "authenticated") {
+        useShellStore.getState().setActiveView(user.defaultView);
+      }
     },
 
     updateEmail: async (email) => {

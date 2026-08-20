@@ -207,6 +207,25 @@ describe("changePassword", () => {
     expect(state.accessToken).toBe("token-456");
   });
 
+  it("keeps the reissued access token even if the follow-up me() fails (#234)", async () => {
+    useAuthStore.setState({
+      status: "authenticated",
+      user: adminUser,
+      pendingEmail: null,
+      accessToken: "token-123",
+    });
+    vi.mocked(authApi.changePassword).mockResolvedValue({ accessToken: "token-456" });
+    vi.mocked(authApi.me).mockRejectedValue(new Error("network blip"));
+
+    await expect(
+      useAuthStore.getState().changePassword("old-pw", "new-pw"),
+    ).rejects.toThrow("network blip");
+
+    // The old token is already dead server-side the moment changePassword
+    // resolved — the store must not be left pointing at it.
+    expect(useAuthStore.getState().accessToken).toBe("token-456");
+  });
+
   it("seeds the shell's Active view, completing the login that was blocked on the password change", async () => {
     useAuthStore.setState({
       status: "must-change-password",
@@ -217,6 +236,22 @@ describe("changePassword", () => {
     useShellStore.setState({ activeView: "week" });
     vi.mocked(authApi.changePassword).mockResolvedValue({ accessToken: "token-456" });
     vi.mocked(authApi.me).mockResolvedValue({ ...adminUser, defaultView: "day" });
+
+    await useAuthStore.getState().changePassword("old-pw", "new-pw");
+
+    expect(useShellStore.getState().activeView).toBe("day");
+  });
+
+  it("leaves the shell's Active view alone when already authenticated (#234)", async () => {
+    useAuthStore.setState({
+      status: "authenticated",
+      user: adminUser,
+      pendingEmail: null,
+      accessToken: "token-123",
+    });
+    useShellStore.setState({ activeView: "day" });
+    vi.mocked(authApi.changePassword).mockResolvedValue({ accessToken: "token-456" });
+    vi.mocked(authApi.me).mockResolvedValue({ ...adminUser, defaultView: "week" });
 
     await useAuthStore.getState().changePassword("old-pw", "new-pw");
 

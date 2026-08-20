@@ -7,19 +7,21 @@ import { Button } from "../components/ui/Button";
 import { Input } from "../components/ui/Input";
 import { DeleteAccountDialog } from "./DeleteAccountDialog";
 
-// The Settings page's Account section (#57, #125, ADR-0047): Name (a display
-// label) and Email (the login identifier and Email-Channel Reminder
-// recipient, ADR-0021). The Email Channel only becomes selectable in the
-// event modal once the self-hoster has SMTP configured — see
-// reminderChannelOptions. Also where ADR-0059's IMAP disclosure lives,
-// beside the SMTP-backed fields rather than as a warning on every invite
-// (#202): plain text, shown only when Invitations are actually being sent
-// but nothing reads Responses back.
+// The Settings page's Account section (#57, #125, #234, ADR-0047): Name (a
+// display label), Email (the login identifier and Email-Channel Reminder
+// recipient, ADR-0021), and Change password — the self-service route to
+// changePassword, previously reachable only from the forced change-password
+// screen. The Email Channel only becomes selectable in the event modal once
+// the self-hoster has SMTP configured — see reminderChannelOptions. Also
+// where ADR-0059's IMAP disclosure lives, beside the SMTP-backed fields
+// rather than as a warning on every invite (#202): plain text, shown only
+// when Invitations are actually being sent but nothing reads Responses back.
 export function AccountSection() {
   const user = useAuthStore((state) => state.user);
   const accessToken = useAuthStore((state) => state.accessToken);
   const updateName = useAuthStore((state) => state.updateName);
   const updateEmail = useAuthStore((state) => state.updateEmail);
+  const changePassword = useAuthStore((state) => state.changePassword);
   const disableAccount = useAuthStore((state) => state.disableAccount);
 
   const [name, setName] = useState(user?.name ?? "");
@@ -30,12 +32,24 @@ export function AccountSection() {
   const [emailSaved, setEmailSaved] = useState(false);
   const emailAction = useAsyncAction();
 
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [passwordChanged, setPasswordChanged] = useState(false);
+  const passwordAction = useAsyncAction();
+
   const [disableError, setDisableError] = useState<string | null>(null);
   const [isDisabling, setIsDisabling] = useState(false);
   const [deletingAccount, setDeletingAccount] = useState(false);
 
   const isNameUnchanged = name === (user?.name ?? "");
   const isEmailUnchanged = email === (user?.email ?? "");
+
+  // Both sides of the mismatch check share the same non-empty rule
+  // canSubmitPassword applies, so there's no whitespace-only value that
+  // reads as "matching" here yet still leaves Submit disabled unexplained.
+  const newPasswordsMatch = newPassword.trim() !== "" && newPassword === confirmPassword;
+  const canSubmitPassword = currentPassword.trim() !== "" && newPasswordsMatch;
 
   async function handleSubmitName(domEvent: React.FormEvent) {
     domEvent.preventDefault();
@@ -74,6 +88,20 @@ export function AccountSection() {
 
       await updateEmail(email);
       setEmailSaved(true);
+    });
+  }
+
+  async function handleSubmitPassword(domEvent: React.FormEvent) {
+    domEvent.preventDefault();
+    if (!canSubmitPassword) return;
+
+    await passwordAction.run(async () => {
+      setPasswordChanged(false);
+      await changePassword(currentPassword, newPassword);
+      setCurrentPassword("");
+      setNewPassword("");
+      setConfirmPassword("");
+      setPasswordChanged(true);
     });
   }
 
@@ -155,6 +183,75 @@ export function AccountSection() {
           Attendees stay Needs-Action.
         </p>
       )}
+
+      {/* #234: current + new, so this stays a deliberate action and not a
+        stray keystroke — App passwords aren't touched (ADR-0024), so a
+        synced device keeps working through this the same way it does
+        through Name/Email above. */}
+      <div className="mt-8 border-t border-border pt-6">
+        <h3 className="text-body font-medium text-ink">Change password</h3>
+        <p className="mt-1 text-label-sm text-ink-muted">
+          Signs you out of every other device.
+        </p>
+
+        <form onSubmit={handleSubmitPassword} className="mt-3 flex flex-col gap-3">
+          <Input
+            label="Current password"
+            type="password"
+            autoComplete="current-password"
+            value={currentPassword}
+            onChange={(domEvent) => {
+              setCurrentPassword(domEvent.target.value);
+              setPasswordChanged(false);
+            }}
+            disabled={passwordAction.isSubmitting}
+            className="w-72"
+          />
+          <Input
+            label="New password"
+            type="password"
+            autoComplete="new-password"
+            value={newPassword}
+            onChange={(domEvent) => {
+              setNewPassword(domEvent.target.value);
+              setPasswordChanged(false);
+            }}
+            disabled={passwordAction.isSubmitting}
+            className="w-72"
+          />
+          <Input
+            label="Confirm new password"
+            type="password"
+            autoComplete="new-password"
+            value={confirmPassword}
+            onChange={(domEvent) => {
+              setConfirmPassword(domEvent.target.value);
+              setPasswordChanged(false);
+            }}
+            invalid={confirmPassword !== "" && !newPasswordsMatch}
+            disabled={passwordAction.isSubmitting}
+            className="w-72"
+          />
+          {confirmPassword !== "" && !newPasswordsMatch && (
+            <p className="text-label-sm text-danger">Passwords don't match.</p>
+          )}
+          <div>
+            <Button
+              type="submit"
+              disabled={!canSubmitPassword}
+              loading={passwordAction.isSubmitting}
+            >
+              Update password
+            </Button>
+          </div>
+        </form>
+        {passwordAction.error && (
+          <p className="mt-2 text-label-sm text-danger">{passwordAction.error}</p>
+        )}
+        {passwordChanged && !passwordAction.error && (
+          <p className="mt-2 text-label-sm text-ink-muted">Password updated.</p>
+        )}
+      </div>
 
       <div className="mt-8 border-t border-border pt-6">
         <h3 className="text-body font-medium text-ink">Danger zone</h3>
