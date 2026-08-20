@@ -21,7 +21,7 @@ export function ThemeToggle() {
 
   return (
     <Menu.Root>
-      <Menu.Trigger aria-label="Theme" className={iconButtonClasses()}>
+      <Menu.Trigger aria-label="Theme" title="Theme" className={iconButtonClasses()}>
         <TriggerIcon className="size-5" />
       </Menu.Trigger>
       <Menu.Portal>

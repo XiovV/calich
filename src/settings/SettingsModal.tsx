@@ -53,6 +53,7 @@ export function SettingsModal() {
           <Dialog.Close
             className={iconButtonClasses({ className: "absolute top-4 right-4 z-10" })}
             aria-label="Close settings"
+            title="Close settings"
           >
             <X className="size-5" />
           </Dialog.Close>

@@ -42,6 +42,7 @@ export function NotificationBell() {
     <Popover.Root open={open} onOpenChange={handleOpenChange}>
       <Popover.Trigger
         aria-label="Notifications"
+        title="Notifications"
         className={`relative ${iconButtonClasses()}`}
       >
         <Bell className="size-5" />

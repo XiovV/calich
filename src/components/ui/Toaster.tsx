@@ -13,6 +13,7 @@ function ToastList() {
       <Toast.Title className="text-body text-ink" />
       <Toast.Close
         aria-label="Dismiss"
+        title="Dismiss"
         className="absolute top-2 right-2 rounded-shell-pill p-1 text-ink-muted hover:bg-surface-hover"
       >
         &times;

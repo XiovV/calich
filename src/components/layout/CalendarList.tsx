@@ -243,6 +243,7 @@ export function CalendarList() {
         <Menu.Root>
           <Menu.Trigger
             aria-label={`${calendar.name} actions`}
+            title={`${calendar.name} actions`}
             className={iconButtonClasses({
               size: "tiny",
               className:

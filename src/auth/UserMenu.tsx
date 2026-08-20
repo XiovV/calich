@@ -18,7 +18,7 @@ export function UserMenu() {
 
   return (
     <Menu.Root>
-      <Menu.Trigger aria-label="Account menu" className={iconButtonClasses()}>
+      <Menu.Trigger aria-label="Account menu" title="Account menu" className={iconButtonClasses()}>
         <CircleUserRound className="size-5" />
       </Menu.Trigger>
       <Menu.Portal>
