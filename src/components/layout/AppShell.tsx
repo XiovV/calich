@@ -6,9 +6,8 @@ import { Sidebar } from "./Sidebar";
 import { CalendarView } from "../../calendar-grid/CalendarView";
 import { EventModal } from "../../calendar-grid/EventModal";
 import { computeDefaultDraft, type DraftBlock } from "../../lib/gridTime";
-import { useCalendarsStore } from "../../lib/calendarsStore";
 import { useEventsStore } from "../../lib/eventsStore";
-import { useShellStore } from "../../lib/shellStore";
+import { refetchCalendarsAndReconcile, useShellStore } from "../../lib/shellStore";
 import { useWorkspacesStore } from "../../lib/workspacesStore";
 import { occurrenceKey, type Occurrence } from "../../lib/occurrence";
 
@@ -19,11 +18,7 @@ type EventModalState =
 
 export function AppShell() {
   const [eventModalState, setEventModalState] = useState<EventModalState>(null);
-  const fetchCalendars = useCalendarsStore((state) => state.fetchCalendars);
   const fetchEvents = useEventsStore((state) => state.fetchEvents);
-  const reconcileCheckedCalendarIds = useShellStore(
-    (state) => state.reconcileCheckedCalendarIds,
-  );
   const fetchWorkspaces = useWorkspacesStore((state) => state.fetchWorkspaces);
   const activeWorkspaceId = useWorkspacesStore((state) => state.activeWorkspaceId);
 
@@ -60,16 +55,12 @@ export function AppShell() {
     // reload, #116), and whenever the active Workspace changes (#155,
     // ADR-0045) — switching Workspaces must change the visible Calendar list
     // without a reload, same as any other externally-caused change to it.
-    // reconcileCheckedCalendarIds (rather than replacing the checked set
+    // refetchCalendarsAndReconcile (rather than replacing the checked set
     // outright) is what keeps a deliberately-unchecked Calendar unchecked
     // across a later refetch while still auto-checking one seen for the
     // first time.
     function refetch() {
-      fetchCalendars().then(() => {
-        reconcileCheckedCalendarIds(
-          useCalendarsStore.getState().calendars.map((calendar) => calendar.id),
-        );
-      });
+      refetchCalendarsAndReconcile();
       fetchEvents();
     }
 
@@ -82,7 +73,7 @@ export function AppShell() {
     document.addEventListener("visibilitychange", handleVisibilityChange);
     return () =>
       document.removeEventListener("visibilitychange", handleVisibilityChange);
-  }, [fetchCalendars, fetchEvents, reconcileCheckedCalendarIds, activeWorkspaceId]);
+  }, [fetchEvents, activeWorkspaceId]);
 
   function handleCreateClick() {
     const draft = computeDefaultDraft(new Date());

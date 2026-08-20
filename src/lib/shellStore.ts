@@ -90,3 +90,17 @@ export const useShellStore = create<ShellState>((set) => ({
       knownCalendarIds: new Set(state.knownCalendarIds).add(id),
     })),
 }));
+
+// Shared by every caller that refetches Calendars and needs the checked set
+// to pick up whatever changed — a newly-Shared Calendar, or (#229) one an
+// Import just created — without disturbing a Calendar the caller had
+// deliberately unchecked. reconcileCheckedCalendarIds (rather than
+// setCheckedCalendarIds) is what gives that guarantee; see its own comment.
+export async function refetchCalendarsAndReconcile(): Promise<void> {
+  await useCalendarsStore.getState().fetchCalendars();
+  useShellStore
+    .getState()
+    .reconcileCheckedCalendarIds(
+      useCalendarsStore.getState().calendars.map((calendar) => calendar.id),
+    );
+}

@@ -27,6 +27,7 @@ const { toast } = await import("../lib/toast");
 const { useAuthStore } = await import("../lib/authStore");
 const { useCalendarsStore } = await import("../lib/calendarsStore");
 const { useEventsStore } = await import("../lib/eventsStore");
+const { useShellStore } = await import("../lib/shellStore");
 const { ImportExportSection } = await import("./ImportExportSection");
 
 function summaryFor(filename: string, calendarName: string): ImportSummary {
@@ -192,6 +193,84 @@ describe("ImportExportSection", () => {
       expect(toast.error).toHaveBeenCalledWith("Select a .ics or .zip file."),
     );
     expect(importApi.preview).not.toHaveBeenCalled();
+  });
+
+  // The import created a new Calendar server-side; fetchCalendars is the
+  // only way this session learns its id. Without a reconcile after it, the
+  // new Calendar's toggle stayed unset until a reload (#229).
+  it("checks the imported calendar's toggle immediately, without a reload", async () => {
+    const created = {
+      id: "cal-new",
+      name: "Personal",
+      color: "peacock" as const,
+      isOwner: true,
+      access: "owner" as const,
+    };
+    useCalendarsStore.setState({
+      calendars: [],
+      fetchCalendars: vi.fn(async () => {
+        useCalendarsStore.setState({ calendars: [created] });
+      }),
+    });
+    vi.mocked(importApi.preview).mockResolvedValue(
+      summaryFor("personal.ics", "Personal"),
+    );
+    vi.mocked(importApi.commit).mockResolvedValue(
+      summaryFor("personal.ics", "Personal"),
+    );
+    render(<ImportExportSection />);
+
+    chooseFile(fileInput(), icsFile());
+    await screen.findByRole("dialog", { name: "Import preview" });
+    await userEvent.click(screen.getByRole("button", { name: "Import" }));
+
+    await waitFor(() =>
+      expect(useShellStore.getState().checkedCalendarIds.has("cal-new")).toBe(
+        true,
+      ),
+    );
+    expect(useShellStore.getState().knownCalendarIds.has("cal-new")).toBe(
+      true,
+    );
+  });
+
+  // Importing more events into a Calendar that already exists must not
+  // touch its current toggle — a Calendar the caller had deliberately
+  // hidden stays hidden after importing into it (#229).
+  it("leaves an existing calendar's toggle alone when importing into it", async () => {
+    const existing = {
+      id: "cal-existing",
+      name: "Personal",
+      color: "peacock" as const,
+      isOwner: true,
+      access: "owner" as const,
+    };
+    useCalendarsStore.setState({
+      calendars: [existing],
+      fetchCalendars: vi.fn(async () => {
+        useCalendarsStore.setState({ calendars: [existing] });
+      }),
+    });
+    useShellStore.setState({
+      checkedCalendarIds: new Set(),
+      knownCalendarIds: new Set(["cal-existing"]),
+    });
+    vi.mocked(importApi.preview).mockResolvedValue(
+      summaryFor("personal.ics", "Personal"),
+    );
+    vi.mocked(importApi.commit).mockResolvedValue(
+      summaryFor("personal.ics", "Personal"),
+    );
+    render(<ImportExportSection />);
+
+    chooseFile(fileInput(), icsFile());
+    await screen.findByRole("dialog", { name: "Import preview" });
+    await userEvent.click(screen.getByRole("button", { name: "Import" }));
+
+    await waitFor(() => expect(importApi.commit).toHaveBeenCalled());
+    expect(
+      useShellStore.getState().checkedCalendarIds.has("cal-existing"),
+    ).toBe(false);
   });
 
   it("previews a .ics dropped on the drop zone", async () => {

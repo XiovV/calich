@@ -4,6 +4,7 @@ import { Button } from "../components/ui/Button";
 import { useAuthStore } from "../lib/authStore";
 import { useCalendarsStore } from "../lib/calendarsStore";
 import { useEventsStore } from "../lib/eventsStore";
+import { refetchCalendarsAndReconcile } from "../lib/shellStore";
 import { errorMessage } from "../lib/errorMessage";
 import { icsApi, type ExportSummary } from "../lib/icsApi";
 import {
@@ -61,7 +62,6 @@ function isSupportedFile(file: File): boolean {
 export function ImportExportSection() {
   const accessToken = useAuthStore((state) => state.accessToken);
   const calendars = useCalendarsStore((state) => state.calendars);
-  const fetchCalendars = useCalendarsStore((state) => state.fetchCalendars);
   const fetchEvents = useEventsStore((state) => state.fetchEvents);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -183,7 +183,7 @@ export function ImportExportSection() {
         pendingImport.file,
         targets,
       );
-      await Promise.all([fetchCalendars(), fetchEvents()]);
+      await Promise.all([refetchCalendarsAndReconcile(), fetchEvents()]);
       setCompletedImport({ isZip: pendingImport.isZip, summary });
       setPendingImport(null);
       const totals = summarizeImport(summary);
