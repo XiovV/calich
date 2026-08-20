@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { isSameDay } from "date-fns";
 import { layoutOverlappingEvents } from "../lib/layoutOverlappingEvents";
+import { getDaySegments, type OccurrenceDaySegment } from "../lib/occurrenceSegments";
 import { occurrenceKey, type Occurrence } from "../lib/occurrence";
 import { useWorkingHours } from "../hooks/useWorkingHours";
 import { CLICK_DISTANCE_THRESHOLD_PX, isDragGesture } from "../lib/pointerDrag";
@@ -65,9 +66,7 @@ export function DayColumn({
   eventDragPreview,
   isLastColumn,
 }: DayColumnProps) {
-  const dayOccurrences = occurrences.filter((occurrence) =>
-    isSameDay(occurrence.start, day),
-  );
+  const daySegments = getDaySegments(occurrences, day);
   const isToday = isSameDay(day, now);
   const workingHours = useWorkingHours();
 
@@ -91,15 +90,21 @@ export function DayColumn({
       CLICK_DISTANCE_THRESHOLD_PX,
     );
 
-  // While a draft is being created, include it as a pseudo-occurrence in the
-  // same overlap-layout pass as the real occurrences, so existing events shrink
-  // to make room for it instead of the preview overlapping them.
-  const draftOccurrence: Occurrence | null = draftBlock
+  // While a draft is being created, include it as a pseudo-segment in the
+  // same overlap-layout pass as the real day segments, so existing events
+  // shrink to make room for it instead of the preview overlapping them. A
+  // create-drag never crosses midnight (bounded to this one day column), so
+  // its segment is just its own unclipped bounds.
+  const draftSegment: OccurrenceDaySegment | null = draftBlock
     ? {
-        event: {
-          id: DRAFT_PSEUDO_EVENT_ID,
-          calendarId: "",
-          title: "",
+        occurrence: {
+          event: {
+            id: DRAFT_PSEUDO_EVENT_ID,
+            calendarId: "",
+            title: "",
+            start: draftBlock.start,
+            end: draftBlock.end,
+          },
           start: draftBlock.start,
           end: draftBlock.end,
         },
@@ -107,19 +112,17 @@ export function DayColumn({
         end: draftBlock.end,
       }
     : null;
-  const layoutInput = draftOccurrence
-    ? [...dayOccurrences, draftOccurrence]
-    : dayOccurrences;
+  const layoutInput = draftSegment ? [...daySegments, draftSegment] : daySegments;
 
   const allLayouts = layoutOverlappingEvents(layoutInput);
   const layouts = allLayouts.filter(
     (layout) =>
-      layout.occurrence.event.id !== DRAFT_PSEUDO_EVENT_ID &&
-      occurrenceKey(layout.occurrence) !== draggingKey,
+      layout.occurrence.occurrence.event.id !== DRAFT_PSEUDO_EVENT_ID &&
+      occurrenceKey(layout.occurrence.occurrence) !== draggingKey,
   );
   const draftLayout = draftBlock
     ? allLayouts.find(
-        (layout) => layout.occurrence.event.id === DRAFT_PSEUDO_EVENT_ID,
+        (layout) => layout.occurrence.occurrence.event.id === DRAFT_PSEUDO_EVENT_ID,
       )
     : undefined;
 
@@ -187,8 +190,12 @@ export function DayColumn({
       ))}
       {layouts.map((layout) => (
         <EventBlock
-          key={occurrenceKey(layout.occurrence)}
-          layout={layout}
+          key={occurrenceKey(layout.occurrence.occurrence)}
+          occurrence={layout.occurrence.occurrence}
+          segmentStart={layout.occurrence.start}
+          segmentEnd={layout.occurrence.end}
+          column={layout.column}
+          columnCount={layout.columnCount}
           pixelsPerHour={pixelsPerHour}
           now={now}
           onOccurrenceClick={onOccurrenceClick}

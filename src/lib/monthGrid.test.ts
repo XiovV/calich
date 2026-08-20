@@ -117,6 +117,31 @@ describe("getOccurrencesForDay", () => {
     expect(result).toEqual([matching]);
   });
 
+  it("returns a midnight-crossing Occurrence for both the day it starts and the day it ends on", () => {
+    const spanning = makeOccurrence(
+      "spanning",
+      new Date(2026, 7, 10, 23, 0),
+      new Date(2026, 7, 11, 1, 0),
+    );
+
+    expect(getOccurrencesForDay([spanning], new Date(2026, 7, 10))).toEqual([spanning]);
+    expect(getOccurrencesForDay([spanning], new Date(2026, 7, 11))).toEqual([spanning]);
+    expect(getOccurrencesForDay([spanning], new Date(2026, 7, 12))).toEqual([]);
+  });
+
+  it("keeps the Occurrence's true start/end on the day it doesn't start on", () => {
+    const spanning = makeOccurrence(
+      "spanning",
+      new Date(2026, 7, 10, 23, 0),
+      new Date(2026, 7, 11, 1, 0),
+    );
+
+    const [result] = getOccurrencesForDay([spanning], new Date(2026, 7, 11));
+
+    expect(result.start).toEqual(new Date(2026, 7, 10, 23, 0));
+    expect(result.end).toEqual(new Date(2026, 7, 11, 1, 0));
+  });
+
   it("orders same-day occurrences by start time", () => {
     const day = new Date(2026, 7, 10);
     const late = makeOccurrence(

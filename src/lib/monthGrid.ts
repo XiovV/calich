@@ -1,6 +1,7 @@
 import { addDays, isSameDay, isSameMonth, startOfMonth, startOfWeek } from "date-fns";
 import type { Day as WeekStartsOn } from "date-fns";
 import type { Occurrence } from "./occurrence";
+import { occurrenceIntersectsDay } from "./occurrenceSegments";
 import { roundUpToIncrement, type DraftBlock } from "./gridTime";
 
 const MONTH_GRID_ROWS = 6;
@@ -22,12 +23,19 @@ export function buildMonthGrid(selectedDate: Date, weekStartsOn: WeekStartsOn): 
   });
 }
 
+/**
+ * `occurrences` that touch `day` — including a timed Occurrence that crosses
+ * midnight into or out of it, so it gets a chip on every Day cell it covers
+ * (issue #230), not just the one its own start falls on. Each returned
+ * Occurrence keeps its true, uncropped `start`/`end` — a Month chip shows
+ * the Occurrence's real time, not a per-day clipped one.
+ */
 export function getOccurrencesForDay(
   occurrences: Occurrence[],
   day: Date,
 ): Occurrence[] {
   return occurrences
-    .filter((occurrence) => isSameDay(occurrence.start, day))
+    .filter((occurrence) => occurrenceIntersectsDay(occurrence, day))
     .sort((a, b) => a.start.getTime() - b.start.getTime());
 }
 

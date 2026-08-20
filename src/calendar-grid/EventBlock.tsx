@@ -1,4 +1,3 @@
-import type { OccurrenceLayout } from "../lib/layoutOverlappingEvents";
 import type { Occurrence } from "../lib/occurrence";
 import { durationToHeight, timeToY } from "../lib/gridTime";
 import { canWriteCalendarEvents, getCalendarById } from "../lib/calendar";
@@ -11,7 +10,18 @@ import { GRID_Z_OCCURRENCE_EDGE } from "./gridStacking";
 export type EventDragKind = "move" | "resize-start" | "resize-end";
 
 interface EventBlockProps {
-  layout: OccurrenceLayout;
+  occurrence: Occurrence;
+  /**
+   * The Occurrence's span clipped to the day this block renders in — equal
+   * to `occurrence.start`/`occurrence.end` unless the Occurrence crosses
+   * midnight, in which case this is just today's segment (issue #230). Drives
+   * the block's position and height; `occurrence.start`/`end` (the true,
+   * uncropped bounds) still drive what's displayed and what a drag commits.
+   */
+  segmentStart: Date;
+  segmentEnd: Date;
+  column: number;
+  columnCount: number;
   pixelsPerHour: number;
   now: Date;
   onOccurrenceClick: (occurrence: Occurrence) => void;
@@ -24,13 +34,16 @@ interface EventBlockProps {
 }
 
 export function EventBlock({
-  layout,
+  occurrence,
+  segmentStart,
+  segmentEnd,
+  column,
+  columnCount,
   pixelsPerHour,
   now,
   onOccurrenceClick,
   onDragStart,
 }: EventBlockProps) {
-  const { occurrence, column, columnCount } = layout;
   const { event } = occurrence;
   const isPast = occurrence.end < now;
   const calendars = useCalendarsStore((state) => state.calendars);
@@ -42,9 +55,15 @@ export function EventBlock({
   // at all rather than started and silently discarded, so no drag preview
   // flashes and snaps back.
   const isReadOnly = !canWriteCalendarEvents(calendar);
+  // A midnight-crossing Occurrence's non-start-day segments have no real
+  // start edge to resize from, and its non-end-day segments have no real
+  // end edge — only the segment that actually carries that edge gets the
+  // handle for it (issue #230).
+  const showResizeStart = segmentStart.getTime() === occurrence.start.getTime();
+  const showResizeEnd = segmentEnd.getTime() === occurrence.end.getTime();
 
-  const top = timeToY(occurrence.start, pixelsPerHour);
-  const height = durationToHeight(occurrence.start, occurrence.end, pixelsPerHour);
+  const top = timeToY(segmentStart, pixelsPerHour);
+  const height = durationToHeight(segmentStart, segmentEnd, pixelsPerHour);
   const { left, width } = columnLayoutToBox(column, columnCount);
 
   function handleEdgeMouseDown(
@@ -82,7 +101,7 @@ export function EventBlock({
         width: `calc(${width}% - 2px)`,
       }}
     >
-      {!isReadOnly && (
+      {!isReadOnly && showResizeStart && (
         <div
           onMouseDown={(domEvent) => handleEdgeMouseDown(domEvent, "resize-start")}
           className="absolute inset-x-0 top-0 h-1.5 cursor-ns-resize"
@@ -97,7 +116,7 @@ export function EventBlock({
         isPast={isPast}
         hasAttachments={Boolean(event.attachments?.length)}
       />
-      {!isReadOnly && (
+      {!isReadOnly && showResizeEnd && (
         <div
           onMouseDown={(domEvent) => handleEdgeMouseDown(domEvent, "resize-end")}
           className="absolute inset-x-0 bottom-0 h-1.5 cursor-ns-resize"
