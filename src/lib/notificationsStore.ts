@@ -3,6 +3,7 @@ import { useAuthStore } from "./authStore";
 import type { Notification as AppNotification } from "./notification";
 import { notificationsApi } from "./notificationsApi";
 import { makeOptimisticWrite } from "./optimisticWrite";
+import { formatDateTime } from "./timeFormat";
 
 interface NotificationsState {
   notifications: AppNotification[];
@@ -28,10 +29,11 @@ function requireAccessToken(): string {
 function showBrowserNotification(notification: AppNotification) {
   if (typeof Notification === "undefined") return;
 
+  const timeFormat = useAuthStore.getState().user?.timeFormat ?? "24h";
   const body =
     notification.kind === "invite"
       ? "You were invited."
-      : `Starts ${notification.occurrenceStart.toLocaleString()}`;
+      : `Starts ${formatDateTime(notification.occurrenceStart, timeFormat)}`;
 
   const fire = () => {
     new Notification(notification.title, { body });

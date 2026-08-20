@@ -2,9 +2,11 @@ import { Popover } from "@base-ui/react/popover";
 import { formatDistanceToNow } from "date-fns";
 import { Bell, UserPlus } from "lucide-react";
 import { useEffect, useState } from "react";
+import { useAuthStore } from "../../lib/authStore";
 import type { Notification as AppNotification } from "../../lib/notification";
 import { useNotificationsStore } from "../../lib/notificationsStore";
 import { useShellStore } from "../../lib/shellStore";
+import { formatDateTime } from "../../lib/timeFormat";
 import { iconButtonClasses } from "../ui/iconButtonClasses";
 
 // How often the feed is re-polled for newly-fired Notifications while a tab
@@ -14,6 +16,7 @@ const POLL_INTERVAL_MS = 30_000;
 
 export function NotificationBell() {
   const [open, setOpen] = useState(false);
+  const timeFormat = useAuthStore((state) => state.user?.timeFormat ?? "24h");
   const notifications = useNotificationsStore((state) => state.notifications);
   const fetchNotifications = useNotificationsStore(
     (state) => state.fetchNotifications,
@@ -77,7 +80,7 @@ export function NotificationBell() {
                       <p className="text-label-sm text-ink-muted">
                         {notification.kind === "invite"
                           ? "You were invited"
-                          : notification.occurrenceStart.toLocaleString()}{" "}
+                          : formatDateTime(notification.occurrenceStart, timeFormat)}{" "}
                         ·{" "}
                         {formatDistanceToNow(notification.firedAt, {
                           addSuffix: true,

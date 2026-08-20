@@ -160,7 +160,7 @@ The Active view a User's session starts at. Seeds Active view when a Session is 
 _Avoid_: initial view, starting view, preferred view, last view
 
 **Time format**:
-Whether times are rendered as 12-hour or 24-hour, applied wherever this app formats a time itself — Event chips, timed Event blocks, the hour gutter, and the Email a Reminder sends. Deliberately does not reach the browser's native time input, which renders in the browser's own locale and cannot be told otherwise. See ADR-0039.
+Whether times are rendered as 12-hour or 24-hour, applied wherever this app formats a time itself — Event chips, timed Event blocks, the hour gutter, the Notification feed, and the Email a Reminder sends. Deliberately does not reach the browser's native time input, which renders in the browser's own locale and cannot be told otherwise. See ADR-0039.
 _Avoid_: clock format, hour format, locale (this is one axis of a locale, not a locale)
 
 **Working hours**:
