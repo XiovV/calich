@@ -376,6 +376,24 @@ export function EventAttendeesSection({
 
   if (!isStaging && !loading && !canManage && attendeeCount === 0 && !organizerName) return null;
 
+  // #237: whether the Workspace has anyone (besides the caller) or any
+  // Group to ever invite, independent of who's invited or staged right now
+  // — unlike targetOptions, which goes to zero once every Member's invited
+  // too, so it can't tell "nobody's ever been inviteable" apart from
+  // "everyone's already invited". Also independent of attendeeCount: a
+  // solo Workspace can still pick up an email-shaped Attendee (#200), which
+  // touches neither availableUsers nor availableGroups.
+  const workspaceHasNoOneElseToInvite =
+    availableUsers.every((user) => user.userId === currentUserId) && availableGroups.length === 0;
+
+  // The empty-Attendee-list fallback: a different fact from "Nobody has
+  // been invited yet" when the Workspace was never inviteable to begin
+  // with, so it replaces that message instead of sitting beside it.
+  const emptyAttendeesMessage =
+    canManage && workspaceHasNoOneElseToInvite
+      ? "There is nobody else in this workspace to invite."
+      : "Nobody has been invited yet.";
+
   const bannerError = isStaging ? staging.error : inviteError;
 
   return (
@@ -384,7 +402,7 @@ export function EventAttendeesSection({
         <p className="mt-1.5 text-label-sm text-ink-muted">Loading…</p>
       ) : (
         <>
-          {hasAnyRows ? (
+          {hasAnyRows && (
             <ul className="mt-2 flex max-h-40 flex-col gap-1.5 overflow-y-auto">
               {organizerName && (
                 <li className="flex items-center gap-2">
@@ -465,34 +483,36 @@ export function EventAttendeesSection({
                     );
                   })}
             </ul>
-          ) : (
-            <p className="mt-2 text-label-sm text-ink-muted">Nobody has been invited yet.</p>
           )}
 
-          {canManage &&
-            (targetOptions.length > 0 ? (
-              <div className="mt-3 flex items-center gap-2">
-                <Select
-                  value={effectiveTarget}
-                  onValueChange={setSelectedTarget}
-                  options={targetOptions}
-                  aria-label="Person or group to invite"
-                  className="min-w-0 flex-1"
-                />
-                <Button
-                  size="small"
-                  onClick={handleInvite}
-                  disabled={!effectiveTarget || isInviting}
-                  loading={isInviting}
-                >
-                  Invite
-                </Button>
-              </div>
-            ) : (
-              <p className="mt-3 text-label-sm text-ink-muted">
-                Everyone and every group in this workspace is already invited.
-              </p>
-            ))}
+          {attendeeCount === 0 && (
+            <p className="mt-2 text-label-sm text-ink-muted">{emptyAttendeesMessage}</p>
+          )}
+
+          {canManage && targetOptions.length > 0 && (
+            <div className="mt-3 flex items-center gap-2">
+              <Select
+                value={effectiveTarget}
+                onValueChange={setSelectedTarget}
+                options={targetOptions}
+                aria-label="Person or group to invite"
+                className="min-w-0 flex-1"
+              />
+              <Button
+                size="small"
+                onClick={handleInvite}
+                disabled={!effectiveTarget || isInviting}
+                loading={isInviting}
+              >
+                Invite
+              </Button>
+            </div>
+          )}
+          {canManage && targetOptions.length === 0 && attendeeCount > 0 && !workspaceHasNoOneElseToInvite && (
+            <p className="mt-3 text-label-sm text-ink-muted">
+              Everyone and every group in this workspace is already invited.
+            </p>
+          )}
 
           {canManage && allowEmailInvite && (
             <div className="mt-2 flex items-center gap-2">
