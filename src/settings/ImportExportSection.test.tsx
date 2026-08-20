@@ -66,7 +66,12 @@ function chooseFile(input: HTMLInputElement, file: File) {
   const list = input.files!;
   const implSymbol = Object.getOwnPropertySymbols(list).find(
     (symbol) => symbol.toString() === "Symbol(impl)",
-  )!;
+  );
+  if (!implSymbol) {
+    throw new Error(
+      "No Symbol(impl) on the input's FileList — jsdom's internals moved, and this helper can no longer populate a live list.",
+    );
+  }
   const entries = (list as unknown as Record<symbol, File[]>)[implSymbol];
   entries.length = 0;
   entries.push(file);

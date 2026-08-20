@@ -104,7 +104,7 @@ export function ImportExportSection() {
     }
   }
 
-  async function handleFile(file: File) {
+  async function previewFile(file: File) {
     if (!accessToken || isPreviewing) return;
 
     if (!isSupportedFile(file)) {
@@ -157,7 +157,7 @@ export function ImportExportSection() {
       toast.error("Select one file at a time.");
       return;
     }
-    handleFile(files[0]);
+    previewFile(files[0]);
   }
 
   async function handleConfirmImport(targets: ImportTarget[]) {
