@@ -47,3 +47,17 @@ Edit/delete/drag on a recurring Occurrence prompt **This event / This and follow
 Internally we prefer `UNTIL` over `COUNT` (the UI may still say "after N occurrences", translated to the Nth Occurrence's date at save) so splits never do count arithmetic. Changing or removing the rule itself is forced to **All events** and discards existing overrides/exceptions after a warning, because their `recurrence_id`s may no longer be generated.
 
 Expansion uses **local wall-clock semantics** (via `rrule.js`) so a 09:00 series stays 09:00 across DST; per-event timezone is deferred to CalDAV.
+
+## An Override is emitted from its own start, not only from the slot it replaces
+
+Amended by #227. The one-line definition above — *"expand master `rrule` over the window → drop starts matching an exception → for each remaining start, render the override with that `recurrence_id` if one exists, else the shifted master"* — makes every Occurrence rule-produced, and quietly makes the **window** the arbiter of whether an Override exists at all. An Override moved onto a different day than the one it replaces has two dates: the slot it replaces (its `recurrence_id`) and the one it now sits on (its own start). The rule generates only the first. So a window holding the second but not the first generated no slot to substitute into, and the Event vanished — invisible in Day view on both days, and, moved across a week boundary, invisible in *every* week. Changing the week-start Preference made it reappear, which is the tell: same data, same view, a different window, a different answer.
+
+**An Override is emitted from its own `[start, end)` whenever the substitution above didn't already emit it.** The two paths are exclusive by construction — the substitution records what it emitted — so an Override whose both dates land in one window still renders exactly once.
+
+The rest of the rule stands unchanged, and deliberately:
+
+- **The slot it replaces stays suppressed.** An Override outside the window still consumes its Master's generated start, so a moved Occurrence never renders on both its old and its new date. That is the same line of code as before; it is what makes the second emission safe rather than duplicative.
+- **An Exception still wins.** A cancelled slot is cancelled wherever its Override was moved to, so the window remains irrelevant to the outcome — the property whose absence was the bug.
+- **An Override still isn't a standalone Event.** One whose Master isn't in the expanded set — a deleted series, an unchecked Calendar — is not emitted. It is a member of a series that isn't being drawn.
+
+This is a completion of the expansion rule rather than a new direction: the ADR always intended the Occurrence to be drawn once, on the date it actually falls on. Stating expansion purely as a walk over rule-produced starts is what lost the Overrides that had left theirs.

@@ -42,11 +42,14 @@ function indexOverrides(events: Event[]): Map<string, Map<number, Event>> {
  * is always safe: `rule.between` is bounded by the window and never enumerates
  * the whole infinite series.
  *
- * Overrides (rows with `parentId`/`recurrenceId`) are never expanded on their
- * own — they replace one Occurrence of their parent's series, so a matching
- * Occurrence renders the override's own fields instead of the master's
- * (`occurrence.event` becomes the override). Exceptions (`exdates` on the
- * master) drop their Occurrence entirely. See ADR-0016.
+ * Overrides (rows with `parentId`/`recurrenceId`) are never expanded as a
+ * series of their own — they replace one Occurrence of their parent's, so a
+ * matching Occurrence renders the Override's own fields instead of the
+ * Master's (`occurrence.event` becomes the Override). One that was moved off
+ * the slot it replaces is still emitted, from its own `[start, end)`, since
+ * that slot may sit outside the window entirely (`movedOverrides`).
+ * Exceptions (`exdates` on the Master) drop their Occurrence entirely. See
+ * ADR-0016.
  *
  * Pure: depends only on its arguments — each Event's own Anchor zone drives
  * its wall-clock conversion, falling back to the ambient/Viewer zone only for
@@ -59,6 +62,9 @@ export function expandOccurrences(
 ): Occurrence[] {
   const overridesByParent = indexOverrides(events);
   const occurrences: Occurrence[] = [];
+  // Which Overrides the substitution below already emitted, so the moved-
+  // Override pass can't emit one of them a second time.
+  const substituted = new Set<string>();
 
   for (const event of events) {
     // Overrides are substituted in below, not expanded as their own series.
@@ -113,6 +119,7 @@ export function expandOccurrences(
       if (override) {
         if (overlapsWindow(override.start, override.end, windowStart, windowEnd)) {
           occurrences.push({ event: override, start: override.start, end: override.end });
+          substituted.add(override.id);
         }
         continue;
       }
@@ -123,6 +130,59 @@ export function expandOccurrences(
       if (overlapsWindow(start, end, windowStart, windowEnd)) {
         occurrences.push({ event, start, end });
       }
+    }
+  }
+
+  return occurrences.concat(
+    movedOverrides(events, overridesByParent, substituted, windowStart, windowEnd),
+  );
+}
+
+/**
+ * The Occurrences of every Override that overlaps `[windowStart, windowEnd)`
+ * but wasn't substituted into its Master's expansion above, because the slot
+ * it replaces falls outside the window.
+ *
+ * An Override moved onto a different day is otherwise emitted by nobody: the
+ * expansion substitutes it only where the Master generates the Occurrence it
+ * replaces, so an Override whose `recurrenceId` is a day, a week, or a month
+ * away from its own start vanishes from every window that doesn't happen to
+ * hold both (#227). Keying off its own `[start, end)` puts it in exactly the
+ * window it now sits in — and only that one, since the substitution above
+ * already emitted it wherever both fall in the same window.
+ *
+ * The Occurrence it replaces stays suppressed either way: an Override outside
+ * the window still consumes its Master's slot up there, so a moved Occurrence
+ * never renders on both its old and its new date.
+ */
+function movedOverrides(
+  events: Event[],
+  overridesByParent: Map<string, Map<number, Event>>,
+  substituted: Set<string>,
+  windowStart: Date,
+  windowEnd: Date,
+): Occurrence[] {
+  const occurrences: Occurrence[] = [];
+
+  // Walking Masters rather than Overrides is what keeps an Override that has
+  // no Master here — a deleted series, an unchecked Calendar — out of the
+  // window: it is a member of a series, not an Event standing on its own.
+  for (const master of events) {
+    if (master.parentId) continue;
+    const overrides = overridesByParent.get(master.id);
+    if (!overrides) continue;
+
+    const exdateKeys = new Set((master.exdates ?? []).map(instantKey));
+
+    for (const [recurrenceKey, override] of overrides) {
+      if (substituted.has(override.id)) continue;
+      if (!overlapsWindow(override.start, override.end, windowStart, windowEnd)) continue;
+      // An Exception cancels the Occurrence wherever its Override was moved
+      // to, exactly as it does during substitution — so which window is being
+      // expanded can't change the answer.
+      if (exdateKeys.has(recurrenceKey)) continue;
+
+      occurrences.push({ event: override, start: override.start, end: override.end });
     }
   }
 

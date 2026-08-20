@@ -301,6 +301,195 @@ describe("expandOccurrences", () => {
     expect(occurrences.some((o) => o.start.getDate() === 13)).toBe(false);
     expect(occurrences).toHaveLength(2);
   });
+
+  it("renders an Override moved onto another day, whose replaced slot is outside the window", () => {
+    // The Tuesday series whose Aug 18 Occurrence was moved onto Wed Aug 19:
+    // Day view on the 19th has to show it even though the slot it replaces —
+    // the only thing that used to emit it — sits outside that day's window.
+    const master = makeEvent({
+      start: new Date(2026, 7, 18, 9, 0),
+      end: new Date(2026, 7, 18, 9, 30),
+      rrule: "FREQ=WEEKLY;BYDAY=TU",
+    });
+    const override = makeEvent({
+      id: "evt-2",
+      title: "Standup (moved)",
+      parentId: master.id,
+      recurrenceId: new Date(2026, 7, 18, 9, 0),
+      start: new Date(2026, 7, 19, 9, 0),
+      end: new Date(2026, 7, 19, 9, 30),
+    });
+
+    const wed = expandOccurrences(
+      [master, override],
+      new Date(2026, 7, 19),
+      new Date(2026, 7, 20),
+    );
+    expect(wed).toHaveLength(1);
+    expect(wed[0].event).toBe(override);
+    expect(wed[0].start).toEqual(override.start);
+    expect(wed[0].end).toEqual(override.end);
+
+    // And the day it was moved off stays empty: the Master's slot is still
+    // suppressed there, rather than the Occurrence rendering on both days.
+    const tue = expandOccurrences(
+      [master, override],
+      new Date(2026, 7, 18),
+      new Date(2026, 7, 19),
+    );
+    expect(tue).toHaveLength(0);
+  });
+
+  it("puts an Override moved across a week boundary in the week containing its own start only", () => {
+    // The Sunday series whose Aug 23 Occurrence was moved onto Mon Aug 24.
+    // With Monday-start weeks, Aug 23 closes one week and Aug 24 opens the
+    // next, so the two windows disagree about which one the Occurrence is in.
+    const master = makeEvent({
+      start: new Date(2026, 7, 23, 9, 0),
+      end: new Date(2026, 7, 23, 9, 30),
+      rrule: "FREQ=WEEKLY;BYDAY=SU",
+    });
+    const override = makeEvent({
+      id: "evt-2",
+      parentId: master.id,
+      recurrenceId: new Date(2026, 7, 23, 9, 0),
+      start: new Date(2026, 7, 24, 9, 0),
+      end: new Date(2026, 7, 24, 9, 30),
+    });
+
+    const weekOfAug17 = expandOccurrences(
+      [master, override],
+      new Date(2026, 7, 17),
+      new Date(2026, 7, 24),
+    );
+    expect(weekOfAug17).toHaveLength(0);
+
+    const weekOfAug24 = expandOccurrences(
+      [master, override],
+      new Date(2026, 7, 24),
+      new Date(2026, 7, 31),
+    );
+    // The Override plus the untouched Sun Aug 30 Occurrence.
+    expect(weekOfAug24).toHaveLength(2);
+    expect(weekOfAug24.filter((o) => o.event === override)).toHaveLength(1);
+  });
+
+  it("puts an Override moved across a month boundary in the month containing its own start only", () => {
+    // A Monday series starting Aug 31, whose first Occurrence moved onto
+    // Tue Sep 1 — the same split as the week case, one grid up.
+    const master = makeEvent({
+      start: new Date(2026, 7, 31, 9, 0),
+      end: new Date(2026, 7, 31, 9, 30),
+      rrule: "FREQ=WEEKLY;BYDAY=MO",
+    });
+    const override = makeEvent({
+      id: "evt-2",
+      parentId: master.id,
+      recurrenceId: new Date(2026, 7, 31, 9, 0),
+      start: new Date(2026, 8, 1, 9, 0),
+      end: new Date(2026, 8, 1, 9, 30),
+    });
+
+    const august = expandOccurrences(
+      [master, override],
+      new Date(2026, 7, 1),
+      new Date(2026, 8, 1),
+    );
+    expect(august).toHaveLength(0);
+
+    const september = expandOccurrences(
+      [master, override],
+      new Date(2026, 8, 1),
+      new Date(2026, 9, 1),
+    );
+    // The Override plus the Mondays Sep 7, 14, 21 and 28.
+    expect(september).toHaveLength(5);
+    expect(september.filter((o) => o.event === override)).toHaveLength(1);
+  });
+
+  it("renders an Override moved backwards, whose replaced slot is after the window", () => {
+    // The mirror of the week case: a Monday series whose Aug 24 Occurrence
+    // was moved back onto Sun Aug 23, so the slot it replaces is past the end
+    // of the window its own start is in rather than before its start.
+    const master = makeEvent({
+      start: new Date(2026, 7, 24, 9, 0),
+      end: new Date(2026, 7, 24, 9, 30),
+      rrule: "FREQ=WEEKLY;BYDAY=MO",
+    });
+    const override = makeEvent({
+      id: "evt-2",
+      parentId: master.id,
+      recurrenceId: new Date(2026, 7, 24, 9, 0),
+      start: new Date(2026, 7, 23, 9, 0),
+      end: new Date(2026, 7, 23, 9, 30),
+    });
+
+    const weekOfAug17 = expandOccurrences(
+      [master, override],
+      new Date(2026, 7, 17),
+      new Date(2026, 7, 24),
+    );
+    expect(weekOfAug17).toHaveLength(1);
+    expect(weekOfAug17[0].event).toBe(override);
+
+    const weekOfAug24 = expandOccurrences(
+      [master, override],
+      new Date(2026, 7, 24),
+      new Date(2026, 7, 31),
+    );
+    // Nothing: the only Monday this window holds is Aug 24, whose slot the
+    // Override consumed on its way out of the week.
+    expect(weekOfAug24).toHaveLength(0);
+  });
+
+  it("emits a moved Override once when its own start and its replaced slot are both in the window", () => {
+    const master = makeEvent({
+      start: new Date(2026, 7, 18, 9, 0),
+      end: new Date(2026, 7, 18, 9, 30),
+      rrule: "FREQ=WEEKLY;BYDAY=TU",
+    });
+    const override = makeEvent({
+      id: "evt-2",
+      parentId: master.id,
+      recurrenceId: new Date(2026, 7, 18, 9, 0),
+      start: new Date(2026, 7, 19, 9, 0),
+      end: new Date(2026, 7, 19, 9, 30),
+    });
+
+    // A Monday-start week holding both Tue Aug 18 and Wed Aug 19.
+    const occurrences = expandOccurrences(
+      [master, override],
+      new Date(2026, 7, 17),
+      new Date(2026, 7, 24),
+    );
+    expect(occurrences).toHaveLength(1);
+    expect(occurrences[0].event).toBe(override);
+  });
+
+  it("keeps an excepted Occurrence cancelled even when its Override moved into the window", () => {
+    // An Exception on the slot suppresses it wherever the Override sits, so
+    // which window is being expanded can't change the answer.
+    const master = makeEvent({
+      start: new Date(2026, 7, 18, 9, 0),
+      end: new Date(2026, 7, 18, 9, 30),
+      rrule: "FREQ=WEEKLY;BYDAY=TU",
+      exdates: [new Date(2026, 7, 18, 9, 0)],
+    });
+    const override = makeEvent({
+      id: "evt-2",
+      parentId: master.id,
+      recurrenceId: new Date(2026, 7, 18, 9, 0),
+      start: new Date(2026, 7, 19, 9, 0),
+      end: new Date(2026, 7, 19, 9, 30),
+    });
+
+    const occurrences = expandOccurrences(
+      [master, override],
+      new Date(2026, 7, 19),
+      new Date(2026, 7, 20),
+    );
+    expect(occurrences).toHaveLength(0);
+  });
 });
 
 describe("expandOccurrences all-day", () => {
