@@ -1,7 +1,7 @@
 import { authedFetch, errorFromResponse } from "./apiClient";
 import type { Calendar } from "./calendar";
 import type { Reminder } from "./event";
-import { requireActiveWorkspaceId } from "./workspacesStore";
+import { workspaceHeaders } from "./workspaceHeaders";
 
 export interface SubscriptionPreview {
   name: string;
@@ -76,7 +76,7 @@ export const calendarsApi = {
   async list(accessToken: string): Promise<Calendar[]> {
     const response = await authedFetch(accessToken, "/api/calendars/", {
       credentials: "include",
-      headers: { "X-Workspace-Id": String(requireActiveWorkspaceId()) },
+      headers: workspaceHeaders(),
     });
     if (!response.ok) throw await errorFromResponse(response);
 
@@ -90,10 +90,7 @@ export const calendarsApi = {
     const response = await authedFetch(accessToken, "/api/calendars/", {
       method: "POST",
       credentials: "include",
-      headers: {
-        "Content-Type": "application/json",
-        "X-Workspace-Id": String(requireActiveWorkspaceId()),
-      },
+      headers: workspaceHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify(calendar),
     });
     if (!response.ok) throw await errorFromResponse(response);
@@ -177,10 +174,9 @@ export const calendarsApi = {
   },
 
   // previewSubscription fetches and parses url without writing anything
-  // (#83). It shares the workspace-scoped /subscribe endpoint with subscribe
-  // below, so it asserts the active Workspace the same way — without the
-  // header the server refuses the request as a non-Member before it ever
-  // reaches the feed, which made every URL fail identically (#225).
+  // (#83). It shares the Workspace-scoped /subscribe endpoint with subscribe
+  // below, so it asserts the active Workspace the same way — omitting that
+  // is what made every URL fail identically (#225).
   async previewSubscription(
     accessToken: string,
     url: string,
@@ -188,10 +184,7 @@ export const calendarsApi = {
     const response = await authedFetch(accessToken, "/api/calendars/subscribe?dryRun=1", {
       method: "POST",
       credentials: "include",
-      headers: {
-        "Content-Type": "application/json",
-        "X-Workspace-Id": String(requireActiveWorkspaceId()),
-      },
+      headers: workspaceHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify({ url }),
     });
     if (!response.ok) throw await errorFromResponse(response);
@@ -211,10 +204,7 @@ export const calendarsApi = {
     const response = await authedFetch(accessToken, "/api/calendars/subscribe?dryRun=0", {
       method: "POST",
       credentials: "include",
-      headers: {
-        "Content-Type": "application/json",
-        "X-Workspace-Id": String(requireActiveWorkspaceId()),
-      },
+      headers: workspaceHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify(subscription),
     });
     if (!response.ok) throw await errorFromResponse(response);

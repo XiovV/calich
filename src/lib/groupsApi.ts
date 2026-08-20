@@ -1,10 +1,10 @@
 import { authedFetch, errorFromResponse } from "./apiClient";
-import { requireActiveWorkspaceId } from "./workspacesStore";
+import { workspaceHeaders } from "./workspaceHeaders";
 
 // Groups management (#167, ADR-0045): the Owner/Admin screen that creates,
 // renames, and deletes Groups, and adds/removes Workspace Members from them.
-// Scoped to the currently active Workspace via the X-Workspace-Id header,
-// mirroring calendarsApi's own Workspace-scoped calls.
+// Scoped to the currently active Workspace via workspaceHeaders, the same
+// as every other Workspace-scoped call.
 
 export interface Group {
   id: number;
@@ -17,10 +17,6 @@ export interface GroupMember {
 
 interface GroupMemberWire {
   userId: number;
-}
-
-function workspaceHeaders(extra?: HeadersInit): HeadersInit {
-  return { "X-Workspace-Id": String(requireActiveWorkspaceId()), ...extra };
 }
 
 export const groupsApi = {
