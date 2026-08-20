@@ -82,7 +82,10 @@ describe("calendarsApi.create", () => {
       expect.objectContaining({
         method: "POST",
         credentials: "include",
-        headers: expect.objectContaining({ Authorization: "Bearer token-123" }),
+        headers: expect.objectContaining({
+          Authorization: "Bearer token-123",
+          "X-Workspace-Id": "7",
+        }),
         body: JSON.stringify({ id: "cal-1", name: "Personal", color: "peacock" }),
       }),
     );
@@ -213,6 +216,29 @@ describe("calendarsApi.previewSubscription", () => {
     );
   });
 
+  // Omitting this header made the server refuse every URL as a non-Member
+  // before it ever reached the feed, which gated the whole subscribe flow
+  // (#225) — see previewSubscription's own comment.
+  it("sends the active workspace id", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(200, { name: "Team Holidays", color: "#8E44ADFF", eventCount: 2 }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await calendarsApi.previewSubscription("token-123", "https://example.com/feed.ics");
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/calendars/subscribe?dryRun=1",
+      expect.objectContaining({
+        headers: {
+          Authorization: "Bearer token-123",
+          "Content-Type": "application/json",
+          "X-Workspace-Id": "7",
+        },
+      }),
+    );
+  });
+
   it("throws an ApiError on failure", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       jsonResponse(400, { error: { code: "invalid_request", message: "subscription URL is invalid" } }),
@@ -255,6 +281,7 @@ describe("calendarsApi.subscribe", () => {
       expect.objectContaining({
         method: "POST",
         credentials: "include",
+        headers: expect.objectContaining({ "X-Workspace-Id": "7" }),
         body: JSON.stringify({
           url: "https://example.com/feed.ics",
           name: "Team Holidays",

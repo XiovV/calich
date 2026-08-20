@@ -176,6 +176,11 @@ export const calendarsApi = {
     return (await response.json()) as RefreshResult;
   },
 
+  // previewSubscription fetches and parses url without writing anything
+  // (#83). It shares the workspace-scoped /subscribe endpoint with subscribe
+  // below, so it asserts the active Workspace the same way — without the
+  // header the server refuses the request as a non-Member before it ever
+  // reaches the feed, which made every URL fail identically (#225).
   async previewSubscription(
     accessToken: string,
     url: string,
@@ -183,7 +188,10 @@ export const calendarsApi = {
     const response = await authedFetch(accessToken, "/api/calendars/subscribe?dryRun=1", {
       method: "POST",
       credentials: "include",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        "X-Workspace-Id": String(requireActiveWorkspaceId()),
+      },
       body: JSON.stringify({ url }),
     });
     if (!response.ok) throw await errorFromResponse(response);
