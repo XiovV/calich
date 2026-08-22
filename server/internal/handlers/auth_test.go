@@ -352,6 +352,11 @@ func TestMe_MustChangePassword_Returns403(t *testing.T) {
 	}
 }
 
+// TestMe_ValidToken_ReturnsUser_AfterPasswordChange pins the fix for #242:
+// the access token issued by ChangePassword itself keeps working, but the
+// pre-change one — the whole point of the "signs you out of every other
+// device" promise — is now rejected immediately rather than riding out its
+// 15-minute TTL.
 func TestMe_ValidToken_ReturnsUser_AfterPasswordChange(t *testing.T) {
 	srv := newAuthTestServer(t)
 
@@ -367,12 +372,32 @@ func TestMe_ValidToken_ReturnsUser_AfterPasswordChange(t *testing.T) {
 	if changeResp.StatusCode != http.StatusOK {
 		t.Fatalf("expected 200 from change-password, got %d", changeResp.StatusCode)
 	}
+	var changed changePasswordResponse
+	if err := json.NewDecoder(changeResp.Body).Decode(&changed); err != nil {
+		t.Fatalf("decode change-password response: %v", err)
+	}
+
+	preChangeReq, err := http.NewRequest(http.MethodGet, srv.URL+"/api/auth/me", nil)
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	preChangeReq.Header.Set("Authorization", "Bearer "+loggedIn.AccessToken)
+
+	preChangeResp, err := http.DefaultClient.Do(preChangeReq)
+	if err != nil {
+		t.Fatalf("GET /api/auth/me: %v", err)
+	}
+	defer preChangeResp.Body.Close()
+
+	if preChangeResp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected 401 for the pre-change access token, got %d", preChangeResp.StatusCode)
+	}
 
 	req, err := http.NewRequest(http.MethodGet, srv.URL+"/api/auth/me", nil)
 	if err != nil {
 		t.Fatalf("build request: %v", err)
 	}
-	req.Header.Set("Authorization", "Bearer "+loggedIn.AccessToken)
+	req.Header.Set("Authorization", "Bearer "+changed.AccessToken)
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -381,7 +406,7 @@ func TestMe_ValidToken_ReturnsUser_AfterPasswordChange(t *testing.T) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("expected 200 after password change, got %d", resp.StatusCode)
+		t.Fatalf("expected 200 for the freshly issued access token, got %d", resp.StatusCode)
 	}
 
 	var me meResponse

@@ -690,6 +690,59 @@ func TestAuthenticate_RejectsGarbage(t *testing.T) {
 	}
 }
 
+// TestAuthenticate_RejectsAccessTokenIssuedBeforePasswordChange pins the fix
+// for #242: ChangePassword already revoked the refresh token, but a
+// pre-change access token kept authenticating for its full 15-minute TTL
+// because Authenticate never checked the database at all. It now compares
+// the token's "tv" (token_version) claim against the account's current
+// token_version (ADR-0071).
+func TestAuthenticate_RejectsAccessTokenIssuedBeforePasswordChange(t *testing.T) {
+	svc := newTestAuthService(t, "admin", "admin")
+	ctx := context.Background()
+	if _, _, err := svc.Bootstrap(ctx); err != nil {
+		t.Fatalf("bootstrap: %v", err)
+	}
+
+	login, err := svc.Login(ctx, "admin@example.com", "admin")
+	if err != nil {
+		t.Fatalf("login: %v", err)
+	}
+
+	if _, err := svc.Authenticate(ctx, login.AccessToken); err != nil {
+		t.Fatalf("expected the freshly issued access token to authenticate, got %v", err)
+	}
+
+	if _, err := svc.ChangePassword(ctx, mustUserID(t, svc, "admin"), "admin", "a-new-password"); err != nil {
+		t.Fatalf("change password: %v", err)
+	}
+
+	if _, err := svc.Authenticate(ctx, login.AccessToken); err == nil {
+		t.Fatalf("expected the pre-change access token to be rejected after a password change")
+	}
+}
+
+// TestAuthenticate_AcceptsAccessTokenIssuedByPasswordChange guards the
+// boundary of the #242 fix: the fresh access token ChangePassword itself
+// returns already carries the bumped token_version, so it must still
+// authenticate even though it was minted in the very call that invalidated
+// every token before it.
+func TestAuthenticate_AcceptsAccessTokenIssuedByPasswordChange(t *testing.T) {
+	svc := newTestAuthService(t, "admin", "admin")
+	ctx := context.Background()
+	if _, _, err := svc.Bootstrap(ctx); err != nil {
+		t.Fatalf("bootstrap: %v", err)
+	}
+
+	result, err := svc.ChangePassword(ctx, mustUserID(t, svc, "admin"), "admin", "a-new-password")
+	if err != nil {
+		t.Fatalf("change password: %v", err)
+	}
+
+	if _, err := svc.Authenticate(ctx, result.AccessToken); err != nil {
+		t.Fatalf("expected the access token ChangePassword just issued to authenticate, got %v", err)
+	}
+}
+
 func TestMustChangePassword_ReflectsUserFlag(t *testing.T) {
 	svc := newTestAuthService(t, "", "")
 	ctx := context.Background()

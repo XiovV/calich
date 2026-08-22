@@ -34,6 +34,13 @@ type User struct {
 	// instead.
 	IsDisabled bool
 	CreatedAt  time.Time
+	// TokenVersion is embedded in every access token's "tv" claim at mint
+	// time (AuthService.newAccessToken) and compared against this column's
+	// current value on every AuthService.Authenticate call (#242, ADR-0071).
+	// UpdatePassword increments it, so a token minted before a password
+	// change stops authenticating immediately rather than riding out its
+	// full accessTokenTTL.
+	TokenVersion int64
 
 	// WeekStart is a date-fns weekStartsOn index (0 = Sunday .. 6 = Saturday):
 	// the first column of the Month grid, the first day of the Week view, and
@@ -56,7 +63,7 @@ type User struct {
 // exact order scanUserFields expects — kept as one constant so the two never
 // drift apart across GetByID, GetByIDs, GetByEmail, ListEnabledExcluding,
 // and First.
-const userColumns = `id, name, password_hash, must_change_password, email, synced_device_reminders_enabled, is_disabled, created_at, week_start, default_view, time_format, working_hours_start, working_hours_end`
+const userColumns = `id, name, password_hash, must_change_password, email, synced_device_reminders_enabled, is_disabled, created_at, week_start, default_view, time_format, working_hours_start, working_hours_end, token_version`
 
 type UserRepository struct {
 	db DBTX
@@ -260,16 +267,37 @@ func (r *UserRepository) UpdateWorkingHours(ctx context.Context, userID int64, s
 	return r.GetByID(ctx, userID)
 }
 
-// UpdatePassword sets a new password hash and clears must_change_password.
-func (r *UserRepository) UpdatePassword(ctx context.Context, userID int64, passwordHash string) error {
+// UpdatePassword sets a new password hash, clears must_change_password, and
+// bumps token_version — what AuthService.Authenticate compares a bearer
+// access token's "tv" claim against (#242, ADR-0071), so every access token
+// minted before this call stops authenticating on its very next use rather
+// than riding out its full TTL. Returns the updated User so callers that
+// immediately mint a fresh token (AuthService.ChangePassword) have the new
+// token_version to hand without a second round trip.
+func (r *UserRepository) UpdatePassword(ctx context.Context, userID int64, passwordHash string) (User, error) {
 	_, err := r.db.ExecContext(ctx,
-		`UPDATE users SET password_hash = ?, must_change_password = 0 WHERE id = ?`,
+		`UPDATE users SET password_hash = ?, must_change_password = 0, token_version = token_version + 1 WHERE id = ?`,
 		passwordHash, userID,
 	)
 	if err != nil {
-		return fmt.Errorf("update password: %w", err)
+		return User{}, fmt.Errorf("update password: %w", err)
 	}
-	return nil
+	return r.GetByID(ctx, userID)
+}
+
+// GetTokenVersion returns userID's token_version alone — the single column
+// AuthService.Authenticate needs on every authenticated request (#242,
+// ADR-0071), cheaper than GetByID's full row.
+func (r *UserRepository) GetTokenVersion(ctx context.Context, userID int64) (int64, error) {
+	var tokenVersion int64
+	err := r.db.QueryRowContext(ctx, `SELECT token_version FROM users WHERE id = ?`, userID).Scan(&tokenVersion)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, ErrNotFound
+	}
+	if err != nil {
+		return 0, fmt.Errorf("get token version: %w", err)
+	}
+	return tokenVersion, nil
 }
 
 // First returns the earliest-created user — the sole user in today's
@@ -346,7 +374,7 @@ func scanUserFields(scan func(dest ...any) error) (User, error) {
 	// based on the declared column type — no manual parsing needed here.
 	err := scan(
 		&u.ID, &u.Name, &u.PasswordHash, &u.MustChangePassword, &u.Email, &u.SyncedDeviceRemindersEnabled, &u.IsDisabled, &u.CreatedAt,
-		&u.WeekStart, &u.DefaultView, &u.TimeFormat, &workingHoursStart, &workingHoursEnd,
+		&u.WeekStart, &u.DefaultView, &u.TimeFormat, &workingHoursStart, &workingHoursEnd, &u.TokenVersion,
 	)
 	if err != nil {
 		return User{}, err

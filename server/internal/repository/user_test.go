@@ -115,13 +115,9 @@ func TestUserRepository_UpdatePassword(t *testing.T) {
 		t.Fatalf("create user: %v", err)
 	}
 
-	if err := repo.UpdatePassword(ctx, created.ID, "new-hash"); err != nil {
-		t.Fatalf("update password: %v", err)
-	}
-
-	updated, err := repo.GetByID(ctx, created.ID)
+	updated, err := repo.UpdatePassword(ctx, created.ID, "new-hash")
 	if err != nil {
-		t.Fatalf("get by id: %v", err)
+		t.Fatalf("update password: %v", err)
 	}
 
 	if updated.PasswordHash != "new-hash" {
@@ -129,6 +125,39 @@ func TestUserRepository_UpdatePassword(t *testing.T) {
 	}
 	if updated.MustChangePassword {
 		t.Fatalf("expected must_change_password to be cleared after updating password")
+	}
+}
+
+// TestUserRepository_UpdatePassword_BumpsTokenVersion pins the fix for
+// #242: AuthService.Authenticate checks token_version against a bearer
+// access token's own claim, so a password change has to actually move this
+// column for a pre-change token to stop authenticating.
+func TestUserRepository_UpdatePassword_BumpsTokenVersion(t *testing.T) {
+	repo := newTestUserRepository(t)
+	ctx := context.Background()
+
+	created, err := repo.Create(ctx, "admin", "admin@example.com", "old-hash", true)
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	if created.TokenVersion != 0 {
+		t.Fatalf("expected a freshly created user to start at token_version 0, got %d", created.TokenVersion)
+	}
+
+	updated, err := repo.UpdatePassword(ctx, created.ID, "new-hash")
+	if err != nil {
+		t.Fatalf("update password: %v", err)
+	}
+	if updated.TokenVersion != created.TokenVersion+1 {
+		t.Fatalf("expected token_version to be incremented by 1, got %d (was %d)", updated.TokenVersion, created.TokenVersion)
+	}
+
+	fetched, err := repo.GetTokenVersion(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("get token version: %v", err)
+	}
+	if fetched != updated.TokenVersion {
+		t.Fatalf("expected GetTokenVersion to reflect the update, got %d, want %d", fetched, updated.TokenVersion)
 	}
 }
 

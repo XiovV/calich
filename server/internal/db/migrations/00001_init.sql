@@ -57,7 +57,17 @@ CREATE TABLE users (
     default_view TEXT NOT NULL DEFAULT 'week',
     time_format TEXT NOT NULL DEFAULT '24h',
     working_hours_start INTEGER NULL,
-    working_hours_end INTEGER NULL
+    working_hours_end INTEGER NULL,
+    -- token_version (#242, ADR-0071) is embedded in every access token's "tv"
+    -- claim at mint time and compared against the account's current value on
+    -- every AuthService.Authenticate call. ChangePassword increments it, so a
+    -- token minted before the change stops authenticating immediately rather
+    -- than riding out its full accessTokenTTL. An integer counter rather than
+    -- a password_changed_at timestamp because a JWT's NumericDate claims
+    -- round-trip through JSON at whole-second precision — a password change
+    -- landing in the same second as the token it's meant to outdate would
+    -- make "issued before changed" ambiguous; a counter has no such tie.
+    token_version INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE sessions (

@@ -28,7 +28,7 @@ Live sessions are deleted, exactly as `ChangePassword` already does. The schedul
 
 **Everything they own stays live for everyone else.** Ownership stays with the disabled User; their Calendars, their Events, and every Share on them are untouched. Disable is a property of the account, not of the data — "turn off this login" must not silently degrade other people's calendars. If the data should go, delete is the operation that says so.
 
-One gap is accepted knowingly: `AuthService.Authenticate` is a stateless JWT check that never touches the database, so a disabled User keeps a working access token for up to its 15-minute TTL. Closing it would mean a database read on every authenticated request, which is a poor trade for 15 minutes.
+One gap is accepted knowingly: `AuthService.Authenticate` does not check `is_disabled`, so a disabled User keeps a working access token for up to its 15-minute TTL — `httpauth.RequireEnabledUser`'s own per-request read is what actually closes off every other route. `Authenticate` does now touch the database on every call for a narrower reason (a `token_version` check, ADR-0071) — that read exists to close the equivalent gap for a password change, not this one, and folding `is_disabled` into it was deliberately left out of that change's scope.
 
 ## Delete
 
