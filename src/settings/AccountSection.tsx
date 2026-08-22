@@ -212,13 +212,20 @@ export function AccountSection() {
             entry this change applies to, so the update after Save never
             reaches it. `sr-only` keeps it out of the visual layout without
             display:none/visibility:hidden, which is how password-manager
-            heuristics decide a field isn't fillable and skip it. */}
+            heuristics decide a field isn't fillable and skip it.
+            #250: that same visibility is what makes it a stop in the tab
+            order with no accessible name. `tabIndex={-1}` takes it out of
+            tab order without touching the DOM/autocomplete cues password
+            managers key off of; `aria-hidden` is only safe once it's
+            unfocusable, which tabIndex={-1} guarantees. */}
           <input
             type="text"
             name="username"
             autoComplete="username"
             value={user?.email ?? ""}
             readOnly
+            tabIndex={-1}
+            aria-hidden="true"
             className="sr-only"
           />
           <Input

@@ -218,6 +218,18 @@ describe("AccountSection — hidden username field for password managers (#246)"
     expect(usernameField).toHaveClass("sr-only");
     expect(usernameField).not.toHaveAttribute("hidden");
   });
+
+  // #250: sr-only keeps it out of the visual layout but not the tab order or
+  // accessibility tree, so it was a stop between Email and Current password
+  // with no accessible name. It must stay reachable by password managers
+  // (DOM presence + autocomplete) without being a keyboard/screen-reader stop.
+  it("is unfocusable and hidden from the accessibility tree (#250)", () => {
+    render(<AccountSection />);
+
+    const usernameField = document.querySelector('input[autocomplete="username"]');
+    expect(usernameField).toHaveAttribute("tabIndex", "-1");
+    expect(usernameField).toHaveAttribute("aria-hidden", "true");
+  });
 });
 
 describe("AccountSection — change password (#234)", () => {
