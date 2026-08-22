@@ -39,7 +39,7 @@ func newWorkspaceHandlerTestServer(t *testing.T) *workspaceHandlerTestServer {
 	workspaces := g.Workspaces
 	auth := g.Auth
 
-	authHandler := NewAuthHandler(auth, false, false, true)
+	authHandler := NewAuthHandler(auth, g.RateLimiter, false, false, true)
 	workspaceHandler := NewWorkspaceHandler(workspaces)
 
 	r := chi.NewRouter()

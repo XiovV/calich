@@ -2,10 +2,12 @@ package handlers
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"time"
 
+	"github.com/XiovV/calich/server/internal/clientip"
 	"github.com/XiovV/calich/server/internal/httpauth"
 	"github.com/XiovV/calich/server/internal/httpresponse"
 	"github.com/XiovV/calich/server/internal/repository"
@@ -16,6 +18,11 @@ const refreshCookieName = "refresh_token"
 
 type AuthHandler struct {
 	auth *service.AuthService
+	// rateLimiter throttles Login and Register (#240, ADR-0070) — the
+	// CalDAV Basic auth surface it also covers is throttled separately, in
+	// httpauth.RequireCalDAVAuth, since that's where the request actually
+	// terminates.
+	rateLimiter *service.AuthRateLimiter
 	// smtpConfigured is whether the self-hoster has set up SMTP transport
 	// (ADR-0021) — combined with the user's own email to compute
 	// meResponse's emailReminderChannelAvailable.
@@ -29,8 +36,8 @@ type AuthHandler struct {
 	cookieSecure bool
 }
 
-func NewAuthHandler(auth *service.AuthService, smtpConfigured, imapConfigured, cookieSecure bool) *AuthHandler {
-	return &AuthHandler{auth: auth, smtpConfigured: smtpConfigured, imapConfigured: imapConfigured, cookieSecure: cookieSecure}
+func NewAuthHandler(auth *service.AuthService, rateLimiter *service.AuthRateLimiter, smtpConfigured, imapConfigured, cookieSecure bool) *AuthHandler {
+	return &AuthHandler{auth: auth, rateLimiter: rateLimiter, smtpConfigured: smtpConfigured, imapConfigured: imapConfigured, cookieSecure: cookieSecure}
 }
 
 type loginRequest struct {
@@ -51,9 +58,11 @@ type loginResponse struct {
 
 var loginErrors = []errorCase{
 	{service.ErrInvalidCredentials, unauthorized("invalid_credentials", "invalid email or password")},
+	{service.ErrAuthRateLimitExceeded, rateLimited("too many attempts, please try again later")},
 }
 
 var registerErrors = []errorCase{
+	{service.ErrAuthRateLimitExceeded, rateLimited("too many attempts, please try again later")},
 	{service.ErrSignupsDisabled, forbidden("self-registration is disabled on this instance")},
 	{service.ErrInvalidDisplayName, badRequest("name must not be empty and must be at most 100 characters")},
 	{service.ErrEmailRequired, badRequest("email is required")},
@@ -137,6 +146,12 @@ func (h *AuthHandler) SetupStatus(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// Login is throttled ahead of AuthService.Login itself (#240, ADR-0070):
+// CheckAuth's cheap SQL count runs before any password comparison, so a
+// flood past the ceiling never reaches AuthService.Login's bcrypt compare.
+// A failure charges both the submitted Email's and the caller's IP's own
+// buckets identically whether or not that Email names a real account
+// (ADR-0047's enumeration posture); a success clears the Email bucket alone.
 func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 	var req loginRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -144,8 +159,26 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	ip := clientip.From(r)
+
+	if err := h.rateLimiter.CheckAuth(r.Context(), req.Email, ip); respondError(w, err, loginErrors, "failed to log in") {
+		return
+	}
+
 	result, err := h.auth.Login(r.Context(), req.Email, req.Password)
-	if respondError(w, err, loginErrors, "failed to log in") {
+	if err != nil {
+		if errors.Is(err, service.ErrInvalidCredentials) {
+			if recErr := h.rateLimiter.RecordAuthFailure(r.Context(), req.Email, ip); recErr != nil {
+				httpresponse.Error(w, http.StatusInternalServerError, "internal_error", "failed to log in")
+				return
+			}
+		}
+		respondError(w, err, loginErrors, "failed to log in")
+		return
+	}
+
+	if err := h.rateLimiter.ClearAuthFailures(r.Context(), req.Email); err != nil {
+		httpresponse.Error(w, http.StatusInternalServerError, "internal_error", "failed to log in")
 		return
 	}
 
@@ -175,6 +208,19 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 	var req registerRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		httpresponse.Error(w, http.StatusBadRequest, "invalid_request", "request body must be valid JSON")
+		return
+	}
+
+	ip := clientip.From(r)
+
+	if err := h.rateLimiter.CheckRegister(r.Context(), ip); respondError(w, err, registerErrors, "failed to register") {
+		return
+	}
+	// Charged on every call past the ceiling check, success or failure
+	// (#240, ADR-0070) — what's throttled is how often Register is invoked
+	// at all, not a count of wrong guesses against a credential.
+	if err := h.rateLimiter.RecordRegisterAttempt(r.Context(), ip); err != nil {
+		httpresponse.Error(w, http.StatusInternalServerError, "internal_error", "failed to register")
 		return
 	}
 

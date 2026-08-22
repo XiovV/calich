@@ -102,7 +102,7 @@ func newFromGraph(graph *service.Graph, cfg config.Config) *App {
 		a.Mailer = mailer.NewSMTPMailer(cfg.SMTPHost, cfg.SMTPPort, cfg.SMTPUser, cfg.SMTPPass, cfg.SMTPFrom)
 	}
 
-	a.AuthHandler = handlers.NewAuthHandler(a.Auth, cfg.SMTPConfigured(), cfg.ImapConfigured(), cfg.CookieSecure)
+	a.AuthHandler = handlers.NewAuthHandler(a.Auth, a.RateLimiter, cfg.SMTPConfigured(), cfg.ImapConfigured(), cfg.CookieSecure)
 	a.CalendarHandler = handlers.NewCalendarHandler(a.Calendars, a.Events, a.Imports, a.Subscriptions, a.AttachmentStore)
 	a.EventHandler = handlers.NewEventHandler(a.Events, a.AttachmentStore)
 	a.AttachmentHandler = handlers.NewAttachmentHandler(a.Attachments, cfg.MaxAttachmentSize)

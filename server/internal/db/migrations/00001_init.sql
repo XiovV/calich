@@ -599,7 +599,32 @@ CREATE TABLE outbox (
 CREATE INDEX idx_outbox_status_id ON outbox(status, id);
 CREATE INDEX idx_outbox_actor_created ON outbox(actor_user_id, created_at);
 
+-- auth_rate_limit_attempts is AuthRateLimiter's rolling-window ledger (#240,
+-- ADR-0070): one row per throttled attempt against Login, CalDAV Basic auth,
+-- or Register. scope is 'auth' (Login and CalDAV Basic auth share one
+-- ceiling — the same "guess a password against one account" problem behind
+-- two transports) or 'register'. key_type is 'email' or 'ip': Register has
+-- no existing credential to key on, so it's counted by ip alone, while auth
+-- is counted by both independently (either bucket at its ceiling refuses
+-- the request) since neither key alone resists both a distributed guess
+-- (many IPs, one email) and a guess that rotates targets (one IP, many
+-- emails). key_value is COLLATE NOCASE for its 'email' rows, the same fold
+-- every other email column in this schema carries; harmless for 'ip' rows,
+-- which never vary by case. There is no user_id/actor column, unlike
+-- outbox's actor-keyed ceiling (ADR-0058) — by definition a failed Login has
+-- no authenticated actor yet to key on.
+CREATE TABLE auth_rate_limit_attempts (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    scope      TEXT NOT NULL CHECK (scope IN ('auth', 'register')),
+    key_type   TEXT NOT NULL CHECK (key_type IN ('email', 'ip')),
+    key_value  TEXT NOT NULL COLLATE NOCASE,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX idx_auth_rate_limit_lookup ON auth_rate_limit_attempts(scope, key_type, key_value, created_at);
+
 -- +goose Down
+DROP TABLE auth_rate_limit_attempts;
 DROP TABLE outbox;
 DROP TABLE deleted_objects;
 DROP TABLE change_sequence;

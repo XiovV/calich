@@ -41,6 +41,13 @@ func Config(t *testing.T) config.Config {
 		// Well above defaultInviteRateLimitPerHour (ADR-0058), so only a test
 		// that lowers it deliberately ever sees the cap.
 		InviteRateLimitPerHour: 1000,
+		// Well above defaultAuthRateLimitPerEmail/PerIP/defaultRegisterRateLimitPerIP
+		// (#240, ADR-0070), so only a test that lowers one deliberately ever
+		// sees the cap — every handler test in this repo logs in or
+		// registers repeatedly from the same loopback address.
+		AuthRateLimitPerEmail:  1000,
+		AuthRateLimitPerIP:     1000,
+		RegisterRateLimitPerIP: 1000,
 		// No cadence of its own: a test that refreshes a Subscription does so
 		// explicitly rather than waiting for one to come due (ADR-0033).
 		SubscriptionRefreshInterval: 0,

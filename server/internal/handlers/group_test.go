@@ -41,7 +41,7 @@ func newGroupHandlerTestServer(t *testing.T) *groupHandlerTestServer {
 	auth := g.Auth
 	groups := g.Groups
 
-	authHandler := NewAuthHandler(auth, false, false, true)
+	authHandler := NewAuthHandler(auth, g.RateLimiter, false, false, true)
 	groupHandler := NewGroupHandler(groups)
 
 	r := chi.NewRouter()

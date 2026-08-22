@@ -70,6 +70,10 @@ type Graph struct {
 	// nothing to queue one into, and EventService takes the nil as "queue
 	// no Invitation at all".
 	OutboxRepo *repository.OutboxRepository
+	// RateLimitRepo backs RateLimiter (#240, ADR-0070) — built
+	// unconditionally, unlike OutboxRepo, since throttling Login/Register/
+	// CalDAV needs no self-hoster configuration to be worth having.
+	RateLimitRepo *repository.RateLimitAttemptRepository
 
 	Auth          *AuthService
 	Accounts      *AccountService
@@ -83,6 +87,12 @@ type Graph struct {
 	Subscriptions *SubscribeService
 	Users         *UserService
 	Workspaces    *WorkspaceService
+	// RateLimiter throttles Login, Register, and CalDAV Basic auth (#240,
+	// ADR-0070) — held by the Graph rather than by AuthService/
+	// AppPasswordService, since it's enforced from the HTTP layer
+	// (AuthHandler, httpauth.RequireCalDAVAuth) rather than from inside
+	// either service.
+	RateLimiter *AuthRateLimiter
 }
 
 // GraphOption is a build input that isn't part of config.Config, because it
@@ -158,7 +168,9 @@ func NewGraph(sqlDB *sql.DB, cfg config.Config, opts ...GraphOption) (*Graph, er
 	if cfg.SMTPConfigured() {
 		g.OutboxRepo = repository.NewOutboxRepository(sqlDB)
 	}
+	g.RateLimitRepo = repository.NewRateLimitAttemptRepository(sqlDB)
 
+	g.RateLimiter = NewAuthRateLimiter(g.RateLimitRepo, cfg.AuthRateLimitPerEmail, cfg.AuthRateLimitPerIP, cfg.RegisterRateLimitPerIP)
 	g.Workspaces = NewWorkspaceService(sqlDB, g.WorkspaceRepo, g.WorkspaceInviteRepo, g.CalendarRepo, g.ShareRepo)
 	g.Groups = NewGroupService(g.GroupRepo, g.WorkspaceRepo)
 	g.Calendars = NewCalendarService(g.CalendarRepo, g.ShareRepo, g.UserRepo, g.EventReminderRepo, g.DefaultReminderRepo, g.ExplicitReminderRepo, g.ColorOverrideRepo, g.WorkspaceRepo, g.GroupShareRepo, g.GroupRepo)

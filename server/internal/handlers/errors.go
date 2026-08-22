@@ -47,6 +47,14 @@ func unauthorized(code, message string) errorResponse {
 	return errorResponse{http.StatusUnauthorized, code, message}
 }
 
+// rateLimited renders AuthRateLimiter's ErrAuthRateLimitExceeded (#240,
+// ADR-0070) — always the same code and message regardless of which bucket
+// tripped or whether the submitted Email names a real account, so a 429
+// here can never become a User-enumeration oracle.
+func rateLimited(message string) errorResponse {
+	return errorResponse{http.StatusTooManyRequests, "rate_limited", message}
+}
+
 // alsoHandling returns base extended with extra, leaving base untouched — for
 // a handler that renders everything a sibling does plus a few of its own.
 // base is matched first.

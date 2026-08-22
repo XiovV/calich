@@ -15,7 +15,7 @@ import (
 	"github.com/XiovV/calich/server/internal/static"
 )
 
-func New(logger *slog.Logger, authHandler *handlers.AuthHandler, calendarHandler *handlers.CalendarHandler, eventHandler *handlers.EventHandler, attachmentHandler *handlers.AttachmentHandler, notificationHandler *handlers.NotificationHandler, appPasswordHandler *handlers.AppPasswordHandler, accountHandler *handlers.AccountHandler, userHandler *handlers.UserHandler, workspaceHandler *handlers.WorkspaceHandler, groupHandler *handlers.GroupHandler, calDAVHandler http.Handler, authenticator httpauth.Authenticator, activeUserChecker httpauth.ActiveUserChecker, calDAVAuthenticator httpauth.CalDAVAuthenticator, enabledChecker httpauth.DisabledChecker, workspaceMembershipChecker httpauth.WorkspaceMembershipChecker) (http.Handler, error) {
+func New(logger *slog.Logger, authHandler *handlers.AuthHandler, calendarHandler *handlers.CalendarHandler, eventHandler *handlers.EventHandler, attachmentHandler *handlers.AttachmentHandler, notificationHandler *handlers.NotificationHandler, appPasswordHandler *handlers.AppPasswordHandler, accountHandler *handlers.AccountHandler, userHandler *handlers.UserHandler, workspaceHandler *handlers.WorkspaceHandler, groupHandler *handlers.GroupHandler, calDAVHandler http.Handler, authenticator httpauth.Authenticator, activeUserChecker httpauth.ActiveUserChecker, calDAVAuthenticator httpauth.CalDAVAuthenticator, calDAVRateLimiter httpauth.CalDAVRateLimiter, enabledChecker httpauth.DisabledChecker, workspaceMembershipChecker httpauth.WorkspaceMembershipChecker) (http.Handler, error) {
 	r := chi.NewRouter()
 	r.Use(requestLogger(logger))
 	r.Use(middleware.Recoverer)
@@ -247,11 +247,11 @@ func New(logger *slog.Logger, authHandler *handlers.AuthHandler, calendarHandler
 	// outside RequireAuth — it authenticates via HTTP Basic against hashed App
 	// passwords instead of a bearer access token.
 	r.Route("/dav", func(r chi.Router) {
-		r.Use(httpauth.RequireCalDAVAuth(calDAVAuthenticator))
+		r.Use(httpauth.RequireCalDAVAuth(calDAVAuthenticator, calDAVRateLimiter))
 		r.Handle("/", calDAVHandler)
 		r.Handle("/*", calDAVHandler)
 	})
-	r.With(httpauth.RequireCalDAVAuth(calDAVAuthenticator)).Handle("/.well-known/caldav", calDAVHandler)
+	r.With(httpauth.RequireCalDAVAuth(calDAVAuthenticator, calDAVRateLimiter)).Handle("/.well-known/caldav", calDAVHandler)
 
 	distFS, err := static.Dist()
 	if err != nil {

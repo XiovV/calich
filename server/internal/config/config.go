@@ -33,6 +33,20 @@ const (
 // trips it, while still bounding a runaway script.
 const defaultInviteRateLimitPerHour = 100
 
+// defaultAuthRateLimitPerEmail/PerIP and defaultRegisterRateLimitPerIP are
+// AuthRateLimiter's ceilings (#240, ADR-0070) when AUTH_RATE_LIMIT_PER_EMAIL/
+// AUTH_RATE_LIMIT_PER_IP/REGISTER_RATE_LIMIT_PER_IP are unset. The auth pair
+// governs Login and CalDAV Basic auth alike — the same "guess a password
+// against one account" problem behind two transports — high enough that a
+// User mistyping their password a few times never trips it, low enough to
+// meaningfully slow a script. Register has no existing credential to
+// protect, so it gets its own, coarser IP-only ceiling instead.
+const (
+	defaultAuthRateLimitPerEmail  = 10
+	defaultAuthRateLimitPerIP     = 30
+	defaultRegisterRateLimitPerIP = 20
+)
+
 type Config struct {
 	Port        string
 	DataDir     string
@@ -49,6 +63,14 @@ type Config struct {
 	// InviteRateLimitPerHour is the per-User hourly ceiling on queued
 	// Invitations (#204, ADR-0058).
 	InviteRateLimitPerHour int
+	// AuthRateLimitPerEmail/PerIP are Login's and CalDAV Basic auth's shared
+	// ceilings on failed authentication attempts within a rolling 15-minute
+	// window (#240, ADR-0070). RegisterRateLimitPerIP is Register's own,
+	// IP-only ceiling within a rolling 1-hour window, charged on every call
+	// rather than only failures.
+	AuthRateLimitPerEmail  int
+	AuthRateLimitPerIP     int
+	RegisterRateLimitPerIP int
 	// SMTP transport for Email-Channel Reminders (ADR-0021). Email delivery
 	// is only wired up when every one of these is set.
 	SMTPHost string
@@ -112,6 +134,9 @@ func Load() Config {
 		MaxAttachmentSize:           getEnvInt64("MAX_ATTACHMENT_SIZE", defaultMaxAttachmentSize),
 		MaxAttachmentsPerEvent:      getEnvInt("MAX_ATTACHMENTS_PER_EVENT", defaultMaxAttachmentsPerEvent),
 		InviteRateLimitPerHour:      getEnvInt("INVITE_RATE_LIMIT_PER_HOUR", defaultInviteRateLimitPerHour),
+		AuthRateLimitPerEmail:       getEnvInt("AUTH_RATE_LIMIT_PER_EMAIL", defaultAuthRateLimitPerEmail),
+		AuthRateLimitPerIP:          getEnvInt("AUTH_RATE_LIMIT_PER_IP", defaultAuthRateLimitPerIP),
+		RegisterRateLimitPerIP:      getEnvInt("REGISTER_RATE_LIMIT_PER_IP", defaultRegisterRateLimitPerIP),
 		EnableSignups:               getEnvBool("ENABLE_SIGNUPS", false),
 		CookieSecure:                getEnvBool("COOKIE_SECURE", true),
 	}

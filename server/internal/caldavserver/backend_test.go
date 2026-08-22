@@ -83,11 +83,11 @@ func newTestCalDAVEnv(t *testing.T) testCalDAVEnv {
 
 	r := chi.NewRouter()
 	r.Route(pathPrefix, func(r chi.Router) {
-		r.Use(httpauth.RequireCalDAVAuth(appPasswordService))
+		r.Use(httpauth.RequireCalDAVAuth(appPasswordService, g.RateLimiter))
 		r.Handle("/", handler)
 		r.Handle("/*", handler)
 	})
-	r.With(httpauth.RequireCalDAVAuth(appPasswordService)).Handle("/.well-known/caldav", handler)
+	r.With(httpauth.RequireCalDAVAuth(appPasswordService, g.RateLimiter)).Handle("/.well-known/caldav", handler)
 
 	srv := httptest.NewServer(r)
 	t.Cleanup(srv.Close)

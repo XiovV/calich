@@ -49,7 +49,7 @@ func newAuthTestServerWithCookieSecure(t *testing.T, smtpConfigured, imapConfigu
 	// the only path that used to.
 	mustSeedUserRequiringPasswordChange(t, users, "admin", "admin")
 
-	h := NewAuthHandler(auth, smtpConfigured, imapConfigured, cookieSecure)
+	h := NewAuthHandler(auth, g.RateLimiter, smtpConfigured, imapConfigured, cookieSecure)
 
 	r := chi.NewRouter()
 	r.Get("/api/auth/setup-status", h.SetupStatus)
@@ -287,7 +287,7 @@ func TestLogin_DisabledAccount_SucceedsButMeIsBlocked(t *testing.T) {
 		t.Fatalf("disable user: %v", err)
 	}
 
-	h := NewAuthHandler(auth, false, false, true)
+	h := NewAuthHandler(auth, g.RateLimiter, false, false, true)
 	r := chi.NewRouter()
 	r.Post("/api/auth/login", h.Login)
 	r.With(httpauth.RequireAuth(auth), httpauth.RequireActiveUser(auth), httpauth.RequireEnabledUser(auth)).Get("/api/auth/me", h.Me)
@@ -663,7 +663,7 @@ func TestUpdateName_DuplicateNameIsAllowed(t *testing.T) {
 		t.Fatalf("change password: %v", err)
 	}
 
-	h := NewAuthHandler(auth, false, false, true)
+	h := NewAuthHandler(auth, g.RateLimiter, false, false, true)
 	r := chi.NewRouter()
 	r.Post("/api/auth/login", h.Login)
 	r.With(httpauth.RequireAuth(auth), httpauth.RequireActiveUser(auth)).Put("/api/auth/name", h.UpdateName)
@@ -1536,7 +1536,7 @@ func TestSetupStatus_AccountExistsAndSignupsEnabled(t *testing.T) {
 		t.Fatalf("bootstrap: %v", err)
 	}
 
-	h := NewAuthHandler(g.Auth, false, false, true)
+	h := NewAuthHandler(g.Auth, g.RateLimiter, false, false, true)
 	r := chi.NewRouter()
 	r.Get("/api/auth/setup-status", h.SetupStatus)
 	srv := httptest.NewServer(r)
@@ -1559,7 +1559,7 @@ func TestSetupStatus_NoAccountsYet(t *testing.T) {
 	cfg.InitialName, cfg.InitialEmail, cfg.InitialPassword = "", "", ""
 	g := newTestGraphWithConfig(t, cfg)
 
-	h := NewAuthHandler(g.Auth, false, false, true)
+	h := NewAuthHandler(g.Auth, g.RateLimiter, false, false, true)
 	r := chi.NewRouter()
 	r.Get("/api/auth/setup-status", h.SetupStatus)
 	srv := httptest.NewServer(r)
