@@ -557,6 +557,11 @@ func TestValidateEmail(t *testing.T) {
 		{name: "internal whitespace is rejected", input: "alice bob@example.com", wantErr: ErrInvalidEmail},
 		{name: "a colon is rejected", input: "ali:ce@example.com", wantErr: ErrInvalidEmail},
 		{name: "not a well-formed address is rejected", input: "not-an-email", wantErr: ErrInvalidEmail},
+		{name: "bare angle-bracket address is rejected", input: "<alice@example.com>", wantErr: ErrInvalidEmail},
+		{name: "name-addr form with no whitespace is rejected", input: "Evil<alice@example.com>", wantErr: ErrInvalidEmail},
+		{name: "name-addr form with whitespace is rejected", input: "Evil <alice@example.com>", wantErr: ErrInvalidEmail},
+		{name: "trailing comment is rejected", input: "alice@example.com (comment)", wantErr: ErrInvalidEmail},
+		{name: "quoted local-part is rejected", input: `"alice"@example.com`, wantErr: ErrInvalidEmail},
 	}
 
 	for _, tt := range tests {

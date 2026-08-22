@@ -474,6 +474,34 @@ func TestWorkspaceService_CreateInvite_FoldsEmailCase(t *testing.T) {
 	}
 }
 
+// TestWorkspaceService_CreateInvite_RejectsAngleBracketAddress covers #243:
+// CreateInvite used to validate with a bare mail.ParseAddress call, which
+// accepts RFC 5322 name-addr forms like "<a@b.com>" — the same bypass that
+// was closed on Register/AuthService.UpdateEmail. An invite's email is
+// written straight into users.email by
+// AuthService.AcceptWorkspaceInviteNewAccount with no further validation, so
+// this path needs the same rejection or the bypass reopens here.
+func TestWorkspaceService_CreateInvite_RejectsAngleBracketAddress(t *testing.T) {
+	workspaces, _, users := newTestWorkspaceInviteHarness(t)
+	ctx := context.Background()
+
+	owner, err := users.Create(ctx, "alice", "alice@example.com", "hash", false)
+	if err != nil {
+		t.Fatalf("create owner: %v", err)
+	}
+	workspace, err := workspaces.CreateForOwner(ctx, owner.ID, "Alice's Workspace")
+	if err != nil {
+		t.Fatalf("create workspace: %v", err)
+	}
+
+	if _, err := workspaces.CreateInvite(ctx, owner.ID, workspace.ID, "<bob@example.com>"); !errors.Is(err, ErrInvalidEmail) {
+		t.Fatalf("expected ErrInvalidEmail for a bare angle-bracket address, got %v", err)
+	}
+	if _, err := workspaces.CreateInvite(ctx, owner.ID, workspace.ID, "Evil<bob@example.com>"); !errors.Is(err, ErrInvalidEmail) {
+		t.Fatalf("expected ErrInvalidEmail for a name-addr form, got %v", err)
+	}
+}
+
 // TestAuthService_AcceptWorkspaceInviteExisting_CaseInsensitiveEmailMatch
 // covers #196's third acceptance criterion directly: a Workspace Invite
 // issued for "Damir@x.com" is accepted by a User whose stored Email is

@@ -158,6 +158,17 @@ func normalizeEmail(email string) string {
 // account that can never authenticate over CalDAV
 // (AppPasswordService.Authenticate). Ordinary email addresses never contain
 // either, so this isn't a new restriction in practice.
+//
+// mail.ParseAddress parses the full RFC 5322 address grammar, including the
+// name-addr form ("Evil<a@b.com>", "<a@b.com>", "a@b.com (comment)") — it's
+// an address parser, not a validator of the bare addr-spec this field wants.
+// Requiring the parsed Address to have no Name and its Address to equal the
+// input string rejects those forms while still accepting ordinary,
+// unquoted-local-part addresses (#243). The equality check also rejects a
+// quoted local-part ("alice"@example.com): ParseAddress unquotes it to a
+// different canonical string, so storing the raw quoted form would reopen
+// the same uniqueness bypass under a different disguise — two logins that
+// parse to one mailbox but compare unequal as stored strings.
 func validateEmail(email string) (string, error) {
 	email = normalizeEmail(email)
 	if email == "" {
@@ -166,7 +177,8 @@ func validateEmail(email string) (string, error) {
 	if strings.ContainsAny(email, ":") || strings.ContainsFunc(email, unicode.IsSpace) {
 		return "", ErrInvalidEmail
 	}
-	if _, err := mail.ParseAddress(email); err != nil {
+	addr, err := mail.ParseAddress(email)
+	if err != nil || addr.Name != "" || addr.Address != email {
 		return "", ErrInvalidEmail
 	}
 	return email, nil
