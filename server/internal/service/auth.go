@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/golang-jwt/jwt/v5"
 	"golang.org/x/crypto/bcrypt"
@@ -133,7 +134,7 @@ const maxWorkingHoursMinute = 1439
 // contain spaces: "Jane Smith" is a valid name.
 func validateName(name string) (string, error) {
 	name = strings.TrimSpace(name)
-	if name == "" || len(name) > maxNameLength {
+	if name == "" || utf8.RuneCountInString(name) > maxNameLength {
 		return "", ErrInvalidDisplayName
 	}
 	return name, nil

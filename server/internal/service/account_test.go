@@ -520,6 +520,8 @@ func TestValidateName(t *testing.T) {
 		{name: "internal whitespace is accepted", input: "Jane Smith", want: "Jane Smith"},
 		{name: "a colon is accepted", input: "ali:ce", want: "ali:ce"},
 		{name: "over the length limit is rejected", input: strings.Repeat("a", maxNameLength+1), wantErr: true},
+		{name: "a multi-byte name at the rune limit is accepted", input: strings.Repeat("田", maxNameLength), want: strings.Repeat("田", maxNameLength)},
+		{name: "a multi-byte name over the rune limit is rejected", input: strings.Repeat("田", maxNameLength+1), wantErr: true},
 	}
 
 	for _, tt := range tests {
