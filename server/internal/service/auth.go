@@ -72,7 +72,10 @@ const inviteTokenTTL = 7 * 24 * time.Hour
 var (
 	ErrInvalidCredentials = errors.New("invalid credentials")
 	ErrInvalidSession     = errors.New("invalid session")
-	ErrInvalidPassword    = errors.New("password must not be empty")
+	// ErrInvalidPassword is returned by validatePassword for an empty
+	// password, and — since #251 — for one that is non-empty but entirely
+	// whitespace, which is no harder to guess than empty.
+	ErrInvalidPassword = errors.New("password must not be empty or only whitespace")
 	// ErrPasswordTooShort is returned by validatePassword for a non-empty
 	// password under minPasswordRunes characters (#247).
 	ErrPasswordTooShort = errors.New("password must be at least 8 characters")
@@ -90,8 +93,10 @@ var (
 	// maxEmailLength octets (#248).
 	ErrEmailTooLong = errors.New("email must be at most 254 characters")
 	// ErrInvalidDisplayName is returned when a display name fails validateName —
-	// empty (or all whitespace) or longer than maxNameLength.
-	ErrInvalidDisplayName = errors.New("name must not be empty and must be at most 100 characters")
+	// empty (or all whitespace) or longer than maxNameLength, and — since
+	// #251 — a name with no printable content (e.g. all zero-width spaces)
+	// or one carrying a control character (e.g. NUL).
+	ErrInvalidDisplayName = errors.New("name must contain a visible character, must not contain control characters, and must be at most 100 characters")
 	// ErrEmailTaken mirrors repository.ErrEmailTaken so handlers only import
 	// the service package's sentinels.
 	ErrEmailTaken = repository.ErrEmailTaken
@@ -153,14 +158,50 @@ var validTimeFormats = map[string]bool{
 // bound may hold — 23:59, expressed as minutes since midnight (ADR-0039).
 const maxWorkingHoursMinute = 1439
 
+// isVisibleRune is validateName and validatePassword's shared definition of
+// "actually there" (#251): printable, and not whitespace. Printable alone
+// isn't enough — unicode.IsPrint treats the ASCII space as printable, so a
+// name or password of nothing but spaces would still pass a bare IsPrint
+// check, which is exactly the gap #247's minPasswordRunes floor left open
+// for validatePassword ("        " is eight printable runes) and that a
+// ZWSP-flanked space (U+200B, ' ', U+200B — none of it trimmed, since ZWSP
+// isn't unicode.IsSpace) would have left open for validateName too.
+func isVisibleRune(r rune) bool {
+	return unicode.IsPrint(r) && !unicode.IsSpace(r)
+}
+
 // validateName trims name and checks it against the one set of rules shared
 // by every path that picks or renames one — Register, AuthService.UpdateName,
 // and AcceptWorkspaceInviteNewAccount — so none of them can drift (#125,
 // ADR-0047). Unlike the identifier (see validateEmail), a display name may
 // contain spaces: "Jane Smith" is a valid name.
+//
+// Two further checks guard against degenerate input TrimSpace doesn't catch
+// (#251). strings.TrimSpace only strips unicode.IsSpace runes, and U+200B
+// ZERO WIDTH SPACE (category Cf, "format") isn't one — a name of nothing but
+// ZWSPs (or ZWSPs padding a lone space) would pass an emptiness check on the
+// trimmed string alone and render as a blank name visible to other Workspace
+// members; requiring at least one isVisibleRune closes that gap without a
+// separate name == "" check — an empty string contains none, by definition.
+// Control characters — notably NUL — get their own outright rejection rather
+// than being silently discounted: letting one through here means it reaches
+// SQLite, whose C string handling truncates the name at the NUL with no
+// error and no sign anything was dropped.
 func validateName(name string) (string, error) {
 	name = strings.TrimSpace(name)
-	if name == "" || utf8.RuneCountInString(name) > maxNameLength {
+	if utf8.RuneCountInString(name) > maxNameLength {
+		return "", ErrInvalidDisplayName
+	}
+	sawVisible := false
+	for _, r := range name {
+		if unicode.IsControl(r) {
+			return "", ErrInvalidDisplayName
+		}
+		if isVisibleRune(r) {
+			sawVisible = true
+		}
+	}
+	if !sawVisible {
 		return "", ErrInvalidDisplayName
 	}
 	return name, nil
@@ -242,6 +283,18 @@ func validateEmail(email string) (string, error) {
 // and AcceptWorkspaceInviteNewAccount (#241, #247) — so none of them can
 // drift out of sync with bcrypt.GenerateFromPassword's own maxPasswordBytes
 // limit or with each other's minimum.
+//
+// The floor is counted in runes, not visible content, because spaces are
+// legitimate inside a passphrase — so this deliberately doesn't trim. But a
+// password of nothing but spaces (or NUL bytes, or ZWSPs) is no harder to
+// guess than the "x" this floor was added to reject (#247), so it needs its
+// own check: at least one isVisibleRune, on top of meeting minPasswordRunes
+// (#251). Control characters are rejected outright even alongside real
+// content, matching validateName — bcrypt has no NUL-truncation bug to
+// motivate it here, but a control character set via a direct API call
+// can't be typed back into a browser's password field, locking the account
+// out of the web login the same way a colon in an email locks it out of
+// CalDAV Basic auth (see validateEmail).
 func validatePassword(password string) error {
 	if password == "" {
 		return ErrInvalidPassword
@@ -251,6 +304,12 @@ func validatePassword(password string) error {
 	}
 	if len(password) > maxPasswordBytes {
 		return ErrPasswordTooLong
+	}
+	if strings.ContainsFunc(password, unicode.IsControl) {
+		return ErrInvalidPassword
+	}
+	if !strings.ContainsFunc(password, isVisibleRune) {
+		return ErrInvalidPassword
 	}
 	return nil
 }

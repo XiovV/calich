@@ -64,12 +64,12 @@ var loginErrors = []errorCase{
 var registerErrors = []errorCase{
 	{service.ErrAuthRateLimitExceeded, rateLimited("too many attempts, please try again later")},
 	{service.ErrSignupsDisabled, forbidden("self-registration is disabled on this instance")},
-	{service.ErrInvalidDisplayName, badRequest("name must not be empty and must be at most 100 characters")},
+	{service.ErrInvalidDisplayName, badRequest("name must contain a visible character, must not contain control characters, and must be at most 100 characters")},
 	{service.ErrEmailRequired, badRequest("email is required")},
 	{service.ErrInvalidEmail, badRequest("email must be a valid address and must not contain whitespace or a colon")},
 	{service.ErrEmailTooLong, badRequest("email must be at most 254 characters")},
 	{service.ErrEmailTaken, conflict("email_taken", "email is already taken")},
-	{service.ErrInvalidPassword, badRequest("password must not be empty")},
+	{service.ErrInvalidPassword, badRequest("password must not be empty or only whitespace")},
 	{service.ErrPasswordTooShort, badRequest("password must be at least 8 characters")},
 	{service.ErrPasswordTooLong, badRequest("password must be at most 72 bytes")},
 }
@@ -80,9 +80,9 @@ var previewWorkspaceInviteErrors = []errorCase{
 
 var acceptWorkspaceInviteErrors = []errorCase{
 	{service.ErrWorkspaceInviteInvalid, unauthorized("invite_invalid", "invite is invalid or has expired")},
-	{service.ErrInvalidDisplayName, badRequest("name must not be empty and must be at most 100 characters")},
+	{service.ErrInvalidDisplayName, badRequest("name must contain a visible character, must not contain control characters, and must be at most 100 characters")},
 	{service.ErrEmailTaken, conflict("email_taken", "email is already taken")},
-	{service.ErrInvalidPassword, badRequest("password must not be empty")},
+	{service.ErrInvalidPassword, badRequest("password must not be empty or only whitespace")},
 	{service.ErrPasswordTooShort, badRequest("password must be at least 8 characters")},
 	{service.ErrPasswordTooLong, badRequest("password must be at most 72 bytes")},
 }
@@ -101,7 +101,7 @@ var updateEmailErrors = []errorCase{
 }
 
 var updateNameErrors = []errorCase{
-	{service.ErrInvalidDisplayName, badRequest("name must not be empty and must be at most 100 characters")},
+	{service.ErrInvalidDisplayName, badRequest("name must contain a visible character, must not contain control characters, and must be at most 100 characters")},
 }
 
 var updatePreferencesErrors = []errorCase{
@@ -119,7 +119,7 @@ var refreshErrors = []errorCase{
 // *current* password was wrong, not the username/password pair.
 var changePasswordErrors = []errorCase{
 	{service.ErrInvalidCredentials, unauthorized("invalid_credentials", "current password is incorrect")},
-	{service.ErrInvalidPassword, badRequest("new password must not be empty")},
+	{service.ErrInvalidPassword, badRequest("new password must not be empty or only whitespace")},
 	{service.ErrPasswordTooShort, badRequest("new password must be at least 8 characters")},
 	{service.ErrPasswordTooLong, badRequest("new password must be at most 72 bytes")},
 }

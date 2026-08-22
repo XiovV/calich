@@ -522,6 +522,25 @@ func TestValidateName(t *testing.T) {
 		{name: "over the length limit is rejected", input: strings.Repeat("a", maxNameLength+1), wantErr: true},
 		{name: "a multi-byte name at the rune limit is accepted", input: strings.Repeat("田", maxNameLength), want: strings.Repeat("田", maxNameLength)},
 		{name: "a multi-byte name over the rune limit is rejected", input: strings.Repeat("田", maxNameLength+1), wantErr: true},
+		// #251: TrimSpace only strips unicode.IsSpace runes, and U+200B ZERO
+		// WIDTH SPACE isn't one, so a name of nothing but ZWSPs is non-empty
+		// by the trim-then-check-emptiness logic alone and would render blank.
+		{name: "zero-width spaces only is rejected", input: "​​", wantErr: true},
+		// A lone ASCII space flanked by ZWSPs survives trimming untouched
+		// (neither ZWSP is IsSpace), and unicode.IsPrint(' ') is true — so a
+		// bare "at least one printable rune" check would accept it despite
+		// there being no visible content once the flanking ZWSPs are
+		// discounted. isVisibleRune's added "not IsSpace" requirement closes
+		// this the same way it closes the all-ZWSP case above.
+		{name: "a zero-width-space-flanked space is rejected", input: "​ ​", wantErr: true},
+		// A NUL byte must be rejected outright rather than silently let
+		// through: SQLite's C string handling truncates a stored name at the
+		// first NUL, with no error and no sign anything was dropped.
+		{name: "a null byte is rejected", input: "null\x00byte", wantErr: true},
+		// #251 rejects control characters outright, not only when they're
+		// the name's sole content — an embedded tab (e.g. from a pasted
+		// spreadsheet cell) must be rejected alongside otherwise-ordinary text.
+		{name: "a control character mixed with real content is rejected", input: "Jane\tSmith", wantErr: true},
 	}
 
 	for _, tt := range tests {

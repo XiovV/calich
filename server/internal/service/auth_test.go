@@ -478,6 +478,67 @@ func TestRegister_RejectsPasswordOverMaxBytes_MultibyteRunes(t *testing.T) {
 	}
 }
 
+// TestRegister_RejectsWhitespaceOnlyPassword covers #251: eight spaces meets
+// minPasswordRunes, so before this check existed it passed #247's floor —
+// as guessable online over CalDAV Basic auth as the "x" that floor was
+// added to reject.
+func TestRegister_RejectsWhitespaceOnlyPassword(t *testing.T) {
+	svc := newTestAuthServiceWithSignups(t, "", "", true)
+	ctx := context.Background()
+
+	if _, err := svc.Register(ctx, "alice", "alice@example.com", "        "); !errors.Is(err, ErrInvalidPassword) {
+		t.Fatalf("expected ErrInvalidPassword, got %v", err)
+	}
+}
+
+// TestValidatePassword_RejectsNulOnlyPassword covers #251: unicode.IsSpace
+// doesn't match NUL, so a naive "reject if every rune is whitespace" check
+// would still accept a password of nothing but NUL bytes — exactly the kind
+// of fixed, guessable-online secret the check exists to reject.
+// isVisibleRune closes this the same way it closes the plain-spaces case,
+// since IsPrint(NUL) is false too.
+func TestValidatePassword_RejectsNulOnlyPassword(t *testing.T) {
+	if err := validatePassword(strings.Repeat("\x00", minPasswordRunes)); !errors.Is(err, ErrInvalidPassword) {
+		t.Fatalf("expected ErrInvalidPassword, got %v", err)
+	}
+}
+
+// TestValidatePassword_RejectsZeroWidthSpaceOnlyPassword mirrors
+// TestValidatePassword_RejectsNulOnlyPassword for U+200B ZERO WIDTH SPACE
+// (#251): not IsSpace either, and not IsPrint, so isVisibleRune catches it
+// the same way.
+func TestValidatePassword_RejectsZeroWidthSpaceOnlyPassword(t *testing.T) {
+	if err := validatePassword(strings.Repeat("​", minPasswordRunes)); !errors.Is(err, ErrInvalidPassword) {
+		t.Fatalf("expected ErrInvalidPassword, got %v", err)
+	}
+}
+
+// TestValidatePassword_RejectsControlCharacterMixedWithRealContent covers
+// #251: a password of mostly NUL bytes plus a single visible rune has an
+// isVisibleRune, so an outright control-character check is needed on top of
+// it — the same as validateName's. Without it, a password like this could be
+// set via a direct API call but never re-typed into a browser's password
+// field (which can't produce a NUL byte), locking the account out of the
+// web login the way a colon in an email locks one out of CalDAV Basic auth.
+func TestValidatePassword_RejectsControlCharacterMixedWithRealContent(t *testing.T) {
+	if err := validatePassword("\x00\x00\x00\x00\x00\x00\x00a"); !errors.Is(err, ErrInvalidPassword) {
+		t.Fatalf("expected ErrInvalidPassword, got %v", err)
+	}
+}
+
+// TestValidatePassword_AcceptsWhitespaceWithRealContent covers two things
+// #251's all-whitespace check must not overcorrect on: a passphrase that
+// legitimately contains spaces (validatePassword deliberately doesn't
+// trim), and a password padded with whitespace around real content — both
+// contain an isVisibleRune, so both pass same as before this fix.
+func TestValidatePassword_AcceptsWhitespaceWithRealContent(t *testing.T) {
+	for _, password := range []string{"correct horse battery", "  abcd  "} {
+		if err := validatePassword(password); err != nil {
+			t.Fatalf("expected %q to be accepted, got %v", password, err)
+		}
+	}
+}
+
 // TestRegister_RejectsEmailOverMaxLength covers #248: before maxEmailLength
 // existed, validateEmail bounded nothing but well-formedness, so an address
 // thousands of characters long was accepted and stored as the account's
@@ -1327,6 +1388,41 @@ func TestUpdateName_AcceptsSpaces(t *testing.T) {
 
 	if _, err := svc.UpdateName(ctx, user.ID, "ad:min smith"); err != nil {
 		t.Fatalf("expected a name with a colon and a space to be accepted, got %v", err)
+	}
+}
+
+// TestUpdateName_RejectsZeroWidthSpaceOnlyName covers #251: strings.TrimSpace
+// only strips unicode.IsSpace runes, and U+200B ZERO WIDTH SPACE isn't one —
+// so before this check existed, a name of nothing but ZWSPs was non-empty by
+// validateName's emptiness check and rendered as a blank name visible to
+// other Workspace members.
+func TestUpdateName_RejectsZeroWidthSpaceOnlyName(t *testing.T) {
+	svc := newTestAuthService(t, "admin", "admin")
+	ctx := context.Background()
+	user, _, err := svc.Bootstrap(ctx)
+	if err != nil {
+		t.Fatalf("bootstrap: %v", err)
+	}
+
+	if _, err := svc.UpdateName(ctx, user.ID, "​​"); !errors.Is(err, ErrInvalidDisplayName) {
+		t.Fatalf("expected ErrInvalidDisplayName, got %v", err)
+	}
+}
+
+// TestUpdateName_RejectsNullByte covers #251: without this check, a NUL
+// byte in the name reached SQLite, whose C string handling silently
+// truncated the stored name at the NUL — a 200 response with no sign
+// anything was dropped.
+func TestUpdateName_RejectsNullByte(t *testing.T) {
+	svc := newTestAuthService(t, "admin", "admin")
+	ctx := context.Background()
+	user, _, err := svc.Bootstrap(ctx)
+	if err != nil {
+		t.Fatalf("bootstrap: %v", err)
+	}
+
+	if _, err := svc.UpdateName(ctx, user.ID, "null\x00byte"); !errors.Is(err, ErrInvalidDisplayName) {
+		t.Fatalf("expected ErrInvalidDisplayName, got %v", err)
 	}
 }
 
