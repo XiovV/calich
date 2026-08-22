@@ -67,7 +67,7 @@ func (s *accountHandlerTestServer) register(t *testing.T, username string) (acce
 	t.Helper()
 	ctx := context.Background()
 
-	body, err := json.Marshal(registerRequest{Name: username, Email: username + "@example.com", Password: "hunter2"})
+	body, err := json.Marshal(registerRequest{Name: username, Email: username + "@example.com", Password: "hunter22"})
 	if err != nil {
 		t.Fatalf("marshal register request: %v", err)
 	}
@@ -298,7 +298,7 @@ func TestAccountDelete_DispositionDelete_RemovesAccount(t *testing.T) {
 		t.Fatalf("expected 204, got %d", resp.StatusCode)
 	}
 
-	loginResp := login(t, s.srv, "alice", "hunter2")
+	loginResp := login(t, s.srv, "alice", "hunter22")
 	defer loginResp.Body.Close()
 	if loginResp.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("expected a deleted account to be refused login, got %d", loginResp.StatusCode)

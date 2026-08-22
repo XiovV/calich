@@ -122,7 +122,7 @@ func TestBootstrap_CreatesWorkspaceOwnedByTheBootstrappedUser(t *testing.T) {
 }
 
 func TestBootstrap_UsesEnvCredentialsWhenBothSet(t *testing.T) {
-	svc := newTestAuthService(t, "alice", "hunter2")
+	svc := newTestAuthService(t, "alice", "hunter22")
 	ctx := context.Background()
 
 	user, created, err := svc.Bootstrap(ctx)
@@ -139,7 +139,7 @@ func TestBootstrap_UsesEnvCredentialsWhenBothSet(t *testing.T) {
 		t.Fatalf("expected env-configured bootstrap user to skip forced password change")
 	}
 
-	result, err := svc.Login(ctx, "alice@example.com", "hunter2")
+	result, err := svc.Login(ctx, "alice@example.com", "hunter22")
 	if err != nil {
 		t.Fatalf("expected env credentials to work, got: %v", err)
 	}
@@ -155,7 +155,7 @@ func TestBootstrap_FoldsInitialEmailCase(t *testing.T) {
 	cfg := apptest.Config(t)
 	cfg.InitialName = "Admin"
 	cfg.InitialEmail = "Admin@Example.com"
-	cfg.InitialPassword = "hunter2"
+	cfg.InitialPassword = "hunter22"
 	svc := newTestGraphWithConfig(t, cfg).Auth
 
 	ctx := context.Background()
@@ -167,7 +167,7 @@ func TestBootstrap_FoldsInitialEmailCase(t *testing.T) {
 		t.Fatalf("expected bootstrapped email to be folded to lowercase, got %q", user.Email)
 	}
 
-	if _, err := svc.Login(ctx, "admin@example.com", "hunter2"); err != nil {
+	if _, err := svc.Login(ctx, "admin@example.com", "hunter22"); err != nil {
 		t.Fatalf("expected login with the folded email to work, got: %v", err)
 	}
 }
@@ -225,7 +225,7 @@ func TestRegister_ConcurrentFirstRegistrations_OnlyOneSucceeds(t *testing.T) {
 		wg.Add(1)
 		go func(i int, username string) {
 			defer wg.Done()
-			_, err := svc.Register(ctx, username, username+"@example.com", "hunter2")
+			_, err := svc.Register(ctx, username, username+"@example.com", "hunter22")
 			results[i] = err
 		}(i, username)
 	}
@@ -260,7 +260,7 @@ func TestRegister_FirstAccountSucceedsEvenWithSignupsDisabled(t *testing.T) {
 	svc := newTestAuthServiceWithSignups(t, "", "", false)
 	ctx := context.Background()
 
-	result, err := svc.Register(ctx, "alice", "alice@example.com", "hunter2")
+	result, err := svc.Register(ctx, "alice", "alice@example.com", "hunter22")
 	if err != nil {
 		t.Fatalf("register: %v", err)
 	}
@@ -301,11 +301,11 @@ func TestRegister_SignupsDisabled_BlocksASecondRegistration(t *testing.T) {
 	svc := newTestAuthServiceWithSignups(t, "", "", false)
 	ctx := context.Background()
 
-	if _, err := svc.Register(ctx, "alice", "alice@example.com", "hunter2"); err != nil {
+	if _, err := svc.Register(ctx, "alice", "alice@example.com", "hunter22"); err != nil {
 		t.Fatalf("register alice: %v", err)
 	}
 
-	if _, err := svc.Register(ctx, "bob", "bob@example.com", "hunter2"); !errors.Is(err, ErrSignupsDisabled) {
+	if _, err := svc.Register(ctx, "bob", "bob@example.com", "hunter22"); !errors.Is(err, ErrSignupsDisabled) {
 		t.Fatalf("expected ErrSignupsDisabled, got %v", err)
 	}
 }
@@ -318,10 +318,10 @@ func TestRegister_SignupsEnabled_AlwaysCreatesAFreshWorkspace(t *testing.T) {
 	svc := newTestAuthServiceWithSignups(t, "", "", true)
 	ctx := context.Background()
 
-	if _, err := svc.Register(ctx, "alice", "alice@example.com", "hunter2"); err != nil {
+	if _, err := svc.Register(ctx, "alice", "alice@example.com", "hunter22"); err != nil {
 		t.Fatalf("register alice: %v", err)
 	}
-	if _, err := svc.Register(ctx, "bob", "bob@example.com", "hunter2"); err != nil {
+	if _, err := svc.Register(ctx, "bob", "bob@example.com", "hunter22"); err != nil {
 		t.Fatalf("register bob: %v", err)
 	}
 
@@ -360,7 +360,7 @@ func TestRegister_SeedsDefaultCalendars(t *testing.T) {
 	svc := newTestAuthServiceWithSignups(t, "", "", true)
 	ctx := context.Background()
 
-	if _, err := svc.Register(ctx, "alice", "alice@example.com", "hunter2"); err != nil {
+	if _, err := svc.Register(ctx, "alice", "alice@example.com", "hunter22"); err != nil {
 		t.Fatalf("register alice: %v", err)
 	}
 
@@ -393,7 +393,7 @@ func TestRegister_RejectsEmptyEmail(t *testing.T) {
 	svc := newTestAuthServiceWithSignups(t, "", "", true)
 	ctx := context.Background()
 
-	if _, err := svc.Register(ctx, "alice", "", "hunter2"); !errors.Is(err, ErrEmailRequired) {
+	if _, err := svc.Register(ctx, "alice", "", "hunter22"); !errors.Is(err, ErrEmailRequired) {
 		t.Fatalf("expected ErrEmailRequired, got %v", err)
 	}
 }
@@ -402,7 +402,7 @@ func TestRegister_RejectsInvalidEmail(t *testing.T) {
 	svc := newTestAuthServiceWithSignups(t, "", "", true)
 	ctx := context.Background()
 
-	if _, err := svc.Register(ctx, "alice", "not-an-email", "hunter2"); !errors.Is(err, ErrInvalidEmail) {
+	if _, err := svc.Register(ctx, "alice", "not-an-email", "hunter22"); !errors.Is(err, ErrInvalidEmail) {
 		t.Fatalf("expected ErrInvalidEmail, got %v", err)
 	}
 }
@@ -424,6 +424,29 @@ func TestRegister_RejectsEmptyPassword(t *testing.T) {
 
 	if _, err := svc.Register(ctx, "alice", "alice@example.com", ""); !errors.Is(err, ErrInvalidPassword) {
 		t.Fatalf("expected ErrInvalidPassword, got %v", err)
+	}
+}
+
+// TestValidatePassword_AcceptsExactlyMinRunes pins the boundary
+// validatePassword draws at minPasswordRunes (#247): a password of exactly
+// that many characters must be accepted, so an off-by-one on < vs <= would
+// be a regression none of the "under the floor" tests alone would catch.
+func TestValidatePassword_AcceptsExactlyMinRunes(t *testing.T) {
+	if err := validatePassword(strings.Repeat("a", minPasswordRunes)); err != nil {
+		t.Fatalf("expected a password of exactly %d characters to be accepted, got %v", minPasswordRunes, err)
+	}
+}
+
+// TestRegister_RejectsPasswordUnderMinLength covers #247: before this floor
+// existed, "x" was a valid password on every one of the three paths that
+// share validatePassword.
+func TestRegister_RejectsPasswordUnderMinLength(t *testing.T) {
+	svc := newTestAuthServiceWithSignups(t, "", "", true)
+	ctx := context.Background()
+
+	shortPassword := strings.Repeat("a", minPasswordRunes-1)
+	if _, err := svc.Register(ctx, "alice", "alice@example.com", shortPassword); !errors.Is(err, ErrPasswordTooShort) {
+		t.Fatalf("expected ErrPasswordTooShort, got %v", err)
 	}
 }
 
@@ -459,10 +482,10 @@ func TestRegister_DuplicateEmail_ReturnsErrEmailTaken(t *testing.T) {
 	svc := newTestAuthServiceWithSignups(t, "", "", true)
 	ctx := context.Background()
 
-	if _, err := svc.Register(ctx, "alice", "alice@example.com", "hunter2"); err != nil {
+	if _, err := svc.Register(ctx, "alice", "alice@example.com", "hunter22"); err != nil {
 		t.Fatalf("register alice: %v", err)
 	}
-	if _, err := svc.Register(ctx, "alice-two", "alice@example.com", "hunter2"); !errors.Is(err, ErrEmailTaken) {
+	if _, err := svc.Register(ctx, "alice-two", "alice@example.com", "hunter22"); !errors.Is(err, ErrEmailTaken) {
 		t.Fatalf("expected ErrEmailTaken, got %v", err)
 	}
 }
@@ -474,10 +497,10 @@ func TestRegister_DuplicateNameIsAllowed(t *testing.T) {
 	svc := newTestAuthServiceWithSignups(t, "", "", true)
 	ctx := context.Background()
 
-	if _, err := svc.Register(ctx, "alice", "alice@example.com", "hunter2"); err != nil {
+	if _, err := svc.Register(ctx, "alice", "alice@example.com", "hunter22"); err != nil {
 		t.Fatalf("register first alice: %v", err)
 	}
-	if _, err := svc.Register(ctx, "alice", "alice2@example.com", "hunter2"); err != nil {
+	if _, err := svc.Register(ctx, "alice", "alice2@example.com", "hunter22"); err != nil {
 		t.Fatalf("expected two accounts to share a name, got: %v", err)
 	}
 }
@@ -489,10 +512,10 @@ func TestRegister_DuplicateEmail_DifferentCase_ReturnsErrEmailTaken(t *testing.T
 	svc := newTestAuthServiceWithSignups(t, "", "", true)
 	ctx := context.Background()
 
-	if _, err := svc.Register(ctx, "alice", "Alice@Example.com", "hunter2"); err != nil {
+	if _, err := svc.Register(ctx, "alice", "Alice@Example.com", "hunter22"); err != nil {
 		t.Fatalf("register alice: %v", err)
 	}
-	if _, err := svc.Register(ctx, "alice-two", "alice@example.com", "hunter2"); !errors.Is(err, ErrEmailTaken) {
+	if _, err := svc.Register(ctx, "alice-two", "alice@example.com", "hunter22"); !errors.Is(err, ErrEmailTaken) {
 		t.Fatalf("expected ErrEmailTaken, got %v", err)
 	}
 }
@@ -505,7 +528,7 @@ func TestRegister_FoldsEmailCase_LoginWithDifferentCaseAuthenticatesSameUser(t *
 	svc := newTestAuthServiceWithSignups(t, "", "", true)
 	ctx := context.Background()
 
-	registered, err := svc.Register(ctx, "damir", "Damir@x.com", "hunter2")
+	registered, err := svc.Register(ctx, "damir", "Damir@x.com", "hunter22")
 	if err != nil {
 		t.Fatalf("register: %v", err)
 	}
@@ -522,7 +545,7 @@ func TestRegister_FoldsEmailCase_LoginWithDifferentCaseAuthenticatesSameUser(t *
 		t.Fatalf("expected stored email to be folded to lowercase, got %q", stored.Email)
 	}
 
-	loggedIn, err := svc.Login(ctx, "damir@x.com", "hunter2")
+	loggedIn, err := svc.Login(ctx, "damir@x.com", "hunter22")
 	if err != nil {
 		t.Fatalf("login: %v", err)
 	}

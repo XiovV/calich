@@ -1400,6 +1400,26 @@ func TestChangePassword_SkipsCurrentPasswordCheckWhileMustChangePassword(t *test
 	}
 }
 
+// TestChangePassword_RejectsNewPasswordUnderMinLength covers #247: a new
+// password under the 8-character floor must come back as a 400.
+func TestChangePassword_RejectsNewPasswordUnderMinLength(t *testing.T) {
+	srv := newAuthTestServer(t)
+
+	loginResp := login(t, srv, "admin@example.com", "admin")
+	defer loginResp.Body.Close()
+	var loggedIn loginResponse
+	if err := json.NewDecoder(loginResp.Body).Decode(&loggedIn); err != nil {
+		t.Fatalf("decode login response: %v", err)
+	}
+
+	resp := changePassword(t, srv, loggedIn.AccessToken, "admin", "short1")
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", resp.StatusCode)
+	}
+}
+
 // TestChangePassword_RejectsNewPasswordOverMaxBytes covers #241: a new
 // password over bcrypt's 72-byte limit must come back as a 400, not the
 // opaque 500 bcrypt.ErrPasswordTooLong used to produce once wrapped as a

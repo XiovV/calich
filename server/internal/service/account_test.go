@@ -54,7 +54,7 @@ func (h *accountTestHarness) register(t *testing.T, username string) (repository
 	t.Helper()
 	ctx := context.Background()
 
-	if _, err := h.auth.Register(ctx, username, username+"@example.com", "hunter2"); err != nil {
+	if _, err := h.auth.Register(ctx, username, username+"@example.com", "hunter22"); err != nil {
 		t.Fatalf("register %s: %v", username, err)
 	}
 

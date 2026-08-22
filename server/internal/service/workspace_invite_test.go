@@ -124,11 +124,11 @@ func TestWorkspaceService_ReissueInvite_InvalidatesPriorToken(t *testing.T) {
 		t.Fatalf("expected reissue to mint a different token")
 	}
 
-	if _, err := auth.AcceptWorkspaceInviteNewAccount(ctx, first.Token, "bob", "hunter2"); !errors.Is(err, ErrWorkspaceInviteInvalid) {
+	if _, err := auth.AcceptWorkspaceInviteNewAccount(ctx, first.Token, "bob", "hunter22"); !errors.Is(err, ErrWorkspaceInviteInvalid) {
 		t.Fatalf("expected the prior token to be invalid, got %v", err)
 	}
 
-	if _, err := auth.AcceptWorkspaceInviteNewAccount(ctx, second.Token, "bob", "hunter2"); err != nil {
+	if _, err := auth.AcceptWorkspaceInviteNewAccount(ctx, second.Token, "bob", "hunter22"); err != nil {
 		t.Fatalf("expected the reissued token to work, got %v", err)
 	}
 }
@@ -264,7 +264,7 @@ func TestAuthService_AcceptWorkspaceInviteNewAccount_CreatesUserAndMembership(t 
 		t.Fatalf("create invite: %v", err)
 	}
 
-	result, err := auth.AcceptWorkspaceInviteNewAccount(ctx, invite.Token, "bob", "hunter2")
+	result, err := auth.AcceptWorkspaceInviteNewAccount(ctx, invite.Token, "bob", "hunter22")
 	if err != nil {
 		t.Fatalf("accept invite: %v", err)
 	}
@@ -289,7 +289,7 @@ func TestAuthService_AcceptWorkspaceInviteNewAccount_CreatesUserAndMembership(t 
 	}
 
 	// The invite is single-use: accepting it again must fail.
-	if _, err := auth.AcceptWorkspaceInviteNewAccount(ctx, invite.Token, "bob2", "hunter2"); !errors.Is(err, ErrWorkspaceInviteInvalid) {
+	if _, err := auth.AcceptWorkspaceInviteNewAccount(ctx, invite.Token, "bob2", "hunter22"); !errors.Is(err, ErrWorkspaceInviteInvalid) {
 		t.Fatalf("expected a consumed invite to be rejected, got %v", err)
 	}
 
@@ -721,7 +721,7 @@ func TestAuthService_AcceptWorkspaceInviteNewAccount_ConvertsEmailAttendees(t *t
 	if err != nil {
 		t.Fatalf("create invite: %v", err)
 	}
-	if _, err := auth.AcceptWorkspaceInviteNewAccount(ctx, invite.Token, "bob", "hunter2"); err != nil {
+	if _, err := auth.AcceptWorkspaceInviteNewAccount(ctx, invite.Token, "bob", "hunter22"); err != nil {
 		t.Fatalf("accept invite: %v", err)
 	}
 

@@ -70,7 +70,7 @@ func decodeErrorCode(t *testing.T, resp *http.Response) string {
 func TestLogin_RateLimit_AttemptsBelowCeilingAreOrdinaryFailures(t *testing.T) {
 	srv := newRateLimitedAuthTestServer(t, 3, 100, 100, true)
 
-	seedUser(t, srv, "alice@example.com", "hunter2")
+	seedUser(t, srv, "alice@example.com", "hunter22")
 
 	for i := 0; i < 2; i++ {
 		resp := login(t, srv, "alice@example.com", "wrong-password")
@@ -87,7 +87,7 @@ func TestLogin_RateLimit_AttemptsBelowCeilingAreOrdinaryFailures(t *testing.T) {
 func TestLogin_RateLimit_RefusesOnceEmailCeilingReached(t *testing.T) {
 	srv := newRateLimitedAuthTestServer(t, 2, 100, 100, true)
 
-	seedUser(t, srv, "alice@example.com", "hunter2")
+	seedUser(t, srv, "alice@example.com", "hunter22")
 
 	for i := 0; i < 2; i++ {
 		resp := login(t, srv, "alice@example.com", "wrong-password")
@@ -114,7 +114,7 @@ func TestLogin_RateLimit_RefusesOnceEmailCeilingReached(t *testing.T) {
 func TestLogin_RateLimit_LooksIdenticalForUnknownEmail(t *testing.T) {
 	srv := newRateLimitedAuthTestServer(t, 2, 100, 100, true)
 
-	seedUser(t, srv, "alice@example.com", "hunter2")
+	seedUser(t, srv, "alice@example.com", "hunter22")
 
 	realResp, unknownResp := tripEmailCeiling(t, srv, "alice@example.com"), tripEmailCeiling(t, srv, "nobody@example.com")
 	defer realResp.resp.Body.Close()
@@ -151,7 +151,7 @@ func tripEmailCeiling(t *testing.T, srv *httptest.Server, email string) rateLimi
 func TestLogin_RateLimit_SuccessResetsEmailCeiling(t *testing.T) {
 	srv := newRateLimitedAuthTestServer(t, 2, 100, 100, true)
 
-	seedUser(t, srv, "alice@example.com", "hunter2")
+	seedUser(t, srv, "alice@example.com", "hunter22")
 
 	// One failed attempt, then a successful one.
 	resp := login(t, srv, "alice@example.com", "wrong-password")
@@ -160,7 +160,7 @@ func TestLogin_RateLimit_SuccessResetsEmailCeiling(t *testing.T) {
 		t.Fatalf("expected 401 for the wrong password, got %d", resp.StatusCode)
 	}
 
-	resp = login(t, srv, "alice@example.com", "hunter2")
+	resp = login(t, srv, "alice@example.com", "hunter22")
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("expected 200 for the correct password, got %d", resp.StatusCode)
@@ -202,7 +202,7 @@ func TestLogin_RateLimit_IPCeilingAppliesAcrossDifferentEmails(t *testing.T) {
 func TestRegister_RateLimit_AttemptsBelowCeilingSucceed(t *testing.T) {
 	srv := newRateLimitedAuthTestServer(t, 100, 100, 2, true)
 
-	resp := register(t, srv, "Alice", "alice@example.com", "hunter2")
+	resp := register(t, srv, "Alice", "alice@example.com", "hunter22")
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("expected 200, got %d", resp.StatusCode)
@@ -212,7 +212,7 @@ func TestRegister_RateLimit_AttemptsBelowCeilingSucceed(t *testing.T) {
 func TestRegister_RateLimit_RefusesOnceIPCeilingReached(t *testing.T) {
 	srv := newRateLimitedAuthTestServer(t, 100, 100, 2, false)
 
-	if resp := register(t, srv, "Alice", "alice@example.com", "hunter2"); resp.StatusCode != http.StatusOK {
+	if resp := register(t, srv, "Alice", "alice@example.com", "hunter22"); resp.StatusCode != http.StatusOK {
 		resp.Body.Close()
 		t.Fatalf("expected the 1st registration (creating the instance's first account) to succeed, got %d", resp.StatusCode)
 	} else {
@@ -221,7 +221,7 @@ func TestRegister_RateLimit_RefusesOnceIPCeilingReached(t *testing.T) {
 	// Signups are disabled and there's already an account, so this 2nd call
 	// is refused — but it still counts against the ceiling (RecordRegisterAttempt
 	// runs regardless of outcome).
-	if resp := register(t, srv, "Bob", "bob@example.com", "hunter2"); resp.StatusCode != http.StatusForbidden {
+	if resp := register(t, srv, "Bob", "bob@example.com", "hunter22"); resp.StatusCode != http.StatusForbidden {
 		resp.Body.Close()
 		t.Fatalf("expected the 2nd registration to be refused as self-registration disabled, got %d", resp.StatusCode)
 	} else {
@@ -229,7 +229,7 @@ func TestRegister_RateLimit_RefusesOnceIPCeilingReached(t *testing.T) {
 	}
 
 	// The 3rd call is refused for hitting the ceiling instead.
-	resp := register(t, srv, "Carol", "carol@example.com", "hunter2")
+	resp := register(t, srv, "Carol", "carol@example.com", "hunter22")
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusTooManyRequests {
 		t.Fatalf("expected 429 once the ceiling is reached, got %d", resp.StatusCode)
@@ -252,21 +252,21 @@ func TestRegister_RateLimit_AppliesIndependentlyOfEnableSignups(t *testing.T) {
 	// allowed for the first account, ADR-0044), so every subsequent call
 	// below is refused by ENABLE_SIGNUPS being false rather than by minting
 	// a fresh first account each time.
-	seedResp := register(t, srv, "Admin", "admin@example.com", "hunter2")
+	seedResp := register(t, srv, "Admin", "admin@example.com", "hunter22")
 	seedResp.Body.Close()
 	if seedResp.StatusCode != http.StatusOK {
 		t.Fatalf("expected the seed registration to succeed, got %d", seedResp.StatusCode)
 	}
 
 	for i, email := range []string{"a@example.com", "b@example.com"} {
-		resp := register(t, srv, "Someone", email, "hunter2")
+		resp := register(t, srv, "Someone", email, "hunter22")
 		resp.Body.Close()
 		if resp.StatusCode != http.StatusForbidden {
 			t.Fatalf("attempt %d: expected 403 self-registration-disabled, got %d", i, resp.StatusCode)
 		}
 	}
 
-	resp := register(t, srv, "Someone", "c@example.com", "hunter2")
+	resp := register(t, srv, "Someone", "c@example.com", "hunter22")
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusTooManyRequests {
 		t.Fatalf("expected the rate limiter to still bite once its own ceiling is reached, even though ENABLE_SIGNUPS was already refusing every call, got %d", resp.StatusCode)

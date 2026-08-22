@@ -70,7 +70,7 @@ func (s *groupHandlerTestServer) register(t *testing.T, username string) (access
 	t.Helper()
 	ctx := context.Background()
 
-	body, err := json.Marshal(registerRequest{Name: username, Email: username + "@example.com", Password: "hunter2"})
+	body, err := json.Marshal(registerRequest{Name: username, Email: username + "@example.com", Password: "hunter22"})
 	if err != nil {
 		t.Fatalf("marshal register request: %v", err)
 	}

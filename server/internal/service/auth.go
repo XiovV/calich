@@ -43,6 +43,18 @@ const maxNameLength = 100
 // accented letters) can hit this well under 72 visible characters.
 const maxPasswordBytes = 72
 
+// minPasswordRunes is the floor validatePassword enforces (#247): before
+// this, the only check on any of the three password-setting paths —
+// Register, AcceptWorkspaceInviteNewAccount, ChangePassword — was
+// non-emptiness, so "x" was a valid password. A self-hoster picking their
+// own password is one threat model, but a Workspace Invite lets other
+// people pick theirs on the same instance, and CalDAV Basic auth exposes it
+// to online guessing. Counted in runes like maxNameLength/validateName,
+// not bytes like maxPasswordBytes: that limit is bcrypt's own byte-accurate
+// hashing constraint, but a floor meant to resist guessing should track
+// visible characters instead.
+const minPasswordRunes = 8
+
 // inviteTokenTTL is how long a Workspace Invite token is valid for
 // (ADR-0044) — shorter than the 30-day refresh token (ADR-0009) because this
 // token doesn't extend a Session, it creates one: anyone holding a live link
@@ -53,6 +65,9 @@ var (
 	ErrInvalidCredentials = errors.New("invalid credentials")
 	ErrInvalidSession     = errors.New("invalid session")
 	ErrInvalidPassword    = errors.New("password must not be empty")
+	// ErrPasswordTooShort is returned by validatePassword for a non-empty
+	// password under minPasswordRunes characters (#247).
+	ErrPasswordTooShort = errors.New("password must be at least 8 characters")
 	// ErrPasswordTooLong is returned by validatePassword for input over
 	// maxPasswordBytes bytes — bcrypt.GenerateFromPassword's own limit,
 	// checked explicitly (#241) so a too-long password comes back as a
@@ -187,11 +202,15 @@ func validateEmail(email string) (string, error) {
 
 // validatePassword checks a plaintext password against the one set of rules
 // shared by every path that hashes one with bcrypt — Register, ChangePassword,
-// and AcceptWorkspaceInviteNewAccount (#241) — so none of them can drift out
-// of sync with bcrypt.GenerateFromPassword's own maxPasswordBytes limit.
+// and AcceptWorkspaceInviteNewAccount (#241, #247) — so none of them can
+// drift out of sync with bcrypt.GenerateFromPassword's own maxPasswordBytes
+// limit or with each other's minimum.
 func validatePassword(password string) error {
 	if password == "" {
 		return ErrInvalidPassword
+	}
+	if utf8.RuneCountInString(password) < minPasswordRunes {
+		return ErrPasswordTooShort
 	}
 	if len(password) > maxPasswordBytes {
 		return ErrPasswordTooLong

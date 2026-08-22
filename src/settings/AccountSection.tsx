@@ -237,11 +237,14 @@ export function AccountSection() {
             disabled={passwordAction.isSubmitting}
             className="w-72"
           />
-          {/* #241: the 72-byte cap is bcrypt's own limit, hit well before 72
-            visible characters for anyone not typing plain ASCII (e.g. emoji,
-            accented letters) — stated up front instead of only surfacing as
-            a rejection after Update password is pressed. */}
-          <p className="-mt-2 text-label-sm text-ink-muted">Up to 72 bytes long.</p>
+          {/* #247: the 8-character floor. #241: bcrypt's own 72-byte cap,
+            hit well before 72 visible characters for anyone not typing
+            plain ASCII (e.g. emoji, accented letters) — stated up front
+            instead of only surfacing as a rejection after Update password
+            is pressed. */}
+          <p className="-mt-2 text-label-sm text-ink-muted">
+            At least 8 characters, up to 72 bytes.
+          </p>
           <Input
             label="Confirm new password"
             type="password"
