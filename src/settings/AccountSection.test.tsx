@@ -96,6 +96,19 @@ describe("AccountSection — Name/Email normalization (#245)", () => {
   });
 });
 
+describe("AccountSection — hidden username field for password managers (#246)", () => {
+  it("carries the account email on a hidden autocomplete=username input", () => {
+    render(<AccountSection />);
+
+    const usernameField = document.querySelector('input[autocomplete="username"]');
+    expect(usernameField).not.toBeNull();
+    expect(usernameField).toHaveValue(user.email);
+    expect(usernameField).toHaveAttribute("name", "username");
+    expect(usernameField).toHaveClass("sr-only");
+    expect(usernameField).not.toHaveAttribute("hidden");
+  });
+});
+
 describe("AccountSection — change password (#234)", () => {
   it("disables Update password until current, new and matching-confirm are all filled", async () => {
     render(<AccountSection />);

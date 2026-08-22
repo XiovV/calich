@@ -199,6 +199,20 @@ export function AccountSection() {
         </p>
 
         <form onSubmit={handleSubmitPassword} className="mt-3 flex flex-col gap-3">
+          {/* #246: password managers key a saved credential off a username
+            field — without one here they have no way to tell which stored
+            entry this change applies to, so the update after Save never
+            reaches it. `sr-only` keeps it out of the visual layout without
+            display:none/visibility:hidden, which is how password-manager
+            heuristics decide a field isn't fillable and skip it. */}
+          <input
+            type="text"
+            name="username"
+            autoComplete="username"
+            value={user?.email ?? ""}
+            readOnly
+            className="sr-only"
+          />
           <Input
             label="Current password"
             type="password"
