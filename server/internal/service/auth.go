@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"net/mail"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -166,6 +167,20 @@ func normalizeEmail(email string) string {
 	return strings.ToLower(strings.TrimSpace(email))
 }
 
+// emailPattern is the WHATWG "valid email address" grammar that browsers use
+// for native type="email" validation
+// (https://html.spec.whatwg.org/multipage/input.html#valid-e-mail-address).
+// validateEmail must accept exactly what the login form's native validation
+// accepts (#243) — mail.ParseAddress alone accepts strictly more than that
+// grammar, and the gap keeps reopening this same web-login lockout: a
+// non-ASCII local part (mail.ParseAddress allows it; the WHATWG local part
+// is ASCII-only) or an RFC 5321 domain-literal like a@[192.168.1.1]
+// (mail.ParseAddress allows it; WHATWG requires dot-separated labels) both
+// round-trip the equality check below yet get rejected by the browser,
+// stranding the account outside the web UI while the API keeps
+// authenticating it.
+var emailPattern = regexp.MustCompile("^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$")
+
 // validateEmail normalizes email and checks it against the one set of rules
 // shared by every path that picks or changes the account's login identifier
 // — Register and AuthService.UpdateEmail (ADR-0047). A colon or other
@@ -185,6 +200,10 @@ func normalizeEmail(email string) string {
 // different canonical string, so storing the raw quoted form would reopen
 // the same uniqueness bypass under a different disguise — two logins that
 // parse to one mailbox but compare unequal as stored strings.
+//
+// That equality check is necessary but not sufficient: it pins the value to
+// a bare addr-spec without constraining it to the subset the login form can
+// actually submit. emailPattern is that missing constraint (#243).
 func validateEmail(email string) (string, error) {
 	email = normalizeEmail(email)
 	if email == "" {
@@ -195,6 +214,9 @@ func validateEmail(email string) (string, error) {
 	}
 	addr, err := mail.ParseAddress(email)
 	if err != nil || addr.Name != "" || addr.Address != email {
+		return "", ErrInvalidEmail
+	}
+	if !emailPattern.MatchString(email) {
 		return "", ErrInvalidEmail
 	}
 	return email, nil
