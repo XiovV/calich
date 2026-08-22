@@ -66,13 +66,27 @@ function withToken(init: RequestInit, accessToken: string): RequestInit {
 // TTL) never surfaces as a user-visible failure. A recurring 401 on the
 // retry, or a failed refresh, is returned untouched for the caller's
 // existing `if (!response.ok) throw ...` handling.
+//
+// shouldRefreshOn401 defaults to always-refresh; pass one for an endpoint
+// where the HTTP status alone can't tell an expired token from a semantic
+// 401 answer — e.g. authApi.changePassword (#249), whose 401 is
+// RequireAuth's "unauthorized" for an expired token (refreshable, same as
+// everywhere else) on every route it guards, but also the handler's own
+// "invalid_credentials" for a wrong current password (final — retrying it
+// as a token refresh doubles the bcrypt compare and rotates the refresh
+// token for nothing, on a path an ordinary typo hits). Both share the same
+// status code, so the predicate is handed a clone of the response to
+// inspect the body instead — the original's body is left untouched for
+// whichever fetch's result the caller ultimately reads.
 export async function authedFetch(
   accessToken: string,
   input: string,
   init: RequestInit = {},
+  { shouldRefreshOn401 }: { shouldRefreshOn401?: (response: Response) => Promise<boolean> } = {},
 ): Promise<Response> {
   const response = await fetch(input, withToken(init, accessToken));
   if (response.status !== 401) return response;
+  if (shouldRefreshOn401 && !(await shouldRefreshOn401(response.clone()))) return response;
 
   let refreshedToken: string;
   try {

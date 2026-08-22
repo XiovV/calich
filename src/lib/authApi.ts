@@ -224,12 +224,29 @@ export const authApi = {
     currentPassword: string,
     newPassword: string,
   ): Promise<{ accessToken: string }> {
-    const response = await authedFetch(accessToken, "/api/auth/change-password", {
-      method: "POST",
-      credentials: "include",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }),
-    });
+    const response = await authedFetch(
+      accessToken,
+      "/api/auth/change-password",
+      {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }),
+      },
+      // A 401 here is ambiguous by status code alone: RequireAuth returns it
+      // for an expired access token (refresh and retry, as usual), but so
+      // does the handler itself for a wrong current password (the real
+      // answer — retrying that as a refresh doubles the bcrypt compare and
+      // rotates the refresh token for nothing, on a path an ordinary typo
+      // hits). invalid_credentials in the body is the only thing that tells
+      // them apart (#249).
+      {
+        shouldRefreshOn401: async (response) => {
+          const body = (await response.json().catch(() => null)) as { error?: { code?: string } } | null;
+          return body?.error?.code !== "invalid_credentials";
+        },
+      },
+    );
     if (!response.ok) throw await errorFromResponse(response);
 
     const body = (await response.json()) as { access_token: string };

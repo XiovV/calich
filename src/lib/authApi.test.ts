@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { setSessionRefresher } from "./apiClient";
 import { ApiError, authApi } from "./authApi";
 
 function jsonResponse(status: number, body: unknown): Response {
@@ -182,6 +183,52 @@ describe("authApi.changePassword", () => {
     await expect(authApi.changePassword("token-123", "wrong", "new-pw")).rejects.toMatchObject({
       code: "invalid_credentials",
     });
+  });
+
+  // #249: a 401 here means the current password was wrong, not an expired
+  // access token, so it must not trigger a refresh-and-retry — that used to
+  // cost a second bcrypt compare and a refresh-token rotation on every typo.
+  it("does not refresh the session on an invalid current password", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(401, { error: { code: "invalid_credentials", message: "current password is incorrect" } }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const refresher = vi.fn().mockResolvedValue("token-456");
+    setSessionRefresher(refresher);
+
+    await expect(authApi.changePassword("token-123", "wrong", "new-pw")).rejects.toMatchObject({
+      code: "invalid_credentials",
+    });
+
+    expect(refresher).not.toHaveBeenCalled();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  // #249's fix must not break the case it looks identical to at the HTTP
+  // level: RequireAuth's 401 "unauthorized" for an actually expired access
+  // token still has to refresh and retry transparently, same as every other
+  // authedFetch caller.
+  it("still refreshes and retries on an expired access token", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonResponse(401, { error: { code: "unauthorized", message: "invalid or expired access token" } }),
+      )
+      .mockResolvedValueOnce(jsonResponse(200, { access_token: "new-token-456" }));
+    vi.stubGlobal("fetch", fetchMock);
+    const refresher = vi.fn().mockResolvedValue("token-789");
+    setSessionRefresher(refresher);
+
+    const result = await authApi.changePassword("token-123", "old-pw", "new-pw");
+
+    expect(result).toEqual({ accessToken: "new-token-456" });
+    expect(refresher).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "/api/auth/change-password",
+      expect.objectContaining({ headers: expect.objectContaining({ Authorization: "Bearer token-789" }) }),
+    );
   });
 });
 

@@ -99,6 +99,41 @@ describe("authedFetch", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
+  it("returns a 401 untouched, without refreshing, when shouldRefreshOn401 resolves false", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(401, { error: { code: "invalid_credentials" } }));
+    vi.stubGlobal("fetch", fetchMock);
+    const refresher = vi.fn();
+    setSessionRefresher(refresher);
+    const shouldRefreshOn401 = vi.fn().mockResolvedValue(false);
+
+    const response = await authedFetch("token-1", "/api/auth/change-password", {}, { shouldRefreshOn401 });
+
+    expect(response.status).toBe(401);
+    expect(refresher).not.toHaveBeenCalled();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(shouldRefreshOn401).toHaveBeenCalledTimes(1);
+    // The predicate is handed a clone — the original response's body must
+    // still be readable by the caller afterward.
+    await expect(response.json()).resolves.toEqual({ error: { code: "invalid_credentials" } });
+  });
+
+  it("refreshes and retries when shouldRefreshOn401 resolves true", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(401, { error: { code: "unauthorized" } }))
+      .mockResolvedValueOnce(jsonResponse(200, { ok: true }));
+    vi.stubGlobal("fetch", fetchMock);
+    const refresher = vi.fn().mockResolvedValue("token-2");
+    setSessionRefresher(refresher);
+    const shouldRefreshOn401 = vi.fn().mockResolvedValue(true);
+
+    const response = await authedFetch("token-1", "/api/auth/change-password", {}, { shouldRefreshOn401 });
+
+    expect(response.status).toBe(200);
+    expect(refresher).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
   it("returns the original 401 untouched when the refresh itself fails", async () => {
     const fetchMock = vi.fn().mockResolvedValue(emptyResponse(401));
     vi.stubGlobal("fetch", fetchMock);
