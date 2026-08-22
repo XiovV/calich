@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useAuthStore } from "../lib/authStore";
 import { appPasswordsApi } from "../lib/appPasswordsApi";
 import { useAsyncAction } from "../hooks/useAsyncAction";
+import { useSyncedField } from "../hooks/useSyncedField";
 import { errorMessage } from "../lib/errorMessage";
 import { Button } from "../components/ui/Button";
 import { Input } from "../components/ui/Input";
@@ -24,12 +25,19 @@ export function AccountSection() {
   const changePassword = useAuthStore((state) => state.changePassword);
   const disableAccount = useAuthStore((state) => state.disableAccount);
 
-  const [name, setName] = useState(user?.name ?? "");
+  // `user` in the store is replaced wholesale by every save this session
+  // makes — including ones from another tab, since each save's response is
+  // the full canonical record, not just the field it touched (#245
+  // reopened). useSyncedField keeps Name/Email tracking it while pristine,
+  // without clobbering an unsaved edit; a passive resync also clears the
+  // stale "Saved." message it would otherwise leave attached to a value
+  // this tab never actually submitted.
   const [nameSaved, setNameSaved] = useState(false);
+  const name = useSyncedField(user?.name ?? "", () => setNameSaved(false));
   const nameAction = useAsyncAction();
 
-  const [email, setEmail] = useState(user?.email ?? "");
   const [emailSaved, setEmailSaved] = useState(false);
+  const email = useSyncedField(user?.email ?? "", () => setEmailSaved(false));
   const emailAction = useAsyncAction();
 
   const [currentPassword, setCurrentPassword] = useState("");
@@ -42,8 +50,8 @@ export function AccountSection() {
   const [isDisabling, setIsDisabling] = useState(false);
   const [deletingAccount, setDeletingAccount] = useState(false);
 
-  const isNameUnchanged = name === (user?.name ?? "");
-  const isEmailUnchanged = email === (user?.email ?? "");
+  const isNameUnchanged = name.value === (user?.name ?? "");
+  const isEmailUnchanged = email.value === (user?.email ?? "");
 
   // Both sides of the mismatch check share the same non-empty rule
   // canSubmitPassword applies, so there's no whitespace-only value that
@@ -53,12 +61,12 @@ export function AccountSection() {
 
   async function handleSubmitName(domEvent: React.FormEvent) {
     domEvent.preventDefault();
-    if (isNameUnchanged || !name.trim()) return;
+    if (isNameUnchanged || !name.value.trim()) return;
 
     await nameAction.run(async () => {
       setNameSaved(false);
-      const updatedUser = await updateName(name.trim());
-      setName(updatedUser.name);
+      const updatedUser = await updateName(name.value.trim());
+      name.markSaved(updatedUser.name);
       setNameSaved(true);
     });
   }
@@ -87,8 +95,8 @@ export function AccountSection() {
         }
       }
 
-      const updatedUser = await updateEmail(email);
-      setEmail(updatedUser.email);
+      const updatedUser = await updateEmail(email.value);
+      email.markSaved(updatedUser.email);
       setEmailSaved(true);
     });
   }
@@ -133,9 +141,9 @@ export function AccountSection() {
       <form onSubmit={handleSubmitName} className="mt-4 flex items-end gap-2">
         <Input
           label="Name"
-          value={name}
+          value={name.value}
           onChange={(domEvent) => {
-            setName(domEvent.target.value);
+            name.setValue(domEvent.target.value);
             setNameSaved(false);
           }}
           disabled={nameAction.isSubmitting}
@@ -143,7 +151,7 @@ export function AccountSection() {
         />
         <Button
           type="submit"
-          disabled={isNameUnchanged || !name.trim()}
+          disabled={isNameUnchanged || !name.value.trim()}
           loading={nameAction.isSubmitting}
         >
           Save
@@ -163,9 +171,9 @@ export function AccountSection() {
         <Input
           label="Email"
           type="email"
-          value={email}
+          value={email.value}
           onChange={(domEvent) => {
-            setEmail(domEvent.target.value);
+            email.setValue(domEvent.target.value);
             setEmailSaved(false);
           }}
           disabled={emailAction.isSubmitting}

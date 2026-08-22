@@ -96,6 +96,117 @@ describe("AccountSection — Name/Email normalization (#245)", () => {
   });
 });
 
+describe("AccountSection — re-syncs from a save that touched a different field (#245 reopened)", () => {
+  it("re-syncs the Email field, and re-disables its Save, after a Name-only save changes the store's email", async () => {
+    // Simulates the two-tab repro without needing two tabs: the store's
+    // `user` can change for a reason that has nothing to do with the Email
+    // field's own save (e.g. another tab's Email change, reflected back
+    // here the next time *any* save returns the canonical user).
+    const updatedUser = { ...user, name: "New Name", email: "new-address@calich.test" };
+    vi.mocked(authApi.updateName).mockResolvedValue(updatedUser);
+    render(<AccountSection />);
+
+    const nameInput = screen.getByLabelText("Name");
+    const emailInput = screen.getByLabelText("Email");
+    const nameSaveButton = screen.getAllByRole("button", { name: "Save" })[0];
+    const emailSaveButton = screen.getAllByRole("button", { name: "Save" })[1];
+
+    expect(emailInput).toHaveValue(user.email);
+    expect(emailSaveButton).toBeDisabled();
+
+    await userEvent.clear(nameInput);
+    await userEvent.type(nameInput, "New Name");
+    await userEvent.click(nameSaveButton);
+
+    expect(authApi.updateName).toHaveBeenCalledWith("token-123", "New Name");
+    // The Email field never received user input — it must reflect the
+    // store's current email, not the stale value captured at mount.
+    expect(emailInput).toHaveValue("new-address@calich.test");
+    // And Save must not have silently re-enabled itself off that resync.
+    expect(emailSaveButton).toBeDisabled();
+  });
+
+  it("does not clobber an in-progress, unsaved Email edit when a Name save resolves", async () => {
+    const updatedUser = { ...user, name: "New Name" };
+    vi.mocked(authApi.updateName).mockResolvedValue(updatedUser);
+    render(<AccountSection />);
+
+    const nameInput = screen.getByLabelText("Name");
+    const emailInput = screen.getByLabelText("Email");
+    const nameSaveButton = screen.getAllByRole("button", { name: "Save" })[0];
+
+    await userEvent.clear(emailInput);
+    await userEvent.type(emailInput, "still-typing@calich.test");
+
+    await userEvent.clear(nameInput);
+    await userEvent.type(nameInput, "New Name");
+    await userEvent.click(nameSaveButton);
+
+    expect(authApi.updateName).toHaveBeenCalledWith("token-123", "New Name");
+    expect(emailInput).toHaveValue("still-typing@calich.test");
+  });
+
+  it("resumes tracking the store's Name after an edit is manually reverted to the original value, unsaved", async () => {
+    // A "dirty" flag latched on keystroke and cleared only by *this* field's
+    // own save gets stuck forever if the edit is reverted by hand instead of
+    // saved: the revert never runs that clearing code, so a later external
+    // change (another field's save, another tab) would go unreflected here
+    // for the rest of the session.
+    const updatedUser = { ...user, email: "new-address@calich.test", name: "Externally Changed" };
+    vi.mocked(authApi.updateEmail).mockResolvedValue(updatedUser);
+    vi.mocked(appPasswordsApi.list).mockResolvedValue([]);
+    render(<AccountSection />);
+
+    const nameInput = screen.getByLabelText("Name");
+    const emailInput = screen.getByLabelText("Email");
+    const emailSaveButton = screen.getAllByRole("button", { name: "Save" })[1];
+
+    await userEvent.type(nameInput, "x");
+    await userEvent.type(nameInput, "{backspace}");
+    expect(nameInput).toHaveValue(user.name);
+
+    // The Name field's own save is never touched from here on — only Email
+    // is saved. If reverting above left Name's "dirty" flag stuck true, this
+    // externally-driven name change (e.g. from another tab) would never
+    // reach it.
+    await userEvent.clear(emailInput);
+    await userEvent.type(emailInput, "new-address@calich.test");
+    await userEvent.click(emailSaveButton);
+
+    expect(authApi.updateEmail).toHaveBeenCalledWith("token-123", "new-address@calich.test");
+    expect(nameInput).toHaveValue("Externally Changed");
+  });
+
+  it("clears a stale 'Saved.' message when a field re-syncs passively rather than from its own save", async () => {
+    const emailSavedUser = { ...user, email: "own-save@calich.test" };
+    vi.mocked(authApi.updateEmail).mockResolvedValue(emailSavedUser);
+    vi.mocked(appPasswordsApi.list).mockResolvedValue([]);
+    render(<AccountSection />);
+
+    const emailInput = screen.getByLabelText("Email");
+    const emailSaveButton = screen.getAllByRole("button", { name: "Save" })[1];
+
+    await userEvent.clear(emailInput);
+    await userEvent.type(emailInput, "own-save@calich.test");
+    await userEvent.click(emailSaveButton);
+    expect(screen.getByText("Saved.")).toBeInTheDocument();
+
+    const nameOnlyUser = { ...emailSavedUser, name: "New Name", email: "someone-else@calich.test" };
+    vi.mocked(authApi.updateName).mockResolvedValue(nameOnlyUser);
+    const nameInput = screen.getByLabelText("Name");
+    const nameSaveButton = screen.getAllByRole("button", { name: "Save" })[0];
+    await userEvent.clear(nameInput);
+    await userEvent.type(nameInput, "New Name");
+    await userEvent.click(nameSaveButton);
+
+    expect(emailInput).toHaveValue("someone-else@calich.test");
+    // Exactly one "Saved." now: Name's own, freshly earned by the save that
+    // just ran. Email's earlier one must not still be showing — that would
+    // misattribute a value this tab never actually submitted.
+    expect(screen.getAllByText("Saved.")).toHaveLength(1);
+  });
+});
+
 describe("AccountSection — hidden username field for password managers (#246)", () => {
   it("carries the account email on a hidden autocomplete=username input", () => {
     render(<AccountSection />);
