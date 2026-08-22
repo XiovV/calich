@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/go-chi/chi/v5"
@@ -1371,6 +1372,28 @@ func TestChangePassword_SkipsCurrentPasswordCheckWhileMustChangePassword(t *test
 
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+}
+
+// TestChangePassword_RejectsNewPasswordOverMaxBytes covers #241: a new
+// password over bcrypt's 72-byte limit must come back as a 400, not the
+// opaque 500 bcrypt.ErrPasswordTooLong used to produce once wrapped as a
+// generic error.
+func TestChangePassword_RejectsNewPasswordOverMaxBytes(t *testing.T) {
+	srv := newAuthTestServer(t)
+
+	loginResp := login(t, srv, "admin@example.com", "admin")
+	defer loginResp.Body.Close()
+	var loggedIn loginResponse
+	if err := json.NewDecoder(loginResp.Body).Decode(&loggedIn); err != nil {
+		t.Fatalf("decode login response: %v", err)
+	}
+
+	resp := changePassword(t, srv, loggedIn.AccessToken, "admin", strings.Repeat("a", 73))
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", resp.StatusCode)
 	}
 }
 

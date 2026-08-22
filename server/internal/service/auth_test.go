@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -406,12 +407,51 @@ func TestRegister_RejectsInvalidEmail(t *testing.T) {
 	}
 }
 
+// TestValidatePassword_AcceptsExactlyMaxBytes pins the boundary validatePassword
+// draws at maxPasswordBytes (#241): a password of exactly that many bytes is
+// what bcrypt.GenerateFromPassword itself still accepts, so validatePassword
+// rejecting it too (an off-by-one on > vs >=) would be a regression none of
+// the "over the limit" tests alone would catch.
+func TestValidatePassword_AcceptsExactlyMaxBytes(t *testing.T) {
+	if err := validatePassword(strings.Repeat("a", maxPasswordBytes)); err != nil {
+		t.Fatalf("expected a password of exactly %d bytes to be accepted, got %v", maxPasswordBytes, err)
+	}
+}
+
 func TestRegister_RejectsEmptyPassword(t *testing.T) {
 	svc := newTestAuthServiceWithSignups(t, "", "", true)
 	ctx := context.Background()
 
 	if _, err := svc.Register(ctx, "alice", "alice@example.com", ""); !errors.Is(err, ErrInvalidPassword) {
 		t.Fatalf("expected ErrInvalidPassword, got %v", err)
+	}
+}
+
+// TestRegister_RejectsPasswordOverMaxBytes covers #241: bcrypt itself limits
+// GenerateFromPassword to 72 bytes, so this must come back as ErrPasswordTooLong
+// rather than a wrapped, unrecognized error.
+func TestRegister_RejectsPasswordOverMaxBytes(t *testing.T) {
+	svc := newTestAuthServiceWithSignups(t, "", "", true)
+	ctx := context.Background()
+
+	longPassword := strings.Repeat("a", maxPasswordBytes+1)
+	if _, err := svc.Register(ctx, "alice", "alice@example.com", longPassword); !errors.Is(err, ErrPasswordTooLong) {
+		t.Fatalf("expected ErrPasswordTooLong, got %v", err)
+	}
+}
+
+// TestRegister_RejectsPasswordOverMaxBytes_MultibyteRunes covers #241's
+// "not an exotic input" case: the limit is bytes, not characters, so a
+// passphrase of multi-byte runes (e.g. emoji) can exceed it well under 72
+// visible characters.
+func TestRegister_RejectsPasswordOverMaxBytes_MultibyteRunes(t *testing.T) {
+	svc := newTestAuthServiceWithSignups(t, "", "", true)
+	ctx := context.Background()
+
+	// 19 emoji, 4 bytes each in UTF-8 = 76 bytes, well under 72 characters.
+	longPassword := strings.Repeat("\U0001F600", 19)
+	if _, err := svc.Register(ctx, "alice", "alice@example.com", longPassword); !errors.Is(err, ErrPasswordTooLong) {
+		t.Fatalf("expected ErrPasswordTooLong, got %v", err)
 	}
 }
 
@@ -725,6 +765,29 @@ func TestChangePassword_RejectsEmptyNewPassword(t *testing.T) {
 	_, err = svc.ChangePassword(ctx, user.ID, "admin", "")
 	if !errors.Is(err, ErrInvalidPassword) {
 		t.Fatalf("expected ErrInvalidPassword, got %v", err)
+	}
+}
+
+// TestChangePassword_RejectsNewPasswordOverMaxBytes covers #241: a new
+// password over bcrypt's 72-byte limit must come back as ErrPasswordTooLong
+// rather than the opaque 500 a wrapped bcrypt.ErrPasswordTooLong used to
+// produce.
+func TestChangePassword_RejectsNewPasswordOverMaxBytes(t *testing.T) {
+	svc := newTestAuthService(t, "admin", "admin")
+	ctx := context.Background()
+	if _, _, err := svc.Bootstrap(ctx); err != nil {
+		t.Fatalf("bootstrap: %v", err)
+	}
+
+	user, err := svc.users.GetByEmail(ctx, "admin@example.com")
+	if err != nil {
+		t.Fatalf("get user: %v", err)
+	}
+
+	longPassword := strings.Repeat("a", maxPasswordBytes+1)
+	_, err = svc.ChangePassword(ctx, user.ID, "admin", longPassword)
+	if !errors.Is(err, ErrPasswordTooLong) {
+		t.Fatalf("expected ErrPasswordTooLong, got %v", err)
 	}
 }
 

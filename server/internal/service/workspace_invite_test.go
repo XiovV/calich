@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -634,6 +635,33 @@ func TestAuthService_AcceptWorkspaceInviteExisting_ConvertsEmailAttendees(t *tes
 	}
 	if len(attendees) != 1 || attendees[0].Name != "bob" {
 		t.Fatalf("expected the sole Attendee to render by Name, got %+v", attendees)
+	}
+}
+
+// TestAuthService_AcceptWorkspaceInviteNewAccount_RejectsPasswordOverMaxBytes
+// covers #241: this call site wraps bcrypt.GenerateFromPassword the same way
+// Register and ChangePassword do, so it needs the same explicit check.
+func TestAuthService_AcceptWorkspaceInviteNewAccount_RejectsPasswordOverMaxBytes(t *testing.T) {
+	workspaces, auth, users := newTestWorkspaceInviteHarness(t)
+	ctx := context.Background()
+
+	owner, err := users.Create(ctx, "alice", "alice@example.com", "hash", false)
+	if err != nil {
+		t.Fatalf("create owner: %v", err)
+	}
+	workspace, err := workspaces.CreateForOwner(ctx, owner.ID, "Alice's Workspace")
+	if err != nil {
+		t.Fatalf("create workspace: %v", err)
+	}
+
+	invite, err := workspaces.CreateInvite(ctx, owner.ID, workspace.ID, "bob@example.com")
+	if err != nil {
+		t.Fatalf("create invite: %v", err)
+	}
+
+	longPassword := strings.Repeat("a", maxPasswordBytes+1)
+	if _, err := auth.AcceptWorkspaceInviteNewAccount(ctx, invite.Token, "bob", longPassword); !errors.Is(err, ErrPasswordTooLong) {
+		t.Fatalf("expected ErrPasswordTooLong, got %v", err)
 	}
 }
 

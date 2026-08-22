@@ -34,6 +34,14 @@ const (
 // name) imposes a tighter limit.
 const maxNameLength = 100
 
+// maxPasswordBytes is bcrypt's own limit (golang.org/x/crypto/bcrypt,
+// bcrypt.go, #241) — GenerateFromPassword returns the opaque
+// ErrPasswordTooLong for anything over it, and every caller here wraps that
+// as a generic error, so it's checked explicitly up front instead. It's
+// bytes, not characters: a password heavy on multi-byte runes (emoji,
+// accented letters) can hit this well under 72 visible characters.
+const maxPasswordBytes = 72
+
 // inviteTokenTTL is how long a Workspace Invite token is valid for
 // (ADR-0044) — shorter than the 30-day refresh token (ADR-0009) because this
 // token doesn't extend a Session, it creates one: anyone holding a live link
@@ -44,6 +52,11 @@ var (
 	ErrInvalidCredentials = errors.New("invalid credentials")
 	ErrInvalidSession     = errors.New("invalid session")
 	ErrInvalidPassword    = errors.New("password must not be empty")
+	// ErrPasswordTooLong is returned by validatePassword for input over
+	// maxPasswordBytes bytes — bcrypt.GenerateFromPassword's own limit,
+	// checked explicitly (#241) so a too-long password comes back as a
+	// normal validation error instead of surfacing as a generic 500.
+	ErrPasswordTooLong = errors.New("password must be at most 72 bytes")
 	// ErrInvalidEmail is returned when an email fails validateEmail — not a
 	// well-formed address, or containing a colon or other whitespace (ADR-0047:
 	// this is also the CalDAV Basic auth identifier, and Go's
@@ -157,6 +170,20 @@ func validateEmail(email string) (string, error) {
 		return "", ErrInvalidEmail
 	}
 	return email, nil
+}
+
+// validatePassword checks a plaintext password against the one set of rules
+// shared by every path that hashes one with bcrypt — Register, ChangePassword,
+// and AcceptWorkspaceInviteNewAccount (#241) — so none of them can drift out
+// of sync with bcrypt.GenerateFromPassword's own maxPasswordBytes limit.
+func validatePassword(password string) error {
+	if password == "" {
+		return ErrInvalidPassword
+	}
+	if len(password) > maxPasswordBytes {
+		return ErrPasswordTooLong
+	}
+	return nil
 }
 
 type AuthService struct {
@@ -292,8 +319,8 @@ func (s *AuthService) Register(ctx context.Context, name, email, password string
 		return LoginResult{}, err
 	}
 
-	if password == "" {
-		return LoginResult{}, ErrInvalidPassword
+	if err := validatePassword(password); err != nil {
+		return LoginResult{}, err
 	}
 
 	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
@@ -542,8 +569,8 @@ func (s *AuthService) AcceptWorkspaceInviteNewAccount(ctx context.Context, token
 	if err != nil {
 		return LoginResult{}, err
 	}
-	if password == "" {
-		return LoginResult{}, ErrInvalidPassword
+	if err := validatePassword(password); err != nil {
+		return LoginResult{}, err
 	}
 
 	invite, err := s.liveWorkspaceInvite(ctx, token)
@@ -800,8 +827,8 @@ func (s *AuthService) ChangePassword(ctx context.Context, userID int64, currentP
 		}
 	}
 
-	if newPassword == "" {
-		return ChangePasswordResult{}, ErrInvalidPassword
+	if err := validatePassword(newPassword); err != nil {
+		return ChangePasswordResult{}, err
 	}
 
 	hash, err := bcrypt.GenerateFromPassword([]byte(newPassword), bcrypt.DefaultCost)

@@ -106,6 +106,21 @@ describe("AccountSection — change password (#234)", () => {
     expect(useAuthStore.getState().accessToken).toBe("token-123");
   });
 
+  it("surfaces a too-long new password with a clear message and changes nothing (#241)", async () => {
+    vi.mocked(authApi.changePassword).mockRejectedValue(
+      new Error("new password must be at most 72 bytes"),
+    );
+    render(<AccountSection />);
+
+    const longPassword = "a".repeat(73);
+    await fillPasswordForm("old-pw", longPassword, longPassword);
+    await userEvent.click(updateButton());
+
+    expect(screen.getByText("new password must be at most 72 bytes")).toBeInTheDocument();
+    expect(screen.queryByText("Password updated.")).not.toBeInTheDocument();
+    expect(useAuthStore.getState().accessToken).toBe("token-123");
+  });
+
   it("flags mismatched new/confirm passwords inline", async () => {
     render(<AccountSection />);
 

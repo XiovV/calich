@@ -69,6 +69,7 @@ var registerErrors = []errorCase{
 	{service.ErrInvalidEmail, badRequest("email must be a valid address and must not contain whitespace or a colon")},
 	{service.ErrEmailTaken, conflict("email_taken", "email is already taken")},
 	{service.ErrInvalidPassword, badRequest("password must not be empty")},
+	{service.ErrPasswordTooLong, badRequest("password must be at most 72 bytes")},
 }
 
 var previewWorkspaceInviteErrors = []errorCase{
@@ -80,6 +81,7 @@ var acceptWorkspaceInviteErrors = []errorCase{
 	{service.ErrInvalidDisplayName, badRequest("name must not be empty and must be at most 100 characters")},
 	{service.ErrEmailTaken, conflict("email_taken", "email is already taken")},
 	{service.ErrInvalidPassword, badRequest("password must not be empty")},
+	{service.ErrPasswordTooLong, badRequest("password must be at most 72 bytes")},
 }
 
 var joinWorkspaceInviteErrors = []errorCase{
@@ -114,6 +116,7 @@ var refreshErrors = []errorCase{
 var changePasswordErrors = []errorCase{
 	{service.ErrInvalidCredentials, unauthorized("invalid_credentials", "current password is incorrect")},
 	{service.ErrInvalidPassword, badRequest("new password must not be empty")},
+	{service.ErrPasswordTooLong, badRequest("new password must be at most 72 bytes")},
 }
 
 type setupStatusResponse struct {

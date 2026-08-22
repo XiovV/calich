@@ -165,6 +165,9 @@ export function AcceptWorkspaceInvitePage() {
           onChange={(domEvent) => setPassword(domEvent.target.value)}
           className="mt-4"
         />
+        {/* #241: bcrypt's own 72-byte cap, hit well before 72 visible
+          characters for anyone not typing plain ASCII. */}
+        <p className="mt-1 text-label-sm text-ink-muted">Up to 72 bytes long.</p>
 
         <Input
           label="Confirm password"
