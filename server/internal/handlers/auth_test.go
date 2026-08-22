@@ -590,6 +590,29 @@ func TestUpdateEmail_RejectsAnInvalidAddress(t *testing.T) {
 	}
 }
 
+// TestUpdateEmail_RejectsAnOverlongAddress covers #248's repro: a 5000-plus
+// character address used to be accepted and stored as the account's login
+// identifier with no ceiling but the request body limit.
+func TestUpdateEmail_RejectsAnOverlongAddress(t *testing.T) {
+	srv := newAuthTestServer(t)
+	accessToken := authenticatedAccessToken(t, srv)
+
+	body, _ := json.Marshal(updateEmailRequest{Email: strings.Repeat("a", 5000) + "@example.com"})
+	req, _ := http.NewRequest(http.MethodPut, srv.URL+"/api/auth/email", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("PUT /api/auth/email: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", resp.StatusCode)
+	}
+}
+
 // TestUpdateName_RenamesButLoginStillNeedsTheOriginalEmail covers ADR-0047:
 // Name is a display-only rename — it never affects the login identifier, so
 // signing in still requires the account's Email, before and after the

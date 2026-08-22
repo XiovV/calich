@@ -36,6 +36,13 @@ const (
 // name) imposes a tighter limit.
 const maxNameLength = 100
 
+// maxEmailLength bounds validateEmail (#248) — RFC 5321 §4.5.3.1 caps a
+// forward path at 254 octets, and unlike a display name this value is never
+// just text: it's the CalDAV Basic auth username (ADR-0024) sent on every
+// sync request, the Email-Channel Reminder recipient (ADR-0021), and the
+// login identifier compared on every Login and AppPasswordService.Authenticate.
+const maxEmailLength = 254
+
 // maxPasswordBytes is bcrypt's own limit (golang.org/x/crypto/bcrypt,
 // bcrypt.go, #241) — GenerateFromPassword returns the opaque
 // ErrPasswordTooLong for anything over it, and every caller here wraps that
@@ -79,6 +86,9 @@ var (
 	// this is also the CalDAV Basic auth identifier, and Go's
 	// net/http.Request.BasicAuth splits credentials on the first colon).
 	ErrInvalidEmail = errors.New("email must be a valid address and must not contain whitespace or a colon")
+	// ErrEmailTooLong is returned by validateEmail for an address over
+	// maxEmailLength octets (#248).
+	ErrEmailTooLong = errors.New("email must be at most 254 characters")
 	// ErrInvalidDisplayName is returned when a display name fails validateName —
 	// empty (or all whitespace) or longer than maxNameLength.
 	ErrInvalidDisplayName = errors.New("name must not be empty and must be at most 100 characters")
@@ -183,8 +193,10 @@ var emailPattern = regexp.MustCompile("^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z
 
 // validateEmail normalizes email and checks it against the one set of rules
 // shared by every path that picks or changes the account's login identifier
-// — Register and AuthService.UpdateEmail (ADR-0047). A colon or other
-// whitespace is rejected because Go's net/http.Request.BasicAuth splits
+// — Register and AuthService.UpdateEmail (ADR-0047), plus WorkspaceService.CreateInvite
+// and event.go's inviteEmail, which pick an email on someone else's behalf.
+// maxEmailLength bounds it the same way maxNameLength bounds validateName
+// (#248). A colon or other whitespace is rejected because Go's net/http.Request.BasicAuth splits
 // credentials on the first colon: an email containing one could create an
 // account that can never authenticate over CalDAV
 // (AppPasswordService.Authenticate). Ordinary email addresses never contain
@@ -208,6 +220,9 @@ func validateEmail(email string) (string, error) {
 	email = normalizeEmail(email)
 	if email == "" {
 		return "", ErrEmailRequired
+	}
+	if len(email) > maxEmailLength {
+		return "", ErrEmailTooLong
 	}
 	if strings.ContainsAny(email, ":") || strings.ContainsFunc(email, unicode.IsSpace) {
 		return "", ErrInvalidEmail

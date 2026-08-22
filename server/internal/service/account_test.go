@@ -568,6 +568,8 @@ func TestValidateEmail(t *testing.T) {
 		{name: "domain-literal is rejected", input: "a@[192.168.1.1]", wantErr: ErrInvalidEmail},
 		{name: "single-label domain is accepted", input: "test@calich", want: "test@calich"},
 		{name: "trailing dot on domain is rejected", input: "qa.tester@calich.test.", wantErr: ErrInvalidEmail},
+		{name: "exactly maxEmailLength is accepted", input: strings.Repeat("a", maxEmailLength-len("@example.com")) + "@example.com", want: strings.Repeat("a", maxEmailLength-len("@example.com")) + "@example.com"},
+		{name: "over maxEmailLength is rejected", input: strings.Repeat("a", maxEmailLength-len("@example.com")+1) + "@example.com", wantErr: ErrEmailTooLong},
 	}
 
 	for _, tt := range tests {

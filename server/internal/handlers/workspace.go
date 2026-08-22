@@ -101,6 +101,7 @@ func toWorkspaceInviteResponse(result service.WorkspaceInviteResult) workspaceIn
 
 var createWorkspaceInviteErrors = []errorCase{
 	{service.ErrInvalidEmail, badRequest("email is not a valid address")},
+	{service.ErrEmailTooLong, badRequest("email must be at most 254 characters")},
 	{repository.ErrWorkspaceInviteExists, conflict("invite_exists", repository.ErrWorkspaceInviteExists.Error())},
 	{repository.ErrNotFound, notFound("workspace not found")},
 }

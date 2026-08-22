@@ -67,6 +67,7 @@ var registerErrors = []errorCase{
 	{service.ErrInvalidDisplayName, badRequest("name must not be empty and must be at most 100 characters")},
 	{service.ErrEmailRequired, badRequest("email is required")},
 	{service.ErrInvalidEmail, badRequest("email must be a valid address and must not contain whitespace or a colon")},
+	{service.ErrEmailTooLong, badRequest("email must be at most 254 characters")},
 	{service.ErrEmailTaken, conflict("email_taken", "email is already taken")},
 	{service.ErrInvalidPassword, badRequest("password must not be empty")},
 	{service.ErrPasswordTooShort, badRequest("password must be at least 8 characters")},
@@ -95,6 +96,7 @@ var joinWorkspaceInviteErrors = []errorCase{
 var updateEmailErrors = []errorCase{
 	{service.ErrEmailRequired, badRequest("email is required")},
 	{service.ErrInvalidEmail, badRequest("email must be a valid address and must not contain whitespace or a colon")},
+	{service.ErrEmailTooLong, badRequest("email must be at most 254 characters")},
 	{service.ErrEmailTaken, conflict("email_taken", "email is already taken")},
 }
 

@@ -478,6 +478,20 @@ func TestRegister_RejectsPasswordOverMaxBytes_MultibyteRunes(t *testing.T) {
 	}
 }
 
+// TestRegister_RejectsEmailOverMaxLength covers #248: before maxEmailLength
+// existed, validateEmail bounded nothing but well-formedness, so an address
+// thousands of characters long was accepted and stored as the account's
+// CalDAV Basic auth username and login identifier.
+func TestRegister_RejectsEmailOverMaxLength(t *testing.T) {
+	svc := newTestAuthServiceWithSignups(t, "", "", true)
+	ctx := context.Background()
+
+	longEmail := strings.Repeat("a", maxEmailLength-len("@example.com")+1) + "@example.com"
+	if _, err := svc.Register(ctx, "alice", longEmail, "password123"); !errors.Is(err, ErrEmailTooLong) {
+		t.Fatalf("expected ErrEmailTooLong, got %v", err)
+	}
+}
+
 func TestRegister_DuplicateEmail_ReturnsErrEmailTaken(t *testing.T) {
 	svc := newTestAuthServiceWithSignups(t, "", "", true)
 	ctx := context.Background()
