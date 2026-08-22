@@ -37,8 +37,8 @@ interface AuthState {
   joinWorkspaceInvite: (token: string) => Promise<{ id: number; name: string }>;
   logout: () => Promise<void>;
   changePassword: (currentPassword: string, newPassword: string) => Promise<void>;
-  updateEmail: (email: string) => Promise<void>;
-  updateName: (name: string) => Promise<void>;
+  updateEmail: (email: string) => Promise<User>;
+  updateName: (name: string) => Promise<User>;
   updateSyncedDeviceReminders: (enabled: boolean) => Promise<void>;
   updateWeekStart: (weekStart: number) => Promise<void>;
   updateDefaultView: (defaultView: ActiveView) => Promise<void>;
@@ -231,6 +231,7 @@ export const useAuthStore = create<AuthState>((set, get) => {
 
       const user = await authApi.updateEmail(accessToken, email);
       set(authenticated(user, accessToken));
+      return user;
     },
 
     updateName: async (name) => {
@@ -239,6 +240,7 @@ export const useAuthStore = create<AuthState>((set, get) => {
 
       const user = await authApi.updateName(accessToken, name);
       set(authenticated(user, accessToken));
+      return user;
     },
 
     updateSyncedDeviceReminders: async (enabled) => {

@@ -57,7 +57,8 @@ export function AccountSection() {
 
     await nameAction.run(async () => {
       setNameSaved(false);
-      await updateName(name.trim());
+      const updatedUser = await updateName(name.trim());
+      setName(updatedUser.name);
       setNameSaved(true);
     });
   }
@@ -86,7 +87,8 @@ export function AccountSection() {
         }
       }
 
-      await updateEmail(email);
+      const updatedUser = await updateEmail(email);
+      setEmail(updatedUser.email);
       setEmailSaved(true);
     });
   }
@@ -136,6 +138,7 @@ export function AccountSection() {
             setName(domEvent.target.value);
             setNameSaved(false);
           }}
+          disabled={nameAction.isSubmitting}
           className="w-72"
         />
         <Button
@@ -165,6 +168,7 @@ export function AccountSection() {
             setEmail(domEvent.target.value);
             setEmailSaved(false);
           }}
+          disabled={emailAction.isSubmitting}
           className="w-72"
         />
         <Button type="submit" disabled={isEmailUnchanged} loading={emailAction.isSubmitting}>

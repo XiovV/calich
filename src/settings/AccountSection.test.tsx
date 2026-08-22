@@ -24,6 +24,7 @@ vi.mock("../lib/appPasswordsApi", () => ({
 }));
 
 const { authApi } = await import("../lib/authApi");
+const { appPasswordsApi } = await import("../lib/appPasswordsApi");
 const { useAuthStore } = await import("../lib/authStore");
 const { AccountSection } = await import("./AccountSection");
 
@@ -59,6 +60,41 @@ async function fillPasswordForm(current: string, next: string, confirm: string) 
 }
 
 const updateButton = () => screen.getByRole("button", { name: "Update password" });
+
+describe("AccountSection — Name/Email normalization (#245)", () => {
+  it("re-syncs the Name field from the server's normalized value after save", async () => {
+    const updatedUser = { ...user, name: "QA Tester" };
+    vi.mocked(authApi.updateName).mockResolvedValue(updatedUser);
+    render(<AccountSection />);
+
+    const nameInput = screen.getByLabelText("Name");
+    await userEvent.clear(nameInput);
+    await userEvent.type(nameInput, "QA Tester  ");
+    const saveButton = screen.getAllByRole("button", { name: "Save" })[0];
+    await userEvent.click(saveButton);
+
+    expect(authApi.updateName).toHaveBeenCalledWith("token-123", "QA Tester");
+    expect(nameInput).toHaveValue("QA Tester");
+    expect(saveButton).toBeDisabled();
+  });
+
+  it("re-syncs the Email field from the server's normalized value after save", async () => {
+    const updatedUser = { ...user, email: "qa.tester@calich.test" };
+    vi.mocked(authApi.updateEmail).mockResolvedValue(updatedUser);
+    vi.mocked(appPasswordsApi.list).mockResolvedValue([]);
+    render(<AccountSection />);
+
+    const emailInput = screen.getByLabelText("Email");
+    await userEvent.clear(emailInput);
+    await userEvent.type(emailInput, "QA.Tester@Calich.TEST");
+    const saveButton = screen.getAllByRole("button", { name: "Save" })[1];
+    await userEvent.click(saveButton);
+
+    expect(authApi.updateEmail).toHaveBeenCalledWith("token-123", "QA.Tester@Calich.TEST");
+    expect(emailInput).toHaveValue("qa.tester@calich.test");
+    expect(saveButton).toBeDisabled();
+  });
+});
 
 describe("AccountSection — change password (#234)", () => {
   it("disables Update password until current, new and matching-confirm are all filled", async () => {
