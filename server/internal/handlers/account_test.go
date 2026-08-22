@@ -42,7 +42,7 @@ func newAccountHandlerTestServer(t *testing.T) *accountHandlerTestServer {
 	auth := g.Auth
 	accounts := g.Accounts
 
-	authHandler := NewAuthHandler(auth, false, false)
+	authHandler := NewAuthHandler(auth, false, false, true)
 	accountHandler := NewAccountHandler(accounts)
 
 	r := chi.NewRouter()

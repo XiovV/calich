@@ -24,10 +24,13 @@ type AuthHandler struct {
 	// (ADR-0059) — meResponse's invitationRepliesConfigured, which Settings
 	// uses to disclose whether an emailed Response ever comes back.
 	imapConfigured bool
+	// cookieSecure is the Refresh token cookie's Secure attribute
+	// (config.Config.CookieSecure, ADR-0009, #239).
+	cookieSecure bool
 }
 
-func NewAuthHandler(auth *service.AuthService, smtpConfigured, imapConfigured bool) *AuthHandler {
-	return &AuthHandler{auth: auth, smtpConfigured: smtpConfigured, imapConfigured: imapConfigured}
+func NewAuthHandler(auth *service.AuthService, smtpConfigured, imapConfigured, cookieSecure bool) *AuthHandler {
+	return &AuthHandler{auth: auth, smtpConfigured: smtpConfigured, imapConfigured: imapConfigured, cookieSecure: cookieSecure}
 }
 
 type loginRequest struct {
@@ -146,7 +149,7 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	setRefreshCookie(w, result.RefreshToken, result.RefreshTokenExpiresAt)
+	h.setRefreshCookie(w, result.RefreshToken, result.RefreshTokenExpiresAt)
 
 	httpresponse.JSON(w, http.StatusOK, loginResponse{
 		AccessToken:        result.AccessToken,
@@ -180,7 +183,7 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	setRefreshCookie(w, result.RefreshToken, result.RefreshTokenExpiresAt)
+	h.setRefreshCookie(w, result.RefreshToken, result.RefreshTokenExpiresAt)
 
 	httpresponse.JSON(w, http.StatusOK, loginResponse{
 		AccessToken:        result.AccessToken,
@@ -238,7 +241,7 @@ func (h *AuthHandler) AcceptWorkspaceInvite(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	setRefreshCookie(w, result.RefreshToken, result.RefreshTokenExpiresAt)
+	h.setRefreshCookie(w, result.RefreshToken, result.RefreshTokenExpiresAt)
 
 	httpresponse.JSON(w, http.StatusOK, loginResponse{
 		AccessToken:        result.AccessToken,
@@ -513,7 +516,7 @@ func (h *AuthHandler) Logout(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	clearRefreshCookie(w)
+	h.clearRefreshCookie(w)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -544,31 +547,31 @@ func (h *AuthHandler) ChangePassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	setRefreshCookie(w, result.RefreshToken, result.RefreshTokenExpiresAt)
+	h.setRefreshCookie(w, result.RefreshToken, result.RefreshTokenExpiresAt)
 
 	httpresponse.JSON(w, http.StatusOK, changePasswordResponse{AccessToken: result.AccessToken})
 }
 
-func setRefreshCookie(w http.ResponseWriter, value string, expires time.Time) {
+func (h *AuthHandler) setRefreshCookie(w http.ResponseWriter, value string, expires time.Time) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     refreshCookieName,
 		Value:    value,
 		Path:     "/",
 		Expires:  expires,
 		HttpOnly: true,
-		Secure:   true,
+		Secure:   h.cookieSecure,
 		SameSite: http.SameSiteLaxMode,
 	})
 }
 
-func clearRefreshCookie(w http.ResponseWriter) {
+func (h *AuthHandler) clearRefreshCookie(w http.ResponseWriter) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     refreshCookieName,
 		Value:    "",
 		Path:     "/",
 		MaxAge:   -1,
 		HttpOnly: true,
-		Secure:   true,
+		Secure:   h.cookieSecure,
 		SameSite: http.SameSiteLaxMode,
 	})
 }

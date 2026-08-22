@@ -1,5 +1,11 @@
 # httpOnly refresh-token cookie now that a backend exists
 
-Status: supersedes ADR-0008
+Status: supersedes ADR-0008; amended by the `COOKIE_SECURE` note below (#239)
 
 The refresh token is now issued and validated by the Go backend as an `httpOnly`, `Secure` cookie, not stored in `localStorage`. The access token is kept in memory only (not persisted client-side); a page refresh re-authenticates silently against the refresh cookie via `refreshAccessToken`. ADR-0008 explicitly named this cookie pattern as the intended long-term design, blocked only on a backend existing to issue it — that backend now exists. `httpOnly` cookies aren't readable by JS, closing the XSS-based token theft risk that came with `localStorage`, which matters more here since this app is meant to run in self-hosted environments with varying levels of hardening.
+
+## Amendment: `Secure` is operator-configurable (#239)
+
+`Secure` was originally hardcoded `true`. In practice, a browser silently discards a `Secure` cookie sent over plain HTTP from an origin it doesn't trust — so on a plain-HTTP deployment (the first thing most self-hosters try, e.g. `http://192.168.1.50:8080`) the Refresh token cookie was never stored at all. Login appeared to succeed, then the User was bounced back to the login screen on the next page load or once the 15-minute access token expired, with no error surfaced. This is invisible in local development, where `http://localhost` is treated as a trustworthy origin.
+
+`Secure` is now controlled by `COOKIE_SECURE` (`config.Config`), defaulting to `true` — an operator who sets nothing keeps this ADR's original behaviour. Deriving it instead from `X-Forwarded-Proto` or `r.TLS` was considered and rejected: it depends on reverse-proxy configuration the operator may not control, and fails silently in exactly the same way when the header is absent. `HttpOnly` and `SameSite=Lax` are unaffected — only `Secure` is configurable, and `setRefreshCookie`/`clearRefreshCookie` always agree on the same setting so a cookie set under one value is still clearable under that value. The default stays `true` because the risk this ADR closes (XSS-based token theft against a `Secure`, `httpOnly` cookie) is worse than the plain-HTTP failure mode this amendment fixes; turning it off is an explicit, documented (see README) opt-in for a deployment that has already decided not to run TLS.

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -28,6 +29,11 @@ func newAuthTestServerWithSMTP(t *testing.T, smtpConfigured bool) *httptest.Serv
 
 func newAuthTestServerWithMail(t *testing.T, smtpConfigured, imapConfigured bool) *httptest.Server {
 	t.Helper()
+	return newAuthTestServerWithCookieSecure(t, smtpConfigured, imapConfigured, true)
+}
+
+func newAuthTestServerWithCookieSecure(t *testing.T, smtpConfigured, imapConfigured, cookieSecure bool) *httptest.Server {
+	t.Helper()
 
 	// No bootstrap account: these tests seed or register the Users they need.
 	cfg := apptest.Config(t)
@@ -43,7 +49,7 @@ func newAuthTestServerWithMail(t *testing.T, smtpConfigured, imapConfigured bool
 	// the only path that used to.
 	mustSeedUserRequiringPasswordChange(t, users, "admin", "admin")
 
-	h := NewAuthHandler(auth, smtpConfigured, imapConfigured)
+	h := NewAuthHandler(auth, smtpConfigured, imapConfigured, cookieSecure)
 
 	r := chi.NewRouter()
 	r.Get("/api/auth/setup-status", h.SetupStatus)
@@ -188,6 +194,49 @@ func TestLogin_Success_SetsRefreshCookieAndReturnsAccessToken(t *testing.T) {
 	}
 }
 
+// TestRefreshCookie_SecureFollowsCookieSecureSetting covers #239: a
+// self-hoster on a plain-HTTP LAN deployment can turn Secure off via
+// COOKIE_SECURE, and setRefreshCookie/clearRefreshCookie must agree on the
+// setting — a cookie set under one value has to be clearable under the same
+// one, or logout leaves it behind.
+func TestRefreshCookie_SecureFollowsCookieSecureSetting(t *testing.T) {
+	for _, cookieSecure := range []bool{true, false} {
+		t.Run(fmt.Sprintf("cookieSecure=%v", cookieSecure), func(t *testing.T) {
+			srv := newAuthTestServerWithCookieSecure(t, false, false, cookieSecure)
+
+			loginResp := login(t, srv, "admin@example.com", "admin")
+			defer loginResp.Body.Close()
+			loginCookie := refreshCookieFrom(t, loginResp)
+			if loginCookie.Secure != cookieSecure {
+				t.Fatalf("expected login's refresh_token cookie Secure=%v, got %v", cookieSecure, loginCookie.Secure)
+			}
+			if !loginCookie.HttpOnly {
+				t.Fatalf("expected refresh_token cookie to stay HttpOnly regardless of COOKIE_SECURE")
+			}
+			if loginCookie.SameSite != http.SameSiteLaxMode {
+				t.Fatalf("expected refresh_token cookie to stay SameSite=Lax regardless of COOKIE_SECURE")
+			}
+
+			logoutReq, err := http.NewRequest(http.MethodPost, srv.URL+"/api/auth/logout", nil)
+			if err != nil {
+				t.Fatalf("build request: %v", err)
+			}
+			logoutReq.AddCookie(loginCookie)
+
+			logoutResp, err := http.DefaultClient.Do(logoutReq)
+			if err != nil {
+				t.Fatalf("POST /api/auth/logout: %v", err)
+			}
+			defer logoutResp.Body.Close()
+
+			clearedCookie := refreshCookieFrom(t, logoutResp)
+			if clearedCookie.Secure != cookieSecure {
+				t.Fatalf("expected logout's cleared refresh_token cookie Secure=%v to match the setting the cookie was set under, got %v", cookieSecure, clearedCookie.Secure)
+			}
+		})
+	}
+}
+
 func TestLogin_InvalidCredentials_Returns401(t *testing.T) {
 	srv := newAuthTestServer(t)
 
@@ -238,7 +287,7 @@ func TestLogin_DisabledAccount_SucceedsButMeIsBlocked(t *testing.T) {
 		t.Fatalf("disable user: %v", err)
 	}
 
-	h := NewAuthHandler(auth, false, false)
+	h := NewAuthHandler(auth, false, false, true)
 	r := chi.NewRouter()
 	r.Post("/api/auth/login", h.Login)
 	r.With(httpauth.RequireAuth(auth), httpauth.RequireActiveUser(auth), httpauth.RequireEnabledUser(auth)).Get("/api/auth/me", h.Me)
@@ -614,7 +663,7 @@ func TestUpdateName_DuplicateNameIsAllowed(t *testing.T) {
 		t.Fatalf("change password: %v", err)
 	}
 
-	h := NewAuthHandler(auth, false, false)
+	h := NewAuthHandler(auth, false, false, true)
 	r := chi.NewRouter()
 	r.Post("/api/auth/login", h.Login)
 	r.With(httpauth.RequireAuth(auth), httpauth.RequireActiveUser(auth)).Put("/api/auth/name", h.UpdateName)
@@ -1487,7 +1536,7 @@ func TestSetupStatus_AccountExistsAndSignupsEnabled(t *testing.T) {
 		t.Fatalf("bootstrap: %v", err)
 	}
 
-	h := NewAuthHandler(g.Auth, false, false)
+	h := NewAuthHandler(g.Auth, false, false, true)
 	r := chi.NewRouter()
 	r.Get("/api/auth/setup-status", h.SetupStatus)
 	srv := httptest.NewServer(r)
@@ -1510,7 +1559,7 @@ func TestSetupStatus_NoAccountsYet(t *testing.T) {
 	cfg.InitialName, cfg.InitialEmail, cfg.InitialPassword = "", "", ""
 	g := newTestGraphWithConfig(t, cfg)
 
-	h := NewAuthHandler(g.Auth, false, false)
+	h := NewAuthHandler(g.Auth, false, false, true)
 	r := chi.NewRouter()
 	r.Get("/api/auth/setup-status", h.SetupStatus)
 	srv := httptest.NewServer(r)

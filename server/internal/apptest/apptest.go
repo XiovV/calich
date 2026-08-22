@@ -45,6 +45,7 @@ func Config(t *testing.T) config.Config {
 		// explicitly rather than waiting for one to come due (ADR-0033).
 		SubscriptionRefreshInterval: 0,
 		EnableSignups:               false,
+		CookieSecure:                true,
 	}
 }
 

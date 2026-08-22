@@ -26,7 +26,7 @@ func newAppPasswordTestServer(t *testing.T) (*httptest.Server, string) {
 
 	appPasswords := g.AppPasswords
 	h := NewAppPasswordHandler(appPasswords)
-	authHandler := NewAuthHandler(auth, false, false)
+	authHandler := NewAuthHandler(auth, false, false, true)
 
 	r := chi.NewRouter()
 	r.Post("/api/auth/login", authHandler.Login)

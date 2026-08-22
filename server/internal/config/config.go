@@ -76,6 +76,12 @@ type Config struct {
 	// very first account on the instance, which Bootstrap or a first-run
 	// Register call always creates regardless of this setting.
 	EnableSignups bool
+	// CookieSecure sets the Refresh token cookie's Secure attribute
+	// (ADR-0009, #239). Defaults to true: a browser silently drops a
+	// Secure cookie sent over plain HTTP, so this only needs to come off
+	// for a deliberately unencrypted LAN deployment — turning it off on a
+	// public instance exposes the Refresh token to on-path interception.
+	CookieSecure bool
 }
 
 // devEnvFile is the local-dev environment file loaded by Load, sitting one
@@ -107,6 +113,7 @@ func Load() Config {
 		MaxAttachmentsPerEvent:      getEnvInt("MAX_ATTACHMENTS_PER_EVENT", defaultMaxAttachmentsPerEvent),
 		InviteRateLimitPerHour:      getEnvInt("INVITE_RATE_LIMIT_PER_HOUR", defaultInviteRateLimitPerHour),
 		EnableSignups:               getEnvBool("ENABLE_SIGNUPS", false),
+		CookieSecure:                getEnvBool("COOKIE_SECURE", true),
 	}
 }
 
