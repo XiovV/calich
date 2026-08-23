@@ -164,6 +164,22 @@ For development, run the two halves separately instead — `make dev-backend` on
 `:8080` and `make dev-frontend` for the Vite dev server, which proxies `/api` to it.
 `make help` lists every target.
 
+## CalDAV sync
+
+Calich syncs two-way with any CalDAV-capable calendar app (iOS/macOS Calendar,
+Thunderbird, DAVx5, etc.).
+
+1. In Calich, go to **Settings → App passwords**.
+2. Give it a label (e.g. `Phone`) and click **Generate**.
+3. Copy the password shown — it's only displayed once.
+4. In your calendar app, add a CalDAV account using:
+   - **Server/URL**: the domain your Calich instance runs at
+   - **Username**: your Calich account email
+   - **Password**: the app password you just generated
+
+Each app password can be revoked independently without affecting your login or
+other devices.
+
 ## Configuration
 
 All configuration is by environment variable.
