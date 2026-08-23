@@ -22,6 +22,12 @@ func New(logger *slog.Logger, authHandler *handlers.AuthHandler, calendarHandler
 
 	r.Route("/api", func(r chi.Router) {
 		r.Get("/health", handlers.Health)
+		// Version (#256, ADR-0072) is public and unauthenticated: the build
+		// label is already inferable from the content-hashed asset filenames
+		// a public instance serves, so withholding it buys nothing, while a
+		// curl-able endpoint is what answers "what is actually deployed" on
+		// an instance that won't finish booting.
+		r.Get("/version", handlers.Version)
 
 		r.Route("/auth", func(r chi.Router) {
 			// SetupStatus (#169, ADR-0047) is public and unauthenticated by

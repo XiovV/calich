@@ -10,10 +10,18 @@
 DOCKER_IMAGE := calich-server
 DATA_DIR := ./data
 
+# The build label reported by /api/version and shown beside the wordmark
+# (#256, ADR-0072). Overridable per-invocation — `make build-backend
+# VERSION=v1.2.3` — which is how the release pipeline will set it from the
+# tag. Left as "dev" it matches the package default, so an ordinary local
+# build is indistinguishable from `go run`.
+VERSION ?= dev
+VERSION_LDFLAGS := -X github.com/XiovV/calich/server/internal/version.Version=$(VERSION)
+
 help:
 	@echo "Backend (run from a separate terminal, needs Go 1.26+):"
 	@echo "  make dev-backend    run the Go backend on :8080, storing data in $(DATA_DIR)"
-	@echo "  make build-backend  compile the backend binary"
+	@echo "  make build-backend  compile the backend binary (VERSION=v1.2.3 to stamp a build label)"
 	@echo "  make test-backend   run backend tests"
 	@echo "  make lint-backend   go vet the backend"
 	@echo "  make fmt            check backend formatting (gofmt)"
@@ -41,7 +49,7 @@ dev-backend:
 	cd server && DATA_DIR=$(abspath $(DATA_DIR)) PORT=8080 go run ./cmd/server
 
 build-backend:
-	cd server && go build -o bin/calich-server ./cmd/server
+	cd server && go build -ldflags "$(VERSION_LDFLAGS)" -o bin/calich-server ./cmd/server
 
 test-backend:
 	cd server && go test ./...
@@ -77,7 +85,7 @@ lint: lint-backend lint-frontend
 # --- Docker ---
 
 docker-build:
-	docker build -t $(DOCKER_IMAGE) .
+	docker build --build-arg VERSION=$(VERSION) -t $(DOCKER_IMAGE) .
 
 docker-run:
 	mkdir -p $(DATA_DIR)

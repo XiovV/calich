@@ -71,7 +71,7 @@ var registerErrors = []errorCase{
 	{service.ErrEmailTaken, conflict("email_taken", "email is already taken")},
 	{service.ErrInvalidPassword, badRequest("password must not be empty or only whitespace")},
 	{service.ErrPasswordTooShort, badRequest("password must be at least 8 characters")},
-	{service.ErrPasswordTooLong, badRequest("password must be at most 72 bytes")},
+	{service.ErrPasswordTooLong, badRequest("password is too long, please choose a shorter one")},
 }
 
 var previewWorkspaceInviteErrors = []errorCase{
@@ -84,7 +84,7 @@ var acceptWorkspaceInviteErrors = []errorCase{
 	{service.ErrEmailTaken, conflict("email_taken", "email is already taken")},
 	{service.ErrInvalidPassword, badRequest("password must not be empty or only whitespace")},
 	{service.ErrPasswordTooShort, badRequest("password must be at least 8 characters")},
-	{service.ErrPasswordTooLong, badRequest("password must be at most 72 bytes")},
+	{service.ErrPasswordTooLong, badRequest("password is too long, please choose a shorter one")},
 }
 
 var joinWorkspaceInviteErrors = []errorCase{
@@ -121,7 +121,7 @@ var changePasswordErrors = []errorCase{
 	{service.ErrInvalidCredentials, unauthorized("invalid_credentials", "current password is incorrect")},
 	{service.ErrInvalidPassword, badRequest("new password must not be empty or only whitespace")},
 	{service.ErrPasswordTooShort, badRequest("new password must be at least 8 characters")},
-	{service.ErrPasswordTooLong, badRequest("new password must be at most 72 bytes")},
+	{service.ErrPasswordTooLong, badRequest("new password is too long, please choose a shorter one")},
 }
 
 type setupStatusResponse struct {

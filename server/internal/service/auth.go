@@ -83,6 +83,8 @@ var (
 	// maxPasswordBytes bytes — bcrypt.GenerateFromPassword's own limit,
 	// checked explicitly (#241) so a too-long password comes back as a
 	// normal validation error instead of surfacing as a generic 500.
+	// This text is for logs, not users: the handlers deliberately render it
+	// without the byte count, which a user can neither count nor act on.
 	ErrPasswordTooLong = errors.New("password must be at most 72 bytes")
 	// ErrInvalidEmail is returned when an email fails validateEmail — not a
 	// well-formed address, or containing a colon or other whitespace (ADR-0047:

@@ -2,6 +2,7 @@ import { ChevronLeft, ChevronRight, Settings } from "lucide-react";
 import { useNavigate } from "react-router";
 import { useShellStore } from "../../lib/shellStore";
 import { useWeekStartsOn } from "../../hooks/useWeekStartsOn";
+import { useVersion } from "../../hooks/useVersion";
 import { navigateDate } from "../../lib/navigateDate";
 import { formatDateLabel } from "../../lib/formatDateLabel";
 import { UserMenu } from "../../auth/UserMenu";
@@ -18,6 +19,7 @@ export function TopBar() {
   const activeView = useShellStore((state) => state.activeView);
   const setSelectedDate = useShellStore((state) => state.setSelectedDate);
   const weekStartsOn = useWeekStartsOn();
+  const version = useVersion();
 
   const goToToday = () => setSelectedDate(new Date());
   const goToPrevious = () =>
@@ -27,7 +29,15 @@ export function TopBar() {
 
   return (
     <div className="flex h-full items-center gap-4 px-4">
-      <span className="text-heading font-medium text-ink">Calich</span>
+      {/* Wordmark and build label read as one unit, so they sit in their own
+          tight flex rather than taking the row's gap-4 between them. Baseline
+          alignment keeps the small label sitting on the wordmark's baseline
+          instead of centred against it. The label is absent until it resolves
+          and absent for good if it never does (#256, ADR-0072). */}
+      <div className="flex items-baseline gap-1.5">
+        <span className="text-heading font-medium text-ink">Calich</span>
+        {version && <span className="text-label-sm text-ink-muted">{version}</span>}
+      </div>
 
       <Button
         variant="outline"

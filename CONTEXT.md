@@ -332,3 +332,7 @@ _Avoid_: source UID, foreign ID, original UID
 **Data directory**:
 The single directory (`DATA_DIR`, default `/data`) under which the backend stores all persistent state — the SQLite database and every Attachment's bytes, plus any future runtime data. The one path a self-hoster needs to mount as a volume, and now the only place where losing it loses data the database cannot describe.
 _Avoid_: data dir (in prose), storage path
+
+**Version**:
+The opaque label naming which build of the app an instance is running, fixed when that build is produced and unchangeable afterward — a property of the code, not of the deployment, so unlike the Data directory it is not something a self-hoster sets. Never parsed, compared, or reformatted: whoever names the release decides what it reads, and it is shown and served exactly as written. Reads `dev` on any build produced without one, which is every build made outside a release. Shown beside the wordmark to whoever is signed in, and answerable to anyone who can reach the instance, signed in or not. Distinct from the release it names — a release is the published artifact, the Version is only the label it carries. See ADR-0072.
+_Avoid_: build number, release, app version, semver

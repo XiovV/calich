@@ -2,6 +2,7 @@ package router
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"log/slog"
 	"net/http"
@@ -74,5 +75,35 @@ func TestRouter_UnknownClientRouteFallsBackToSPA(t *testing.T) {
 	}
 	if len(body) == 0 {
 		t.Fatalf("expected non-empty index.html body")
+	}
+}
+
+// /api/version must be reachable with no credentials at all (#256,
+// ADR-0072), and must not be swallowed by the SPA catch-all the way any
+// unknown path is. Both halves matter: the badge is fetched before the
+// shell knows anything, and index.html would answer 200 here too, so the
+// body is what tells the two apart.
+func TestRouter_VersionIsPublicAndNotShadowedBySPACatchAll(t *testing.T) {
+	r := newTestRouter(t)
+
+	srv := httptest.NewServer(r)
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/api/version")
+	if err != nil {
+		t.Fatalf("GET /api/version: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected /api/version to return 200 unauthenticated, got %d", resp.StatusCode)
+	}
+
+	var body map[string]string
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("expected a JSON body from the handler, not the SPA fallback: %v", err)
+	}
+	if body["version"] == "" {
+		t.Fatalf("expected a non-empty version label, got %#v", body)
 	}
 }
