@@ -4,7 +4,10 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"net/http"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/XiovV/calich/server/internal/clientip"
@@ -32,8 +35,14 @@ type AuthHandler struct {
 	// uses to disclose whether an emailed Response ever comes back.
 	imapConfigured bool
 	// cookieSecure is the Refresh token cookie's Secure attribute
-	// (config.Config.CookieSecure, ADR-0009, #239).
+	// (config.Config.CookieSecure, ADR-0009, #239, #257).
 	cookieSecure bool
+	// warnInsecureCookieOnce bounds the "TLS in front but COOKIE_SECURE is
+	// off" warning to one line per process (#257). The condition is a
+	// deployment mistake, not a per-request event, and Refresh runs every
+	// time an access token expires — logging it per request would bury the
+	// one line that matters under thousands of identical ones.
+	warnInsecureCookieOnce sync.Once
 }
 
 func NewAuthHandler(auth *service.AuthService, rateLimiter *service.AuthRateLimiter, smtpConfigured, imapConfigured, cookieSecure bool) *AuthHandler {
@@ -190,7 +199,7 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.setRefreshCookie(w, result.RefreshToken, result.RefreshTokenExpiresAt)
+	h.setRefreshCookie(w, r, result.RefreshToken, result.RefreshTokenExpiresAt)
 
 	httpresponse.JSON(w, http.StatusOK, loginResponse{
 		AccessToken:        result.AccessToken,
@@ -237,7 +246,7 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.setRefreshCookie(w, result.RefreshToken, result.RefreshTokenExpiresAt)
+	h.setRefreshCookie(w, r, result.RefreshToken, result.RefreshTokenExpiresAt)
 
 	httpresponse.JSON(w, http.StatusOK, loginResponse{
 		AccessToken:        result.AccessToken,
@@ -295,7 +304,7 @@ func (h *AuthHandler) AcceptWorkspaceInvite(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	h.setRefreshCookie(w, result.RefreshToken, result.RefreshTokenExpiresAt)
+	h.setRefreshCookie(w, r, result.RefreshToken, result.RefreshTokenExpiresAt)
 
 	httpresponse.JSON(w, http.StatusOK, loginResponse{
 		AccessToken:        result.AccessToken,
@@ -601,12 +610,28 @@ func (h *AuthHandler) ChangePassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.setRefreshCookie(w, result.RefreshToken, result.RefreshTokenExpiresAt)
+	h.setRefreshCookie(w, r, result.RefreshToken, result.RefreshTokenExpiresAt)
 
 	httpresponse.JSON(w, http.StatusOK, changePasswordResponse{AccessToken: result.AccessToken})
 }
 
-func (h *AuthHandler) setRefreshCookie(w http.ResponseWriter, value string, expires time.Time) {
+// setRefreshCookie issues the Refresh token cookie, and warns the operator
+// once if this request proves the instance is behind TLS while COOKIE_SECURE
+// is still off (#257) — the mistake that would otherwise never surface,
+// since an insecure cookie works perfectly right up until someone reads it
+// off a plaintext request to the same host.
+//
+// Note this only *reports* the mismatch and never acts on it: ADR-0009
+// rejected deriving Secure from these same signals because an absent
+// X-Forwarded-Proto would silently downgrade the cookie. A false negative
+// here costs a missing log line; a false negative there cost the token.
+func (h *AuthHandler) setRefreshCookie(w http.ResponseWriter, r *http.Request, value string, expires time.Time) {
+	if !h.cookieSecure && requestIsTLS(r) {
+		h.warnInsecureCookieOnce.Do(func() {
+			slog.Warn("issuing a non-Secure refresh token cookie over TLS; set COOKIE_SECURE=true so the cookie cannot leak over a plaintext request to this host", "host", r.Host)
+		})
+	}
+
 	http.SetCookie(w, &http.Cookie{
 		Name:     refreshCookieName,
 		Value:    value,
@@ -616,6 +641,20 @@ func (h *AuthHandler) setRefreshCookie(w http.ResponseWriter, value string, expi
 		Secure:   h.cookieSecure,
 		SameSite: http.SameSiteLaxMode,
 	})
+}
+
+// requestIsTLS reports whether this request reached the instance over TLS,
+// either directly or through a reverse proxy that terminated it. Absence of
+// both signals is not proof of plain HTTP — a proxy may simply not set the
+// header — which is exactly why this only ever gates a warning.
+func requestIsTLS(r *http.Request) bool {
+	if r.TLS != nil {
+		return true
+	}
+	// X-Forwarded-Proto is a list when several proxies have appended to it;
+	// the client-facing scheme is the first entry.
+	proto, _, _ := strings.Cut(r.Header.Get("X-Forwarded-Proto"), ",")
+	return strings.EqualFold(strings.TrimSpace(proto), "https")
 }
 
 func (h *AuthHandler) clearRefreshCookie(w http.ResponseWriter) {

@@ -3,6 +3,7 @@ package handlers
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -192,6 +193,46 @@ func TestLogin_Success_SetsRefreshCookieAndReturnsAccessToken(t *testing.T) {
 	}
 	if cookie.Path != "/" {
 		t.Fatalf("expected refresh_token cookie Path=/, got %q", cookie.Path)
+	}
+}
+
+// TestRequestIsTLS covers #257's detection half: COOKIE_SECURE now defaults
+// to false so a plain-HTTP LAN deployment works out of the box, which means
+// the instance that graduates to a reverse proxy is the one at risk of
+// leaving it off. requestIsTLS is what notices, so it has to read a
+// terminating proxy's header the way proxies actually write it.
+func TestRequestIsTLS(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		tls       bool
+		forwarded string
+		want      bool
+	}{
+		{name: "direct TLS", tls: true, want: true},
+		{name: "plain HTTP", want: false},
+		{name: "proxy terminated TLS", forwarded: "https", want: true},
+		{name: "proxy forwarded plain HTTP", forwarded: "http", want: false},
+		// Some proxies capitalize the scheme, and RFC 7239-era headers are
+		// case-insensitive.
+		{name: "mixed case", forwarded: "HTTPS", want: true},
+		// Chained proxies append, and the client-facing scheme is first —
+		// reading the last entry here would miss a real TLS deployment.
+		{name: "chained proxies", forwarded: "https, http", want: true},
+		{name: "chained proxies, plain client", forwarded: "http, https", want: false},
+		{name: "padded list", forwarded: "  https , http", want: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "/api/auth/login", nil)
+			if tc.tls {
+				req.TLS = &tls.ConnectionState{}
+			}
+			if tc.forwarded != "" {
+				req.Header.Set("X-Forwarded-Proto", tc.forwarded)
+			}
+			if got := requestIsTLS(req); got != tc.want {
+				t.Fatalf("requestIsTLS() = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }
 
