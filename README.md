@@ -73,6 +73,8 @@ docker run -d \
   -e INITIAL_EMAIL=you@example.com \ # Optional
   -e INITIAL_PASSWORD=change-me \ # Optional
   -e INITIAL_NAME=change-me \ # Optional
+  -e COOKIE_SECURE=false \ # false by default, set to true when running behind a reverse proxy
+
   xiovv/calich:latest
 ```
 
@@ -91,7 +93,8 @@ services:
     environment:
       INITIAL_EMAIL: you@example.com # Optional
       INITIAL_PASSWORD: change-me # Optional
-      INITIAL_NAME=change-me \ # Optional
+      INITIAL_NAME=change-me  # Optional
+      COOKIE_SECURE=false # false by default, set to true when running behind a reverse proxy
 ```
 
 ```bash
