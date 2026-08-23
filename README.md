@@ -7,7 +7,7 @@ An open-source, self-hosted Google Calendar alternative with **CalDAV** sync.
 - **Day, Week, Month and Year views**, with drag-to-create, drag-to-move and resize.
 - **Recurring events and all-day events**
 - **CalDAV**: two-way sync with your phone and other calendar apps.
-- **Workspaces**: share calendars with other members, organize them into groups,
+- **Workspaces**: share calendars with other members, organize members into groups,
   and invite people by email.
 - **Attendees and invitations** — Invite others to events.
 - **Reminders**: in-app and email.
@@ -45,9 +45,6 @@ An open-source, self-hosted Google Calendar alternative with **CalDAV** sync.
 Calich is a single binary serving both the API and the web app on one port
 (`8080` by default). All persistent state lives under one directory, so a
 deployment is the binary (or container) plus a volume.
-
-Reachable from anywhere other than a trusted LAN? Put TLS in front of it and set
-`COOKIE_SECURE=true` — see [Behind a reverse proxy](#behind-a-reverse-proxy).
 
 ### Docker
 
@@ -112,8 +109,7 @@ INITIAL_PASSWORD=change-me \
   calich-server
 ```
 
-The frontend is embedded in the binary, so that's the whole install. To run it as a
-service, a minimal systemd unit:
+To run it as a service, a minimal systemd unit:
 
 ```ini
 # /etc/systemd/system/calich.service
@@ -153,12 +149,7 @@ cp -r dist/. server/internal/static/dist/
 make build-backend VERSION=v1.0.0         # writes server/bin/calich-server
 ```
 
-Step 1 matters: `server/internal/static/dist/` holds a placeholder page in the repo
-so the Go build compiles without a frontend present. Skip it and you'll get a
-working API serving a blank placeholder instead of the app.
-
-`VERSION` is optional — it's the label shown beside the wordmark and served from
-`/api/version`. Left unset, the build honestly reports `dev`.
+`VERSION` is optional. If left unset, the version badge will show `dev`.
 
 Then run it:
 
@@ -226,7 +217,7 @@ services:
 A minimal Caddy site block, which handles certificates automatically:
 
 ```caddyfile
-calendar.example.com {
+calich.example.com {
     reverse_proxy calich:8080
 }
 ```
@@ -236,10 +227,10 @@ Or nginx:
 ```nginx
 server {
     listen 443 ssl;
-    server_name calendar.example.com;
+    server_name calich.example.com;
 
-    ssl_certificate     /etc/letsencrypt/live/calendar.example.com/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/calendar.example.com/privkey.pem;
+    ssl_certificate     /etc/letsencrypt/live/calich.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/calich.example.com/privkey.pem;
 
     location / {
         proxy_pass http://calich:8080;
@@ -251,41 +242,16 @@ server {
 }
 ```
 
-Keep `X-Forwarded-Proto` in place — it's what lets Calich notice if `COOKIE_SECURE`
-is still off and warn you about it.
-
-**Want HTTPS on a LAN address?** A public certificate authority won't issue for a
-private IP, but you have two good options: [Tailscale](https://tailscale.com), whose
-`tailscale cert` / Serve gives you real HTTPS on a `*.ts.net` name with no cert
-management at all; or a real domain resolved to your private IP with a certificate
-obtained via the DNS-01 challenge, which Caddy and certbot both support. Either way
-you get a trustworthy origin and can set `COOKIE_SECURE=true`.
-
 ## Data & backups
 
 Everything this instance keeps is under `DATA_DIR` (default `/data`): `calich.db`
 (SQLite) and an `attachments/` directory holding every uploaded file's bytes.
 
-**A backup that copies only `calich.db` silently loses every attachment — back up the
-whole `DATA_DIR`, not just the database file.**
-
 ## Roadmap
 
-Calendars today come from this instance or from a subscribed `.ics` URL. The next
-milestone is mirroring calendars from external providers over their own APIs:
-
-- [ ] **Connections** — authorize and revoke a Google account ([#180](https://github.com/XiovV/calich/issues/180))
-- [ ] **Linked calendars** — pick which of a connection's calendars to mirror, and see their events ([#181](https://github.com/XiovV/calich/issues/181))
-- [ ] **Full and delta refresh**, with a background poller for connections ([#182](https://github.com/XiovV/calich/issues/182))
-- [ ] Linked events carry **RSVP status, conference link and colour** ([#183](https://github.com/XiovV/calich/issues/183))
-- [ ] **Sharing linked calendars**, with a viewer-dependent CalDAV home-set ([#184](https://github.com/XiovV/calich/issues/184))
-- [ ] Reminders on an external source are **opt-in, off by default** ([#185](https://github.com/XiovV/calich/issues/185))
-- [ ] **Connection lifecycle** — disconnect disposition, pending calendars, failure states ([#186](https://github.com/XiovV/calich/issues/186))
-
-Beyond that milestone:
-
-- [ ] **Microsoft** as a second provider — the connection layer is built to be provider-extensible.
-- [ ] **Web Push**, layered on the notification records already stored.
-- [ ] **Creating** multi-day all-day events from the event modal — they render and import correctly today, but only the API can create one.
-- [ ] **Private-address blocking** on subscription URLs, and encrypting stored subscription credentials, before multi-user deployments are recommended.
-- [ ] **Reminder catch-up** after downtime — missed fires are currently dropped by design.
+- [ ] Keyboard shortcuts
+- [ ] Connect with Google Calendar
+- [ ] Agenda view and daily agenda reminders
+- [ ] Tasks integration
+- [ ] Booking pages
+- [ ] Mobile app
