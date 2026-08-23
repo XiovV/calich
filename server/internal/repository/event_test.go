@@ -727,3 +727,50 @@ func mustParseTime(t *testing.T, value string) time.Time {
 	}
 	return ts
 }
+
+// A client may send start/end in any UTC offset, and every bound time.Time is
+// normalized to UTC before it reaches SQLite (see utc.go). The offsets here
+// use a *nameless* fixed zone deliberately: Go only attaches a named Location
+// when the offset matches the host's local zone, and a nameless zone is what
+// formats as "+0100 +0100" and fails to scan back. Constructing it explicitly
+// reproduces the failure on any host rather than only on a UTC one, which is
+// how this regressed — it passed in CET and failed in the UTC container.
+func TestEventRepository_Create_NormalizesNonUTCOffsetsToUTC(t *testing.T) {
+	repo, userID, calendarID, _ := newTestEventRepository(t)
+	ctx := context.Background()
+
+	plusOne := time.FixedZone("", 1*60*60)
+	start := time.Date(2026, 1, 1, 10, 0, 0, 0, plusOne)
+	end := time.Date(2026, 1, 1, 11, 0, 0, 0, plusOne)
+
+	created, err := repo.Create(ctx, "evt-tz", &userID, EventFields{CalendarID: calendarID, Title: "Standup", Start: start, End: end}, 0)
+	if err != nil {
+		t.Fatalf("create event with a non-UTC offset: %v", err)
+	}
+
+	wantStart := time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC)
+	wantEnd := time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC)
+	if !created.Start.Equal(wantStart) || !created.End.Equal(wantEnd) {
+		t.Fatalf("expected the same instants back, got start=%v end=%v", created.Start, created.End)
+	}
+
+	fetched, err := repo.GetByID(ctx, "evt-tz")
+	if err != nil {
+		t.Fatalf("get by id: %v", err)
+	}
+	if !fetched.Start.Equal(wantStart) || !fetched.End.Equal(wantEnd) {
+		t.Fatalf("expected the same instants on re-read, got start=%v end=%v", fetched.Start, fetched.End)
+	}
+
+	// The windowing predicate compares lexically against the stored TEXT, so a
+	// zoned bound value would sort as a string rather than as an instant.
+	from := time.Date(2026, 1, 1, 9, 30, 0, 0, plusOne) // 08:30Z — before the event
+	to := time.Date(2026, 1, 1, 12, 0, 0, 0, plusOne)   // 11:00Z — after it
+	listed, err := repo.ListByCalendarIDs(ctx, []string{calendarID}, &from, &to)
+	if err != nil {
+		t.Fatalf("list windowed: %v", err)
+	}
+	if len(listed) != 1 || listed[0].ID != "evt-tz" {
+		t.Fatalf("expected the event to fall inside a window given in a non-UTC offset, got %+v", listed)
+	}
+}

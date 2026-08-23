@@ -27,7 +27,7 @@ func (r *EventExceptionRepository) WithTx(tx *sql.Tx) *EventExceptionRepository 
 func (r *EventExceptionRepository) Add(ctx context.Context, parentID string, occurrenceStart time.Time) error {
 	_, err := r.db.ExecContext(ctx,
 		`INSERT OR IGNORE INTO event_exceptions (parent_id, occurrence_start) VALUES (?, ?)`,
-		parentID, occurrenceStart,
+		parentID, occurrenceStart.UTC(),
 	)
 	if err != nil {
 		return fmt.Errorf("add exception: %w", err)
@@ -76,7 +76,7 @@ func (r *EventExceptionRepository) ListByParentIDs(ctx context.Context, parentID
 func (r *EventExceptionRepository) ReparentFrom(ctx context.Context, oldParentID, newParentID string, fromStart time.Time) error {
 	_, err := r.db.ExecContext(ctx,
 		`UPDATE event_exceptions SET parent_id = ? WHERE parent_id = ? AND occurrence_start >= ?`,
-		newParentID, oldParentID, fromStart,
+		newParentID, oldParentID, fromStart.UTC(),
 	)
 	if err != nil {
 		return fmt.Errorf("reparent exceptions: %w", err)

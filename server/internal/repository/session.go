@@ -27,7 +27,7 @@ func NewSessionRepository(db *sql.DB) *SessionRepository {
 func (r *SessionRepository) Create(ctx context.Context, userID int64, refreshTokenHash string, refreshTokenExpiresAt time.Time) (Session, error) {
 	res, err := r.db.ExecContext(ctx,
 		`INSERT INTO sessions (user_id, refresh_token_hash, refresh_token_expires_at) VALUES (?, ?, ?)`,
-		userID, refreshTokenHash, refreshTokenExpiresAt,
+		userID, refreshTokenHash, refreshTokenExpiresAt.UTC(),
 	)
 	if err != nil {
 		return Session{}, fmt.Errorf("insert session: %w", err)

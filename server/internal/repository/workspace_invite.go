@@ -52,7 +52,7 @@ func (r *WorkspaceInviteRepository) WithTx(tx *sql.Tx) *WorkspaceInviteRepositor
 func (r *WorkspaceInviteRepository) Create(ctx context.Context, workspaceID int64, email, inviteTokenHash string, inviteExpiresAt time.Time) (WorkspaceInvite, error) {
 	res, err := r.db.ExecContext(ctx,
 		`INSERT INTO workspace_invites (workspace_id, email, invite_token_hash, invite_expires_at) VALUES (?, ?, ?, ?)`,
-		workspaceID, email, inviteTokenHash, inviteExpiresAt,
+		workspaceID, email, inviteTokenHash, inviteExpiresAt.UTC(),
 	)
 	if err != nil {
 		if strings.Contains(err.Error(), "UNIQUE constraint failed") {
@@ -116,7 +116,7 @@ func (r *WorkspaceInviteRepository) GetByTokenHash(ctx context.Context, inviteTo
 func (r *WorkspaceInviteRepository) SetTokenHash(ctx context.Context, id int64, inviteTokenHash string, inviteExpiresAt time.Time) (WorkspaceInvite, error) {
 	if _, err := r.db.ExecContext(ctx,
 		`UPDATE workspace_invites SET invite_token_hash = ?, invite_expires_at = ? WHERE id = ?`,
-		inviteTokenHash, inviteExpiresAt, id,
+		inviteTokenHash, inviteExpiresAt.UTC(), id,
 	); err != nil {
 		return WorkspaceInvite{}, fmt.Errorf("set workspace invite token: %w", err)
 	}

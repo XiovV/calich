@@ -29,7 +29,7 @@ func NewFiredReminderRepository(db *sql.DB) *FiredReminderRepository {
 func (r *FiredReminderRepository) MarkFired(ctx context.Context, reminderID, userID int64, occurrenceStart, firedAt time.Time) (bool, error) {
 	res, err := r.db.ExecContext(ctx,
 		`INSERT OR IGNORE INTO fired_reminders (reminder_id, user_id, occurrence_start, fired_at) VALUES (?, ?, ?, ?)`,
-		reminderID, userID, occurrenceStart, firedAt,
+		reminderID, userID, occurrenceStart.UTC(), firedAt.UTC(),
 	)
 	if err != nil {
 		return false, fmt.Errorf("mark reminder fired: %w", err)
@@ -51,7 +51,7 @@ func (r *FiredReminderRepository) MarkFired(ctx context.Context, reminderID, use
 func (r *FiredReminderRepository) MarkDefaultFired(ctx context.Context, defaultReminderID int64, eventID string, userID int64, occurrenceStart, firedAt time.Time) (bool, error) {
 	res, err := r.db.ExecContext(ctx,
 		`INSERT OR IGNORE INTO fired_default_reminders (default_reminder_id, event_id, user_id, occurrence_start, fired_at) VALUES (?, ?, ?, ?, ?)`,
-		defaultReminderID, eventID, userID, occurrenceStart, firedAt,
+		defaultReminderID, eventID, userID, occurrenceStart.UTC(), firedAt.UTC(),
 	)
 	if err != nil {
 		return false, fmt.Errorf("mark default reminder fired: %w", err)

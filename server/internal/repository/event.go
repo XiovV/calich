@@ -165,7 +165,7 @@ type EventFields struct {
 func (r *EventRepository) Create(ctx context.Context, id string, createdBy *int64, f EventFields, changeSeq int64) (Event, error) {
 	if _, err := r.db.ExecContext(ctx,
 		`INSERT INTO events (id, calendar_id, title, "start", "end", all_day, rrule, parent_id, recurrence_id, tzid, description, location, url, color, external_uid, created_by, change_seq) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		id, f.CalendarID, f.Title, f.Start, f.End, f.AllDay, f.Rrule, f.ParentID, f.RecurrenceID, f.Tzid, f.Description, f.Location, f.URL, f.Color, f.ExternalUID, createdBy, changeSeq,
+		id, f.CalendarID, f.Title, f.Start.UTC(), f.End.UTC(), f.AllDay, f.Rrule, f.ParentID, utcPtr(f.RecurrenceID), f.Tzid, f.Description, f.Location, f.URL, f.Color, f.ExternalUID, createdBy, changeSeq,
 	); err != nil {
 		return Event{}, fmt.Errorf("insert event: %w", err)
 	}
@@ -233,13 +233,13 @@ func (r *EventRepository) listWindowed(ctx context.Context, baseQuery string, ba
 	switch {
 	case from != nil && to != nil:
 		query += ` AND ((rrule = '' AND "end" > ? AND "start" < ?) OR (rrule != '' AND "start" < ?))`
-		args = append(args, *from, *to, *to)
+		args = append(args, from.UTC(), to.UTC(), to.UTC())
 	case from != nil:
 		query += ` AND (rrule != '' OR "end" > ?)`
-		args = append(args, *from)
+		args = append(args, from.UTC())
 	case to != nil:
 		query += ` AND "start" < ?`
-		args = append(args, *to)
+		args = append(args, to.UTC())
 	}
 	query += ` ORDER BY "start", id`
 
@@ -350,7 +350,7 @@ func (r *EventRepository) ListAllWithAnyReminder(ctx context.Context) ([]Event, 
 func (r *EventRepository) Update(ctx context.Context, id string, f EventFields, changeSeq, sequence int64) (Event, error) {
 	res, err := r.db.ExecContext(ctx,
 		`UPDATE events SET calendar_id = ?, title = ?, "start" = ?, "end" = ?, all_day = ?, rrule = ?, tzid = ?, description = ?, location = ?, url = ?, color = ?, change_seq = ?, sequence = ? WHERE id = ?`,
-		f.CalendarID, f.Title, f.Start, f.End, f.AllDay, f.Rrule, f.Tzid, f.Description, f.Location, f.URL, f.Color, changeSeq, sequence, id,
+		f.CalendarID, f.Title, f.Start.UTC(), f.End.UTC(), f.AllDay, f.Rrule, f.Tzid, f.Description, f.Location, f.URL, f.Color, changeSeq, sequence, id,
 	)
 	if err != nil {
 		return Event{}, fmt.Errorf("update event: %w", err)
@@ -414,7 +414,7 @@ func (r *EventRepository) Delete(ctx context.Context, id string) error {
 func (r *EventRepository) ReparentOverridesFrom(ctx context.Context, oldParentID, newParentID string, fromStart time.Time) error {
 	_, err := r.db.ExecContext(ctx,
 		`UPDATE events SET parent_id = ? WHERE parent_id = ? AND recurrence_id >= ?`,
-		newParentID, oldParentID, fromStart,
+		newParentID, oldParentID, fromStart.UTC(),
 	)
 	if err != nil {
 		return fmt.Errorf("reparent overrides: %w", err)

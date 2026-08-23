@@ -55,7 +55,7 @@ func (r *NotificationRepository) WithTx(tx *sql.Tx) *NotificationRepository {
 func (r *NotificationRepository) Insert(ctx context.Context, userID int64, eventID string, occurrenceStart time.Time, title string, firedAt time.Time) (Notification, error) {
 	res, err := r.db.ExecContext(ctx,
 		`INSERT INTO notifications (user_id, event_id, kind, occurrence_start, title, fired_at) VALUES (?, ?, ?, ?, ?, ?)`,
-		userID, eventID, KindReminder, occurrenceStart, title, firedAt,
+		userID, eventID, KindReminder, occurrenceStart.UTC(), title, firedAt.UTC(),
 	)
 	if err != nil {
 		return Notification{}, fmt.Errorf("insert notification: %w", err)
@@ -84,7 +84,7 @@ func (r *NotificationRepository) Insert(ctx context.Context, userID int64, event
 func (r *NotificationRepository) InsertInvite(ctx context.Context, userID int64, eventID string, title string, invitedAt time.Time) (Notification, error) {
 	res, err := r.db.ExecContext(ctx,
 		`INSERT INTO notifications (user_id, event_id, kind, occurrence_start, title, fired_at) VALUES (?, ?, ?, NULL, ?, ?)`,
-		userID, eventID, KindInvite, title, invitedAt,
+		userID, eventID, KindInvite, title, invitedAt.UTC(),
 	)
 	if err != nil {
 		return Notification{}, fmt.Errorf("insert invite notification: %w", err)
