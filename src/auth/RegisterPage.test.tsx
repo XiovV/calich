@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router";
 
 // Same convention as AccountSection.test.tsx: authApi is mocked, authStore
@@ -67,5 +68,36 @@ describe("RegisterPage — closed state (#235)", () => {
 
     expect(screen.getByRole("button", { name: "Create account" })).toBeInTheDocument();
     expect(screen.queryByText("Registration is closed")).not.toBeInTheDocument();
+  });
+});
+
+// #255: the 8-character floor was stated in the hint text but only enforced
+// server-side — a short password left Create account enabled until the
+// round trip rejected it.
+describe("RegisterPage — password minimum length (#255)", () => {
+  it("keeps Create account disabled while the password is under 8 characters", async () => {
+    useAuthStore.setState({ signupsEnabled: true });
+    renderRegisterPage();
+
+    await userEvent.type(screen.getByLabelText("Name"), "Jane Smith");
+    await userEvent.type(screen.getByLabelText("Email"), "jane@example.com");
+    await userEvent.type(screen.getByLabelText("Password"), "short7c");
+    expect(screen.getByRole("button", { name: "Create account" })).toBeDisabled();
+
+    await userEvent.type(screen.getByLabelText("Password"), "8");
+    expect(screen.getByRole("button", { name: "Create account" })).toBeEnabled();
+  });
+
+  // An all-whitespace password can be 8+ code points long and still fail
+  // the server's isVisibleRune check (#251) — hasMinPasswordLength alone
+  // wouldn't catch that, so the pre-existing trim guard must stay.
+  it("keeps Create account disabled for an 8-character whitespace-only password", async () => {
+    useAuthStore.setState({ signupsEnabled: true });
+    renderRegisterPage();
+
+    await userEvent.type(screen.getByLabelText("Name"), "Jane Smith");
+    await userEvent.type(screen.getByLabelText("Email"), "jane@example.com");
+    await userEvent.type(screen.getByLabelText("Password"), "        ");
+    expect(screen.getByRole("button", { name: "Create account" })).toBeDisabled();
   });
 });

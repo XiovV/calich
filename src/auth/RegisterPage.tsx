@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Link, Navigate, useNavigate } from "react-router";
 import { useAuthStore } from "../lib/authStore";
 import { useAsyncAction } from "../hooks/useAsyncAction";
+import { hasMinPasswordLength } from "../lib/passwordPolicy";
 import { Button } from "../components/ui/Button";
 import { Input } from "../components/ui/Input";
 
@@ -53,7 +54,16 @@ export function RegisterPage() {
     );
   }
 
-  const canSubmit = name.trim() !== "" && email.trim() !== "" && password.trim() !== "";
+  // hasMinPasswordLength mirrors the hint text below the field client-side
+  // (#255) so a too-short password is caught before the round trip that
+  // already catches it. password.trim() !== "" stays alongside it — an
+  // all-whitespace password can be 8+ code points long and still fail the
+  // server's isVisibleRune check (#251).
+  const canSubmit =
+    name.trim() !== "" &&
+    email.trim() !== "" &&
+    password.trim() !== "" &&
+    hasMinPasswordLength(password);
 
   async function handleSubmit(domEvent: React.FormEvent) {
     domEvent.preventDefault();

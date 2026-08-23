@@ -240,11 +240,27 @@ describe("AccountSection — change password (#234)", () => {
     await userEvent.type(screen.getByLabelText("Current password"), "old-pw");
     expect(updateButton()).toBeDisabled();
 
-    await userEvent.type(screen.getByLabelText("New password"), "new-pw");
+    await userEvent.type(screen.getByLabelText("New password"), "new-password");
     expect(updateButton()).toBeDisabled();
 
-    await userEvent.type(screen.getByLabelText("Confirm new password"), "not-new-pw");
+    await userEvent.type(screen.getByLabelText("Confirm new password"), "not-new-password");
     expect(updateButton()).toBeDisabled();
+  });
+
+  // #255: the 8-character floor was stated in the hint text but only
+  // enforced server-side — a short-but-otherwise-valid new password left
+  // Update password enabled until the round trip rejected it.
+  it("keeps Update password disabled while the new password is under 8 characters", async () => {
+    render(<AccountSection />);
+
+    await userEvent.type(screen.getByLabelText("Current password"), "old-pw");
+    await userEvent.type(screen.getByLabelText("New password"), "short7c");
+    await userEvent.type(screen.getByLabelText("Confirm new password"), "short7c");
+    expect(updateButton()).toBeDisabled();
+
+    await userEvent.type(screen.getByLabelText("New password"), "8");
+    await userEvent.type(screen.getByLabelText("Confirm new password"), "8");
+    expect(updateButton()).toBeEnabled();
   });
 
   it("changes the password and clears the form on success", async () => {
@@ -252,10 +268,10 @@ describe("AccountSection — change password (#234)", () => {
     vi.mocked(authApi.me).mockResolvedValue(user);
     render(<AccountSection />);
 
-    await fillPasswordForm("old-pw", "new-pw", "new-pw");
+    await fillPasswordForm("old-pw", "new-password", "new-password");
     await userEvent.click(updateButton());
 
-    expect(authApi.changePassword).toHaveBeenCalledWith("token-123", "old-pw", "new-pw");
+    expect(authApi.changePassword).toHaveBeenCalledWith("token-123", "old-pw", "new-password");
     expect(screen.getByText("Password updated.")).toBeInTheDocument();
     expect(screen.getByLabelText("Current password")).toHaveValue("");
     expect(screen.getByLabelText("New password")).toHaveValue("");
@@ -268,7 +284,7 @@ describe("AccountSection — change password (#234)", () => {
     );
     render(<AccountSection />);
 
-    await fillPasswordForm("wrong-pw", "new-pw", "new-pw");
+    await fillPasswordForm("wrong-pw", "new-password", "new-password");
     await userEvent.click(updateButton());
 
     expect(screen.getByText("current password is incorrect")).toBeInTheDocument();
@@ -280,7 +296,7 @@ describe("AccountSection — change password (#234)", () => {
 
   it("surfaces a too-long new password with a clear message and changes nothing (#241)", async () => {
     vi.mocked(authApi.changePassword).mockRejectedValue(
-      new Error("new password must be at most 72 bytes"),
+      new Error("new password is too long, please choose a shorter one"),
     );
     render(<AccountSection />);
 
@@ -288,7 +304,9 @@ describe("AccountSection — change password (#234)", () => {
     await fillPasswordForm("old-pw", longPassword, longPassword);
     await userEvent.click(updateButton());
 
-    expect(screen.getByText("new password must be at most 72 bytes")).toBeInTheDocument();
+    expect(
+      screen.getByText("new password is too long, please choose a shorter one"),
+    ).toBeInTheDocument();
     expect(screen.queryByText("Password updated.")).not.toBeInTheDocument();
     expect(useAuthStore.getState().accessToken).toBe("token-123");
   });
@@ -296,7 +314,7 @@ describe("AccountSection — change password (#234)", () => {
   it("flags mismatched new/confirm passwords inline", async () => {
     render(<AccountSection />);
 
-    await fillPasswordForm("old-pw", "new-pw", "different-pw");
+    await fillPasswordForm("old-pw", "new-password", "different-password");
 
     expect(screen.getByText("Passwords don't match.")).toBeInTheDocument();
   });

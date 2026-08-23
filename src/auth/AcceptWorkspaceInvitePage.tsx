@@ -3,6 +3,7 @@ import { Link, useNavigate, useSearchParams } from "react-router";
 import { useAuthStore } from "../lib/authStore";
 import { authApi } from "../lib/authApi";
 import { errorMessage } from "../lib/errorMessage";
+import { hasMinPasswordLength } from "../lib/passwordPolicy";
 import { useAsyncAction } from "../hooks/useAsyncAction";
 import { Button } from "../components/ui/Button";
 import { Input } from "../components/ui/Input";
@@ -129,7 +130,16 @@ export function AcceptWorkspaceInvitePage() {
   }
 
   const passwordsMatch = password !== "" && password === confirmPassword;
-  const canSubmit = name.trim() !== "" && passwordsMatch;
+  // hasMinPasswordLength mirrors the hint text below the field client-side
+  // (#255) so a too-short password is caught before the round trip that
+  // already catches it. password.trim() !== "" alongside it — an
+  // all-whitespace password can be 8+ code points long and still fail the
+  // server's isVisibleRune check (#251).
+  const canSubmit =
+    name.trim() !== "" &&
+    password.trim() !== "" &&
+    hasMinPasswordLength(password) &&
+    passwordsMatch;
 
   async function handleSubmit(domEvent: React.FormEvent) {
     domEvent.preventDefault();

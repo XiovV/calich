@@ -4,6 +4,7 @@ import { appPasswordsApi } from "../lib/appPasswordsApi";
 import { useAsyncAction } from "../hooks/useAsyncAction";
 import { useSyncedField } from "../hooks/useSyncedField";
 import { errorMessage } from "../lib/errorMessage";
+import { hasMinPasswordLength } from "../lib/passwordPolicy";
 import { Button } from "../components/ui/Button";
 import { Input } from "../components/ui/Input";
 import { DeleteAccountDialog } from "./DeleteAccountDialog";
@@ -57,7 +58,10 @@ export function AccountSection() {
   // canSubmitPassword applies, so there's no whitespace-only value that
   // reads as "matching" here yet still leaves Submit disabled unexplained.
   const newPasswordsMatch = newPassword.trim() !== "" && newPassword === confirmPassword;
-  const canSubmitPassword = currentPassword.trim() !== "" && newPasswordsMatch;
+  // Mirrors the hint text below the field client-side (#255) so a too-short
+  // password is caught before the round trip that already catches it.
+  const canSubmitPassword =
+    currentPassword.trim() !== "" && hasMinPasswordLength(newPassword) && newPasswordsMatch;
 
   async function handleSubmitName(domEvent: React.FormEvent) {
     domEvent.preventDefault();
