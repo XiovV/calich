@@ -42,6 +42,8 @@ Folding them would drag an immutable string through every liveness poll, and —
 
 `dev` is the package default, so a release build whose ldflag silently failed to fire is indistinguishable from a laptop. Choosing `""` or `"unknown"` as the default does not fix this — it relocates the ambiguity. The only real fix is the release pipeline asserting the flag is set before publishing, which is out of scope for #256 and belongs with the pipeline work.
 
+**Amended:** the release pipeline has since shipped (ADR-0073) and deliberately did **not** take that fix. It asserts only that the published release carries a non-empty tag, which catches an unlabelled release but not a `-X` whose symbol path has stopped matching after a refactor — that still links silently and still ships an image whose badge reads `dev`. Closing the gap needs the pipeline to boot the built image and read `/api/version` back before pushing; that was considered and scoped out. The gap described above remains open.
+
 `dev` was chosen over an empty string for a different reason: an empty label hides the badge entirely, which means the badge is invisible during exactly the development in which its wiring would be noticed as broken.
 
 ## Considered and rejected

@@ -43,7 +43,7 @@ An open-source, self-hosted Google Calendar alternative with **CalDAV** sync.
 ## Deployment
 
 Calich is a single binary serving both the API and the web app on one port
-(`8080` by default). All persistent state lives under one directory, so a
+(`8080` by default). All persistent data live under one directory, so a
 deployment is the binary (or container) plus a volume.
 
 ### Docker
@@ -58,7 +58,7 @@ docker run -d \
 
   -e INITIAL_EMAIL=you@example.com \ # Optional
   -e INITIAL_PASSWORD=change-me \ # Optional
-  ghcr.io/xiovv/calich:latest
+  xiovv/calich:latest
 ```
 
 Or with Compose:
@@ -66,7 +66,7 @@ Or with Compose:
 ```yaml
 services:
   calich:
-    image: ghcr.io/xiovv/calich:latest
+    image: xiovv/calich:latest
     container_name: calich
     restart: unless-stopped
     ports:
@@ -204,7 +204,7 @@ Once you're terminating TLS, set `COOKIE_SECURE=true` alongside it:
 ```yaml
 services:
   calich:
-    image: ghcr.io/xiovv/calich:latest
+    image: xiovv/calich:latest
     restart: unless-stopped
     volumes:
       - ./data:/data

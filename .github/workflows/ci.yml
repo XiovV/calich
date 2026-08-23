@@ -1,0 +1,59 @@
+# Continuous checks on every push to main and every pull request.
+#
+# This is the workflow that is *supposed* to find problems. The release
+# workflow re-runs the same two test suites as a final gate, but by the time
+# it runs the tag already exists and the GitHub Release is already public, so
+# a failure there is expensive to recover from. Lint and gofmt therefore live
+# here and only here: a style complaint should never be able to block a
+# publish, because fixing one after the fact costs a re-tag.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# A force-push or a quick second push should cancel the run it superseded.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    name: Backend (test, vet, gofmt)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          # Reads 1.26.5 from the module file, so the toolchain here can never
+          # drift from the one the Dockerfile and developers build with.
+          go-version-file: server/go.mod
+          cache-dependency-path: server/go.sum
+
+      - run: make test-backend
+      - run: make lint-backend
+      - run: make fmt
+
+  frontend:
+    name: Frontend (test, eslint)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          # Matches the node:22-alpine builder stage in the Dockerfile.
+          node-version: 22
+          cache: yarn
+
+      # Yarn 1 classic (no packageManager field); --frozen-lockfile matches
+      # what the Dockerfile's frontend stage does.
+      - run: yarn install --frozen-lockfile
+
+      - run: make test-frontend
+      - run: make lint-frontend

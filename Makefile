@@ -57,8 +57,14 @@ test-backend:
 lint-backend vet:
 	cd server && go vet ./...
 
+# Exits non-zero when anything is unformatted. `gofmt -l` alone only prints
+# the offending file names and still exits 0, which made this a no-op as the
+# CI gate it is used as.
 fmt:
-	cd server && gofmt -l .
+	@cd server && unformatted=$$(gofmt -l .); \
+	if [ -n "$$unformatted" ]; then \
+		echo "gofmt needed:"; echo "$$unformatted"; exit 1; \
+	fi
 
 # --- Frontend ---
 

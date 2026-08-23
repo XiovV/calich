@@ -1,0 +1,195 @@
+# Publishes a release: the multi-arch container image to Docker Hub, and the
+# pre-compiled binaries the README's "Pre-compiled binaries" section promises.
+#
+# Triggered by *publishing* a GitHub Release rather than by pushing a tag, so
+# that publication is a deliberate second act: the tag can exist, and the
+# notes can be drafted, without anything reaching Docker Hub until you commit
+# to it. It also means github.event.release.prerelease — the "set as a
+# pre-release" checkbox — is available as a machine-readable answer to
+# "should `latest` move", which a tag push would force us to guess by
+# string-sniffing.
+#
+# See docs/adr/0073-the-release-pipeline.md for why Docker Hub over GHCR, why
+# the image tag keeps its `v`, and why the tarball binaries are extracted from
+# the image instead of being built on their own.
+name: Release
+
+on:
+  release:
+    types: [published]
+
+# Serialised per tag. Re-running a release overwrites its image tags, which is
+# tolerable, but two concurrent runs racing to overwrite them is not.
+concurrency:
+  group: release-${{ github.event.release.tag_name }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write # required to upload the tarballs onto the release
+
+jobs:
+  # Fails before anything is built if the release carries no tag. The Version
+  # is linked into the binary at build time (ADR-0072) and an empty -X value
+  # links silently, so an unlabelled release would otherwise produce a
+  # perfectly green build whose version badge reads "dev".
+  guard:
+    name: Check the release tag
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.tag.outputs.version }}
+      prerelease: ${{ steps.tag.outputs.prerelease }}
+    steps:
+      - id: tag
+        env:
+          # Passed through the environment rather than interpolated into the
+          # script body, so a tag containing shell metacharacters is data.
+          TAG: ${{ github.event.release.tag_name }}
+          GH_PRERELEASE: ${{ github.event.release.prerelease }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${TAG}" ]; then
+            echo "::error::release.tag_name is empty — refusing to build an unlabelled release"
+            exit 1
+          fi
+
+          # Two independent signals, either of which withholds `latest`. The
+          # checkbox is authoritative, but a tag like v1.0.0-rc.1 published
+          # with the box left unticked is a mistake we would rather absorb
+          # than propagate to everyone pulling `latest`.
+          prerelease=false
+          if [ "${GH_PRERELEASE}" = "true" ]; then
+            prerelease=true
+          fi
+          case "${TAG}" in
+            *-*) prerelease=true ;;
+          esac
+
+          echo "version=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "prerelease=${prerelease}" >> "$GITHUB_OUTPUT"
+          echo "Releasing ${TAG} (prerelease=${prerelease})"
+
+  test-backend:
+    name: Backend tests
+    needs: guard
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: server/go.mod
+          cache-dependency-path: server/go.sum
+      - run: make test-backend
+
+  test-frontend:
+    name: Frontend tests
+    needs: guard
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: yarn
+      - run: yarn install --frozen-lockfile
+      - run: make test-frontend
+
+  publish:
+    name: Build and publish
+    needs: [guard, test-backend, test-frontend]
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.guard.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+
+      # No QEMU step: the Dockerfile pins both builder stages to
+      # $BUILDPLATFORM and cross-compiles the backend with GOOS/GOARCH, so
+      # neither architecture is ever emulated. The frontend stage resolves to
+      # the same platform for both targets, so BuildKit runs `yarn build`
+      # once and reuses it.
+      - uses: docker/setup-buildx-action@v4
+
+      - uses: docker/login-action@v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: xiovv/calich
+          # type=raw, not type=semver: ADR-0072 holds that the Version label
+          # is opaque and never parsed or reformatted, and the image tag is
+          # the same string. {{raw}} under type=semver would produce the same
+          # `v0.1.0` here, but it would also reject a tag that is not valid
+          # semver, which is a policy this project has deliberately not
+          # adopted.
+          tags: |
+            type=raw,value=${{ needs.guard.outputs.version }}
+            type=raw,value=latest,enable=${{ needs.guard.outputs.prerelease == 'false' }}
+
+      - name: Build and push the image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            VERSION=${{ needs.guard.outputs.version }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # The tarball binaries are lifted out of the build that produced the
+      # image rather than compiled separately. `make build-backend` is a bare
+      # `go build`, and //go:embed all:dist would then embed the tracked
+      # placeholder at server/internal/static/dist/index.html — yielding a
+      # binary that boots, serves the API, and renders "frontend not built".
+      # Only the Dockerfile overwrites that directory. Exporting the `binary`
+      # stage makes that mistake unrepresentable, costs nothing (every layer
+      # is a cache hit from the push above), and guarantees the tarball and
+      # the image contain byte-identical binaries.
+      - name: Export the release binaries
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          target: binary
+          outputs: type=local,dest=./out
+          build-args: |
+            VERSION=${{ needs.guard.outputs.version }}
+          cache-from: type=gha
+
+      - name: Package the tarballs
+        run: |
+          set -euo pipefail
+
+          # Multi-platform local output lands one directory per platform.
+          for platform in amd64 arm64; do
+            src="out/linux_${platform}/calich-server"
+            if [ ! -x "${src}" ]; then
+              echo "::error::expected binary missing: ${src}"
+              exit 1
+            fi
+            # Archive member is bare `calich-server`, matching the README's
+            # `tar -xzf … && sudo install calich-server /usr/local/bin/`.
+            tar -czf "calich_linux_${platform}.tar.gz" -C "out/linux_${platform}" calich-server
+          done
+
+          sha256sum calich_linux_*.tar.gz > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Upload the tarballs to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # --clobber so re-running a release replaces its assets rather than
+          # failing on the ones already there.
+          gh release upload "${VERSION}" \
+            calich_linux_amd64.tar.gz \
+            calich_linux_arm64.tar.gz \
+            SHA256SUMS \
+            --clobber
