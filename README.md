@@ -2,6 +2,20 @@
 
 An open-source, self-hosted Google Calendar alternative with **CalDAV** sync.
 
+## Table of contents
+
+- [Screenshots](#screenshots)
+- [Deployment](#deployment)
+  - [Docker](#docker)
+  - [Pre-compiled binaries](#pre-compiled-binaries)
+  - [Building from source](#building-from-source)
+- [CalDAV sync](#caldav-sync)
+- [Configuration](#configuration)
+  - [`COOKIE_SECURE`](#cookie_secure)
+  - [Behind a reverse proxy](#behind-a-reverse-proxy)
+- [Data & backups](#data--backups)
+- [Roadmap](#roadmap)
+
 **Current features**
 
 - **Day, Week, Month and Year views**, with drag-to-create, drag-to-move and resize.
