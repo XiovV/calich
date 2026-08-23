@@ -80,7 +80,7 @@ export function AppPasswordsSection() {
             Copy this now — it won't be shown again.
           </p>
           <div className="mt-2 flex items-center gap-2">
-            <code className="flex-1 overflow-x-auto rounded bg-surface px-2 py-1 text-body">
+            <code className="flex-1 overflow-x-auto rounded bg-surface px-2 py-1 text-body text-ink">
               {revealedSecret}
             </code>
             <IconButton onClick={handleCopy} aria-label="Copy app password">
