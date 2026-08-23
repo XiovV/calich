@@ -72,6 +72,7 @@ docker run -d \
 
   -e INITIAL_EMAIL=you@example.com \ # Optional
   -e INITIAL_PASSWORD=change-me \ # Optional
+  -e INITIAL_NAME=change-me \ # Optional
   xiovv/calich:latest
 ```
 
@@ -90,13 +91,14 @@ services:
     environment:
       INITIAL_EMAIL: you@example.com # Optional
       INITIAL_PASSWORD: change-me # Optional
+      INITIAL_NAME=change-me \ # Optional
 ```
 
 ```bash
 docker compose up -d
 ```
 
-`INITIAL_EMAIL` and `INITIAL_PASSWORD` create the first account on first start, and
+`INITIAL_EMAIL`, `INITIAL_PASSWORD` and `INITIAL_NAME` create the first account on first start, and
 are ignored on every start afterward. They're optional: if you leave them out you
 will be redirected to the sign up page automatically to create your account.
 
