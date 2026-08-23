@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { computePickableUsers } from "./EventAttendeesSection";
+import { computePickableUsers } from "./computePickableUsers";
 import type { WorkspaceMember } from "../lib/workspaceMembersApi";
 
 function member(userId: number, name: string): WorkspaceMember {

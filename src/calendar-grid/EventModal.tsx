@@ -97,12 +97,8 @@ import {
   EventAttendeesSection,
   type StagedAttendeeTarget,
 } from "./EventAttendeesSection";
-import {
-  ReminderListEditor,
-  fromReminderDrafts,
-  toReminderDrafts,
-  type ReminderDraft,
-} from "./ReminderListEditor";
+import { ReminderListEditor } from "./ReminderListEditor";
+import { fromReminderDrafts, toReminderDrafts, type ReminderDraft } from "./reminderDrafts";
 
 // The Repeat dropdown offers the fixed presets plus a "Custom…" entry that opens
 // the Custom recurrence dialog (issue #35).

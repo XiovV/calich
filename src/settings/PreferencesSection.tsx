@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useAuthStore } from "../lib/authStore";
 import type { ActiveView } from "../lib/shellStore";
 import type { TimeFormat } from "../lib/authApi";
@@ -71,14 +71,21 @@ export function PreferencesSection() {
   // guessing a starting range, so a User who has never opted in doesn't see
   // a preset that looks already-configured. Resyncs whenever the stored
   // Preference changes underneath it (initial load, or another device
-  // setting it).
+  // setting it) — adjusted during render rather than in an Effect, per
+  // https://react.dev/learn/you-might-not-need-an-effect#adjusting-some-state-when-a-prop-changes,
+  // so the mirrored value never has a stale frame it needs a re-render to
+  // paint over.
   const [draftStart, setDraftStart] = useState<number | null>(workingHoursStart);
   const [draftEnd, setDraftEnd] = useState<number | null>(workingHoursEnd);
+  const [syncedWorkingHoursStart, setSyncedWorkingHoursStart] = useState(workingHoursStart);
+  const [syncedWorkingHoursEnd, setSyncedWorkingHoursEnd] = useState(workingHoursEnd);
 
-  useEffect(() => {
+  if (workingHoursStart !== syncedWorkingHoursStart || workingHoursEnd !== syncedWorkingHoursEnd) {
+    setSyncedWorkingHoursStart(workingHoursStart);
+    setSyncedWorkingHoursEnd(workingHoursEnd);
     setDraftStart(workingHoursStart);
     setDraftEnd(workingHoursEnd);
-  }, [workingHoursStart, workingHoursEnd]);
+  }
 
   async function handleWeekStartChange(value: WeekStartOption) {
     await run(() => updateWeekStart(Number(value)));

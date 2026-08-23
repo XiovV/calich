@@ -26,22 +26,24 @@ export function AcceptWorkspaceInvitePage() {
   const token = searchParams.get("token") ?? "";
 
   const [preview, setPreview] = useState<Preview | null>(null);
-  const [previewError, setPreviewError] = useState<string | null>(null);
+  const [fetchError, setFetchError] = useState<string | null>(null);
   const [name, setName] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const { isSubmitting, error, run } = useAsyncAction();
 
+  // An empty token is invalid on its face — no fetch needed to know that,
+  // so it's derived here rather than written into state from the Effect
+  // below (https://react.dev/learn/you-might-not-need-an-effect).
+  const previewError = token === "" ? invalidInviteMessage : fetchError;
+
   useEffect(() => {
-    if (token === "") {
-      setPreviewError(invalidInviteMessage);
-      return;
-    }
+    if (token === "") return;
 
     authApi
       .previewWorkspaceInvite(token)
       .then(setPreview)
-      .catch((err: unknown) => setPreviewError(errorMessage(err)));
+      .catch((err: unknown) => setFetchError(errorMessage(err)));
   }, [token]);
 
   if (status === "loading") {

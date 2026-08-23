@@ -6,6 +6,7 @@ import { workspaceMembersApi, type WorkspaceMember } from "../lib/workspaceMembe
 import { useAuthStore } from "../lib/authStore";
 import { errorMessage } from "../lib/errorMessage";
 import { toast } from "../lib/toast";
+import { computePickableUsers } from "./computePickableUsers";
 import { Button } from "../components/ui/Button";
 import { IconButton } from "../components/ui/IconButton";
 import { Input } from "../components/ui/Input";
@@ -29,24 +30,6 @@ function userTargetKey(userId: number): TargetKey {
 }
 function groupTargetKey(groupId: number): TargetKey {
   return `group:${groupId}`;
-}
-
-// computePickableUsers is the invite picker's User pool: every Member of
-// the Workspace minus whoever's already an Attendee (invited or staged) and
-// minus the signed-in caller — an Organizer or Attendee can't invite
-// themselves, they're already on the Event.
-export function computePickableUsers(
-  availableUsers: WorkspaceMember[],
-  invitedUserIds: Set<number | null>,
-  stagedUserIds: Set<number>,
-  currentUserId: number | undefined,
-): WorkspaceMember[] {
-  return availableUsers.filter(
-    (user) =>
-      user.userId !== currentUserId &&
-      !invitedUserIds.has(user.userId) &&
-      !stagedUserIds.has(user.userId),
-  );
 }
 
 // StagedAttendeeTarget is a create-mode invite that hasn't been sent yet

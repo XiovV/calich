@@ -9,12 +9,12 @@ import { createCalendarCascade } from "../../lib/createCalendarCascade";
 import type { Reminder } from "../../lib/event";
 import { remindersEqual } from "../../lib/recurrenceScope";
 import { toast } from "../../lib/toast";
+import { ReminderListEditor } from "../../calendar-grid/ReminderListEditor";
 import {
-  ReminderListEditor,
   fromReminderDrafts,
   toReminderDrafts,
   type ReminderDraft,
-} from "../../calendar-grid/ReminderListEditor";
+} from "../../calendar-grid/reminderDrafts";
 import { ColorSwatchPicker } from "./ColorSwatchPicker";
 import { Button } from "../ui/Button";
 import { buttonClasses } from "../ui/buttonClasses";
