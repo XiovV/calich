@@ -90,18 +90,11 @@ func (r *SyncRepository) DeletedSince(ctx context.Context, calendarID string, si
 	if err != nil {
 		return nil, fmt.Errorf("list deleted objects: %w", err)
 	}
-	defer rows.Close()
+	return collectRows(rows, scanDeletedObjectRow)
+}
 
-	deleted := []DeletedObject{}
-	for rows.Next() {
-		var d DeletedObject
-		if err := rows.Scan(&d.CalendarID, &d.UID, &d.ChangeSeq); err != nil {
-			return nil, fmt.Errorf("scan deleted object: %w", err)
-		}
-		deleted = append(deleted, d)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate deleted objects: %w", err)
-	}
-	return deleted, nil
+func scanDeletedObjectRow(row rowScanner) (DeletedObject, error) {
+	var d DeletedObject
+	err := row.Scan(&d.CalendarID, &d.UID, &d.ChangeSeq)
+	return d, err
 }

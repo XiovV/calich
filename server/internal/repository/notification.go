@@ -117,25 +117,19 @@ func (r *NotificationRepository) ListRecentByUser(ctx context.Context, userID in
 	if err != nil {
 		return nil, fmt.Errorf("list notifications: %w", err)
 	}
-	defer rows.Close()
+	return collectRows(rows, scanNotificationRow)
+}
 
-	notifications := []Notification{}
-	for rows.Next() {
-		var n Notification
-		var occurrenceStart sql.NullTime
-		if err := rows.Scan(&n.ID, &n.UserID, &n.EventID, &n.Kind, &occurrenceStart, &n.Title, &n.FiredAt, &n.Seen); err != nil {
-			return nil, fmt.Errorf("scan notification: %w", err)
-		}
-		if occurrenceStart.Valid {
-			n.OccurrenceStart = &occurrenceStart.Time
-		}
-		notifications = append(notifications, n)
+func scanNotificationRow(row rowScanner) (Notification, error) {
+	var n Notification
+	var occurrenceStart sql.NullTime
+	if err := row.Scan(&n.ID, &n.UserID, &n.EventID, &n.Kind, &occurrenceStart, &n.Title, &n.FiredAt, &n.Seen); err != nil {
+		return Notification{}, err
 	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate notifications: %w", err)
+	if occurrenceStart.Valid {
+		n.OccurrenceStart = &occurrenceStart.Time
 	}
-
-	return notifications, nil
+	return n, nil
 }
 
 // MarkAllSeen marks every one of userID's currently-unseen Notifications as

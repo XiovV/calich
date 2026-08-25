@@ -105,20 +105,7 @@ func (r *WorkspaceRepository) ListForUser(ctx context.Context, userID int64) ([]
 	if err != nil {
 		return nil, fmt.Errorf("list workspaces for user: %w", err)
 	}
-	defer rows.Close()
-
-	workspaces := []Workspace{}
-	for rows.Next() {
-		w, err := scanWorkspaceRow(rows)
-		if err != nil {
-			return nil, fmt.Errorf("scan workspace: %w", err)
-		}
-		workspaces = append(workspaces, w)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate workspaces: %w", err)
-	}
-	return workspaces, nil
+	return collectRows(rows, scanWorkspaceRow)
 }
 
 // ErrAlreadyMember is returned by AddMember when userID already belongs to
@@ -195,20 +182,13 @@ func (r *WorkspaceRepository) ListMembers(ctx context.Context, workspaceID int64
 	if err != nil {
 		return nil, fmt.Errorf("list workspace members: %w", err)
 	}
-	defer rows.Close()
+	return collectRows(rows, scanWorkspaceMemberRow)
+}
 
-	members := []WorkspaceMember{}
-	for rows.Next() {
-		var m WorkspaceMember
-		if err := rows.Scan(&m.WorkspaceID, &m.UserID, &m.Role, &m.CreatedAt); err != nil {
-			return nil, fmt.Errorf("scan workspace member: %w", err)
-		}
-		members = append(members, m)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate workspace members: %w", err)
-	}
-	return members, nil
+func scanWorkspaceMemberRow(row rowScanner) (WorkspaceMember, error) {
+	var m WorkspaceMember
+	err := row.Scan(&m.WorkspaceID, &m.UserID, &m.Role, &m.CreatedAt)
+	return m, err
 }
 
 // WorkspaceMemberWithUser pairs a WorkspaceMember with the Name and Email of
@@ -237,20 +217,13 @@ func (r *WorkspaceRepository) ListMembersWithUser(ctx context.Context, workspace
 	if err != nil {
 		return nil, fmt.Errorf("list workspace members with user: %w", err)
 	}
-	defer rows.Close()
+	return collectRows(rows, scanWorkspaceMemberWithUserRow)
+}
 
-	members := []WorkspaceMemberWithUser{}
-	for rows.Next() {
-		var m WorkspaceMemberWithUser
-		if err := rows.Scan(&m.WorkspaceID, &m.UserID, &m.Role, &m.CreatedAt, &m.Name, &m.Email); err != nil {
-			return nil, fmt.Errorf("scan workspace member with user: %w", err)
-		}
-		members = append(members, m)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate workspace members with user: %w", err)
-	}
-	return members, nil
+func scanWorkspaceMemberWithUserRow(row rowScanner) (WorkspaceMemberWithUser, error) {
+	var m WorkspaceMemberWithUser
+	err := row.Scan(&m.WorkspaceID, &m.UserID, &m.Role, &m.CreatedAt, &m.Name, &m.Email)
+	return m, err
 }
 
 // SetMemberRole updates userID's Role within workspaceID (#156) — the Owner

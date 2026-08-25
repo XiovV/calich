@@ -87,29 +87,36 @@ func (r *CalendarDefaultReminderRepository) ListByCalendarIDs(ctx context.Contex
 	if err != nil {
 		return nil, nil, fmt.Errorf("list calendar default reminders: %w", err)
 	}
-	defer rows.Close()
-
-	for rows.Next() {
-		var calendarID string
-		var userID int64
-		var isAllDay bool
-		var reminder Reminder
-		if err := rows.Scan(&reminder.ID, &calendarID, &userID, &isAllDay, &reminder.OffsetMinutes, &reminder.Channel); err != nil {
-			return nil, nil, fmt.Errorf("scan calendar default reminder: %w", err)
-		}
+	defaults, err := collectRows(rows, scanCalendarDefaultReminderRow)
+	if err != nil {
+		return nil, nil, err
+	}
+	for _, d := range defaults {
 		byCalendarUser := timedByCalendarUser
-		if isAllDay {
+		if d.AllDay {
 			byCalendarUser = allDayByCalendarUser
 		}
-		if byCalendarUser[calendarID] == nil {
-			byCalendarUser[calendarID] = make(map[int64][]Reminder)
+		if byCalendarUser[d.CalendarID] == nil {
+			byCalendarUser[d.CalendarID] = make(map[int64][]Reminder)
 		}
-		byCalendarUser[calendarID][userID] = append(byCalendarUser[calendarID][userID], reminder)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, nil, fmt.Errorf("iterate calendar default reminders: %w", err)
+		byCalendarUser[d.CalendarID][d.UserID] = append(byCalendarUser[d.CalendarID][d.UserID], d.Reminder)
 	}
 	return timedByCalendarUser, allDayByCalendarUser, nil
+}
+
+// calendarDefaultReminderRow is one ListByCalendarIDs row, split into the
+// timed/all-day maps after collectRows scans it.
+type calendarDefaultReminderRow struct {
+	CalendarID string
+	UserID     int64
+	AllDay     bool
+	Reminder   Reminder
+}
+
+func scanCalendarDefaultReminderRow(row rowScanner) (calendarDefaultReminderRow, error) {
+	var d calendarDefaultReminderRow
+	err := row.Scan(&d.Reminder.ID, &d.CalendarID, &d.UserID, &d.AllDay, &d.Reminder.OffsetMinutes, &d.Reminder.Channel)
+	return d, err
 }
 
 // CalendarIDsWithAny returns the distinct set of Calendar ids carrying at
@@ -122,20 +129,7 @@ func (r *CalendarDefaultReminderRepository) CalendarIDsWithAny(ctx context.Conte
 	if err != nil {
 		return nil, fmt.Errorf("list calendars with default reminders: %w", err)
 	}
-	defer rows.Close()
-
-	var ids []string
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			return nil, fmt.Errorf("scan calendar id: %w", err)
-		}
-		ids = append(ids, id)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate calendars with default reminders: %w", err)
-	}
-	return ids, nil
+	return collectRows(rows, scanID)
 }
 
 // OffsetMinutesRange returns the smallest and largest offset any User's

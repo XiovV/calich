@@ -247,18 +247,9 @@ func (r *EventRepository) listWindowed(ctx context.Context, baseQuery string, ba
 	if err != nil {
 		return nil, fmt.Errorf("list events: %w", err)
 	}
-	defer rows.Close()
-
-	events := []Event{}
-	for rows.Next() {
-		e, err := scanEvent(rows)
-		if err != nil {
-			return nil, fmt.Errorf("scan event: %w", err)
-		}
-		events = append(events, e)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate events: %w", err)
+	events, err := collectRows(rows, scanEvent)
+	if err != nil {
+		return nil, err
 	}
 
 	if from == nil && to == nil {
@@ -325,21 +316,7 @@ func (r *EventRepository) ListAllWithAnyReminder(ctx context.Context) ([]Event, 
 	if err != nil {
 		return nil, fmt.Errorf("list events with reminders: %w", err)
 	}
-	defer rows.Close()
-
-	events := []Event{}
-	for rows.Next() {
-		var e Event
-		if err := scanEventRow(rows, &e); err != nil {
-			return nil, fmt.Errorf("scan event: %w", err)
-		}
-		events = append(events, e)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate events: %w", err)
-	}
-
-	return events, nil
+	return collectRows(rows, scanEvent)
 }
 
 // Update rewrites id's columns from f. f.ParentID and f.RecurrenceID are
@@ -454,17 +431,12 @@ func (r *EventRepository) ListChildrenByParentIDs(ctx context.Context, parentIDs
 	if err != nil {
 		return nil, fmt.Errorf("list children: %w", err)
 	}
-	defer rows.Close()
-
-	for rows.Next() {
-		e, err := scanEvent(rows)
-		if err != nil {
-			return nil, fmt.Errorf("scan event: %w", err)
-		}
-		result[*e.ParentID] = append(result[*e.ParentID], e)
+	children, err := collectRows(rows, scanEvent)
+	if err != nil {
+		return nil, err
 	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate children: %w", err)
+	for _, e := range children {
+		result[*e.ParentID] = append(result[*e.ParentID], e)
 	}
 
 	return result, nil
@@ -482,21 +454,7 @@ func (r *EventRepository) ListMastersByCalendar(ctx context.Context, calendarID 
 	if err != nil {
 		return nil, fmt.Errorf("list masters: %w", err)
 	}
-	defer rows.Close()
-
-	events := []Event{}
-	for rows.Next() {
-		e, err := scanEvent(rows)
-		if err != nil {
-			return nil, fmt.Errorf("scan event: %w", err)
-		}
-		events = append(events, e)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate masters: %w", err)
-	}
-
-	return events, nil
+	return collectRows(rows, scanEvent)
 }
 
 // ListMastersChangedSince returns calendarID's Master Events whose
@@ -511,31 +469,11 @@ func (r *EventRepository) ListMastersChangedSince(ctx context.Context, calendarI
 	if err != nil {
 		return nil, fmt.Errorf("list changed masters: %w", err)
 	}
-	defer rows.Close()
-
-	events := []Event{}
-	for rows.Next() {
-		e, err := scanEvent(rows)
-		if err != nil {
-			return nil, fmt.Errorf("scan event: %w", err)
-		}
-		events = append(events, e)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate changed masters: %w", err)
-	}
-
-	return events, nil
-}
-
-// scanner is satisfied by both *sql.Row and *sql.Rows, so scanEvent can hydrate
-// an Event from either a single-row query or a row within an iteration.
-type scanner interface {
-	Scan(dest ...any) error
+	return collectRows(rows, scanEvent)
 }
 
 // scanEventRow scans an Event's columns into e.
-func scanEventRow(row scanner, e *Event) error {
+func scanEventRow(row rowScanner, e *Event) error {
 	var parentID sql.NullString
 	var recurrenceID sql.NullTime
 	var tzid sql.NullString
@@ -572,7 +510,7 @@ func scanEventRow(row scanner, e *Event) error {
 	return nil
 }
 
-func scanEvent(row scanner) (Event, error) {
+func scanEvent(row rowScanner) (Event, error) {
 	var e Event
 	err := scanEventRow(row, &e)
 	if errors.Is(err, sql.ErrNoRows) {

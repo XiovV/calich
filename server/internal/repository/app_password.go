@@ -57,21 +57,7 @@ func (r *AppPasswordRepository) ListForUser(ctx context.Context, userID int64) (
 	if err != nil {
 		return nil, fmt.Errorf("list app passwords: %w", err)
 	}
-	defer rows.Close()
-
-	var appPasswords []AppPassword
-	for rows.Next() {
-		appPassword, err := scanAppPassword(rows)
-		if err != nil {
-			return nil, fmt.Errorf("scan app password: %w", err)
-		}
-		appPasswords = append(appPasswords, appPassword)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate app passwords: %w", err)
-	}
-
-	return appPasswords, nil
+	return collectRows(rows, scanAppPassword)
 }
 
 // Delete removes userID's app password with the given id. It returns
@@ -106,6 +92,35 @@ func (r *AppPasswordRepository) getByID(ctx context.Context, id int64) (AppPassw
 // rowScanner is satisfied by both *sql.Row and *sql.Rows.
 type rowScanner interface {
 	Scan(dest ...any) error
+}
+
+// collectRows drains rows into a slice of T, scanning each row with scan —
+// the rows.Next/Scan/rows.Err loop every List*-style repository method used
+// to hand-roll (#263). Closes rows itself, so callers only need to check the
+// initial QueryContext error before handing rows off.
+func collectRows[T any](rows *sql.Rows, scan func(rowScanner) (T, error)) ([]T, error) {
+	defer rows.Close()
+
+	result := []T{}
+	for rows.Next() {
+		v, err := scan(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan row: %w", err)
+		}
+		result = append(result, v)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate rows: %w", err)
+	}
+	return result, nil
+}
+
+// scanID scans a single string id column — the shape of a bare `SELECT id`
+// query, shared by every List*IDs-style method.
+func scanID(row rowScanner) (string, error) {
+	var id string
+	err := row.Scan(&id)
+	return id, err
 }
 
 func scanAppPassword(row rowScanner) (AppPassword, error) {

@@ -319,20 +319,7 @@ func (r *OutboxRepository) ListPending(ctx context.Context, limit int) ([]Outbox
 	if err != nil {
 		return nil, fmt.Errorf("list pending outbox messages: %w", err)
 	}
-	defer rows.Close()
-
-	messages := []OutboxMessage{}
-	for rows.Next() {
-		msg, err := scanOutboxMessage(rows)
-		if err != nil {
-			return nil, fmt.Errorf("scan outbox message: %w", err)
-		}
-		messages = append(messages, msg)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate outbox messages: %w", err)
-	}
-	return messages, nil
+	return collectRows(rows, scanOutboxMessage)
 }
 
 // MarkSent records a successful delivery.

@@ -75,20 +75,13 @@ func (r *GroupRepository) ListByWorkspace(ctx context.Context, workspaceID int64
 	if err != nil {
 		return nil, fmt.Errorf("list groups: %w", err)
 	}
-	defer rows.Close()
+	return collectRows(rows, scanGroupRow)
+}
 
-	groups := []Group{}
-	for rows.Next() {
-		var g Group
-		if err := rows.Scan(&g.ID, &g.WorkspaceID, &g.Name, &g.CreatedAt); err != nil {
-			return nil, fmt.Errorf("scan group: %w", err)
-		}
-		groups = append(groups, g)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate groups: %w", err)
-	}
-	return groups, nil
+func scanGroupRow(row rowScanner) (Group, error) {
+	var g Group
+	err := row.Scan(&g.ID, &g.WorkspaceID, &g.Name, &g.CreatedAt)
+	return g, err
 }
 
 // Rename updates id's name.
@@ -161,18 +154,11 @@ func (r *GroupRepository) ListMembers(ctx context.Context, groupID int64) ([]Gro
 	if err != nil {
 		return nil, fmt.Errorf("list group members: %w", err)
 	}
-	defer rows.Close()
+	return collectRows(rows, scanGroupMemberRow)
+}
 
-	members := []GroupMember{}
-	for rows.Next() {
-		var m GroupMember
-		if err := rows.Scan(&m.GroupID, &m.UserID, &m.CreatedAt); err != nil {
-			return nil, fmt.Errorf("scan group member: %w", err)
-		}
-		members = append(members, m)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate group members: %w", err)
-	}
-	return members, nil
+func scanGroupMemberRow(row rowScanner) (GroupMember, error) {
+	var m GroupMember
+	err := row.Scan(&m.GroupID, &m.UserID, &m.CreatedAt)
+	return m, err
 }

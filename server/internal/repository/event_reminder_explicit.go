@@ -64,21 +64,15 @@ func (r *EventReminderExplicitRepository) ListByEventIDs(ctx context.Context, ev
 	if err != nil {
 		return nil, fmt.Errorf("list explicit reminder markers: %w", err)
 	}
-	defer rows.Close()
-
-	for rows.Next() {
-		var eventID string
-		var userID int64
-		if err := rows.Scan(&eventID, &userID); err != nil {
-			return nil, fmt.Errorf("scan explicit reminder marker: %w", err)
-		}
-		if result[eventID] == nil {
-			result[eventID] = make(map[int64]bool)
-		}
-		result[eventID][userID] = true
+	pairs, err := collectRows(rows, scanEventUserID)
+	if err != nil {
+		return nil, err
 	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate explicit reminder markers: %w", err)
+	for _, p := range pairs {
+		if result[p.EventID] == nil {
+			result[p.EventID] = make(map[int64]bool)
+		}
+		result[p.EventID][p.UserID] = true
 	}
 	return result, nil
 }

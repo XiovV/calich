@@ -94,17 +94,12 @@ func (r *AttachmentRepository) ListByEventIDs(ctx context.Context, eventIDs []st
 	if err != nil {
 		return nil, fmt.Errorf("list attachments: %w", err)
 	}
-	defer rows.Close()
-
-	for rows.Next() {
-		a, err := scanAttachmentRow(rows)
-		if err != nil {
-			return nil, fmt.Errorf("scan attachment: %w", err)
-		}
-		result[a.EventID] = append(result[a.EventID], a)
+	attachments, err := collectRows(rows, scanAttachmentRow)
+	if err != nil {
+		return nil, err
 	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate attachments: %w", err)
+	for _, a := range attachments {
+		result[a.EventID] = append(result[a.EventID], a)
 	}
 
 	return result, nil
@@ -119,20 +114,7 @@ func (r *AttachmentRepository) ListAllIDs(ctx context.Context) ([]string, error)
 	if err != nil {
 		return nil, fmt.Errorf("list attachment ids: %w", err)
 	}
-	defer rows.Close()
-
-	var ids []string
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			return nil, fmt.Errorf("scan attachment id: %w", err)
-		}
-		ids = append(ids, id)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate attachment ids: %w", err)
-	}
-	return ids, nil
+	return collectRows(rows, scanID)
 }
 
 // Update overwrites id's filename/content_type/size_bytes in place — the

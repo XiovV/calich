@@ -123,18 +123,11 @@ func (r *CalendarShareRepository) ListByCalendarWithUser(ctx context.Context, ca
 	if err != nil {
 		return nil, fmt.Errorf("list calendar shares with user: %w", err)
 	}
-	defer rows.Close()
+	return collectRows(rows, scanCalendarShareWithUser)
+}
 
-	shares := []CalendarShareWithUser{}
-	for rows.Next() {
-		var s CalendarShareWithUser
-		if err := rows.Scan(&s.CalendarID, &s.UserID, &s.Role, &s.CreatedAt, &s.Name, &s.Email); err != nil {
-			return nil, fmt.Errorf("scan calendar share with user: %w", err)
-		}
-		shares = append(shares, s)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate calendar shares with user: %w", err)
-	}
-	return shares, nil
+func scanCalendarShareWithUser(row rowScanner) (CalendarShareWithUser, error) {
+	var s CalendarShareWithUser
+	err := row.Scan(&s.CalendarID, &s.UserID, &s.Role, &s.CreatedAt, &s.Name, &s.Email)
+	return s, err
 }

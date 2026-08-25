@@ -53,21 +53,28 @@ func (r *EventExceptionRepository) ListByParentIDs(ctx context.Context, parentID
 	if err != nil {
 		return nil, fmt.Errorf("list exceptions: %w", err)
 	}
-	defer rows.Close()
-
-	for rows.Next() {
-		var parentID string
-		var occurrenceStart time.Time
-		if err := rows.Scan(&parentID, &occurrenceStart); err != nil {
-			return nil, fmt.Errorf("scan exception: %w", err)
-		}
-		result[parentID] = append(result[parentID], occurrenceStart)
+	exceptions, err := collectRows(rows, scanExceptionRow)
+	if err != nil {
+		return nil, err
 	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate exceptions: %w", err)
+	for _, e := range exceptions {
+		result[e.ParentID] = append(result[e.ParentID], e.OccurrenceStart)
 	}
 
 	return result, nil
+}
+
+// exceptionRow is one ListByParentIDs row, grouped into its map after
+// collectRows scans it.
+type exceptionRow struct {
+	ParentID        string
+	OccurrenceStart time.Time
+}
+
+func scanExceptionRow(row rowScanner) (exceptionRow, error) {
+	var e exceptionRow
+	err := row.Scan(&e.ParentID, &e.OccurrenceStart)
+	return e, err
 }
 
 // ReparentFrom moves every Exception of oldParentID at-or-after fromStart to

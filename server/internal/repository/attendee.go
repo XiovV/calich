@@ -274,21 +274,28 @@ func (r *AttendeeRepository) ListUserIDsByEventIDs(ctx context.Context, eventIDs
 	if err != nil {
 		return nil, fmt.Errorf("list attendee user ids: %w", err)
 	}
-	defer rows.Close()
-
-	for rows.Next() {
-		var eventID string
-		var userID int64
-		if err := rows.Scan(&eventID, &userID); err != nil {
-			return nil, fmt.Errorf("scan attendee user id: %w", err)
-		}
-		result[eventID] = append(result[eventID], userID)
+	pairs, err := collectRows(rows, scanEventUserID)
+	if err != nil {
+		return nil, err
 	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate attendee user ids: %w", err)
+	for _, p := range pairs {
+		result[p.EventID] = append(result[p.EventID], p.UserID)
 	}
 
 	return result, nil
+}
+
+// eventUserID is one (event_id, user_id) pair — ListUserIDsByEventIDs' raw
+// row, grouped into its map after collectRows scans it.
+type eventUserID struct {
+	EventID string
+	UserID  int64
+}
+
+func scanEventUserID(row rowScanner) (eventUserID, error) {
+	var v eventUserID
+	err := row.Scan(&v.EventID, &v.UserID)
+	return v, err
 }
 
 // AttendeeWithName is one Attendee row hydrated for display and for the
@@ -325,20 +332,7 @@ func (r *AttendeeRepository) ListByEventID(ctx context.Context, eventID string) 
 	if err != nil {
 		return nil, fmt.Errorf("list attendees: %w", err)
 	}
-	defer rows.Close()
-
-	attendees := []AttendeeWithName{}
-	for rows.Next() {
-		a, err := scanAttendeeWithName(rows)
-		if err != nil {
-			return nil, fmt.Errorf("scan attendee: %w", err)
-		}
-		attendees = append(attendees, a)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate attendees: %w", err)
-	}
-	return attendees, nil
+	return collectRows(rows, scanAttendeeWithName)
 }
 
 // ListWithNamesByEventIDs returns every Attendee of any of eventIDs with
@@ -368,17 +362,12 @@ func (r *AttendeeRepository) ListWithNamesByEventIDs(ctx context.Context, eventI
 	if err != nil {
 		return nil, fmt.Errorf("list attendees: %w", err)
 	}
-	defer rows.Close()
-
-	for rows.Next() {
-		a, err := scanAttendeeWithName(rows)
-		if err != nil {
-			return nil, fmt.Errorf("scan attendee: %w", err)
-		}
-		result[a.EventID] = append(result[a.EventID], a)
+	attendees, err := collectRows(rows, scanAttendeeWithName)
+	if err != nil {
+		return nil, err
 	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate attendees: %w", err)
+	for _, a := range attendees {
+		result[a.EventID] = append(result[a.EventID], a)
 	}
 	return result, nil
 }

@@ -131,17 +131,12 @@ func (r *UserRepository) GetByIDs(ctx context.Context, ids []int64) (map[int64]U
 	if err != nil {
 		return nil, fmt.Errorf("query users: %w", err)
 	}
-	defer rows.Close()
-
-	for rows.Next() {
-		u, err := r.scanUserRow(rows)
-		if err != nil {
-			return nil, err
-		}
-		result[u.ID] = u
+	users, err := collectRows(rows, r.scanUserRow)
+	if err != nil {
+		return nil, err
 	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate users: %w", err)
+	for _, u := range users {
+		result[u.ID] = u
 	}
 
 	return result, nil
@@ -170,21 +165,7 @@ func (r *UserRepository) ListEnabledExcluding(ctx context.Context, excludeID int
 	if err != nil {
 		return nil, fmt.Errorf("query enabled users: %w", err)
 	}
-	defer rows.Close()
-
-	users := []User{}
-	for rows.Next() {
-		u, err := r.scanUserRow(rows)
-		if err != nil {
-			return nil, err
-		}
-		users = append(users, u)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate enabled users: %w", err)
-	}
-
-	return users, nil
+	return collectRows(rows, r.scanUserRow)
 }
 
 // UpdateEmail changes userID's login identifier (ADR-0047) — also the
@@ -356,8 +337,8 @@ func (r *UserRepository) scanUser(row *sql.Row) (User, error) {
 	return u, nil
 }
 
-func (r *UserRepository) scanUserRow(rows *sql.Rows) (User, error) {
-	u, err := scanUserFields(rows.Scan)
+func (r *UserRepository) scanUserRow(row rowScanner) (User, error) {
+	u, err := scanUserFields(row.Scan)
 	if err != nil {
 		return User{}, fmt.Errorf("scan user: %w", err)
 	}

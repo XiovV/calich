@@ -86,20 +86,7 @@ func (r *WorkspaceInviteRepository) ListByWorkspace(ctx context.Context, workspa
 	if err != nil {
 		return nil, fmt.Errorf("list workspace invites: %w", err)
 	}
-	defer rows.Close()
-
-	invites := []WorkspaceInvite{}
-	for rows.Next() {
-		i, err := scanWorkspaceInviteRow(rows)
-		if err != nil {
-			return nil, fmt.Errorf("scan workspace invite: %w", err)
-		}
-		invites = append(invites, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate workspace invites: %w", err)
-	}
-	return invites, nil
+	return collectRows(rows, scanWorkspaceInviteRow)
 }
 
 // GetByTokenHash looks up the WorkspaceInvite a token hashes to — used by

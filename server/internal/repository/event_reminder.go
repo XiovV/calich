@@ -139,23 +139,30 @@ func (r *EventReminderRepository) ListByEventIDs(ctx context.Context, eventIDs [
 	if err != nil {
 		return nil, fmt.Errorf("list reminders: %w", err)
 	}
-	defer rows.Close()
-
-	for rows.Next() {
-		var eventID string
-		var userID int64
-		var reminder Reminder
-		if err := rows.Scan(&reminder.ID, &eventID, &userID, &reminder.OffsetMinutes, &reminder.Channel); err != nil {
-			return nil, fmt.Errorf("scan reminder: %w", err)
-		}
-		if result[eventID] == nil {
-			result[eventID] = make(map[int64][]Reminder)
-		}
-		result[eventID][userID] = append(result[eventID][userID], reminder)
+	reminders, err := collectRows(rows, scanEventReminderRow)
+	if err != nil {
+		return nil, err
 	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate reminders: %w", err)
+	for _, rm := range reminders {
+		if result[rm.EventID] == nil {
+			result[rm.EventID] = make(map[int64][]Reminder)
+		}
+		result[rm.EventID][rm.UserID] = append(result[rm.EventID][rm.UserID], rm.Reminder)
 	}
 
 	return result, nil
+}
+
+// eventReminderRow is one ListByEventIDs row, grouped into its
+// (event id, user id)-keyed map after collectRows scans it.
+type eventReminderRow struct {
+	EventID  string
+	UserID   int64
+	Reminder Reminder
+}
+
+func scanEventReminderRow(row rowScanner) (eventReminderRow, error) {
+	var rm eventReminderRow
+	err := row.Scan(&rm.Reminder.ID, &rm.EventID, &rm.UserID, &rm.Reminder.OffsetMinutes, &rm.Reminder.Channel)
+	return rm, err
 }

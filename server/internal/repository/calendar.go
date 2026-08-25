@@ -156,21 +156,7 @@ func (r *CalendarRepository) ListByIDsAny(ctx context.Context, ids []string) ([]
 	if err != nil {
 		return nil, fmt.Errorf("list calendars by id: %w", err)
 	}
-	defer rows.Close()
-
-	calendars := []Calendar{}
-	for rows.Next() {
-		c, err := scanCalendarRow(rows)
-		if err != nil {
-			return nil, fmt.Errorf("scan calendar: %w", err)
-		}
-		calendars = append(calendars, c)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate calendars: %w", err)
-	}
-
-	return calendars, nil
+	return collectRows(rows, scanCalendarRow)
 }
 
 // ListByUser returns a user's calendars ordered by creation time, oldest first.
@@ -181,21 +167,7 @@ func (r *CalendarRepository) ListByUser(ctx context.Context, userID int64) ([]Ca
 	if err != nil {
 		return nil, fmt.Errorf("list calendars: %w", err)
 	}
-	defer rows.Close()
-
-	calendars := []Calendar{}
-	for rows.Next() {
-		c, err := scanCalendarRow(rows)
-		if err != nil {
-			return nil, fmt.Errorf("scan calendar: %w", err)
-		}
-		calendars = append(calendars, c)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate calendars: %w", err)
-	}
-
-	return calendars, nil
+	return collectRows(rows, scanCalendarRow)
 }
 
 // ListByUserAndWorkspace returns a user's calendars scoped to workspaceID,
@@ -210,21 +182,7 @@ func (r *CalendarRepository) ListByUserAndWorkspace(ctx context.Context, userID,
 	if err != nil {
 		return nil, fmt.Errorf("list calendars: %w", err)
 	}
-	defer rows.Close()
-
-	calendars := []Calendar{}
-	for rows.Next() {
-		c, err := scanCalendarRow(rows)
-		if err != nil {
-			return nil, fmt.Errorf("scan calendar: %w", err)
-		}
-		calendars = append(calendars, c)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate calendars: %w", err)
-	}
-
-	return calendars, nil
+	return collectRows(rows, scanCalendarRow)
 }
 
 // CalendarWithRole pairs a Calendar with the Role a Share grants on it. Only
@@ -282,20 +240,7 @@ func (r *CalendarRepository) ListSharedWithUser(ctx context.Context, userID int6
 	if err != nil {
 		return nil, fmt.Errorf("list shared calendars: %w", err)
 	}
-	defer rows.Close()
-
-	calendars := []CalendarWithRole{}
-	for rows.Next() {
-		c, err := scanSharedCalendarRow(rows)
-		if err != nil {
-			return nil, err
-		}
-		calendars = append(calendars, c)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate shared calendars: %w", err)
-	}
-	return calendars, nil
+	return collectRows(rows, scanSharedCalendarRow)
 }
 
 // ListSharedWithUserAndWorkspace returns every Calendar a direct or Group
@@ -317,29 +262,16 @@ func (r *CalendarRepository) ListSharedWithUserAndWorkspace(ctx context.Context,
 	if err != nil {
 		return nil, fmt.Errorf("list shared calendars: %w", err)
 	}
-	defer rows.Close()
-
-	calendars := []CalendarWithRole{}
-	for rows.Next() {
-		c, err := scanSharedCalendarRow(rows)
-		if err != nil {
-			return nil, err
-		}
-		calendars = append(calendars, c)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate shared calendars: %w", err)
-	}
-	return calendars, nil
+	return collectRows(rows, scanSharedCalendarRow)
 }
 
 // scanSharedCalendarRow scans a ListSharedWithUser/ListSharedWithUserAndWorkspace
 // row, translating the aggregated role_rank back into calendar_shares'
 // stored Role strings ("editor"/"viewer").
-func scanSharedCalendarRow(rows *sql.Rows) (CalendarWithRole, error) {
+func scanSharedCalendarRow(row rowScanner) (CalendarWithRole, error) {
 	var c CalendarWithRole
 	var roleRank int
-	if err := rows.Scan(&c.ID, &c.UserID, &c.WorkspaceID, &c.Name, &c.Color, &c.SourceURL, &c.CreatedAt, &c.LastSyncedAt, &c.ETag, &c.LastModified, &c.ContentHash,
+	if err := row.Scan(&c.ID, &c.UserID, &c.WorkspaceID, &c.Name, &c.Color, &c.SourceURL, &c.CreatedAt, &c.LastSyncedAt, &c.ETag, &c.LastModified, &c.ContentHash,
 		&c.NextRefreshAt, &c.RefreshIntervalSeconds, &c.FailureCount, &c.ErrorClass, &c.ErrorMessage, &c.KeepAlarms, &c.FeedName, &c.FeedColor,
 		&roleRank); err != nil {
 		return CalendarWithRole{}, fmt.Errorf("scan shared calendar: %w", err)
@@ -362,21 +294,7 @@ func (r *CalendarRepository) ListDueForRefresh(ctx context.Context, now time.Tim
 	if err != nil {
 		return nil, fmt.Errorf("list due subscriptions: %w", err)
 	}
-	defer rows.Close()
-
-	calendars := []Calendar{}
-	for rows.Next() {
-		c, err := scanCalendarRow(rows)
-		if err != nil {
-			return nil, fmt.Errorf("scan calendar: %w", err)
-		}
-		calendars = append(calendars, c)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate due subscriptions: %w", err)
-	}
-
-	return calendars, nil
+	return collectRows(rows, scanCalendarRow)
 }
 
 func (r *CalendarRepository) Update(ctx context.Context, userID int64, id string, fields CalendarFields) (Calendar, error) {

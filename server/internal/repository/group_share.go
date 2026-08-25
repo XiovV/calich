@@ -108,20 +108,13 @@ func (r *CalendarGroupShareRepository) ListByCalendarWithGroupName(ctx context.C
 	if err != nil {
 		return nil, fmt.Errorf("list calendar group shares with group name: %w", err)
 	}
-	defer rows.Close()
+	return collectRows(rows, scanCalendarGroupShareWithGroupName)
+}
 
-	shares := []CalendarGroupShareWithGroupName{}
-	for rows.Next() {
-		var s CalendarGroupShareWithGroupName
-		if err := rows.Scan(&s.CalendarID, &s.GroupID, &s.Role, &s.CreatedAt, &s.GroupName); err != nil {
-			return nil, fmt.Errorf("scan calendar group share with group name: %w", err)
-		}
-		shares = append(shares, s)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate calendar group shares with group name: %w", err)
-	}
-	return shares, nil
+func scanCalendarGroupShareWithGroupName(row rowScanner) (CalendarGroupShareWithGroupName, error) {
+	var s CalendarGroupShareWithGroupName
+	err := row.Scan(&s.CalendarID, &s.GroupID, &s.Role, &s.CreatedAt, &s.GroupName)
+	return s, err
 }
 
 // BestRoleForUser returns the most permissive Role any Group Share on
