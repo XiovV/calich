@@ -121,23 +121,8 @@ func CancellationToICal(snap repository.OutboxCancelSnapshot, fromAddress string
 	sequenceProp.Value = strconv.FormatInt(snap.Sequence, 10)
 	v.Props.Set(sequenceProp)
 
-	startProp, err := newDateTimeProp(ical.PropDateTimeStart, snap.Start, snap.AllDay, snap.Tzid)
-	if err != nil {
+	if err := appendTimeProps(v, snap.Start, snap.End, snap.AllDay, snap.Tzid, snap.RecurrenceID); err != nil {
 		return nil, err
-	}
-	v.Props.Add(startProp)
-	endProp, err := newDateTimeProp(ical.PropDateTimeEnd, snap.End, snap.AllDay, snap.Tzid)
-	if err != nil {
-		return nil, err
-	}
-	v.Props.Add(endProp)
-
-	if snap.RecurrenceID != nil {
-		prop, err := newDateTimeProp(ical.PropRecurrenceID, *snap.RecurrenceID, snap.AllDay, snap.Tzid)
-		if err != nil {
-			return nil, fmt.Errorf("build recurrence-id: %w", err)
-		}
-		v.Props.Add(prop)
 	}
 
 	v.Props.Add(organizerProp(snap.OrganizerName, fromAddress))

@@ -331,16 +331,11 @@ func buildVEvent(e repository.Event, uid string, recurrenceID *time.Time, recurr
 		v.Props.SetText(ical.PropColor, nearestCSS3Keyword(r, g, b))
 	}
 
-	startProp, err := newDateTimeProp(ical.PropDateTimeStart, e.Start, e.AllDay, e.Tzid)
-	if err != nil {
+	// recurrenceID nil: RECURRENCE-ID (below) is built separately, against
+	// recurrenceIDAnchor rather than e's own AllDay/Tzid.
+	if err := appendTimeProps(v, e.Start, e.End, e.AllDay, e.Tzid, nil); err != nil {
 		return nil, err
 	}
-	v.Props.Add(startProp)
-	endProp, err := newDateTimeProp(ical.PropDateTimeEnd, e.End, e.AllDay, e.Tzid)
-	if err != nil {
-		return nil, err
-	}
-	v.Props.Add(endProp)
 
 	if e.Rrule != "" {
 		// Not SetText: it marks the prop VALUE=TEXT and backslash-escapes
@@ -438,6 +433,38 @@ func buildVAlarm(e repository.Event, reminder repository.Reminder) *ical.Compone
 	alarm.Props.Add(triggerProp)
 
 	return alarm
+}
+
+// appendTimeProps adds DTSTART, DTEND, and — when recurrenceID is set —
+// RECURRENCE-ID to v, all formatted against the same allDay/tzid: the
+// DTSTART/DTEND/RECURRENCE-ID trio buildVEvent and CancellationToICal each
+// build (#275). This shared allDay/tzid is right for CancellationToICal,
+// whose OutboxCancelSnapshot carries a single anchor for all three, but not
+// for buildVEvent's Override case, where RECURRENCE-ID must instead match
+// its Master's own AllDay/Tzid regardless of what the Override itself
+// changed (see buildVEvent's recurrenceIDAnchor) — so buildVEvent calls this
+// with recurrenceID nil and builds that property separately.
+func appendTimeProps(v *ical.Event, start, end time.Time, allDay bool, tzid *string, recurrenceID *time.Time) error {
+	startProp, err := newDateTimeProp(ical.PropDateTimeStart, start, allDay, tzid)
+	if err != nil {
+		return err
+	}
+	v.Props.Add(startProp)
+
+	endProp, err := newDateTimeProp(ical.PropDateTimeEnd, end, allDay, tzid)
+	if err != nil {
+		return err
+	}
+	v.Props.Add(endProp)
+
+	if recurrenceID != nil {
+		prop, err := newDateTimeProp(ical.PropRecurrenceID, *recurrenceID, allDay, tzid)
+		if err != nil {
+			return fmt.Errorf("build recurrence-id: %w", err)
+		}
+		v.Props.Add(prop)
+	}
+	return nil
 }
 
 // newDateTimeProp renders t as an all-day DATE, a zoned/absolute DATE-TIME
