@@ -93,8 +93,8 @@ services:
     environment:
       INITIAL_EMAIL: you@example.com # Optional
       INITIAL_PASSWORD: change-me # Optional
-      INITIAL_NAME=change-me  # Optional
-      COOKIE_SECURE=false # false by default, set to true when running behind a reverse proxy
+      INITIAL_NAME: change-me  # Optional
+      COOKIE_SECURE: false # false by default, set to true when running behind a reverse proxy
 ```
 
 ```bash
