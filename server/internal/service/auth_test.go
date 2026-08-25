@@ -1359,6 +1359,63 @@ func TestUpdatePreferences_NilWorkingHoursLeavesItUntouched(t *testing.T) {
 	}
 }
 
+// TestUpdatePreferences_IsAtomic asserts that when UpdatePreferences' last
+// write — working hours — fails, the earlier week start, default view, and
+// time format writes made in the same call are rolled back too, never
+// leaving some Preference fields committed while others are not (#261,
+// ADR-0018). Working hours is a plain UPDATE with no natural collision to
+// trip through the public API, so the failure here is forced with a poison
+// trigger instead.
+func TestUpdatePreferences_IsAtomic(t *testing.T) {
+	svc := newTestAuthService(t, "admin", "admin")
+	ctx := context.Background()
+	user, _, err := svc.Bootstrap(ctx)
+	if err != nil {
+		t.Fatalf("bootstrap: %v", err)
+	}
+	before, err := svc.GetUser(ctx, user.ID)
+	if err != nil {
+		t.Fatalf("get before: %v", err)
+	}
+
+	if _, err := svc.db.ExecContext(ctx,
+		`CREATE TRIGGER poison_working_hours BEFORE UPDATE ON users WHEN NEW.working_hours_start = 510 BEGIN SELECT RAISE(ABORT, 'boom'); END`,
+	); err != nil {
+		t.Fatalf("install poison trigger: %v", err)
+	}
+
+	weekStart := 0
+	defaultView := "day"
+	timeFormat := "12h"
+	start, end := 510, 1020
+	_, err = svc.UpdatePreferences(ctx, user.ID, PreferencesUpdate{
+		WeekStart:    &weekStart,
+		DefaultView:  &defaultView,
+		TimeFormat:   &timeFormat,
+		WorkingHours: &WorkingHoursUpdate{Start: &start, End: &end},
+	})
+	if err == nil {
+		t.Fatalf("expected update preferences to fail once the working hours write is poisoned")
+	}
+
+	after, err := svc.GetUser(ctx, user.ID)
+	if err != nil {
+		t.Fatalf("get after: %v", err)
+	}
+	if after.WeekStart != before.WeekStart {
+		t.Fatalf("expected week_start to be rolled back, was %d, now %d", before.WeekStart, after.WeekStart)
+	}
+	if after.DefaultView != before.DefaultView {
+		t.Fatalf("expected default_view to be rolled back, was %q, now %q", before.DefaultView, after.DefaultView)
+	}
+	if after.TimeFormat != before.TimeFormat {
+		t.Fatalf("expected time_format to be rolled back, was %q, now %q", before.TimeFormat, after.TimeFormat)
+	}
+	if after.WorkingHoursStart != nil || after.WorkingHoursEnd != nil {
+		t.Fatalf("expected the working hours write to be rolled back, got start=%+v end=%+v", after.WorkingHoursStart, after.WorkingHoursEnd)
+	}
+}
+
 func TestUpdateName_RenamesTheCaller(t *testing.T) {
 	svc := newTestAuthService(t, "admin", "admin")
 	ctx := context.Background()

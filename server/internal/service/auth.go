@@ -317,6 +317,7 @@ func validatePassword(password string) error {
 }
 
 type AuthService struct {
+	db               *sql.DB
 	users            *repository.UserRepository
 	sessions         *repository.SessionRepository
 	workspaces       *WorkspaceService
@@ -330,8 +331,9 @@ type AuthService struct {
 	enableSignups    bool
 }
 
-func NewAuthService(users *repository.UserRepository, sessions *repository.SessionRepository, workspaces *WorkspaceService, workspaceInvites *repository.WorkspaceInviteRepository, calendars *CalendarService, attendees *repository.AttendeeRepository, jwtSecret []byte, initialName, initialEmail, initialPassword string, enableSignups bool) *AuthService {
+func NewAuthService(db *sql.DB, users *repository.UserRepository, sessions *repository.SessionRepository, workspaces *WorkspaceService, workspaceInvites *repository.WorkspaceInviteRepository, calendars *CalendarService, attendees *repository.AttendeeRepository, jwtSecret []byte, initialName, initialEmail, initialPassword string, enableSignups bool) *AuthService {
 	return &AuthService{
+		db:               db,
 		users:            users,
 		sessions:         sessions,
 		workspaces:       workspaces,
@@ -1080,8 +1082,10 @@ type PreferencesUpdate struct {
 
 // UpdatePreferences applies whichever Preferences are present in update,
 // leaving the rest untouched (ADR-0039). Every present field is validated
-// before any is written, so a request setting several Preferences at once
-// either applies all of them or none.
+// before any is written, and the writes themselves run inside one
+// transaction (ADR-0018, #261), so a request setting several Preferences at
+// once either applies all of them or none — a failure partway through never
+// leaves an earlier field committed while a later one is not.
 func (s *AuthService) UpdatePreferences(ctx context.Context, userID int64, update PreferencesUpdate) (repository.User, error) {
 	if update.WeekStart != nil && (*update.WeekStart < 0 || *update.WeekStart > 6) {
 		return repository.User{}, ErrInvalidWeekStart
@@ -1104,25 +1108,33 @@ func (s *AuthService) UpdatePreferences(ctx context.Context, userID int64, updat
 		}
 	}
 
-	if update.WeekStart != nil {
-		if _, err := s.users.UpdateWeekStart(ctx, userID, *update.WeekStart); err != nil {
-			return repository.User{}, fmt.Errorf("update week start preference: %w", err)
+	err := repository.WithTx(ctx, s.db, func(tx *sql.Tx) error {
+		txUsers := s.users.WithTx(tx)
+
+		if update.WeekStart != nil {
+			if _, err := txUsers.UpdateWeekStart(ctx, userID, *update.WeekStart); err != nil {
+				return fmt.Errorf("update week start preference: %w", err)
+			}
 		}
-	}
-	if update.DefaultView != nil {
-		if _, err := s.users.UpdateDefaultView(ctx, userID, *update.DefaultView); err != nil {
-			return repository.User{}, fmt.Errorf("update default view preference: %w", err)
+		if update.DefaultView != nil {
+			if _, err := txUsers.UpdateDefaultView(ctx, userID, *update.DefaultView); err != nil {
+				return fmt.Errorf("update default view preference: %w", err)
+			}
 		}
-	}
-	if update.TimeFormat != nil {
-		if _, err := s.users.UpdateTimeFormat(ctx, userID, *update.TimeFormat); err != nil {
-			return repository.User{}, fmt.Errorf("update time format preference: %w", err)
+		if update.TimeFormat != nil {
+			if _, err := txUsers.UpdateTimeFormat(ctx, userID, *update.TimeFormat); err != nil {
+				return fmt.Errorf("update time format preference: %w", err)
+			}
 		}
-	}
-	if update.WorkingHours != nil {
-		if _, err := s.users.UpdateWorkingHours(ctx, userID, update.WorkingHours.Start, update.WorkingHours.End); err != nil {
-			return repository.User{}, fmt.Errorf("update working hours preference: %w", err)
+		if update.WorkingHours != nil {
+			if _, err := txUsers.UpdateWorkingHours(ctx, userID, update.WorkingHours.Start, update.WorkingHours.End); err != nil {
+				return fmt.Errorf("update working hours preference: %w", err)
+			}
 		}
+		return nil
+	})
+	if err != nil {
+		return repository.User{}, err
 	}
 
 	return s.users.GetByID(ctx, userID)
