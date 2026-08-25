@@ -344,8 +344,8 @@ func TestAccountService_Delete_RejectsTransferToSelf(t *testing.T) {
 
 	self := alice.ID
 	dispositions := []CalendarDisposition{{CalendarID: calendar.ID, Disposition: DispositionTransfer, TransferTo: &self}}
-	if err := h.accounts.Delete(ctx, alice.ID, dispositions); !errors.Is(err, ErrCannotTransferToSelf) {
-		t.Fatalf("expected ErrCannotTransferToSelf, got %v", err)
+	if err := h.accounts.Delete(ctx, alice.ID, dispositions); !errors.Is(err, ErrCannotTransferToSubject) {
+		t.Fatalf("expected ErrCannotTransferToSubject, got %v", err)
 	}
 }
 

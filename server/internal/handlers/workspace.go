@@ -315,23 +315,7 @@ func (h *WorkspaceHandler) RemoveMemberImpact(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	calendars := make([]calendarImpactResponse, len(impact.Calendars))
-	for i, c := range impact.Calendars {
-		candidates := make([]transferCandidateResponse, len(c.TransferCandidates))
-		for j, candidate := range c.TransferCandidates {
-			candidates[j] = transferCandidateResponse{ID: candidate.ID, Name: candidate.Name}
-		}
-		calendars[i] = calendarImpactResponse{
-			ID:                 c.ID,
-			Name:               c.Name,
-			WorkspaceID:        c.WorkspaceID,
-			WorkspaceName:      c.WorkspaceName,
-			ShareCount:         c.ShareCount,
-			TransferCandidates: candidates,
-		}
-	}
-
-	httpresponse.JSON(w, http.StatusOK, deleteImpactResponse{Calendars: calendars})
+	httpresponse.JSON(w, http.StatusOK, toDeleteImpactResponse(impact.Calendars))
 }
 
 var removeMemberErrors = []errorCase{
@@ -339,11 +323,11 @@ var removeMemberErrors = []errorCase{
 	{service.ErrAdminCannotRemoveAdmin, forbidden(service.ErrAdminCannotRemoveAdmin.Error())},
 	{service.ErrInvalidDisposition, badRequest(service.ErrInvalidDisposition.Error())},
 	{service.ErrTransferTargetRequired, badRequest(service.ErrTransferTargetRequired.Error())},
-	{service.ErrCannotTransferToRemovedMember, badRequest(service.ErrCannotTransferToRemovedMember.Error())},
+	{service.ErrCannotTransferToSubject, badRequest(service.ErrCannotTransferToSubject.Error())},
 	{service.ErrTransferTargetNotWorkspaceMember, badRequest(service.ErrTransferTargetNotWorkspaceMember.Error())},
-	{service.ErrCalendarNotOwnedByRemovedMember, badRequest(service.ErrCalendarNotOwnedByRemovedMember.Error())},
+	{service.ErrCalendarNotOwned, badRequest(service.ErrCalendarNotOwned.Error())},
 	{service.ErrDuplicateDisposition, badRequest(service.ErrDuplicateDisposition.Error())},
-	{service.ErrMissingCalendarDisposition, badRequest(service.ErrMissingCalendarDisposition.Error())},
+	{service.ErrMissingDisposition, badRequest(service.ErrMissingDisposition.Error())},
 	{repository.ErrNotFound, notFound("member not found")},
 }
 
@@ -370,16 +354,7 @@ func (h *WorkspaceHandler) RemoveMember(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	dispositions := make([]service.CalendarDisposition, len(req.Calendars))
-	for i, c := range req.Calendars {
-		dispositions[i] = service.CalendarDisposition{
-			CalendarID:  c.CalendarID,
-			Disposition: c.Disposition,
-			TransferTo:  c.TransferTo,
-		}
-	}
-
-	if err := h.workspaces.RemoveMember(r.Context(), actorID, workspaceID, targetID, dispositions); respondError(w, err, removeMemberErrors, "failed to remove member") {
+	if err := h.workspaces.RemoveMember(r.Context(), actorID, workspaceID, targetID, toCalendarDispositions(req.Calendars)); respondError(w, err, removeMemberErrors, "failed to remove member") {
 		return
 	}
 

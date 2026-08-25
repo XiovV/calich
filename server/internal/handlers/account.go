@@ -67,24 +67,6 @@ func (h *AccountHandler) SetDisabled(w http.ResponseWriter, r *http.Request) {
 	httpresponse.JSON(w, http.StatusOK, setDisabledResponse{IsDisabled: user.IsDisabled})
 }
 
-type transferCandidateResponse struct {
-	ID   int64  `json:"id"`
-	Name string `json:"name"`
-}
-
-type calendarImpactResponse struct {
-	ID                 string                      `json:"id"`
-	Name               string                      `json:"name"`
-	WorkspaceID        int64                       `json:"workspace_id"`
-	WorkspaceName      string                      `json:"workspace_name"`
-	ShareCount         int                         `json:"share_count"`
-	TransferCandidates []transferCandidateResponse `json:"transfer_candidates"`
-}
-
-type deleteImpactResponse struct {
-	Calendars []calendarImpactResponse `json:"calendars"`
-}
-
 // DeleteImpact reports what deleting the caller's own account would affect
 // (ADR-0044): every Calendar they own, across every Workspace they belong
 // to, alongside its Share count and the Workspace Members it could be
@@ -99,43 +81,17 @@ func (h *AccountHandler) DeleteImpact(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	calendars := make([]calendarImpactResponse, len(impact.Calendars))
-	for i, c := range impact.Calendars {
-		candidates := make([]transferCandidateResponse, len(c.TransferCandidates))
-		for j, candidate := range c.TransferCandidates {
-			candidates[j] = transferCandidateResponse{ID: candidate.ID, Name: candidate.Name}
-		}
-		calendars[i] = calendarImpactResponse{
-			ID:                 c.ID,
-			Name:               c.Name,
-			WorkspaceID:        c.WorkspaceID,
-			WorkspaceName:      c.WorkspaceName,
-			ShareCount:         c.ShareCount,
-			TransferCandidates: candidates,
-		}
-	}
-
-	httpresponse.JSON(w, http.StatusOK, deleteImpactResponse{Calendars: calendars})
+	httpresponse.JSON(w, http.StatusOK, toDeleteImpactResponse(impact.Calendars))
 }
 
 var deleteAccountErrors = []errorCase{
 	{service.ErrInvalidDisposition, badRequest(service.ErrInvalidDisposition.Error())},
 	{service.ErrTransferTargetRequired, badRequest(service.ErrTransferTargetRequired.Error())},
-	{service.ErrCannotTransferToSelf, badRequest(service.ErrCannotTransferToSelf.Error())},
+	{service.ErrCannotTransferToSubject, badRequest(service.ErrCannotTransferToSubject.Error())},
 	{service.ErrTransferTargetNotWorkspaceMember, badRequest(service.ErrTransferTargetNotWorkspaceMember.Error())},
 	{service.ErrCalendarNotOwned, badRequest(service.ErrCalendarNotOwned.Error())},
 	{service.ErrDuplicateDisposition, badRequest(service.ErrDuplicateDisposition.Error())},
 	{service.ErrMissingDisposition, badRequest(service.ErrMissingDisposition.Error())},
-}
-
-type calendarDispositionRequest struct {
-	CalendarID string `json:"calendar_id"`
-	// Disposition is "transfer" or "delete" (ADR-0044). There is no default:
-	// every Calendar the caller owns needs one, named explicitly.
-	Disposition string `json:"disposition"`
-	// TransferTo is required, and must name a current Member of the
-	// Calendar's own Workspace, when Disposition is "transfer".
-	TransferTo *int64 `json:"transfer_to,omitempty"`
 }
 
 type deleteAccountRequest struct {
@@ -153,16 +109,7 @@ func (h *AccountHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	dispositions := make([]service.CalendarDisposition, len(req.Calendars))
-	for i, c := range req.Calendars {
-		dispositions[i] = service.CalendarDisposition{
-			CalendarID:  c.CalendarID,
-			Disposition: c.Disposition,
-			TransferTo:  c.TransferTo,
-		}
-	}
-
-	if err := h.accounts.Delete(r.Context(), userID, dispositions); err != nil {
+	if err := h.accounts.Delete(r.Context(), userID, toCalendarDispositions(req.Calendars)); err != nil {
 		if respondSoleWorkspaceOwnerError(w, err) {
 			return
 		}

@@ -349,8 +349,8 @@ func TestWorkspaceService_RemoveMember_BlockedWithoutADispositionForAnOwnedCalen
 	h.addMember(t, aliceWorkspace.ID, bob.ID, repository.WorkspaceRoleMember)
 	h.createCalendar(t, bob.ID, aliceWorkspace.ID, "cal-1", "Bob's")
 
-	if err := h.workspaces.RemoveMember(ctx, alice.ID, aliceWorkspace.ID, bob.ID, nil); !errors.Is(err, ErrMissingCalendarDisposition) {
-		t.Fatalf("expected ErrMissingCalendarDisposition, got %v", err)
+	if err := h.workspaces.RemoveMember(ctx, alice.ID, aliceWorkspace.ID, bob.ID, nil); !errors.Is(err, ErrMissingDisposition) {
+		t.Fatalf("expected ErrMissingDisposition, got %v", err)
 	}
 
 	if _, err := h.workspaces.workspaces.GetMember(ctx, aliceWorkspace.ID, bob.ID); err != nil {
@@ -473,8 +473,8 @@ func TestWorkspaceService_RemoveMember_RejectsCalendarNotOwnedByTarget(t *testin
 	aliceCalendar := h.createCalendar(t, alice.ID, aliceWorkspace.ID, "cal-alice", "Alice's")
 
 	dispositions := []CalendarDisposition{{CalendarID: aliceCalendar.ID, Disposition: DispositionDelete}}
-	if err := h.workspaces.RemoveMember(ctx, alice.ID, aliceWorkspace.ID, bob.ID, dispositions); !errors.Is(err, ErrCalendarNotOwnedByRemovedMember) {
-		t.Fatalf("expected ErrCalendarNotOwnedByRemovedMember, got %v", err)
+	if err := h.workspaces.RemoveMember(ctx, alice.ID, aliceWorkspace.ID, bob.ID, dispositions); !errors.Is(err, ErrCalendarNotOwned) {
+		t.Fatalf("expected ErrCalendarNotOwned, got %v", err)
 	}
 }
 
@@ -518,8 +518,8 @@ func TestWorkspaceService_RemoveMember_RejectsTransferToTheRemovedMember(t *test
 	calendar := h.createCalendar(t, bob.ID, aliceWorkspace.ID, "cal-1", "Bob's")
 
 	dispositions := []CalendarDisposition{{CalendarID: calendar.ID, Disposition: DispositionTransfer, TransferTo: &bob.ID}}
-	if err := h.workspaces.RemoveMember(ctx, alice.ID, aliceWorkspace.ID, bob.ID, dispositions); !errors.Is(err, ErrCannotTransferToRemovedMember) {
-		t.Fatalf("expected ErrCannotTransferToRemovedMember, got %v", err)
+	if err := h.workspaces.RemoveMember(ctx, alice.ID, aliceWorkspace.ID, bob.ID, dispositions); !errors.Is(err, ErrCannotTransferToSubject) {
+		t.Fatalf("expected ErrCannotTransferToSubject, got %v", err)
 	}
 }
 

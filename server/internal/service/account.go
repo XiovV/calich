@@ -10,44 +10,7 @@ import (
 	"github.com/XiovV/calich/server/internal/repository"
 )
 
-// Delete dispositions for a self-deleted User's owned Calendars (ADR-0037,
-// ADR-0044) — there is no default, since guessing wrong either silently
-// destroys a shared Calendar or hands its data to someone with no business
-// holding it.
-const (
-	DispositionTransfer = "transfer"
-	DispositionDelete   = "delete"
-)
-
 var (
-	// ErrInvalidDisposition is returned when a CalendarDisposition names
-	// neither DispositionTransfer nor DispositionDelete — there is no
-	// default (ADR-0037).
-	ErrInvalidDisposition = errors.New(`disposition must be "transfer" or "delete"`)
-	// ErrTransferTargetRequired is returned when a CalendarDisposition is
-	// DispositionTransfer with no TransferTo.
-	ErrTransferTargetRequired = errors.New("transfer_to is required when disposition is \"transfer\"")
-	// ErrCannotTransferToSelf is returned when TransferTo names the User
-	// being deleted — their Calendars can't be reassigned to themselves,
-	// since they're about to stop existing.
-	ErrCannotTransferToSelf = errors.New("cannot transfer a calendar to the account being deleted")
-	// ErrTransferTargetNotWorkspaceMember is returned when TransferTo
-	// doesn't belong to the Calendar's own Workspace — a Calendar's Owner
-	// must belong to its Workspace (ADR-0044, ADR-0045), so a transfer
-	// target from anywhere else, or that doesn't exist at all, is refused
-	// the same way.
-	ErrTransferTargetNotWorkspaceMember = errors.New("transfer target must be a member of the calendar's workspace")
-	// ErrCalendarNotOwned is returned when a CalendarDisposition names a
-	// Calendar the deleting User doesn't own.
-	ErrCalendarNotOwned = errors.New("calendar is not owned by you")
-	// ErrDuplicateDisposition is returned when the same Calendar appears
-	// more than once across the dispositions Delete was given.
-	ErrDuplicateDisposition = errors.New("a calendar cannot appear more than once")
-	// ErrMissingDisposition is returned when Delete wasn't given a
-	// disposition for every Calendar the User owns — self-Delete requires an
-	// explicit transfer-or-delete choice for each one (ADR-0044), so an
-	// account can't be deleted with a Calendar silently uncovered.
-	ErrMissingDisposition = errors.New("every owned calendar needs a disposition")
 	// ErrSoleWorkspaceOwner is returned by SetDisabled (when disabling) and
 	// Delete when the User is the sole Owner of a Workspace that still has
 	// other Members in it (ADR-0044) — a Workspace must never be left
@@ -144,27 +107,6 @@ func (s *AccountService) SetDisabled(ctx context.Context, userID int64, isDisabl
 	return user, nil
 }
 
-// TransferCandidate is one other Member of a Calendar's Workspace — a valid
-// transfer target for that Calendar, since a Calendar's Owner must belong to
-// its own Workspace (ADR-0044, ADR-0045).
-type TransferCandidate struct {
-	ID   int64
-	Name string
-}
-
-// CalendarImpact is one Calendar the deleting User owns: which Workspace it
-// belongs to, how many Users hold a Share on it and would therefore lose
-// Access under DispositionDelete, and who it could be transferred to
-// instead.
-type CalendarImpact struct {
-	ID                 string
-	Name               string
-	WorkspaceID        int64
-	WorkspaceName      string
-	ShareCount         int
-	TransferCandidates []TransferCandidate
-}
-
 // DeleteImpact is what DeleteImpact reports before the caller commits to
 // deleting their own account (ADR-0044): every Calendar they own, across
 // every Workspace they belong to.
@@ -212,34 +154,14 @@ func (s *AccountService) DeleteImpact(ctx context.Context, userID int64) (Delete
 			candidatesByWorkspace[c.WorkspaceID] = candidates
 		}
 
-		shares, err := s.shareRepo.ListByCalendarWithUser(ctx, c.ID)
+		ci, err := calendarImpact(ctx, s.shareRepo, c, workspaceNames[c.WorkspaceID], candidatesByWorkspace[c.WorkspaceID])
 		if err != nil {
-			return DeleteImpact{}, fmt.Errorf("list shares for calendar %s: %w", c.ID, err)
+			return DeleteImpact{}, err
 		}
-
-		impact.Calendars = append(impact.Calendars, CalendarImpact{
-			ID:                 c.ID,
-			Name:               c.Name,
-			WorkspaceID:        c.WorkspaceID,
-			WorkspaceName:      workspaceNames[c.WorkspaceID],
-			ShareCount:         len(shares),
-			TransferCandidates: candidatesByWorkspace[c.WorkspaceID],
-		})
+		impact.Calendars = append(impact.Calendars, ci)
 	}
 
 	return impact, nil
-}
-
-// CalendarDisposition is one owned Calendar's transfer-or-delete choice for
-// Delete (ADR-0044) — self-Delete requires one per Calendar the caller owns,
-// unlike the retired Admin-driven Delete, which took a single disposition
-// for the whole account.
-type CalendarDisposition struct {
-	CalendarID  string
-	Disposition string // DispositionTransfer or DispositionDelete
-	// TransferTo is required, and must name a current Member of the
-	// Calendar's own Workspace, when Disposition is DispositionTransfer.
-	TransferTo *int64
 }
 
 // Delete removes the caller's own account outright (ADR-0044), requiring an
@@ -275,60 +197,14 @@ func (s *AccountService) Delete(ctx context.Context, userID int64, dispositions 
 	if err != nil {
 		return fmt.Errorf("list owned calendars: %w", err)
 	}
-	byID := make(map[string]repository.Calendar, len(calendars))
-	for _, c := range calendars {
-		byID[c.ID] = c
-	}
 
-	seen := make(map[string]bool, len(dispositions))
-	for _, d := range dispositions {
-		if seen[d.CalendarID] {
-			return ErrDuplicateDisposition
-		}
-		seen[d.CalendarID] = true
-
-		calendar, ok := byID[d.CalendarID]
-		if !ok {
-			return ErrCalendarNotOwned
-		}
-
-		switch d.Disposition {
-		case DispositionTransfer:
-			if d.TransferTo == nil {
-				return ErrTransferTargetRequired
-			}
-			if *d.TransferTo == userID {
-				return ErrCannotTransferToSelf
-			}
-			isMember, err := s.workspaces.IsMember(ctx, calendar.WorkspaceID, *d.TransferTo)
-			if err != nil {
-				return err
-			}
-			if !isMember {
-				return ErrTransferTargetNotWorkspaceMember
-			}
-		case DispositionDelete:
-		default:
-			return ErrInvalidDisposition
-		}
-	}
-	if len(seen) != len(calendars) {
-		return ErrMissingDisposition
+	if err := validateDispositions(ctx, calendars, dispositions, userID, s.workspaces.IsMember); err != nil {
+		return err
 	}
 
 	return repository.WithTx(ctx, s.db, func(tx *sql.Tx) error {
-		txCalendars := s.calendarRepo.WithTx(tx)
-		for _, d := range dispositions {
-			switch d.Disposition {
-			case DispositionTransfer:
-				if err := txCalendars.TransferOwnershipOne(ctx, userID, d.CalendarID, *d.TransferTo); err != nil {
-					return fmt.Errorf("transfer calendar %s: %w", d.CalendarID, err)
-				}
-			case DispositionDelete:
-				if err := txCalendars.Delete(ctx, userID, d.CalendarID); err != nil {
-					return fmt.Errorf("delete calendar %s: %w", d.CalendarID, err)
-				}
-			}
+		if err := applyDispositions(ctx, tx, s.calendarRepo, userID, dispositions); err != nil {
+			return err
 		}
 
 		txWorkspaces := s.workspaceRepo.WithTx(tx)

@@ -175,22 +175,6 @@ var (
 	// lock out control of the Workspace.
 	ErrAdminCannotRemoveAdmin = errors.New("only the workspace owner can remove an admin")
 
-	// ErrCalendarNotOwnedByRemovedMember is returned by RemoveMember when a
-	// CalendarDisposition names a Calendar the target Member doesn't own
-	// within workspaceID (#160).
-	ErrCalendarNotOwnedByRemovedMember = errors.New("calendar is not owned by the member being removed")
-	// ErrCannotTransferToRemovedMember is returned by RemoveMember when a
-	// CalendarDisposition's TransferTo names the Member being removed — their
-	// Membership, and with it their standing in the Workspace, is about to
-	// end, so their own Calendars can't be reassigned back to them.
-	ErrCannotTransferToRemovedMember = errors.New("cannot transfer a calendar to the member being removed")
-	// ErrMissingCalendarDisposition is returned by RemoveMember when it
-	// wasn't given a disposition for every Calendar the target Member owns
-	// within workspaceID — removal requires an explicit transfer-or-delete
-	// choice for each one (#160), so a Member's departure can't silently
-	// orphan or destroy a Calendar others rely on.
-	ErrMissingCalendarDisposition = errors.New("every calendar the member owns in this workspace needs a disposition")
-
 	// ErrInvalidWorkspaceName is returned by UpdateSettings when name is
 	// empty.
 	ErrInvalidWorkspaceName = errors.New("workspace name must not be empty")
@@ -327,19 +311,11 @@ func (s *WorkspaceService) RemoveMemberImpact(ctx context.Context, actorUserID, 
 
 	impact := RemoveMemberImpact{Calendars: make([]CalendarImpact, 0, len(calendars))}
 	for _, c := range calendars {
-		shares, err := s.shareRepo.ListByCalendarWithUser(ctx, c.ID)
+		ci, err := calendarImpact(ctx, s.shareRepo, c, workspace.Name, candidates)
 		if err != nil {
-			return RemoveMemberImpact{}, fmt.Errorf("list shares for calendar %s: %w", c.ID, err)
+			return RemoveMemberImpact{}, err
 		}
-
-		impact.Calendars = append(impact.Calendars, CalendarImpact{
-			ID:                 c.ID,
-			Name:               c.Name,
-			WorkspaceID:        c.WorkspaceID,
-			WorkspaceName:      workspace.Name,
-			ShareCount:         len(shares),
-			TransferCandidates: candidates,
-		})
+		impact.Calendars = append(impact.Calendars, ci)
 	}
 
 	return impact, nil
@@ -393,59 +369,14 @@ func (s *WorkspaceService) RemoveMember(ctx context.Context, actorUserID, worksp
 	if err != nil {
 		return fmt.Errorf("list owned calendars: %w", err)
 	}
-	byID := make(map[string]repository.Calendar, len(calendars))
-	for _, c := range calendars {
-		byID[c.ID] = c
-	}
 
-	seen := make(map[string]bool, len(dispositions))
-	for _, d := range dispositions {
-		if seen[d.CalendarID] {
-			return ErrDuplicateDisposition
-		}
-		seen[d.CalendarID] = true
-
-		if _, ok := byID[d.CalendarID]; !ok {
-			return ErrCalendarNotOwnedByRemovedMember
-		}
-
-		switch d.Disposition {
-		case DispositionTransfer:
-			if d.TransferTo == nil {
-				return ErrTransferTargetRequired
-			}
-			if *d.TransferTo == targetUserID {
-				return ErrCannotTransferToRemovedMember
-			}
-			isMember, err := s.IsMember(ctx, workspaceID, *d.TransferTo)
-			if err != nil {
-				return err
-			}
-			if !isMember {
-				return ErrTransferTargetNotWorkspaceMember
-			}
-		case DispositionDelete:
-		default:
-			return ErrInvalidDisposition
-		}
-	}
-	if len(seen) != len(calendars) {
-		return ErrMissingCalendarDisposition
+	if err := validateDispositions(ctx, calendars, dispositions, targetUserID, s.IsMember); err != nil {
+		return err
 	}
 
 	return repository.WithTx(ctx, s.db, func(tx *sql.Tx) error {
-		txCalendars := s.calendarRepo.WithTx(tx)
-		for _, d := range dispositions {
-			switch d.Disposition {
-			case DispositionTransfer:
-				if err := txCalendars.TransferOwnershipOne(ctx, targetUserID, d.CalendarID, *d.TransferTo); err != nil {
-					return fmt.Errorf("transfer calendar %s: %w", d.CalendarID, err)
-				}
-			case DispositionDelete:
-				if err := txCalendars.Delete(ctx, targetUserID, d.CalendarID); err != nil {
-					return fmt.Errorf("delete calendar %s: %w", d.CalendarID, err)
-				}
-			}
+		if err := applyDispositions(ctx, tx, s.calendarRepo, targetUserID, dispositions); err != nil {
+			return err
 		}
 
 		if err := s.workspaces.WithTx(tx).RemoveMember(ctx, workspaceID, targetUserID); err != nil {
