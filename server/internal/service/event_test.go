@@ -1746,6 +1746,207 @@ func TestEventService_PutSeries_RejectsUnknownCalendar(t *testing.T) {
 	}
 }
 
+// TestEventService_PutSeries_MarksMasterAndOverrideRemindersExplicit is
+// #266's regression test for upsertSeries' markExplicit decision on
+// PutSeries' side: a CalDAV PUT's VALARMs are the PUTting User's own
+// deliberate assertion of their Reminder list, so both the Master's and an
+// Override's Reminders must be marked explicit — the behavior PutSeries
+// already had, now driven by a shared, intentional parameter instead of
+// PutSeries alone happening to call Mark.
+func TestEventService_PutSeries_MarksMasterAndOverrideRemindersExplicit(t *testing.T) {
+	svc, userID, calendarID := newTestEventService(t)
+	ctx := context.Background()
+
+	masterStart := time.Date(2026, 6, 2, 9, 0, 0, 0, time.UTC)
+	masterEnd := masterStart.Add(30 * time.Minute)
+	recurrenceID := masterStart.AddDate(0, 0, 7)
+	overrideStart := recurrenceID.Add(2 * time.Hour)
+
+	master, overrides, err := svc.PutSeries(ctx, userID, calendarID, "evt-master", SeriesWrite{
+		Title: "Standup", Start: masterStart, End: masterEnd, Rrule: "FREQ=WEEKLY;BYDAY=TU",
+		Reminders: []repository.Reminder{{OffsetMinutes: 10, Channel: "notification"}},
+		Overrides: []OverrideWrite{
+			{
+				RecurrenceID: recurrenceID, Title: "Standup (moved)", Start: overrideStart, End: overrideStart.Add(30 * time.Minute),
+				Reminders: []repository.Reminder{{OffsetMinutes: 15, Channel: "notification"}},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("put series: %v", err)
+	}
+	if len(overrides) != 1 {
+		t.Fatalf("expected exactly one override, got %d", len(overrides))
+	}
+
+	explicit, err := svc.explicitReminders.ListByEventIDs(ctx, []string{master.ID, overrides[0].ID}, []int64{userID})
+	if err != nil {
+		t.Fatalf("list explicit reminder markers: %v", err)
+	}
+	if !explicit[master.ID][userID] {
+		t.Fatalf("expected the master's reminders to be marked explicit, got %+v", explicit)
+	}
+	if !explicit[overrides[0].ID][userID] {
+		t.Fatalf("expected the override's reminders to be marked explicit, got %+v", explicit)
+	}
+}
+
+// TestEventService_PutSeries_MarksEmptyRemindersExplicit confirms PutSeries
+// marks explicit even when write.Reminders is empty — an empty VALARM set
+// is still the PUTting User deliberately saying "no reminders", not "I
+// didn't mention reminders", so a Calendar default must not silently
+// reassert on the next resolved read (ADR-0064).
+func TestEventService_PutSeries_MarksEmptyRemindersExplicit(t *testing.T) {
+	svc, userID, calendarID := newTestEventService(t)
+	ctx := context.Background()
+
+	start := time.Date(2026, 6, 1, 9, 0, 0, 0, time.UTC)
+	master, _, err := svc.PutSeries(ctx, userID, calendarID, "evt-1", SeriesWrite{Title: "Standup", Start: start, End: start.Add(time.Hour)})
+	if err != nil {
+		t.Fatalf("put series: %v", err)
+	}
+
+	explicit, err := svc.explicitReminders.ListByEventIDs(ctx, []string{master.ID}, []int64{userID})
+	if err != nil {
+		t.Fatalf("list explicit reminder markers: %v", err)
+	}
+	if !explicit[master.ID][userID] {
+		t.Fatalf("expected an empty VALARM set to still mark reminders explicit, got %+v", explicit)
+	}
+}
+
+// TestEventService_ImportSeries_DoesNotMarkRemindersExplicit is #266's
+// regression test for upsertSeries' markExplicit decision on writeSeries'
+// side: an ICS import is nobody deliberately asserting "this is my Reminder
+// list" — it's a file describing what a calendar app happened to export —
+// so the importing User's Calendar default must stay free to keep applying
+// wherever the file didn't itself specify a Reminder.
+func TestEventService_ImportSeries_DoesNotMarkRemindersExplicit(t *testing.T) {
+	svc, userID, calendarID := newTestEventService(t)
+	ctx := context.Background()
+
+	start := time.Date(2026, 6, 1, 9, 0, 0, 0, time.UTC)
+	if _, err := svc.ImportSeries(ctx, userID, calendarID, []SeriesWrite{
+		{Title: "Standup", Start: start, End: start.Add(time.Hour), Reminders: []repository.Reminder{{OffsetMinutes: 10, Channel: "notification"}}},
+	}); err != nil {
+		t.Fatalf("import series: %v", err)
+	}
+
+	events, err := svc.List(ctx, userID, nil, nil)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("expected 1 imported event, got %d", len(events))
+	}
+
+	explicit, err := svc.explicitReminders.ListByEventIDs(ctx, []string{events[0].ID}, []int64{userID})
+	if err != nil {
+		t.Fatalf("list explicit reminder markers: %v", err)
+	}
+	if explicit[events[0].ID][userID] {
+		t.Fatalf("expected an ICS import not to mark reminders explicit, got %+v", explicit)
+	}
+}
+
+// TestEventService_ReconcileSubscribedSeries_DoesNotMarkRemindersExplicit is
+// #266's regression test for upsertSeries' markExplicit decision on the
+// Subscription reconcile side, covering both createSubscribedSeries (a new
+// series) and updateSubscribedSeries (an existing one) — a Subscription's
+// own fetched Reminders are never the Calendar Owner deliberately setting a
+// Reminder list either, so the Owner's Calendar default must stay free to
+// keep applying to whatever the feed didn't itself specify.
+func TestEventService_ReconcileSubscribedSeries_DoesNotMarkRemindersExplicit(t *testing.T) {
+	svc, userID, _ := newTestEventService(t)
+	subCalendarID := newTestSubscribedCalendar(t, svc, userID)
+	ctx := context.Background()
+	start := time.Date(2026, 6, 1, 9, 0, 0, 0, time.UTC)
+
+	masterID := seedSubscribedEvent(t, svc, userID, subCalendarID, SeriesWrite{
+		Title: "Standup", Start: start, End: start.Add(time.Hour), ExternalUID: "uid-1",
+		Reminders: []repository.Reminder{{OffsetMinutes: 10, Channel: "notification"}},
+	})
+
+	explicit, err := svc.explicitReminders.ListByEventIDs(ctx, []string{masterID}, []int64{userID})
+	if err != nil {
+		t.Fatalf("list explicit reminder markers after create: %v", err)
+	}
+	if explicit[masterID][userID] {
+		t.Fatalf("expected a created Subscription series not to mark reminders explicit, got %+v", explicit)
+	}
+
+	result := ReconcileResult{
+		Upserts: []SeriesUpsert{
+			{MasterID: masterID, Write: SeriesWrite{
+				Title: "Standup (renamed)", Start: start, End: start.Add(time.Hour), ExternalUID: "uid-1",
+				Reminders: []repository.Reminder{{OffsetMinutes: 20, Channel: "notification"}},
+			}},
+		},
+	}
+	if _, err := svc.ReconcileSubscribedSeries(ctx, userID, subCalendarID, result); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	explicit, err = svc.explicitReminders.ListByEventIDs(ctx, []string{masterID}, []int64{userID})
+	if err != nil {
+		t.Fatalf("list explicit reminder markers after update: %v", err)
+	}
+	if explicit[masterID][userID] {
+		t.Fatalf("expected an updated Subscription series not to mark reminders explicit, got %+v", explicit)
+	}
+}
+
+// TestEventService_ReconcileSubscribedSeries_PersistsColor guards against a
+// real drift #266's consolidation fixed in passing: createSubscribedSeries
+// and updateSubscribedSeries used to build their own repository.EventFields
+// literals by hand and both omitted Color, so a Subscription's per-event
+// color override (ADR-0043) was silently dropped on create and silently
+// reset to empty on every Refresh update. upsertSeries' shared
+// SeriesWrite.fields()/OverrideWrite.fields() always include Color, so both
+// paths persist it now.
+func TestEventService_ReconcileSubscribedSeries_PersistsColor(t *testing.T) {
+	svc, userID, _ := newTestEventService(t)
+	subCalendarID := newTestSubscribedCalendar(t, svc, userID)
+	ctx := context.Background()
+	start := time.Date(2026, 6, 1, 9, 0, 0, 0, time.UTC)
+	// Already-normalized 8-digit hex (NormalizeColor's own output shape) so
+	// the assertion holds regardless of whether the write path this color
+	// travels through happens to normalize it — ImportSubscribedSeries does
+	// (via validateSeriesWrites), ReconcileSubscribedSeries currently
+	// doesn't, and this test isn't about that difference.
+	color := "#ABCDEFFF"
+
+	masterID := seedSubscribedEvent(t, svc, userID, subCalendarID, SeriesWrite{
+		Title: "Standup", Start: start, End: start.Add(time.Hour), ExternalUID: "uid-1", Color: &color,
+	})
+
+	master, err := svc.events.GetByID(ctx, masterID)
+	if err != nil {
+		t.Fatalf("get by id: %v", err)
+	}
+	if master.Color == nil || *master.Color != color {
+		t.Fatalf("expected color %q to survive create, got %v", color, master.Color)
+	}
+
+	updatedColor := "#123456FF"
+	result := ReconcileResult{
+		Upserts: []SeriesUpsert{
+			{MasterID: masterID, Write: SeriesWrite{Title: "Standup", Start: start, End: start.Add(time.Hour), ExternalUID: "uid-1", Color: &updatedColor}},
+		},
+	}
+	if _, err := svc.ReconcileSubscribedSeries(ctx, userID, subCalendarID, result); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	master, err = svc.events.GetByID(ctx, masterID)
+	if err != nil {
+		t.Fatalf("get by id after update: %v", err)
+	}
+	if master.Color == nil || *master.Color != updatedColor {
+		t.Fatalf("expected color %q to survive update, got %v", updatedColor, master.Color)
+	}
+}
+
 func TestEventService_GetOccurrence_NonRecurring_ReturnsMasterFlattened(t *testing.T) {
 	svc, userID, calendarID := newTestEventService(t)
 	ctx := context.Background()
