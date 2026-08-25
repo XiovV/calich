@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"time"
 
+	"golang.org/x/sync/errgroup"
+
 	"github.com/XiovV/calich/server/internal/repository"
 )
 
@@ -331,48 +333,53 @@ var seriesEventFields = eventFields{
 // one batched query across every row regardless of how many there are; rows
 // need not be contiguous in memory, so a Master and its Overrides hydrate
 // together in one pass.
+//
+// The attach calls below run concurrently via errgroup (#273): each writes
+// only fields of its own, except createdByNames and organizersAndAttendees,
+// which both write CreatedByName — restEventFields and seriesEventFields
+// never enable both on the same call, so that's not a live race, but a
+// recipe that did would need to pick one. attachResolvedViewerReminders
+// needs its own snapshot of every row for the same reason: it takes one
+// synchronously, before any goroutine below can mutate rows, so its read
+// never races with their writes.
 func (s *EventService) hydrateEvents(ctx context.Context, rows []*repository.Event, viewerID int64, fields eventFields) error {
 	if len(rows) == 0 {
 		return nil
 	}
-	if fields.calendarMeta {
-		if err := s.attachCalendarMeta(ctx, rows, fields.knownCalendars); err != nil {
-			return err
+
+	var reminderSnapshot []repository.Event
+	if fields.viewerReminders {
+		reminderSnapshot = make([]repository.Event, len(rows))
+		for i, e := range rows {
+			reminderSnapshot[i] = *e
 		}
+	}
+
+	g, ctx := errgroup.WithContext(ctx)
+
+	if fields.calendarMeta {
+		g.Go(func() error { return s.attachCalendarMeta(ctx, rows, fields.knownCalendars) })
 	}
 	if fields.exdates {
-		if err := s.attachExdates(ctx, rows); err != nil {
-			return err
-		}
+		g.Go(func() error { return s.attachExdates(ctx, rows) })
 	}
 	if fields.viewerReminders {
-		if err := s.attachResolvedViewerReminders(ctx, rows, viewerID); err != nil {
-			return err
-		}
+		g.Go(func() error { return s.attachResolvedViewerReminders(ctx, rows, reminderSnapshot, viewerID) })
 	}
 	if fields.createdByNames {
-		if err := s.attachCreatedByNames(ctx, rows); err != nil {
-			return err
-		}
+		g.Go(func() error { return s.attachCreatedByNames(ctx, rows) })
 	}
 	if fields.attachments {
-		if err := s.attachAttachments(ctx, rows); err != nil {
-			return err
-		}
+		g.Go(func() error { return s.attachAttachments(ctx, rows) })
 	}
 	if fields.attendeeCounts {
-		if err := s.attachAttendeeCounts(ctx, rows); err != nil {
-			return err
-		}
+		g.Go(func() error { return s.attachAttendeeCounts(ctx, rows) })
 	}
-	// Last of the two that write CreatedByName, since it carries the
-	// Organizer's email alongside it and attachCreatedByNames does not.
 	if fields.organizersAndAttendees {
-		if err := s.attachOrganizersAndAttendees(ctx, rows); err != nil {
-			return err
-		}
+		g.Go(func() error { return s.attachOrganizersAndAttendees(ctx, rows) })
 	}
-	return nil
+
+	return g.Wait()
 }
 
 // attachExdates fills in Exdates from each row's Exceptions (ADR-0016). An
@@ -443,12 +450,11 @@ func (s *EventService) attachAttendeeCounts(ctx context.Context, rows []*reposit
 // projected to the one User asking. Both recipes' Reminder step, so a Reminder
 // that exists only by Calendar-default resolution appears as a VALARM exactly
 // like an explicit one (#213): CalDAV/ICS export do not stay scoped to explicit
-// rows alone.
-func (s *EventService) attachResolvedViewerReminders(ctx context.Context, rows []*repository.Event, viewerID int64) error {
-	values := make([]repository.Event, len(rows))
-	for i, e := range rows {
-		values[i] = *e
-	}
+// rows alone. values is a snapshot of rows taken by the caller (hydrateEvents)
+// before hydration starts, rather than copied here, since hydrateEvents runs
+// this alongside other attach calls that mutate rows (#273) and a copy taken
+// mid-flight would race with their writes.
+func (s *EventService) attachResolvedViewerReminders(ctx context.Context, rows []*repository.Event, values []repository.Event, viewerID int64) error {
 	resolved, err := s.reminderResolution.Resolve(ctx, values, []int64{viewerID})
 	if err != nil {
 		return err

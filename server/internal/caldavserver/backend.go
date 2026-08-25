@@ -21,6 +21,7 @@ import (
 	"github.com/emersion/go-webdav"
 	"github.com/emersion/go-webdav/caldav"
 	"github.com/go-chi/chi/v5"
+	"golang.org/x/sync/errgroup"
 
 	"github.com/XiovV/calich/server/internal/httpauth"
 	"github.com/XiovV/calich/server/internal/icalendar"
@@ -210,9 +211,34 @@ func (b *Backend) ListCalendars(ctx context.Context) ([]caldav.Calendar, error) 
 		return nil, err
 	}
 
-	calendars, err := b.calendars.ListAccessible(ctx, userID)
-	if err != nil {
-		return nil, fmt.Errorf("list calendars: %w", err)
+	// ListAccessible and ListAttendeeOnlySeries don't depend on each
+	// other's results, so they run concurrently via errgroup (#273).
+	var calendars []service.CalendarWithAccess
+	var attendeeMasters []repository.Event
+
+	g, gctx := errgroup.WithContext(ctx)
+	g.Go(func() error {
+		var err error
+		calendars, err = b.calendars.ListAccessible(gctx, userID)
+		if err != nil {
+			return fmt.Errorf("list calendars: %w", err)
+		}
+		return nil
+	})
+	g.Go(func() error {
+		var err error
+		// The Invitations collection only appears once userID actually has
+		// an Attendee-only Event to show — an absent one keeps the
+		// home-set unchanged for every principal with no such invite
+		// (ADR-0046, #163).
+		attendeeMasters, _, err = b.events.ListAttendeeOnlySeries(gctx, userID)
+		if err != nil {
+			return fmt.Errorf("list attendee-only events: %w", err)
+		}
+		return nil
+	})
+	if err := g.Wait(); err != nil {
+		return nil, err
 	}
 
 	result := make([]caldav.Calendar, len(calendars))
@@ -220,13 +246,6 @@ func (b *Backend) ListCalendars(ctx context.Context) ([]caldav.Calendar, error) 
 		result[i] = toCalDAVCalendar(userID, c.Calendar)
 	}
 
-	// The Invitations collection only appears once userID actually has an
-	// Attendee-only Event to show — an absent one keeps the home-set
-	// unchanged for every principal with no such invite (ADR-0046, #163).
-	attendeeMasters, _, err := b.events.ListAttendeeOnlySeries(ctx, userID)
-	if err != nil {
-		return nil, fmt.Errorf("list attendee-only events: %w", err)
-	}
 	if len(attendeeMasters) > 0 {
 		result = append(result, caldav.Calendar{Path: attendeeCollectionPath(userID), Name: attendeeCollectionName})
 	}
@@ -498,11 +517,14 @@ func (b *Backend) PutCalendarObject(ctx context.Context, path string, calendar *
 		return nil, webdav.NewHTTPError(http.StatusConflict, fmt.Errorf("VEVENT UID %q does not match resource name %q", parsed.UID, masterID))
 	}
 
-	exists, currentETag, err := b.currentObjectETag(ctx, userID, calendarID, masterID)
-	if err != nil {
-		return nil, err
-	}
-	if opts != nil {
+	// Recomputing the current ETag means fully reconstructing the series
+	// (GetSeries, re-encode, SHA256) — wasted work when opts carries no
+	// precondition to check it against (#273).
+	if opts != nil && (opts.IfMatch.IsSet() || opts.IfNoneMatch.IsSet()) {
+		exists, currentETag, err := b.currentObjectETag(ctx, userID, calendarID, masterID)
+		if err != nil {
+			return nil, err
+		}
 		if err := checkPutPreconditions(*opts, exists, currentETag); err != nil {
 			return nil, err
 		}
