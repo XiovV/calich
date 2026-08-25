@@ -110,6 +110,15 @@ type ParsedFile struct {
 	IgnoredVTodo, IgnoredVJournal, IgnoredVFreeBusy int
 }
 
+// propRefreshInterval and propPublishedTTL are the two ways a publisher
+// states its own feed's poll cadence: RFC 7986's registered property, and
+// the older Microsoft/Google convention it superseded. A Refresh honours
+// whichever is present, preferring the RFC 7986 form (#86, ADR-0033).
+const (
+	propRefreshInterval = "REFRESH-INTERVAL"
+	propPublishedTTL    = "X-PUBLISHED-TTL"
+)
+
 // ParseImportFile decodes r as an iCalendar document and classifies its
 // contents for import. maxAttachmentSize and maxAttachmentsPerEvent are
 // MAX_ATTACHMENT_SIZE/MAX_ATTACHMENTS_PER_EVENT (ADR-0040), enforced per
