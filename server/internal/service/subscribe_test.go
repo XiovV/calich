@@ -194,6 +194,53 @@ func TestSubscribeService_Subscribe_Success(t *testing.T) {
 	}
 }
 
+// TestSubscribeService_Subscribe_ImportFailureDeletesOrphanedCalendar
+// asserts that when Subscribe's import step fails after the Calendar has
+// already been committed by CalendarService.Create, Subscribe deletes that
+// Calendar before returning the error — the same compensation
+// cleanupFailedRegistration applies to Register (#172) — rather than
+// leaving an orphaned Calendar with no series and never scheduled for
+// refresh (#262). The import write is a plain UPDATE against the global
+// change_seq counter with no natural collision to trip through the public
+// API, so the failure here is forced with a poison trigger instead, exactly
+// as TestEventService_SetReminders_IsAtomic does.
+func TestSubscribeService_Subscribe_ImportFailureDeletesOrphanedCalendar(t *testing.T) {
+	g := newTestGraph(t, WithSubscribeHTTPClient(&http.Client{}))
+	ctx := context.Background()
+
+	user, err := g.UserRepo.Create(ctx, "user-a", "user-a@example.com", "hash", false)
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	workspace, err := g.WorkspaceRepo.Create(ctx, "Test Workspace", user.ID)
+	if err != nil {
+		t.Fatalf("create workspace: %v", err)
+	}
+	if err := g.WorkspaceRepo.AddMember(ctx, workspace.ID, user.ID, repository.WorkspaceRoleOwner); err != nil {
+		t.Fatalf("add workspace member: %v", err)
+	}
+
+	srv := icsServer(t, subscribeFeedICS)
+
+	if _, err := g.DB.ExecContext(ctx,
+		`CREATE TRIGGER poison_change_seq BEFORE UPDATE ON change_sequence WHEN NEW.id = 1 BEGIN SELECT RAISE(ABORT, 'boom'); END`,
+	); err != nil {
+		t.Fatalf("install poison trigger: %v", err)
+	}
+
+	if _, err := g.Subscriptions.Subscribe(ctx, user.ID, workspace.ID, srv.URL+"/feed.ics", "Team Holidays", "#8E44ADFF", false); err == nil {
+		t.Fatalf("expected subscribe to fail once the change_seq bump is poisoned")
+	}
+
+	cals, err := g.Calendars.List(ctx, user.ID)
+	if err != nil {
+		t.Fatalf("list calendars: %v", err)
+	}
+	if len(cals) != 0 {
+		t.Fatalf("expected no Calendar to remain after the failed import, got %+v", cals)
+	}
+}
+
 func TestSubscribeService_Subscribe_RedirectFollowed(t *testing.T) {
 	svc, events, _, userID, workspaceID := newTestSubscribeService(t)
 	ctx := context.Background()

@@ -201,7 +201,7 @@ func (s *SubscribeService) Subscribe(ctx context.Context, userID, workspaceID in
 		// this write (ADR-0032) — ImportSubscribedSeries is the deliberate
 		// bypass for exactly this case.
 		if _, err := s.events.ImportSubscribedSeries(ctx, userID, calendar.ID, writes); err != nil {
-			return repository.Calendar{}, fmt.Errorf("subscribe %q: %w", MaskURL(normalized), err)
+			return repository.Calendar{}, s.compensateFailedSubscribe(ctx, userID, calendar.ID, fmt.Errorf("subscribe %q: %w", MaskURL(normalized), err))
 		}
 	}
 
@@ -212,10 +212,28 @@ func (s *SubscribeService) Subscribe(ctx context.Context, userID, workspaceID in
 	interval := effectiveRefreshInterval(s.defaultRefreshInterval, durationSecondsPtr(parsed.RefreshInterval))
 	next := nextRefreshTime(s.now().UTC(), calendar.ID, interval, interval)
 	if err := s.calendars.ScheduleNextRefresh(ctx, userID, calendar.ID, next); err != nil {
-		return repository.Calendar{}, fmt.Errorf("schedule next refresh: %w", err)
+		return repository.Calendar{}, s.compensateFailedSubscribe(ctx, userID, calendar.ID, fmt.Errorf("schedule next refresh: %w", err))
 	}
 
 	return calendar, nil
+}
+
+// compensateFailedSubscribe deletes calendarID after Subscribe fails partway
+// through the import or refresh-scheduling step that follows Calendar
+// creation, mirroring Register's cleanupFailedRegistration and
+// AcceptWorkspaceInviteNewAccount's own compensation (#172): the Calendar
+// row was already committed by CalendarService.Create with no series
+// imported and no refresh ever scheduled, and there is no open transaction
+// left to roll it back through, so the failure is compensated explicitly.
+// Deleting the Calendar cascades any series ImportSubscribedSeries managed
+// to write before failing. origErr is always returned, wrapped with the
+// cleanup failure's detail when the compensating delete itself fails, so
+// the caller never loses the original cause.
+func (s *SubscribeService) compensateFailedSubscribe(ctx context.Context, userID int64, calendarID string, origErr error) error {
+	if cleanupErr := s.calendars.Delete(ctx, userID, calendarID); cleanupErr != nil {
+		return fmt.Errorf("%w (cleanup also failed: %v)", origErr, cleanupErr)
+	}
+	return origErr
 }
 
 // UpdateSourceURL changes calendarID's Subscription URL (#88, ADR-0032): a
