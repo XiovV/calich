@@ -191,44 +191,7 @@ func (s *CalendarService) ListAccessible(ctx context.Context, userID int64) ([]C
 	if err != nil {
 		return nil, fmt.Errorf("list shared calendars: %w", err)
 	}
-	// Sorted by Calendar id — not creation time — so a batch of Calendars
-	// that all still lack a colour override get auto-assigned one in
-	// Calendar-id order (ADR-0057): a stable tiebreak, independent of the
-	// query's own ordering.
-	sort.Slice(shared, func(i, j int) bool { return shared[i].ID < shared[j].ID })
-
-	result := make([]CalendarWithAccess, 0, len(owned)+len(shared))
-	for _, c := range owned {
-		color, err := s.resolveDisplayColor(ctx, userID, c)
-		if err != nil {
-			return nil, err
-		}
-		isOwner, ownerName, shareCount, err := s.OwnershipMeta(ctx, userID, c)
-		if err != nil {
-			return nil, err
-		}
-		result = append(result, CalendarWithAccess{Calendar: c, Access: ResolveAccess(userID, c, nil), Color: color, IsOwner: isOwner, OwnerName: ownerName, ShareCount: shareCount})
-	}
-	for _, c := range shared {
-		role := c.Role
-		color, err := s.resolveDisplayColor(ctx, userID, c.Calendar)
-		if err != nil {
-			return nil, err
-		}
-		isOwner, ownerName, shareCount, err := s.OwnershipMeta(ctx, userID, c.Calendar)
-		if err != nil {
-			return nil, err
-		}
-		result = append(result, CalendarWithAccess{Calendar: c.Calendar, Access: ResolveAccess(userID, c.Calendar, &role), Color: color, IsOwner: isOwner, OwnerName: ownerName, ShareCount: shareCount})
-	}
-
-	sort.Slice(result, func(i, j int) bool {
-		if result[i].CreatedAt.Equal(result[j].CreatedAt) {
-			return result[i].ID < result[j].ID
-		}
-		return result[i].CreatedAt.Before(result[j].CreatedAt)
-	})
-	return result, nil
+	return s.mergeAccessible(ctx, userID, owned, shared)
 }
 
 // ListAccessibleInWorkspace returns every Calendar userID has any Access to
@@ -246,33 +209,35 @@ func (s *CalendarService) ListAccessibleInWorkspace(ctx context.Context, userID,
 	if err != nil {
 		return nil, fmt.Errorf("list shared calendars: %w", err)
 	}
-	// See ListAccessible's identical sort: Calendar-id order makes a batch
-	// auto-assignment deterministic (ADR-0057).
+	return s.mergeAccessible(ctx, userID, owned, shared)
+}
+
+// mergeAccessible builds ListAccessible's and ListAccessibleInWorkspace's
+// common result from their already-fetched owned and shared Calendars — the
+// two methods differ only in how owned and shared are fetched (plain vs
+// Workspace-scoped queries); everything downstream of that fetch is
+// identical, so it lives here once.
+func (s *CalendarService) mergeAccessible(ctx context.Context, userID int64, owned []repository.Calendar, shared []repository.CalendarWithRole) ([]CalendarWithAccess, error) {
+	// Sorted by Calendar id — not creation time — so a batch of Calendars
+	// that all still lack a colour override get auto-assigned one in
+	// Calendar-id order (ADR-0057): a stable tiebreak, independent of the
+	// query's own ordering.
 	sort.Slice(shared, func(i, j int) bool { return shared[i].ID < shared[j].ID })
 
 	result := make([]CalendarWithAccess, 0, len(owned)+len(shared))
 	for _, c := range owned {
-		color, err := s.resolveDisplayColor(ctx, userID, c)
+		withAccess, err := s.toCalendarWithAccess(ctx, userID, c, nil)
 		if err != nil {
 			return nil, err
 		}
-		isOwner, ownerName, shareCount, err := s.OwnershipMeta(ctx, userID, c)
-		if err != nil {
-			return nil, err
-		}
-		result = append(result, CalendarWithAccess{Calendar: c, Access: ResolveAccess(userID, c, nil), Color: color, IsOwner: isOwner, OwnerName: ownerName, ShareCount: shareCount})
+		result = append(result, withAccess)
 	}
 	for _, c := range shared {
-		role := c.Role
-		color, err := s.resolveDisplayColor(ctx, userID, c.Calendar)
+		withAccess, err := s.toCalendarWithAccess(ctx, userID, c.Calendar, &c.Role)
 		if err != nil {
 			return nil, err
 		}
-		isOwner, ownerName, shareCount, err := s.OwnershipMeta(ctx, userID, c.Calendar)
-		if err != nil {
-			return nil, err
-		}
-		result = append(result, CalendarWithAccess{Calendar: c.Calendar, Access: ResolveAccess(userID, c.Calendar, &role), Color: color, IsOwner: isOwner, OwnerName: ownerName, ShareCount: shareCount})
+		result = append(result, withAccess)
 	}
 
 	sort.Slice(result, func(i, j int) bool {
@@ -282,6 +247,24 @@ func (s *CalendarService) ListAccessibleInWorkspace(ctx context.Context, userID,
 		return result[i].CreatedAt.Before(result[j].CreatedAt)
 	})
 	return result, nil
+}
+
+// toCalendarWithAccess resolves a single Calendar's CalendarWithAccess for
+// userID — its resolved Access (role is nil for an owned Calendar, non-nil
+// for a shared one, mirroring ResolveAccess's own signature), resolved
+// display colour, and ownership metadata — the per-item logic ListAccessible
+// and ListAccessibleInWorkspace both apply to every owned and shared row
+// they fetch.
+func (s *CalendarService) toCalendarWithAccess(ctx context.Context, userID int64, c repository.Calendar, role *string) (CalendarWithAccess, error) {
+	color, err := s.resolveDisplayColor(ctx, userID, c)
+	if err != nil {
+		return CalendarWithAccess{}, err
+	}
+	isOwner, ownerName, shareCount, err := s.OwnershipMeta(ctx, userID, c)
+	if err != nil {
+		return CalendarWithAccess{}, err
+	}
+	return CalendarWithAccess{Calendar: c, Access: ResolveAccess(userID, c, role), Color: color, IsOwner: isOwner, OwnerName: ownerName, ShareCount: shareCount}, nil
 }
 
 // resolveDisplayColor computes DisplayColor(user, calendar) (ADR-0038,
