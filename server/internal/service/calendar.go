@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"sort"
@@ -43,6 +44,7 @@ var (
 )
 
 type CalendarService struct {
+	db             *sql.DB
 	calendars      *repository.CalendarRepository
 	shares         *repository.CalendarShareRepository
 	users          *repository.UserRepository
@@ -61,8 +63,8 @@ type CalendarService struct {
 	groups            *repository.GroupRepository
 }
 
-func NewCalendarService(calendars *repository.CalendarRepository, shares *repository.CalendarShareRepository, users *repository.UserRepository, eventReminders *repository.EventReminderRepository, defaultReminders *repository.CalendarDefaultReminderRepository, explicitReminders *repository.EventReminderExplicitRepository, colorOverrides *repository.CalendarUserColorRepository, workspaces *repository.WorkspaceRepository, groupShares *repository.CalendarGroupShareRepository, groups *repository.GroupRepository) *CalendarService {
-	return &CalendarService{calendars: calendars, shares: shares, users: users, eventReminders: eventReminders, defaultReminders: defaultReminders, explicitReminders: explicitReminders, colorOverrides: colorOverrides, workspaces: workspaces, groupShares: groupShares, groups: groups}
+func NewCalendarService(db *sql.DB, calendars *repository.CalendarRepository, shares *repository.CalendarShareRepository, users *repository.UserRepository, eventReminders *repository.EventReminderRepository, defaultReminders *repository.CalendarDefaultReminderRepository, explicitReminders *repository.EventReminderExplicitRepository, colorOverrides *repository.CalendarUserColorRepository, workspaces *repository.WorkspaceRepository, groupShares *repository.CalendarGroupShareRepository, groups *repository.GroupRepository) *CalendarService {
+	return &CalendarService{db: db, calendars: calendars, shares: shares, users: users, eventReminders: eventReminders, defaultReminders: defaultReminders, explicitReminders: explicitReminders, colorOverrides: colorOverrides, workspaces: workspaces, groupShares: groupShares, groups: groups}
 }
 
 // requireMember refuses userID unless they're a Member of workspaceID (#155,
@@ -642,10 +644,12 @@ func (s *CalendarService) RevokeShare(ctx context.Context, ownerID int64, calend
 	if _, err := s.requireOwner(ctx, ownerID, calendarID); err != nil {
 		return err
 	}
-	if err := s.shares.Delete(ctx, calendarID, targetUserID); err != nil {
-		return err
-	}
-	return s.clearUserCalendarState(ctx, targetUserID, calendarID)
+	return s.withShareRevocationTx(ctx, func(repos shareRevocationRepos) error {
+		if err := repos.shares.Delete(ctx, calendarID, targetUserID); err != nil {
+			return err
+		}
+		return clearUserCalendarState(ctx, repos, targetUserID, calendarID)
+	})
 }
 
 // ListShares returns every Share on calendarID, each carrying the Name and
@@ -752,10 +756,51 @@ func (s *CalendarService) ShareTargets(ctx context.Context, ownerID int64, calen
 // on calendarID itself, and their colour override, are all cleared with it,
 // mirroring RevokeShare (ADR-0064, ADR-0038).
 func (s *CalendarService) LeaveShare(ctx context.Context, userID int64, calendarID string) error {
-	if err := s.shares.Delete(ctx, calendarID, userID); err != nil {
-		return err
-	}
-	return s.clearUserCalendarState(ctx, userID, calendarID)
+	return s.withShareRevocationTx(ctx, func(repos shareRevocationRepos) error {
+		if err := repos.shares.Delete(ctx, calendarID, userID); err != nil {
+			return err
+		}
+		return clearUserCalendarState(ctx, repos, userID, calendarID)
+	})
+}
+
+// shareRevocationRepos is the tx-bound set of repositories RevokeShare and
+// LeaveShare need — the Share row itself plus the four kinds of per-User
+// state clearUserCalendarState clears alongside it. Every repo call inside a
+// withShareRevocationTx body must go through this tx-bound set, never
+// CalendarService's own pooled repos directly — the test DB caps the pool at
+// one connection (db.OpenInMemory), so a pooled call made while the
+// transaction holds that connection deadlocks waiting for a connection the
+// transaction itself is holding.
+type shareRevocationRepos struct {
+	shares            *repository.CalendarShareRepository
+	eventReminders    *repository.EventReminderRepository
+	defaultReminders  *repository.CalendarDefaultReminderRepository
+	explicitReminders *repository.EventReminderExplicitRepository
+	colorOverrides    *repository.CalendarUserColorRepository
+}
+
+// withShareRevocationTx runs fn inside a transaction, passing it
+// transaction-bound clones of the Share, EventReminder,
+// CalendarDefaultReminder, EventReminderExplicit, and CalendarUserColor
+// repositories, so RevokeShare's and LeaveShare's five writes — the Share
+// delete and clearUserCalendarState's four — commit or roll back atomically:
+// a crash or error partway through must never leave a User's Reminders or
+// colour override lingering for a Calendar they no longer have Access to
+// (#259, ADR-0018). Reads and validation belong outside fn, before
+// withShareRevocationTx is called (ADR-0018) — RevokeShare's requireOwner
+// check runs against the pooled repos beforehand, exactly as EventService's
+// withTx expects of its own callers.
+func (s *CalendarService) withShareRevocationTx(ctx context.Context, fn func(repos shareRevocationRepos) error) error {
+	return repository.WithTx(ctx, s.db, func(tx *sql.Tx) error {
+		return fn(shareRevocationRepos{
+			shares:            s.shares.WithTx(tx),
+			eventReminders:    s.eventReminders.WithTx(tx),
+			defaultReminders:  s.defaultReminders.WithTx(tx),
+			explicitReminders: s.explicitReminders.WithTx(tx),
+			colorOverrides:    s.colorOverrides.WithTx(tx),
+		})
+	})
 }
 
 // clearUserCalendarState clears every per-User-per-Calendar row a Share's
@@ -765,17 +810,17 @@ func (s *CalendarService) LeaveShare(ctx context.Context, userID int64, calendar
 // ADR-0038): a Reminder, default, or colour with no Access behind it would
 // otherwise linger, invisible, until userID was ever shared with calendarID
 // again.
-func (s *CalendarService) clearUserCalendarState(ctx context.Context, userID int64, calendarID string) error {
-	if err := s.eventReminders.DeleteByUserAndCalendar(ctx, userID, calendarID); err != nil {
+func clearUserCalendarState(ctx context.Context, repos shareRevocationRepos, userID int64, calendarID string) error {
+	if err := repos.eventReminders.DeleteByUserAndCalendar(ctx, userID, calendarID); err != nil {
 		return fmt.Errorf("clear reminders: %w", err)
 	}
-	if err := s.defaultReminders.DeleteByUserAndCalendar(ctx, userID, calendarID); err != nil {
+	if err := repos.defaultReminders.DeleteByUserAndCalendar(ctx, userID, calendarID); err != nil {
 		return fmt.Errorf("clear default reminders: %w", err)
 	}
-	if err := s.explicitReminders.DeleteByUserAndCalendar(ctx, userID, calendarID); err != nil {
+	if err := repos.explicitReminders.DeleteByUserAndCalendar(ctx, userID, calendarID); err != nil {
 		return fmt.Errorf("clear explicit reminder markers: %w", err)
 	}
-	if err := s.colorOverrides.Delete(ctx, userID, calendarID); err != nil {
+	if err := repos.colorOverrides.Delete(ctx, userID, calendarID); err != nil {
 		return fmt.Errorf("clear calendar color override: %w", err)
 	}
 	return nil

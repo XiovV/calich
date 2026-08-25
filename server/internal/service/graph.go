@@ -34,8 +34,8 @@ import (
 // EventRepo the row store underneath it.
 type Graph struct {
 	// DB is the handle every repository below was built from, and the one
-	// the transaction-spanning services (Workspaces, Events, Accounts) take
-	// directly.
+	// the transaction-spanning services (Workspaces, Events, Accounts,
+	// Calendars) take directly.
 	DB     *sql.DB
 	Config config.Config
 	// JWTSecret is what AuthService signs Access tokens with — minted fresh
@@ -173,7 +173,7 @@ func NewGraph(sqlDB *sql.DB, cfg config.Config, opts ...GraphOption) (*Graph, er
 	g.RateLimiter = NewAuthRateLimiter(g.RateLimitRepo, cfg.AuthRateLimitPerEmail, cfg.AuthRateLimitPerIP, cfg.RegisterRateLimitPerIP)
 	g.Workspaces = NewWorkspaceService(sqlDB, g.WorkspaceRepo, g.WorkspaceInviteRepo, g.CalendarRepo, g.ShareRepo)
 	g.Groups = NewGroupService(g.GroupRepo, g.WorkspaceRepo)
-	g.Calendars = NewCalendarService(g.CalendarRepo, g.ShareRepo, g.UserRepo, g.EventReminderRepo, g.DefaultReminderRepo, g.ExplicitReminderRepo, g.ColorOverrideRepo, g.WorkspaceRepo, g.GroupShareRepo, g.GroupRepo)
+	g.Calendars = NewCalendarService(sqlDB, g.CalendarRepo, g.ShareRepo, g.UserRepo, g.EventReminderRepo, g.DefaultReminderRepo, g.ExplicitReminderRepo, g.ColorOverrideRepo, g.WorkspaceRepo, g.GroupShareRepo, g.GroupRepo)
 	g.Auth = NewAuthService(g.UserRepo, g.SessionRepo, g.Workspaces, g.WorkspaceInviteRepo, g.Calendars, g.AttendeeRepo, g.JWTSecret, cfg.InitialName, cfg.InitialEmail, cfg.InitialPassword, cfg.EnableSignups)
 	g.Events = NewEventService(sqlDB, g.EventRepo, g.EventExceptionRepo, g.EventReminderRepo, g.DefaultReminderRepo, g.ExplicitReminderRepo, g.SyncRepo, g.Calendars, g.UserRepo, g.AttachmentRepo, g.AttendeeRepo, g.WorkspaceRepo, g.GroupRepo, g.NotificationRepo, g.OutboxRepo, cfg.InviteRateLimitPerHour)
 	g.Attachments = NewAttachmentService(g.AttachmentRepo, g.EventRepo, g.Calendars, g.Events, g.AttachmentStore, cfg.MaxAttachmentsPerEvent)

@@ -3,7 +3,9 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
+	"time"
 
 	"github.com/XiovV/calich/server/internal/repository"
 )
@@ -238,6 +240,128 @@ func TestCalendarService_RevokeShare_NonOwnerRefused(t *testing.T) {
 	err := svc.RevokeShare(ctx, otherID, calendarID, otherID)
 	if !errors.Is(err, repository.ErrNotFound) {
 		t.Fatalf("err = %v, want ErrNotFound", err)
+	}
+}
+
+// TestCalendarService_RevokeAndLeaveShare_AreAtomic asserts that when the
+// last of RevokeShare's/LeaveShare's five writes fails, the four earlier
+// ones in the same sequence — the Share delete and clearUserCalendarState's
+// event-reminder, default-reminder, and explicit-marker clears — are rolled
+// back too, never leaving the Share gone but its state orphaned (#259,
+// ADR-0018). Like TestEventService_Update_DiscardOnRuleChangeIsAtomic, the
+// colour override delete is a plain DELETE with no natural collision to trip
+// through the public API, so the failure here is forced with a poison
+// trigger instead.
+func TestCalendarService_RevokeAndLeaveShare_AreAtomic(t *testing.T) {
+	tests := []struct {
+		name string
+		end  func(svc *CalendarService, ctx context.Context, ownerID, otherID int64, calendarID string) error
+	}{
+		{"RevokeShare", func(svc *CalendarService, ctx context.Context, ownerID, otherID int64, calendarID string) error {
+			return svc.RevokeShare(ctx, ownerID, calendarID, otherID)
+		}},
+		{"LeaveShare", func(svc *CalendarService, ctx context.Context, ownerID, otherID int64, calendarID string) error {
+			return svc.LeaveShare(ctx, otherID, calendarID)
+		}},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			g := newTestGraph(t)
+			ctx := context.Background()
+
+			owner, err := g.UserRepo.Create(ctx, "owner", "owner@example.com", "hash", false)
+			if err != nil {
+				t.Fatalf("create owner: %v", err)
+			}
+			other, err := g.UserRepo.Create(ctx, "other", "other@example.com", "hash", false)
+			if err != nil {
+				t.Fatalf("create other user: %v", err)
+			}
+			workspace, err := g.WorkspaceRepo.Create(ctx, "Test Workspace", owner.ID)
+			if err != nil {
+				t.Fatalf("create workspace: %v", err)
+			}
+			if err := g.WorkspaceRepo.AddMember(ctx, workspace.ID, owner.ID, repository.WorkspaceRoleOwner); err != nil {
+				t.Fatalf("add owner as workspace member: %v", err)
+			}
+			if err := g.WorkspaceRepo.AddMember(ctx, workspace.ID, other.ID, repository.WorkspaceRoleMember); err != nil {
+				t.Fatalf("add other as workspace member: %v", err)
+			}
+
+			svc := g.Calendars
+			calendar, err := svc.Create(ctx, owner.ID, workspace.ID, "cal-1", CalendarWrite{Name: "Family", Color: "#12809CFF"})
+			if err != nil {
+				t.Fatalf("create calendar: %v", err)
+			}
+			if _, _, err := svc.Share(ctx, owner.ID, calendar.ID, "other@example.com", repository.RoleViewer); err != nil {
+				t.Fatalf("share: %v", err)
+			}
+
+			event, err := g.Events.Create(ctx, owner.ID, "evt-1", EventWrite{CalendarID: calendar.ID, Title: "Standup", Start: time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC), End: time.Date(2026, 1, 1, 9, 30, 0, 0, time.UTC)})
+			if err != nil {
+				t.Fatalf("create event: %v", err)
+			}
+			// SetReminders writes both event_reminders and, via its own
+			// explicit-marker write, event_reminders_explicit — the two
+			// tables clearUserCalendarState's first and third deletes target.
+			if _, err := g.Events.SetReminders(ctx, other.ID, event.ID, []repository.Reminder{{OffsetMinutes: 15, Channel: "notification"}}); err != nil {
+				t.Fatalf("set event reminders: %v", err)
+			}
+			if _, err := svc.SetDefaultReminders(ctx, other.ID, calendar.ID, false, []repository.Reminder{{OffsetMinutes: 30, Channel: "notification"}}); err != nil {
+				t.Fatalf("set default reminders: %v", err)
+			}
+			if _, err := svc.SetColorOverride(ctx, other.ID, calendar.ID, "#654321"); err != nil {
+				t.Fatalf("set color override: %v", err)
+			}
+
+			if _, err := g.DB.ExecContext(ctx, fmt.Sprintf(
+				`CREATE TRIGGER poison_color_delete BEFORE DELETE ON calendar_user_colors WHEN OLD.user_id = %d AND OLD.calendar_id = %q BEGIN SELECT RAISE(ABORT, 'boom'); END`,
+				other.ID, calendar.ID,
+			)); err != nil {
+				t.Fatalf("install poison trigger: %v", err)
+			}
+
+			if err := tc.end(svc, ctx, owner.ID, other.ID, calendar.ID); err == nil {
+				t.Fatalf("expected %s to fail once the color override delete is poisoned", tc.name)
+			}
+
+			if access, _, err := svc.Access(ctx, other.ID, calendar.ID); err != nil || access == AccessNone {
+				t.Fatalf("Access after failed %s = %v, %v; want the Share to have survived the rollback", tc.name, access, err)
+			}
+
+			reminders, err := g.EventReminderRepo.ListByEventIDs(ctx, []string{event.ID}, []int64{other.ID})
+			if err != nil {
+				t.Fatalf("list event reminders: %v", err)
+			}
+			if len(reminders[event.ID][other.ID]) != 1 {
+				t.Fatalf("expected the event reminder to have survived the rollback, got %+v", reminders)
+			}
+
+			explicit, err := g.ExplicitReminderRepo.ListByEventIDs(ctx, []string{event.ID}, []int64{other.ID})
+			if err != nil {
+				t.Fatalf("list explicit reminder markers: %v", err)
+			}
+			if !explicit[event.ID][other.ID] {
+				t.Fatalf("expected the explicit reminder marker to have survived the rollback, got %+v", explicit)
+			}
+
+			timed, _, err := svc.GetDefaultReminders(ctx, other.ID, calendar.ID)
+			if err != nil {
+				t.Fatalf("get default reminders: %v", err)
+			}
+			if len(timed) != 1 {
+				t.Fatalf("expected the default reminder to have survived the rollback, got %+v", timed)
+			}
+
+			view, err := svc.AccessWithColor(ctx, other.ID, calendar.ID)
+			if err != nil {
+				t.Fatalf("resolve view: %v", err)
+			}
+			if view.Color != "#654321FF" {
+				t.Fatalf("expected the color override to have survived the rollback, got %q", view.Color)
+			}
+		})
 	}
 }
 
