@@ -129,8 +129,6 @@ var calendarNotFoundErrors = []errorCase{
 	{repository.ErrNotFound, notFound("calendar not found")},
 }
 
-var updateCalendarErrors = alsoHandling(calendarWriteErrors, calendarNotFoundErrors...)
-
 // workspaceMembershipErrors renders service.ErrNotWorkspaceMember as a 403 —
 // the caller's active Workspace, resolved from the X-Workspace-Id header,
 // named a Workspace they don't belong to (#155, ADR-0045).
@@ -232,10 +230,24 @@ var updateSourceURLErrors = []errorCase{
 
 var updateSourceURLErrorsWithNotFound = alsoHandling(updateSourceURLErrors, calendarNotFoundErrors...)
 
-// nonOwnerColorUpdateErrors renders the color-only path a non-Owner caller
-// takes through Update.
-var nonOwnerColorUpdateErrors = alsoHandling(calendarWriteErrors, calendarNotFoundErrors...)
+// calendarFieldForbiddenErrors renders CalendarService.Update's
+// ErrCalendarFieldForbidden (#272) — a non-Owner's write that reaches beyond
+// their own Color, which stays Owner-only management (ADR-0034).
+var calendarFieldForbiddenErrors = []errorCase{
+	{service.ErrCalendarFieldForbidden, forbidden("only the calendar's owner may change its name, subscription url, or feed alarms setting")},
+}
 
+var updateCalendarErrors = alsoHandling(alsoHandling(calendarWriteErrors, calendarNotFoundErrors...), calendarFieldForbiddenErrors...)
+
+// Update writes id: CalendarService.Update decides, and enforces, which
+// fields the caller may actually touch (#272) — a non-Owner reaching beyond
+// their own Color comes back as ErrCalendarFieldForbidden, rendered as a 403
+// by updateCalendarErrors, with no field-permission logic left here. What
+// remains is purely routing to the right write path's follow-up: the
+// returned Calendar's own UserID says whether CalendarService.Update took
+// the Owner path (updateOwner, which still has Subscription URL/KeepAlarms
+// edits of its own to layer in) or the colour-override path
+// (updateColorOverride, whose write is already done).
 func (h *CalendarHandler) Update(w http.ResponseWriter, r *http.Request) {
 	userID := httpauth.MustUserID(r.Context())
 
@@ -246,52 +258,25 @@ func (h *CalendarHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	access, existing, err := h.calendars.Access(r.Context(), userID, id)
-	if respondError(w, err, calendarNotFoundErrors, "failed to update calendar") {
-		return
-	}
-	if !access.CanRead() {
-		httpresponse.Error(w, http.StatusNotFound, "not_found", "calendar not found")
-		return
-	}
-
-	// A caller who isn't id's Owner may only ever change their own colour
-	// here (ADR-0038): name, Subscription URL and KeepAlarms remain Calendar
-	// management, which stays Owner-only (ADR-0034). Refused outright rather
-	// than silently dropped, mirroring PROPPATCH's own 403 for a non-Owner's
-	// displayname write (#106).
-	if existing.UserID != userID {
-		if req.URL != nil || req.KeepAlarms != nil || (req.Name != "" && req.Name != existing.Name) {
-			httpresponse.Error(w, http.StatusForbidden, "forbidden", "only the calendar's owner may change its name, subscription url, or feed alarms setting")
-			return
-		}
-
-		// An empty color is the "clear my override" signal (ADR-0038) —
-		// there is nothing else a color-only request could otherwise mean by
-		// it, since a non-Owner's write never touches calendars.color, which
-		// is NOT NULL and so has no "unset" of its own.
-		if req.Color == "" {
-			err = h.calendars.ClearColorOverride(r.Context(), userID, id)
-		} else {
-			_, err = h.calendars.SetColorOverride(r.Context(), userID, id, req.Color)
-		}
-		if respondError(w, err, nonOwnerColorUpdateErrors, "failed to update calendar") {
-			return
-		}
-
-		result, err := h.calendars.AccessWithColor(r.Context(), userID, id)
-		if respondError(w, err, calendarNotFoundErrors, "failed to update calendar") {
-			return
-		}
-		httpresponse.JSON(w, http.StatusOK, toCalendarWithAccessResponse(result))
-		return
-	}
-
-	calendar, err := h.calendars.Update(r.Context(), userID, id, service.CalendarWrite{Name: req.Name, Color: req.Color})
+	calendar, err := h.calendars.Update(r.Context(), userID, id, service.CalendarWrite{Name: req.Name, Color: req.Color}, req.URL != nil, req.KeepAlarms != nil)
 	if respondError(w, err, updateCalendarErrors, "failed to update calendar") {
 		return
 	}
 
+	if calendar.UserID != userID {
+		h.updateColorOverride(w, r, userID, id)
+		return
+	}
+	h.updateOwner(w, r, userID, id, req, calendar)
+}
+
+// updateOwner is Update's Owner write path: CalendarService.Update has
+// already renamed/recoloured id by the time this runs, so all that's left is
+// layering in a Subscription's URL/KeepAlarms edits (#87, #88, ADR-0032) —
+// each its own service call, since neither lives on CalendarWrite — before
+// responding with the fully updated Calendar.
+func (h *CalendarHandler) updateOwner(w http.ResponseWriter, r *http.Request, userID int64, id string, req updateCalendarRequest, calendar repository.Calendar) {
+	var err error
 	if req.URL != nil {
 		calendar, err = h.subscriptions.UpdateSourceURL(r.Context(), userID, id, *req.URL)
 		if respondError(w, err, updateSourceURLErrorsWithNotFound, "failed to update subscription url") {
@@ -307,6 +292,20 @@ func (h *CalendarHandler) Update(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.respondWithOwnership(w, r, http.StatusOK, userID, calendar, "failed to update calendar")
+}
+
+// updateColorOverride is Update's non-Owner write path: CalendarService.Update
+// has already written (or cleared) userID's own colour override on id by the
+// time this runs, so all that's left is resolving and returning the
+// caller's own view of id (ADR-0038) — never the raw Calendar
+// CalendarService.Update handed back, which still carries the Owner's own
+// stored colour rather than userID's override.
+func (h *CalendarHandler) updateColorOverride(w http.ResponseWriter, r *http.Request, userID int64, id string) {
+	result, err := h.calendars.AccessWithColor(r.Context(), userID, id)
+	if respondError(w, err, calendarNotFoundErrors, "failed to update calendar") {
+		return
+	}
+	httpresponse.JSON(w, http.StatusOK, toCalendarWithAccessResponse(result))
 }
 
 func (h *CalendarHandler) Delete(w http.ResponseWriter, r *http.Request) {

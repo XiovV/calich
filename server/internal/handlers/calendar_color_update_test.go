@@ -190,6 +190,22 @@ func TestCalendarHandler_Update_NoAccessRefused(t *testing.T) {
 	}
 }
 
+// TestCalendarHandler_Update_NoAccessRefusedEvenForOwnerOnlyFields guards
+// against a caller with no Access at all telling apart "id exists but isn't
+// mine" from "id doesn't exist" by whether a rename comes back 403 or 404
+// (#272) — CalendarService.Update must check CanRead before its
+// field-permission gate, not after, since the gate itself only ever fires
+// for existing.UserID != userID.
+func TestCalendarHandler_Update_NoAccessRefusedEvenForOwnerOnlyFields(t *testing.T) {
+	s := newShareTestServer(t)
+
+	resp := doJSON(t, http.MethodPatch, s.baseURL+"/api/calendars/"+s.calendarID, s.otherToken, updateCalendarRequest{Name: "Hijacked", Color: "#654321"})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d", resp.StatusCode)
+	}
+}
+
 func TestCalendarHandler_Update_NonOwnerRejectsInvalidColor(t *testing.T) {
 	s := newShareTestServer(t)
 

@@ -41,6 +41,14 @@ var (
 	// ErrGroupNotFound is returned by ShareWithGroup when groupID doesn't
 	// exist.
 	ErrGroupNotFound = errors.New("group not found")
+	// ErrCalendarFieldForbidden is returned by Update when a caller who
+	// isn't id's Owner tries to change any field beyond their own Color —
+	// name, Subscription URL, and KeepAlarms stay Owner-only management no
+	// Role, however permissive, grants (ADR-0034), mirroring PROPPATCH's own
+	// 403 for a non-Owner's displayname write (#106). A non-Owner's Color
+	// instead lands as their own colour override (ADR-0038), never the
+	// Calendar's own stored colour.
+	ErrCalendarFieldForbidden = errors.New("only the calendar's owner may change its name, subscription url, or feed alarms setting")
 )
 
 type CalendarService struct {
@@ -824,17 +832,55 @@ func (s *CalendarService) Get(ctx context.Context, userID int64, id string) (rep
 	return calendar, nil
 }
 
-// Update and Delete are Owner-only management operations (rename, recolour,
-// delete — CONTEXT.md's Owner entry) that stay scoped by
-// CalendarRepository's own `WHERE user_id = ?`, deliberately not routed
-// through Access: Access answers what a User may do with a Calendar's
-// Events and clamps a Subscribed Calendar to read-only even for its Owner,
-// but that Owner must still be able to manage the Calendar itself (rename
-// their own feed, turn KeepAlarms on and off, ...). ADR-0034 checks these
-// separately from Role for exactly that reason, and the repository's
-// unclamped ownership filter already expresses it — a second, service-level
-// ownership check here would only duplicate it.
-func (s *CalendarService) Update(ctx context.Context, userID int64, id string, write CalendarWrite) (repository.Calendar, error) {
+// Update writes id on behalf of userID (#272). Its Owner may rename and
+// recolour it — that write stays scoped by CalendarRepository's own
+// `WHERE user_id = ?`, deliberately not routed through Access: Access
+// answers what a User may do with a Calendar's Events and clamps a
+// Subscribed Calendar to read-only even for its Owner, but that Owner must
+// still be able to manage the Calendar itself (rename their own feed, turn
+// KeepAlarms on and off, ...) — ADR-0034 checks these separately from Role
+// for exactly that reason. Anyone else with at least Viewer Access may only
+// ever change their own Color here (ADR-0038), routed to their own colour
+// override rather than the Calendar's own stored colour: write.Name naming
+// a change, or hasURL/hasKeepAlarms being true, returns
+// ErrCalendarFieldForbidden rather than silently dropping the rest of the
+// request, mirroring PROPPATCH's own 403 for a non-Owner's displayname
+// write (#106). hasURL and hasKeepAlarms exist purely for that gate —
+// Update itself never touches either column; SubscribeService's
+// UpdateSourceURL/UpdateKeepAlarms do that once Update has confirmed the
+// caller may proceed.
+func (s *CalendarService) Update(ctx context.Context, userID int64, id string, write CalendarWrite, hasURL, hasKeepAlarms bool) (repository.Calendar, error) {
+	access, existing, err := s.Access(ctx, userID, id)
+	if err != nil {
+		return repository.Calendar{}, err
+	}
+
+	if existing.UserID != userID {
+		// A caller with no Access at all to id must see the same
+		// repository.ErrNotFound a nonexistent id would produce — checked
+		// before the field-permission gate below, not after, so a stranger
+		// can never distinguish "id exists but isn't mine" from "id doesn't
+		// exist" by the choice of 403 vs 404.
+		if !access.CanRead() {
+			return repository.Calendar{}, repository.ErrNotFound
+		}
+		if hasURL || hasKeepAlarms || (write.Name != "" && write.Name != existing.Name) {
+			return repository.Calendar{}, ErrCalendarFieldForbidden
+		}
+		// An empty color is the "clear my override" signal (ADR-0038) —
+		// there is nothing else a color-only request could otherwise mean by
+		// it, since a non-Owner's write never touches calendars.color, which
+		// is NOT NULL and so has no "unset" of its own.
+		if write.Color == "" {
+			if err := s.ClearColorOverride(ctx, userID, id); err != nil {
+				return repository.Calendar{}, err
+			}
+		} else if _, err := s.SetColorOverride(ctx, userID, id, write.Color); err != nil {
+			return repository.Calendar{}, err
+		}
+		return existing, nil
+	}
+
 	write.Name = strings.TrimSpace(write.Name)
 	if write.Name == "" {
 		return repository.Calendar{}, ErrInvalidName
@@ -848,6 +894,11 @@ func (s *CalendarService) Update(ctx context.Context, userID int64, id string, w
 	return s.calendars.Update(ctx, userID, id, write.fields())
 }
 
+// Delete is an Owner-only management operation (CONTEXT.md's Owner entry)
+// that stays scoped by CalendarRepository's own `WHERE user_id = ?`,
+// deliberately not routed through Access for the same reason Update's
+// Owner path isn't — a second, service-level ownership check here would
+// only duplicate the repository's unclamped ownership filter.
 func (s *CalendarService) Delete(ctx context.Context, userID int64, id string) error {
 	return s.calendars.Delete(ctx, userID, id)
 }

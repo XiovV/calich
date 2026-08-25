@@ -303,7 +303,7 @@ func (h *dispatchHandler) applyPropPatch(ctx context.Context, userID int64, cale
 	}
 
 	if nameChanged || colorChanged {
-		if _, err := h.backend.calendars.Update(ctx, userID, calendarID, service.CalendarWrite{Name: newName, Color: newColor}); err != nil {
+		if _, err := h.backend.calendars.Update(ctx, userID, calendarID, service.CalendarWrite{Name: newName, Color: newColor}, false, false); err != nil {
 			return nil, err
 		}
 	}

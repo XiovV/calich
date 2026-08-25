@@ -80,7 +80,7 @@ func TestPropfind_CalendarColor_StableAcrossRepeatedGETs_ChangesAfterUpdate(t *t
 		t.Fatalf("expected a stable color when nothing changed, got %q then %q", color1, color2)
 	}
 
-	if _, err := env.calendarService.Update(ctx, env.userID, env.calendarID, service.CalendarWrite{Name: "Personal", Color: "#8E44ADFF"}); err != nil {
+	if _, err := env.calendarService.Update(ctx, env.userID, env.calendarID, service.CalendarWrite{Name: "Personal", Color: "#8E44ADFF"}, false, false); err != nil {
 		t.Fatalf("update calendar color: %v", err)
 	}
 

@@ -138,7 +138,7 @@ func TestCalendarService_Update(t *testing.T) {
 		t.Fatalf("create: %v", err)
 	}
 
-	updated, err := svc.Update(ctx, userID, "cal-1", CalendarWrite{Name: "Renamed", Color: "#E2483DFF"})
+	updated, err := svc.Update(ctx, userID, "cal-1", CalendarWrite{Name: "Renamed", Color: "#E2483DFF"}, false, false)
 	if err != nil {
 		t.Fatalf("update: %v", err)
 	}
@@ -155,7 +155,7 @@ func TestCalendarService_Update_RejectsInvalidColor(t *testing.T) {
 		t.Fatalf("create: %v", err)
 	}
 
-	_, err := svc.Update(ctx, userID, "cal-1", CalendarWrite{Name: "Personal", Color: "not-a-real-color"})
+	_, err := svc.Update(ctx, userID, "cal-1", CalendarWrite{Name: "Personal", Color: "not-a-real-color"}, false, false)
 	if !errors.Is(err, ErrInvalidColor) {
 		t.Fatalf("expected ErrInvalidColor, got %v", err)
 	}
@@ -164,7 +164,7 @@ func TestCalendarService_Update_RejectsInvalidColor(t *testing.T) {
 func TestCalendarService_Update_NotFound(t *testing.T) {
 	svc, userID, _ := newTestCalendarService(t)
 
-	_, err := svc.Update(context.Background(), userID, "nope", CalendarWrite{Name: "Renamed", Color: "#E2483DFF"})
+	_, err := svc.Update(context.Background(), userID, "nope", CalendarWrite{Name: "Renamed", Color: "#E2483DFF"}, false, false)
 	if !errors.Is(err, repository.ErrNotFound) {
 		t.Fatalf("expected ErrNotFound, got %v", err)
 	}
