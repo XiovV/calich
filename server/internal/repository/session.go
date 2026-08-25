@@ -17,11 +17,17 @@ type Session struct {
 }
 
 type SessionRepository struct {
-	db *sql.DB
+	db DBTX
 }
 
 func NewSessionRepository(db *sql.DB) *SessionRepository {
 	return &SessionRepository{db: db}
+}
+
+// WithTx returns a copy of the repository bound to tx, for use inside
+// repository.WithTx to make a multi-table write atomic (ADR-0018).
+func (r *SessionRepository) WithTx(tx *sql.Tx) *SessionRepository {
+	return &SessionRepository{db: tx}
 }
 
 func (r *SessionRepository) Create(ctx context.Context, userID int64, refreshTokenHash string, refreshTokenExpiresAt time.Time) (Session, error) {

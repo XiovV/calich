@@ -18,11 +18,17 @@ type AppPassword struct {
 }
 
 type AppPasswordRepository struct {
-	db *sql.DB
+	db DBTX
 }
 
 func NewAppPasswordRepository(db *sql.DB) *AppPasswordRepository {
 	return &AppPasswordRepository{db: db}
+}
+
+// WithTx returns a copy of the repository bound to tx, for use inside
+// repository.WithTx to make a multi-table write atomic (ADR-0018).
+func (r *AppPasswordRepository) WithTx(tx *sql.Tx) *AppPasswordRepository {
+	return &AppPasswordRepository{db: tx}
 }
 
 func (r *AppPasswordRepository) Create(ctx context.Context, userID int64, label, hash string) (AppPassword, error) {

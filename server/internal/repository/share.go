@@ -26,11 +26,17 @@ type CalendarShare struct {
 }
 
 type CalendarShareRepository struct {
-	db *sql.DB
+	db DBTX
 }
 
 func NewCalendarShareRepository(db *sql.DB) *CalendarShareRepository {
 	return &CalendarShareRepository{db: db}
+}
+
+// WithTx returns a copy of the repository bound to tx, for use inside
+// repository.WithTx to make a multi-table write atomic (ADR-0018).
+func (r *CalendarShareRepository) WithTx(tx *sql.Tx) *CalendarShareRepository {
+	return &CalendarShareRepository{db: tx}
 }
 
 // Upsert grants calendarID a Share to userID with role, or changes an
