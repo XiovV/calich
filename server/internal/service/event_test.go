@@ -959,6 +959,63 @@ func TestEventService_SetReminders_BumpsChangeSeqNeverSequence(t *testing.T) {
 	}
 }
 
+// TestEventService_SetReminders_IsAtomic asserts that when SetReminders'
+// last step — the change_seq bump — fails, the earlier reminder write and
+// explicit marker are rolled back too, never leaving reminders saved
+// without their explicit marker or with a stale change_seq (#260,
+// ADR-0018). The change_seq bump is a plain UPDATE with no natural
+// collision to trip through the public API, so the failure here is forced
+// with a poison trigger instead.
+func TestEventService_SetReminders_IsAtomic(t *testing.T) {
+	svc, userID, calendarID := newTestEventService(t)
+	ctx := context.Background()
+	start := time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC)
+	end := time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC)
+
+	created, err := svc.Create(ctx, userID, "evt-1", EventWrite{CalendarID: calendarID, Title: "Standup", Start: start, End: end})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	before, err := svc.events.GetByID(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("get before: %v", err)
+	}
+
+	if _, err := svc.db.ExecContext(ctx,
+		`CREATE TRIGGER poison_change_seq BEFORE UPDATE ON change_sequence WHEN NEW.id = 1 BEGIN SELECT RAISE(ABORT, 'boom'); END`,
+	); err != nil {
+		t.Fatalf("install poison trigger: %v", err)
+	}
+
+	if _, err := svc.SetReminders(ctx, userID, "evt-1", []repository.Reminder{{OffsetMinutes: 10, Channel: "notification"}}); err == nil {
+		t.Fatalf("expected set reminders to fail once the change_seq bump is poisoned")
+	}
+
+	after, err := svc.events.GetByID(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("get after: %v", err)
+	}
+	if after.ChangeSeq != before.ChangeSeq {
+		t.Fatalf("expected change_seq to be rolled back, was %d, now %d", before.ChangeSeq, after.ChangeSeq)
+	}
+
+	reminders, err := svc.reminders.ListByEventIDs(ctx, []string{created.ID}, []int64{userID})
+	if err != nil {
+		t.Fatalf("list reminders: %v", err)
+	}
+	if len(reminders[created.ID][userID]) != 0 {
+		t.Fatalf("expected the reminder write to be rolled back, got %+v", reminders)
+	}
+
+	explicit, err := svc.explicitReminders.ListByEventIDs(ctx, []string{created.ID}, []int64{userID})
+	if err != nil {
+		t.Fatalf("list explicit reminder markers: %v", err)
+	}
+	if explicit[created.ID][userID] {
+		t.Fatalf("expected the explicit marker to be rolled back, got %+v", explicit)
+	}
+}
+
 func TestEventService_Create_NoReminders(t *testing.T) {
 	svc, userID, calendarID := newTestEventService(t)
 	ctx := context.Background()

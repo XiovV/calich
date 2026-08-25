@@ -385,7 +385,12 @@ func (s *EventService) GetReminders(ctx context.Context, userID int64, eventID s
 // GetReminders — visibility via getVisibleEvent is enough, with no
 // requireWritableCalendar call layered on top. It therefore bypasses the
 // Viewer restriction and a Source's read-only clamp alike, exactly as
-// SetColorOverride does for a Calendar colour (ADR-0038).
+// SetColorOverride does for a Calendar colour (ADR-0038). The reminder
+// write, the explicit marker, and the change_seq bump all run inside one
+// withTx (ADR-0018, #260) — a failure partway through never leaves the new
+// reminders saved without the explicit marker (silently reactivating a
+// stale Calendar default) or saved with a stale change_seq (a synced CalDAV
+// client never learning of the change).
 func (s *EventService) SetReminders(ctx context.Context, userID int64, eventID string, reminders []repository.Reminder) ([]repository.Reminder, error) {
 	if err := validateReminders(reminders); err != nil {
 		return nil, err
@@ -395,17 +400,27 @@ func (s *EventService) SetReminders(ctx context.Context, userID int64, eventID s
 		return nil, err
 	}
 
-	if err := s.reminders.ReplaceByEventID(ctx, userID, eventID, reminders); err != nil {
-		return nil, fmt.Errorf("set reminders: %w", err)
-	}
-	// Records that userID's list here is explicit — including this call's
-	// own empty reminders, which is what "no Reminders on this one Event"
-	// means: their Calendar default stops applying to it (ADR-0064).
-	if err := s.explicitReminders.Mark(ctx, userID, eventID); err != nil {
-		return nil, fmt.Errorf("mark reminders explicit: %w", err)
-	}
-	if err := s.TouchChangeSeq(ctx, eventID); err != nil {
-		return nil, fmt.Errorf("bump change seq: %w", err)
+	err := s.withTx(ctx, func(repos txRepos) error {
+		if err := repos.reminders.ReplaceByEventID(ctx, userID, eventID, reminders); err != nil {
+			return fmt.Errorf("set reminders: %w", err)
+		}
+		// Records that userID's list here is explicit — including this call's
+		// own empty reminders, which is what "no Reminders on this one Event"
+		// means: their Calendar default stops applying to it (ADR-0064).
+		if err := repos.explicitReminders.Mark(ctx, userID, eventID); err != nil {
+			return fmt.Errorf("mark reminders explicit: %w", err)
+		}
+		seq, err := repos.sync.NextChangeSeq(ctx)
+		if err != nil {
+			return fmt.Errorf("next change seq: %w", err)
+		}
+		if err := repos.events.SetChangeSeq(ctx, eventID, seq); err != nil {
+			return fmt.Errorf("bump change_seq: %w", err)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
 	return reminders, nil
 }
