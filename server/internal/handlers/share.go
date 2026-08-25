@@ -7,9 +7,7 @@
 package handlers
 
 import (
-	"encoding/json"
 	"net/http"
-	"strconv"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -86,9 +84,8 @@ func (h *CalendarHandler) Share(w http.ResponseWriter, r *http.Request) {
 
 	id := chi.URLParam(r, "id")
 
-	var req shareRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		httpresponse.Error(w, http.StatusBadRequest, "invalid_request", "request body must be valid JSON")
+	req, ok := decodeJSON[shareRequest](w, r)
+	if !ok {
 		return
 	}
 
@@ -107,9 +104,8 @@ func (h *CalendarHandler) RevokeShare(w http.ResponseWriter, r *http.Request) {
 
 	id := chi.URLParam(r, "id")
 
-	targetUserID, err := strconv.ParseInt(chi.URLParam(r, "userId"), 10, 64)
-	if err != nil {
-		httpresponse.Error(w, http.StatusBadRequest, "invalid_request", "userId must be a number")
+	targetUserID, ok := parseInt64Param(w, r, "userId")
+	if !ok {
 		return
 	}
 
@@ -184,9 +180,8 @@ func (h *CalendarHandler) ShareWithGroup(w http.ResponseWriter, r *http.Request)
 
 	id := chi.URLParam(r, "id")
 
-	var req groupShareRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		httpresponse.Error(w, http.StatusBadRequest, "invalid_request", "request body must be valid JSON")
+	req, ok := decodeJSON[groupShareRequest](w, r)
+	if !ok {
 		return
 	}
 
@@ -205,9 +200,8 @@ func (h *CalendarHandler) RevokeGroupShare(w http.ResponseWriter, r *http.Reques
 
 	id := chi.URLParam(r, "id")
 
-	groupID, err := strconv.ParseInt(chi.URLParam(r, "groupId"), 10, 64)
-	if err != nil {
-		httpresponse.Error(w, http.StatusBadRequest, "invalid_request", "groupId must be a number")
+	groupID, ok := parseInt64Param(w, r, "groupId")
+	if !ok {
 		return
 	}
 

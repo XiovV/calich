@@ -1,12 +1,10 @@
 package handlers
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
-	"strconv"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -379,9 +377,8 @@ func parseEventTimes(rawStart, rawEnd string, allDay bool) (start, end time.Time
 func (h *EventHandler) Create(w http.ResponseWriter, r *http.Request) {
 	userID := httpauth.MustUserID(r.Context())
 
-	var req createEventRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		httpresponse.Error(w, http.StatusBadRequest, "invalid_request", "request body must be valid JSON")
+	req, ok := decodeJSON[createEventRequest](w, r)
+	if !ok {
 		return
 	}
 
@@ -465,9 +462,8 @@ func (h *EventHandler) Update(w http.ResponseWriter, r *http.Request) {
 
 	id := chi.URLParam(r, "id")
 
-	var req updateEventRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		httpresponse.Error(w, http.StatusBadRequest, "invalid_request", "request body must be valid JSON")
+	req, ok := decodeJSON[updateEventRequest](w, r)
+	if !ok {
 		return
 	}
 
@@ -522,9 +518,8 @@ func (h *EventHandler) AddException(w http.ResponseWriter, r *http.Request) {
 
 	id := chi.URLParam(r, "id")
 
-	var req createExceptionRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		httpresponse.Error(w, http.StatusBadRequest, "invalid_request", "request body must be valid JSON")
+	req, ok := decodeJSON[createExceptionRequest](w, r)
+	if !ok {
 		return
 	}
 
@@ -549,9 +544,8 @@ func (h *EventHandler) Reparent(w http.ResponseWriter, r *http.Request) {
 
 	id := chi.URLParam(r, "id")
 
-	var req reparentRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		httpresponse.Error(w, http.StatusBadRequest, "invalid_request", "request body must be valid JSON")
+	req, ok := decodeJSON[reparentRequest](w, r)
+	if !ok {
 		return
 	}
 
@@ -652,9 +646,8 @@ func (h *EventHandler) AddAttendee(w http.ResponseWriter, r *http.Request) {
 
 	id := chi.URLParam(r, "id")
 
-	var req addAttendeeRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		httpresponse.Error(w, http.StatusBadRequest, "invalid_request", "request body must be valid JSON")
+	req, ok := decodeJSON[addAttendeeRequest](w, r)
+	if !ok {
 		return
 	}
 	if (req.UserID == nil) == (req.Email == nil) {
@@ -706,9 +699,8 @@ func (h *EventHandler) AddGroupAttendee(w http.ResponseWriter, r *http.Request) 
 
 	id := chi.URLParam(r, "id")
 
-	var req addGroupAttendeeRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		httpresponse.Error(w, http.StatusBadRequest, "invalid_request", "request body must be valid JSON")
+	req, ok := decodeJSON[addGroupAttendeeRequest](w, r)
+	if !ok {
 		return
 	}
 
@@ -736,9 +728,8 @@ func (h *EventHandler) RemoveAttendee(w http.ResponseWriter, r *http.Request) {
 
 	id := chi.URLParam(r, "id")
 
-	targetUserID, err := strconv.ParseInt(chi.URLParam(r, "userId"), 10, 64)
-	if err != nil {
-		httpresponse.Error(w, http.StatusBadRequest, "invalid_request", "userId must be a valid integer")
+	targetUserID, ok := parseInt64Param(w, r, "userId")
+	if !ok {
 		return
 	}
 
@@ -786,9 +777,8 @@ func (h *EventHandler) SetAttendeeResponse(w http.ResponseWriter, r *http.Reques
 
 	id := chi.URLParam(r, "id")
 
-	var req setAttendeeResponseRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		httpresponse.Error(w, http.StatusBadRequest, "invalid_request", "request body must be valid JSON")
+	req, ok := decodeJSON[setAttendeeResponseRequest](w, r)
+	if !ok {
 		return
 	}
 

@@ -1,12 +1,8 @@
 package handlers
 
 import (
-	"encoding/json"
 	"net/http"
-	"strconv"
 	"time"
-
-	"github.com/go-chi/chi/v5"
 
 	"github.com/XiovV/calich/server/internal/httpauth"
 	"github.com/XiovV/calich/server/internal/httpresponse"
@@ -60,9 +56,8 @@ var revokeAppPasswordErrors = []errorCase{
 func (h *AppPasswordHandler) Create(w http.ResponseWriter, r *http.Request) {
 	userID := httpauth.MustUserID(r.Context())
 
-	var req createAppPasswordRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		httpresponse.Error(w, http.StatusBadRequest, "invalid_request", "request body must be valid JSON")
+	req, ok := decodeJSON[createAppPasswordRequest](w, r)
+	if !ok {
 		return
 	}
 
@@ -97,13 +92,12 @@ func (h *AppPasswordHandler) List(w http.ResponseWriter, r *http.Request) {
 func (h *AppPasswordHandler) Revoke(w http.ResponseWriter, r *http.Request) {
 	userID := httpauth.MustUserID(r.Context())
 
-	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
-	if err != nil {
-		httpresponse.Error(w, http.StatusBadRequest, "invalid_request", "id must be a number")
+	id, ok := parseInt64Param(w, r, "id")
+	if !ok {
 		return
 	}
 
-	err = h.appPasswords.Revoke(r.Context(), userID, id)
+	err := h.appPasswords.Revoke(r.Context(), userID, id)
 	if respondError(w, err, revokeAppPasswordErrors, "failed to revoke app password") {
 		return
 	}

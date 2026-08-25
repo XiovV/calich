@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http"
 
@@ -85,4 +86,22 @@ func respondError(w http.ResponseWriter, err error, cases []errorCase, fallback 
 	}
 	httpresponse.Error(w, http.StatusInternalServerError, "internal_error", fallback)
 	return true
+}
+
+// decodeJSON decodes r's body as JSON into a zero-valued T, writing a 400
+// and reporting false if it isn't valid JSON — the shared "decode or 400"
+// read every handler with a JSON request body starts with, mirroring
+// respondError's bool-return convention:
+//
+//	req, ok := decodeJSON[createEventRequest](w, r)
+//	if !ok {
+//		return
+//	}
+func decodeJSON[T any](w http.ResponseWriter, r *http.Request) (T, bool) {
+	var v T
+	if err := json.NewDecoder(r.Body).Decode(&v); err != nil {
+		httpresponse.Error(w, http.StatusBadRequest, "invalid_request", "request body must be valid JSON")
+		return v, false
+	}
+	return v, true
 }

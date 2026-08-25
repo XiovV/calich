@@ -170,9 +170,8 @@ func (h *AuthHandler) SetupStatus(w http.ResponseWriter, r *http.Request) {
 // buckets identically whether or not that Email names a real account
 // (ADR-0047's enumeration posture); a success clears the Email bucket alone.
 func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
-	var req loginRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		httpresponse.Error(w, http.StatusBadRequest, "invalid_request", "request body must be valid JSON")
+	req, ok := decodeJSON[loginRequest](w, r)
+	if !ok {
 		return
 	}
 
@@ -222,9 +221,8 @@ type registerRequest struct {
 // true. A successful call creates a brand-new Workspace owned by the
 // registrant and logs them straight in.
 func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
-	var req registerRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		httpresponse.Error(w, http.StatusBadRequest, "invalid_request", "request body must be valid JSON")
+	req, ok := decodeJSON[registerRequest](w, r)
+	if !ok {
 		return
 	}
 
@@ -293,9 +291,8 @@ type acceptWorkspaceInviteRequest struct {
 // Member of the inviting Workspace, and logs them straight in — mirroring
 // AcceptInvite's shape for the account-level Invite this replaces.
 func (h *AuthHandler) AcceptWorkspaceInvite(w http.ResponseWriter, r *http.Request) {
-	var req acceptWorkspaceInviteRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		httpresponse.Error(w, http.StatusBadRequest, "invalid_request", "request body must be valid JSON")
+	req, ok := decodeJSON[acceptWorkspaceInviteRequest](w, r)
+	if !ok {
 		return
 	}
 
@@ -323,9 +320,8 @@ type joinWorkspaceInviteRequest struct {
 func (h *AuthHandler) JoinWorkspaceInvite(w http.ResponseWriter, r *http.Request) {
 	userID := httpauth.MustUserID(r.Context())
 
-	var req joinWorkspaceInviteRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		httpresponse.Error(w, http.StatusBadRequest, "invalid_request", "request body must be valid JSON")
+	req, ok := decodeJSON[joinWorkspaceInviteRequest](w, r)
+	if !ok {
 		return
 	}
 
@@ -401,9 +397,8 @@ type updateEmailRequest struct {
 func (h *AuthHandler) UpdateEmail(w http.ResponseWriter, r *http.Request) {
 	userID := httpauth.MustUserID(r.Context())
 
-	var req updateEmailRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		httpresponse.Error(w, http.StatusBadRequest, "invalid_request", "request body must be valid JSON")
+	req, ok := decodeJSON[updateEmailRequest](w, r)
+	if !ok {
 		return
 	}
 
@@ -425,9 +420,8 @@ type updateNameRequest struct {
 func (h *AuthHandler) UpdateName(w http.ResponseWriter, r *http.Request) {
 	userID := httpauth.MustUserID(r.Context())
 
-	var req updateNameRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		httpresponse.Error(w, http.StatusBadRequest, "invalid_request", "request body must be valid JSON")
+	req, ok := decodeJSON[updateNameRequest](w, r)
+	if !ok {
 		return
 	}
 
@@ -448,9 +442,8 @@ type updateSyncedDeviceRemindersRequest struct {
 func (h *AuthHandler) UpdateSyncedDeviceReminders(w http.ResponseWriter, r *http.Request) {
 	userID := httpauth.MustUserID(r.Context())
 
-	var req updateSyncedDeviceRemindersRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		httpresponse.Error(w, http.StatusBadRequest, "invalid_request", "request body must be valid JSON")
+	req, ok := decodeJSON[updateSyncedDeviceRemindersRequest](w, r)
+	if !ok {
 		return
 	}
 
@@ -571,9 +564,8 @@ type changePasswordResponse struct {
 func (h *AuthHandler) ChangePassword(w http.ResponseWriter, r *http.Request) {
 	userID := httpauth.MustUserID(r.Context())
 
-	var req changePasswordRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		httpresponse.Error(w, http.StatusBadRequest, "invalid_request", "request body must be valid JSON")
+	req, ok := decodeJSON[changePasswordRequest](w, r)
+	if !ok {
 		return
 	}
 

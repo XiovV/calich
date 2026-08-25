@@ -7,7 +7,6 @@
 package handlers
 
 import (
-	"encoding/json"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -76,9 +75,8 @@ func (h *CalendarHandler) SetDefaultReminders(w http.ResponseWriter, r *http.Req
 
 	id := chi.URLParam(r, "id")
 
-	var req setDefaultRemindersRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		httpresponse.Error(w, http.StatusBadRequest, "invalid_request", "request body must be valid JSON")
+	req, ok := decodeJSON[setDefaultRemindersRequest](w, r)
+	if !ok {
 		return
 	}
 

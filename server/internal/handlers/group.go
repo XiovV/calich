@@ -4,7 +4,6 @@
 package handlers
 
 import (
-	"encoding/json"
 	"net/http"
 
 	"github.com/XiovV/calich/server/internal/httpauth"
@@ -76,9 +75,8 @@ func (h *GroupHandler) Create(w http.ResponseWriter, r *http.Request) {
 	userID := httpauth.MustUserID(r.Context())
 	workspaceID := httpauth.MustWorkspaceID(r.Context())
 
-	var req createGroupRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		httpresponse.Error(w, http.StatusBadRequest, "invalid_request", "request body must be valid JSON")
+	req, ok := decodeJSON[createGroupRequest](w, r)
+	if !ok {
 		return
 	}
 
@@ -103,9 +101,8 @@ func (h *GroupHandler) Rename(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var req renameGroupRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		httpresponse.Error(w, http.StatusBadRequest, "invalid_request", "request body must be valid JSON")
+	req, ok := decodeJSON[renameGroupRequest](w, r)
+	if !ok {
 		return
 	}
 
@@ -181,9 +178,8 @@ func (h *GroupHandler) AddMember(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var req addGroupMemberRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		httpresponse.Error(w, http.StatusBadRequest, "invalid_request", "request body must be valid JSON")
+	req, ok := decodeJSON[addGroupMemberRequest](w, r)
+	if !ok {
 		return
 	}
 

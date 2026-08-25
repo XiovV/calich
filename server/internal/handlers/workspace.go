@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"encoding/json"
 	"net/http"
 	"strconv"
 	"time"
@@ -105,15 +104,13 @@ type createWorkspaceInviteRequest struct {
 func (h *WorkspaceHandler) CreateInvite(w http.ResponseWriter, r *http.Request) {
 	actorID := httpauth.MustUserID(r.Context())
 
-	workspaceID, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
-	if err != nil {
-		httpresponse.Error(w, http.StatusBadRequest, "invalid_request", "id must be a number")
+	workspaceID, ok := parseInt64Param(w, r, "id")
+	if !ok {
 		return
 	}
 
-	var req createWorkspaceInviteRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		httpresponse.Error(w, http.StatusBadRequest, "invalid_request", "request body must be valid JSON")
+	req, ok := decodeJSON[createWorkspaceInviteRequest](w, r)
+	if !ok {
 		return
 	}
 
@@ -131,9 +128,8 @@ func (h *WorkspaceHandler) CreateInvite(w http.ResponseWriter, r *http.Request) 
 func (h *WorkspaceHandler) ReissueInvite(w http.ResponseWriter, r *http.Request) {
 	actorID := httpauth.MustUserID(r.Context())
 
-	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
-	if err != nil {
-		httpresponse.Error(w, http.StatusBadRequest, "invalid_request", "id must be a number")
+	id, ok := parseInt64Param(w, r, "id")
+	if !ok {
 		return
 	}
 
@@ -280,9 +276,8 @@ func (h *WorkspaceHandler) SetMemberRole(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	var req setWorkspaceMemberRoleRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		httpresponse.Error(w, http.StatusBadRequest, "invalid_request", "request body must be valid JSON")
+	req, ok := decodeJSON[setWorkspaceMemberRoleRequest](w, r)
+	if !ok {
 		return
 	}
 
@@ -370,9 +365,8 @@ func (h *WorkspaceHandler) RemoveMember(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	var req removeMemberRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		httpresponse.Error(w, http.StatusBadRequest, "invalid_request", "request body must be valid JSON")
+	req, ok := decodeJSON[removeMemberRequest](w, r)
+	if !ok {
 		return
 	}
 

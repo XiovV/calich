@@ -6,7 +6,6 @@
 package handlers
 
 import (
-	"encoding/json"
 	"net/http"
 	"time"
 
@@ -67,9 +66,8 @@ func (h *CalendarHandler) Subscribe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var req subscribeRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		httpresponse.Error(w, http.StatusBadRequest, "invalid_request", "request body must be valid JSON")
+	req, ok := decodeJSON[subscribeRequest](w, r)
+	if !ok {
 		return
 	}
 

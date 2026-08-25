@@ -4,7 +4,6 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -169,9 +168,8 @@ func (h *CalendarHandler) Create(w http.ResponseWriter, r *http.Request) {
 	userID := httpauth.MustUserID(r.Context())
 	workspaceID := httpauth.MustWorkspaceID(r.Context())
 
-	var req createCalendarRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		httpresponse.Error(w, http.StatusBadRequest, "invalid_request", "request body must be valid JSON")
+	req, ok := decodeJSON[createCalendarRequest](w, r)
+	if !ok {
 		return
 	}
 
@@ -243,9 +241,8 @@ func (h *CalendarHandler) Update(w http.ResponseWriter, r *http.Request) {
 
 	id := chi.URLParam(r, "id")
 
-	var req updateCalendarRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		httpresponse.Error(w, http.StatusBadRequest, "invalid_request", "request body must be valid JSON")
+	req, ok := decodeJSON[updateCalendarRequest](w, r)
+	if !ok {
 		return
 	}
 

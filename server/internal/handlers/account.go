@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"encoding/json"
 	"errors"
 	"net/http"
 
@@ -52,9 +51,8 @@ type setDisabledResponse struct {
 func (h *AccountHandler) SetDisabled(w http.ResponseWriter, r *http.Request) {
 	userID := httpauth.MustUserID(r.Context())
 
-	var req setDisabledRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		httpresponse.Error(w, http.StatusBadRequest, "invalid_request", "request body must be valid JSON")
+	req, ok := decodeJSON[setDisabledRequest](w, r)
+	if !ok {
 		return
 	}
 
@@ -150,9 +148,8 @@ type deleteAccountRequest struct {
 func (h *AccountHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	userID := httpauth.MustUserID(r.Context())
 
-	var req deleteAccountRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		httpresponse.Error(w, http.StatusBadRequest, "invalid_request", "request body must be valid JSON")
+	req, ok := decodeJSON[deleteAccountRequest](w, r)
+	if !ok {
 		return
 	}
 
