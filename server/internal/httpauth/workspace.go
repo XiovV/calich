@@ -23,6 +23,18 @@ func WorkspaceIDFromContext(ctx context.Context) (int64, bool) {
 	return id, ok
 }
 
+// MustWorkspaceID returns the active Workspace id set by RequireWorkspace.
+// Every route reaching a handler that needs it is already wrapped in
+// RequireWorkspace, so unlike WorkspaceIDFromContext a handler never needs
+// to check for its absence — mirrors MustUserID.
+func MustWorkspaceID(ctx context.Context) int64 {
+	id, ok := WorkspaceIDFromContext(ctx)
+	if !ok {
+		panic("httpauth: MustWorkspaceID called on a context RequireWorkspace never populated")
+	}
+	return id
+}
+
 // WorkspaceMembershipChecker reports whether a user belongs to a Workspace.
 type WorkspaceMembershipChecker interface {
 	IsMember(ctx context.Context, workspaceID, userID int64) (bool, error)

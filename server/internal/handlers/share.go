@@ -56,11 +56,7 @@ var groupShareErrorsWithNotFound = alsoHandling(groupShareErrors, calendarNotFou
 // ListShares serves GET /api/calendars/{id}/shares: every Share on the
 // Calendar, Owner-only.
 func (h *CalendarHandler) ListShares(w http.ResponseWriter, r *http.Request) {
-	userID, ok := httpauth.UserIDFromContext(r.Context())
-	if !ok {
-		httpresponse.Error(w, http.StatusUnauthorized, "unauthorized", "authentication required")
-		return
-	}
+	userID := httpauth.MustUserID(r.Context())
 
 	id := chi.URLParam(r, "id")
 
@@ -86,11 +82,7 @@ type shareRequest struct {
 // named by req.Email with req.Role, or changes an existing Share's Role if
 // they already have one (ADR-0034, ADR-0047). Owner-only.
 func (h *CalendarHandler) Share(w http.ResponseWriter, r *http.Request) {
-	userID, ok := httpauth.UserIDFromContext(r.Context())
-	if !ok {
-		httpresponse.Error(w, http.StatusUnauthorized, "unauthorized", "authentication required")
-		return
-	}
+	userID := httpauth.MustUserID(r.Context())
 
 	id := chi.URLParam(r, "id")
 
@@ -111,11 +103,7 @@ func (h *CalendarHandler) Share(w http.ResponseWriter, r *http.Request) {
 // RevokeShare serves DELETE /api/calendars/{id}/shares/{userId}: removes
 // userId's Share on the Calendar. Owner-only.
 func (h *CalendarHandler) RevokeShare(w http.ResponseWriter, r *http.Request) {
-	userID, ok := httpauth.UserIDFromContext(r.Context())
-	if !ok {
-		httpresponse.Error(w, http.StatusUnauthorized, "unauthorized", "authentication required")
-		return
-	}
+	userID := httpauth.MustUserID(r.Context())
 
 	id := chi.URLParam(r, "id")
 
@@ -137,11 +125,7 @@ func (h *CalendarHandler) RevokeShare(w http.ResponseWriter, r *http.Request) {
 // (ADR-0034). Returns not-found if the caller holds no Share on it —
 // including when the caller is its Owner, who never has one.
 func (h *CalendarHandler) LeaveShare(w http.ResponseWriter, r *http.Request) {
-	userID, ok := httpauth.UserIDFromContext(r.Context())
-	if !ok {
-		httpresponse.Error(w, http.StatusUnauthorized, "unauthorized", "authentication required")
-		return
-	}
+	userID := httpauth.MustUserID(r.Context())
 
 	id := chi.URLParam(r, "id")
 
@@ -170,11 +154,7 @@ func toGroupShareWithNameResponse(s repository.CalendarGroupShareWithGroupName) 
 // ListGroupShares serves GET /api/calendars/{id}/group-shares: every Group
 // Share on the Calendar, Owner-only (ADR-0045).
 func (h *CalendarHandler) ListGroupShares(w http.ResponseWriter, r *http.Request) {
-	userID, ok := httpauth.UserIDFromContext(r.Context())
-	if !ok {
-		httpresponse.Error(w, http.StatusUnauthorized, "unauthorized", "authentication required")
-		return
-	}
+	userID := httpauth.MustUserID(r.Context())
 
 	id := chi.URLParam(r, "id")
 
@@ -200,11 +180,7 @@ type groupShareRequest struct {
 // Share to req.GroupID with req.Role, or changes an existing Group Share's
 // Role if req.GroupID already has one (ADR-0045). Owner-only.
 func (h *CalendarHandler) ShareWithGroup(w http.ResponseWriter, r *http.Request) {
-	userID, ok := httpauth.UserIDFromContext(r.Context())
-	if !ok {
-		httpresponse.Error(w, http.StatusUnauthorized, "unauthorized", "authentication required")
-		return
-	}
+	userID := httpauth.MustUserID(r.Context())
 
 	id := chi.URLParam(r, "id")
 
@@ -225,11 +201,7 @@ func (h *CalendarHandler) ShareWithGroup(w http.ResponseWriter, r *http.Request)
 // RevokeGroupShare serves DELETE /api/calendars/{id}/group-shares/{groupId}:
 // removes groupId's Share on the Calendar. Owner-only.
 func (h *CalendarHandler) RevokeGroupShare(w http.ResponseWriter, r *http.Request) {
-	userID, ok := httpauth.UserIDFromContext(r.Context())
-	if !ok {
-		httpresponse.Error(w, http.StatusUnauthorized, "unauthorized", "authentication required")
-		return
-	}
+	userID := httpauth.MustUserID(r.Context())
 
 	id := chi.URLParam(r, "id")
 
@@ -266,11 +238,7 @@ type shareTargetsResponse struct {
 // Group of the Calendar's own Workspace the share dialog may offer as a
 // target (#159, ADR-0045). Owner-only.
 func (h *CalendarHandler) ShareTargets(w http.ResponseWriter, r *http.Request) {
-	userID, ok := httpauth.UserIDFromContext(r.Context())
-	if !ok {
-		httpresponse.Error(w, http.StatusUnauthorized, "unauthorized", "authentication required")
-		return
-	}
+	userID := httpauth.MustUserID(r.Context())
 
 	id := chi.URLParam(r, "id")
 

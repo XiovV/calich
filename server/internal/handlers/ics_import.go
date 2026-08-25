@@ -54,17 +54,8 @@ type importTargetsRequest struct {
 // per-file JSON instructions) is parsed and, unless dryRun=1, written
 // synchronously in one call (#77).
 func (h *CalendarHandler) Import(w http.ResponseWriter, r *http.Request) {
-	userID, ok := httpauth.UserIDFromContext(r.Context())
-	if !ok {
-		httpresponse.Error(w, http.StatusUnauthorized, "unauthorized", "authentication required")
-		return
-	}
-
-	workspaceID, ok := httpauth.WorkspaceIDFromContext(r.Context())
-	if !ok {
-		httpresponse.Error(w, http.StatusForbidden, "forbidden", "not a member of this workspace")
-		return
-	}
+	userID := httpauth.MustUserID(r.Context())
+	workspaceID := httpauth.MustWorkspaceID(r.Context())
 
 	dryRun, ok := parseDryRun(r.URL.Query().Get("dryRun"))
 	if !ok {

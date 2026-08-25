@@ -28,6 +28,19 @@ func UserIDFromContext(ctx context.Context) (int64, bool) {
 	return id, ok
 }
 
+// MustUserID returns the authenticated user id set by RequireAuth. Every
+// route reaching a handler in internal/handlers is already wrapped in
+// RequireAuth, so unlike UserIDFromContext a handler never needs to check
+// for its absence — it panics instead, the same way a nil DB handle would,
+// if that invariant is ever broken.
+func MustUserID(ctx context.Context) int64 {
+	id, ok := UserIDFromContext(ctx)
+	if !ok {
+		panic("httpauth: MustUserID called on a context RequireAuth never populated")
+	}
+	return id
+}
+
 // Authenticator validates an access token and returns the user id it was
 // issued for.
 type Authenticator interface {

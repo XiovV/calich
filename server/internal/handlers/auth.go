@@ -321,11 +321,7 @@ type joinWorkspaceInviteRequest struct {
 // email matches the invite's, and accepting just adds a WorkspaceMember row
 // for the inviting Workspace — no new account, no password step.
 func (h *AuthHandler) JoinWorkspaceInvite(w http.ResponseWriter, r *http.Request) {
-	userID, ok := httpauth.UserIDFromContext(r.Context())
-	if !ok {
-		httpresponse.Error(w, http.StatusUnauthorized, "unauthorized", "authentication required")
-		return
-	}
+	userID := httpauth.MustUserID(r.Context())
 
 	var req joinWorkspaceInviteRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -387,11 +383,7 @@ func (h *AuthHandler) toMeResponse(user repository.User) meResponse {
 }
 
 func (h *AuthHandler) Me(w http.ResponseWriter, r *http.Request) {
-	userID, ok := httpauth.UserIDFromContext(r.Context())
-	if !ok {
-		httpresponse.Error(w, http.StatusUnauthorized, "unauthorized", "authentication required")
-		return
-	}
+	userID := httpauth.MustUserID(r.Context())
 
 	user, err := h.auth.GetUser(r.Context(), userID)
 	if err != nil {
@@ -407,11 +399,7 @@ type updateEmailRequest struct {
 }
 
 func (h *AuthHandler) UpdateEmail(w http.ResponseWriter, r *http.Request) {
-	userID, ok := httpauth.UserIDFromContext(r.Context())
-	if !ok {
-		httpresponse.Error(w, http.StatusUnauthorized, "unauthorized", "authentication required")
-		return
-	}
+	userID := httpauth.MustUserID(r.Context())
 
 	var req updateEmailRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -435,11 +423,7 @@ type updateNameRequest struct {
 // current password is required, matching UpdateEmail — the Access token
 // already proves identity.
 func (h *AuthHandler) UpdateName(w http.ResponseWriter, r *http.Request) {
-	userID, ok := httpauth.UserIDFromContext(r.Context())
-	if !ok {
-		httpresponse.Error(w, http.StatusUnauthorized, "unauthorized", "authentication required")
-		return
-	}
+	userID := httpauth.MustUserID(r.Context())
 
 	var req updateNameRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -462,11 +446,7 @@ type updateSyncedDeviceRemindersRequest struct {
 // UpdateSyncedDeviceReminders sets "let my synced devices show reminder
 // pop-ups (disable in-app reminder notifications)" (ADR-0027).
 func (h *AuthHandler) UpdateSyncedDeviceReminders(w http.ResponseWriter, r *http.Request) {
-	userID, ok := httpauth.UserIDFromContext(r.Context())
-	if !ok {
-		httpresponse.Error(w, http.StatusUnauthorized, "unauthorized", "authentication required")
-		return
-	}
+	userID := httpauth.MustUserID(r.Context())
 
 	var req updateSyncedDeviceRemindersRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -500,11 +480,7 @@ type updatePreferencesRequest struct {
 // UpdatePreferences applies whichever Preferences (ADR-0039) are present in
 // the request body, leaving the rest untouched.
 func (h *AuthHandler) UpdatePreferences(w http.ResponseWriter, r *http.Request) {
-	userID, ok := httpauth.UserIDFromContext(r.Context())
-	if !ok {
-		httpresponse.Error(w, http.StatusUnauthorized, "unauthorized", "authentication required")
-		return
-	}
+	userID := httpauth.MustUserID(r.Context())
 
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
@@ -593,11 +569,7 @@ type changePasswordResponse struct {
 }
 
 func (h *AuthHandler) ChangePassword(w http.ResponseWriter, r *http.Request) {
-	userID, ok := httpauth.UserIDFromContext(r.Context())
-	if !ok {
-		httpresponse.Error(w, http.StatusUnauthorized, "unauthorized", "authentication required")
-		return
-	}
+	userID := httpauth.MustUserID(r.Context())
 
 	var req changePasswordRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {

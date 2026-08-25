@@ -50,11 +50,7 @@ func reminderList(reminders []repository.Reminder) []reminderWire {
 // caller's own timed and all-day default Reminder lists — empty, not an
 // error, if they've never set either.
 func (h *CalendarHandler) GetDefaultReminders(w http.ResponseWriter, r *http.Request) {
-	userID, ok := httpauth.UserIDFromContext(r.Context())
-	if !ok {
-		httpresponse.Error(w, http.StatusUnauthorized, "unauthorized", "authentication required")
-		return
-	}
+	userID := httpauth.MustUserID(r.Context())
 
 	id := chi.URLParam(r, "id")
 
@@ -76,11 +72,7 @@ type setDefaultRemindersRequest struct {
 // whichever the request names — wholesale, never touching the other list or
 // another User's rows on the same Calendar (ADR-0064).
 func (h *CalendarHandler) SetDefaultReminders(w http.ResponseWriter, r *http.Request) {
-	userID, ok := httpauth.UserIDFromContext(r.Context())
-	if !ok {
-		httpresponse.Error(w, http.StatusUnauthorized, "unauthorized", "authentication required")
-		return
-	}
+	userID := httpauth.MustUserID(r.Context())
 
 	id := chi.URLParam(r, "id")
 

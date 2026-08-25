@@ -58,11 +58,7 @@ var revokeAppPasswordErrors = []errorCase{
 }
 
 func (h *AppPasswordHandler) Create(w http.ResponseWriter, r *http.Request) {
-	userID, ok := httpauth.UserIDFromContext(r.Context())
-	if !ok {
-		httpresponse.Error(w, http.StatusUnauthorized, "unauthorized", "authentication required")
-		return
-	}
+	userID := httpauth.MustUserID(r.Context())
 
 	var req createAppPasswordRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -82,11 +78,7 @@ func (h *AppPasswordHandler) Create(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *AppPasswordHandler) List(w http.ResponseWriter, r *http.Request) {
-	userID, ok := httpauth.UserIDFromContext(r.Context())
-	if !ok {
-		httpresponse.Error(w, http.StatusUnauthorized, "unauthorized", "authentication required")
-		return
-	}
+	userID := httpauth.MustUserID(r.Context())
 
 	appPasswords, err := h.appPasswords.List(r.Context(), userID)
 	if err != nil {
@@ -103,11 +95,7 @@ func (h *AppPasswordHandler) List(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *AppPasswordHandler) Revoke(w http.ResponseWriter, r *http.Request) {
-	userID, ok := httpauth.UserIDFromContext(r.Context())
-	if !ok {
-		httpresponse.Error(w, http.StatusUnauthorized, "unauthorized", "authentication required")
-		return
-	}
+	userID := httpauth.MustUserID(r.Context())
 
 	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
 	if err != nil {

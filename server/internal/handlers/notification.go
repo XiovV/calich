@@ -51,11 +51,7 @@ func toNotificationResponse(n repository.Notification) notificationResponse {
 }
 
 func (h *NotificationHandler) List(w http.ResponseWriter, r *http.Request) {
-	userID, ok := httpauth.UserIDFromContext(r.Context())
-	if !ok {
-		httpresponse.Error(w, http.StatusUnauthorized, "unauthorized", "authentication required")
-		return
-	}
+	userID := httpauth.MustUserID(r.Context())
 
 	notifications, err := h.notifications.List(r.Context(), userID)
 	if err != nil {
@@ -72,11 +68,7 @@ func (h *NotificationHandler) List(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *NotificationHandler) MarkSeen(w http.ResponseWriter, r *http.Request) {
-	userID, ok := httpauth.UserIDFromContext(r.Context())
-	if !ok {
-		httpresponse.Error(w, http.StatusUnauthorized, "unauthorized", "authentication required")
-		return
-	}
+	userID := httpauth.MustUserID(r.Context())
 
 	if err := h.notifications.MarkAllSeen(r.Context(), userID); err != nil {
 		httpresponse.Error(w, http.StatusInternalServerError, "internal_error", "failed to mark notifications seen")

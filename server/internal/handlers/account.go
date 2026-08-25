@@ -50,11 +50,7 @@ type setDisabledResponse struct {
 // RequireEnabledUser, since re-activating is exactly the action a Disabled
 // User must still be able to reach.
 func (h *AccountHandler) SetDisabled(w http.ResponseWriter, r *http.Request) {
-	userID, ok := httpauth.UserIDFromContext(r.Context())
-	if !ok {
-		httpresponse.Error(w, http.StatusUnauthorized, "unauthorized", "authentication required")
-		return
-	}
+	userID := httpauth.MustUserID(r.Context())
 
 	var req setDisabledRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -97,11 +93,7 @@ type deleteImpactResponse struct {
 // transferred to instead — the preview shown before a transfer-or-delete
 // choice is made for each one.
 func (h *AccountHandler) DeleteImpact(w http.ResponseWriter, r *http.Request) {
-	userID, ok := httpauth.UserIDFromContext(r.Context())
-	if !ok {
-		httpresponse.Error(w, http.StatusUnauthorized, "unauthorized", "authentication required")
-		return
-	}
+	userID := httpauth.MustUserID(r.Context())
 
 	impact, err := h.accounts.DeleteImpact(r.Context(), userID)
 	if err != nil {
@@ -156,11 +148,7 @@ type deleteAccountRequest struct {
 // explicit transfer-or-delete disposition for every Calendar they own,
 // across every Workspace they belong to.
 func (h *AccountHandler) Delete(w http.ResponseWriter, r *http.Request) {
-	userID, ok := httpauth.UserIDFromContext(r.Context())
-	if !ok {
-		httpresponse.Error(w, http.StatusUnauthorized, "unauthorized", "authentication required")
-		return
-	}
+	userID := httpauth.MustUserID(r.Context())
 
 	var req deleteAccountRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {

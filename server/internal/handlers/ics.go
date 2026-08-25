@@ -95,11 +95,7 @@ func parseICSScope(w http.ResponseWriter, r *http.Request) (icsScope, bool) {
 // (scope=all, the default) or one flattened Occurrence (scope=occurrence,
 // requiring occurrenceStart).
 func (h *EventHandler) ICS(w http.ResponseWriter, r *http.Request) {
-	userID, ok := httpauth.UserIDFromContext(r.Context())
-	if !ok {
-		httpresponse.Error(w, http.StatusUnauthorized, "unauthorized", "authentication required")
-		return
-	}
+	userID := httpauth.MustUserID(r.Context())
 
 	id := chi.URLParam(r, "id")
 

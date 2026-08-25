@@ -32,18 +32,6 @@ func toWorkspaceResponse(w repository.Workspace) workspaceResponse {
 	return workspaceResponse{ID: w.ID, Name: w.Name, DefaultSharePrivacy: w.DefaultSharePrivacy}
 }
 
-// requireActorID reads the caller's id off r's context, writing a 401 and
-// reporting false when it's missing — every member/invite-management route
-// below needs this before it can do anything else.
-func requireActorID(w http.ResponseWriter, r *http.Request) (int64, bool) {
-	actorID, ok := httpauth.UserIDFromContext(r.Context())
-	if !ok {
-		httpresponse.Error(w, http.StatusUnauthorized, "unauthorized", "authentication required")
-		return 0, false
-	}
-	return actorID, true
-}
-
 // parseInt64Param reads r's chi URL param name as an int64, writing a 400
 // and reporting false when it isn't one.
 func parseInt64Param(w http.ResponseWriter, r *http.Request, name string) (int64, bool) {
@@ -58,11 +46,7 @@ func parseInt64Param(w http.ResponseWriter, r *http.Request, name string) (int64
 // List returns every Workspace the caller belongs to (ADR-0044) — the
 // workspace switcher's data source.
 func (h *WorkspaceHandler) List(w http.ResponseWriter, r *http.Request) {
-	userID, ok := httpauth.UserIDFromContext(r.Context())
-	if !ok {
-		httpresponse.Error(w, http.StatusUnauthorized, "unauthorized", "authentication required")
-		return
-	}
+	userID := httpauth.MustUserID(r.Context())
 
 	workspaces, err := h.workspaces.ListForUser(r.Context(), userID)
 	if err != nil {
@@ -119,11 +103,7 @@ type createWorkspaceInviteRequest struct {
 // token is shown to the caller exactly once, to distribute however they
 // choose.
 func (h *WorkspaceHandler) CreateInvite(w http.ResponseWriter, r *http.Request) {
-	actorID, ok := httpauth.UserIDFromContext(r.Context())
-	if !ok {
-		httpresponse.Error(w, http.StatusUnauthorized, "unauthorized", "authentication required")
-		return
-	}
+	actorID := httpauth.MustUserID(r.Context())
 
 	workspaceID, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
 	if err != nil {
@@ -149,11 +129,7 @@ func (h *WorkspaceHandler) CreateInvite(w http.ResponseWriter, r *http.Request) 
 // and expiry (ADR-0044), invalidating whichever token came before it —
 // callable only by the invite's Workspace's Owner or Admin.
 func (h *WorkspaceHandler) ReissueInvite(w http.ResponseWriter, r *http.Request) {
-	actorID, ok := httpauth.UserIDFromContext(r.Context())
-	if !ok {
-		httpresponse.Error(w, http.StatusUnauthorized, "unauthorized", "authentication required")
-		return
-	}
+	actorID := httpauth.MustUserID(r.Context())
 
 	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
 	if err != nil {
@@ -196,10 +172,7 @@ var listWorkspaceInvitesErrors = []errorCase{
 // callable only by its Owner or Admin — shown alongside active Members on the
 // member-management screen.
 func (h *WorkspaceHandler) ListInvites(w http.ResponseWriter, r *http.Request) {
-	actorID, ok := requireActorID(w, r)
-	if !ok {
-		return
-	}
+	actorID := httpauth.MustUserID(r.Context())
 	workspaceID, ok := parseInt64Param(w, r, "id")
 	if !ok {
 		return
@@ -225,10 +198,7 @@ var cancelWorkspaceInviteErrors = []errorCase{
 // CancelInvite withdraws id outright (#165), callable only by the invite's
 // Workspace's Owner or Admin.
 func (h *WorkspaceHandler) CancelInvite(w http.ResponseWriter, r *http.Request) {
-	actorID, ok := requireActorID(w, r)
-	if !ok {
-		return
-	}
+	actorID := httpauth.MustUserID(r.Context())
 	id, ok := parseInt64Param(w, r, "id")
 	if !ok {
 		return
@@ -258,10 +228,7 @@ var listWorkspaceMembersErrors = []errorCase{
 // ListMembers returns every enabled Member of id (#156), callable by any
 // Member — the member-management list's data source.
 func (h *WorkspaceHandler) ListMembers(w http.ResponseWriter, r *http.Request) {
-	actorID, ok := requireActorID(w, r)
-	if !ok {
-		return
-	}
+	actorID := httpauth.MustUserID(r.Context())
 	workspaceID, ok := parseInt64Param(w, r, "id")
 	if !ok {
 		return
@@ -303,10 +270,7 @@ type workspaceMemberRoleResponse struct {
 // SetMemberRole grants or revokes the Admin Role on a Member of id (#156),
 // callable only by its Owner.
 func (h *WorkspaceHandler) SetMemberRole(w http.ResponseWriter, r *http.Request) {
-	actorID, ok := requireActorID(w, r)
-	if !ok {
-		return
-	}
+	actorID := httpauth.MustUserID(r.Context())
 	workspaceID, ok := parseInt64Param(w, r, "id")
 	if !ok {
 		return
@@ -341,10 +305,7 @@ var removeMemberImpactErrors = []errorCase{
 // could be transferred to instead (#160) — the preview a removal-confirmation
 // UI shows before RemoveMember is called.
 func (h *WorkspaceHandler) RemoveMemberImpact(w http.ResponseWriter, r *http.Request) {
-	actorID, ok := requireActorID(w, r)
-	if !ok {
-		return
-	}
+	actorID := httpauth.MustUserID(r.Context())
 	workspaceID, ok := parseInt64Param(w, r, "id")
 	if !ok {
 		return
@@ -399,10 +360,7 @@ type removeMemberRequest struct {
 // Owner or an Admin, requiring an explicit transfer-or-delete disposition for
 // every Calendar the Member owns within it.
 func (h *WorkspaceHandler) RemoveMember(w http.ResponseWriter, r *http.Request) {
-	actorID, ok := requireActorID(w, r)
-	if !ok {
-		return
-	}
+	actorID := httpauth.MustUserID(r.Context())
 	workspaceID, ok := parseInt64Param(w, r, "id")
 	if !ok {
 		return

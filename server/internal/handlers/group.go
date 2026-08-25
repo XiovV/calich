@@ -40,17 +40,8 @@ var listGroupsErrors = []errorCase{
 // List serves GET /api/groups: every Group of the caller's active Workspace,
 // open to any Member of it (#159, ADR-0045).
 func (h *GroupHandler) List(w http.ResponseWriter, r *http.Request) {
-	userID, ok := httpauth.UserIDFromContext(r.Context())
-	if !ok {
-		httpresponse.Error(w, http.StatusUnauthorized, "unauthorized", "authentication required")
-		return
-	}
-
-	workspaceID, ok := httpauth.WorkspaceIDFromContext(r.Context())
-	if !ok {
-		httpresponse.Error(w, http.StatusForbidden, "forbidden", "not a member of this workspace")
-		return
-	}
+	userID := httpauth.MustUserID(r.Context())
+	workspaceID := httpauth.MustWorkspaceID(r.Context())
 
 	groups, err := h.groups.ListByWorkspace(r.Context(), userID, workspaceID)
 	if respondError(w, err, listGroupsErrors, "failed to list groups") {
@@ -82,17 +73,8 @@ type createGroupRequest struct {
 // Create makes a new Group in the caller's active Workspace (#167), callable
 // only by its Owner or Admin.
 func (h *GroupHandler) Create(w http.ResponseWriter, r *http.Request) {
-	userID, ok := httpauth.UserIDFromContext(r.Context())
-	if !ok {
-		httpresponse.Error(w, http.StatusUnauthorized, "unauthorized", "authentication required")
-		return
-	}
-
-	workspaceID, ok := httpauth.WorkspaceIDFromContext(r.Context())
-	if !ok {
-		httpresponse.Error(w, http.StatusForbidden, "forbidden", "not a member of this workspace")
-		return
-	}
+	userID := httpauth.MustUserID(r.Context())
+	workspaceID := httpauth.MustWorkspaceID(r.Context())
 
 	var req createGroupRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -115,10 +97,7 @@ type renameGroupRequest struct {
 // Rename changes a Group's name (#167), callable only by its Workspace's
 // Owner or Admin.
 func (h *GroupHandler) Rename(w http.ResponseWriter, r *http.Request) {
-	userID, ok := requireActorID(w, r)
-	if !ok {
-		return
-	}
+	userID := httpauth.MustUserID(r.Context())
 	groupID, ok := parseInt64Param(w, r, "id")
 	if !ok {
 		return
@@ -141,10 +120,7 @@ func (h *GroupHandler) Rename(w http.ResponseWriter, r *http.Request) {
 // Delete removes a Group outright (#167), callable only by its Workspace's
 // Owner or Admin.
 func (h *GroupHandler) Delete(w http.ResponseWriter, r *http.Request) {
-	userID, ok := requireActorID(w, r)
-	if !ok {
-		return
-	}
+	userID := httpauth.MustUserID(r.Context())
 	groupID, ok := parseInt64Param(w, r, "id")
 	if !ok {
 		return
@@ -166,10 +142,7 @@ type groupMemberResponse struct {
 // ListMembers returns every GroupMember of a Group (#167), open to any
 // Member of its Workspace.
 func (h *GroupHandler) ListMembers(w http.ResponseWriter, r *http.Request) {
-	userID, ok := requireActorID(w, r)
-	if !ok {
-		return
-	}
+	userID := httpauth.MustUserID(r.Context())
 	groupID, ok := parseInt64Param(w, r, "id")
 	if !ok {
 		return
@@ -202,10 +175,7 @@ type addGroupMemberRequest struct {
 // AddMember adds a Workspace Member to a Group (#167), callable only by the
 // Group's Workspace's Owner or Admin.
 func (h *GroupHandler) AddMember(w http.ResponseWriter, r *http.Request) {
-	userID, ok := requireActorID(w, r)
-	if !ok {
-		return
-	}
+	userID := httpauth.MustUserID(r.Context())
 	groupID, ok := parseInt64Param(w, r, "id")
 	if !ok {
 		return
@@ -227,10 +197,7 @@ func (h *GroupHandler) AddMember(w http.ResponseWriter, r *http.Request) {
 // RemoveMember removes a Member from a Group (#167), callable only by the
 // Group's Workspace's Owner or Admin.
 func (h *GroupHandler) RemoveMember(w http.ResponseWriter, r *http.Request) {
-	userID, ok := requireActorID(w, r)
-	if !ok {
-		return
-	}
+	userID := httpauth.MustUserID(r.Context())
 	groupID, ok := parseInt64Param(w, r, "id")
 	if !ok {
 		return

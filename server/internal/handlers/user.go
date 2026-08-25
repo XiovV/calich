@@ -32,11 +32,7 @@ func toUserDirectoryResponse(u repository.User) userDirectoryResponse {
 
 // Directory serves GET /api/users: every enabled User besides the caller.
 func (h *UserHandler) Directory(w http.ResponseWriter, r *http.Request) {
-	userID, ok := httpauth.UserIDFromContext(r.Context())
-	if !ok {
-		httpresponse.Error(w, http.StatusUnauthorized, "unauthorized", "authentication required")
-		return
-	}
+	userID := httpauth.MustUserID(r.Context())
 
 	users, err := h.users.Directory(r.Context(), userID)
 	if err != nil {

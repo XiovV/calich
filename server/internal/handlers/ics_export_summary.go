@@ -65,11 +65,7 @@ func toExportSummaryResponse(omitted []icalendar.OmittedAttachment) exportSummar
 // download that follows it — including scope=occurrence, which drops nothing
 // silently any more (#217).
 func (h *EventHandler) ICSOversizedAttachments(w http.ResponseWriter, r *http.Request) {
-	userID, ok := httpauth.UserIDFromContext(r.Context())
-	if !ok {
-		httpresponse.Error(w, http.StatusUnauthorized, "unauthorized", "authentication required")
-		return
-	}
+	userID := httpauth.MustUserID(r.Context())
 
 	id := chi.URLParam(r, "id")
 
@@ -123,11 +119,7 @@ func (h *CalendarHandler) omittedForCalendar(ctx context.Context, userID int64, 
 // the Export summary pre-flight for one Calendar's download (#134,
 // ADR-0041).
 func (h *CalendarHandler) ICSOversizedAttachments(w http.ResponseWriter, r *http.Request) {
-	userID, ok := httpauth.UserIDFromContext(r.Context())
-	if !ok {
-		httpresponse.Error(w, http.StatusUnauthorized, "unauthorized", "authentication required")
-		return
-	}
+	userID := httpauth.MustUserID(r.Context())
 
 	id := chi.URLParam(r, "id")
 
@@ -150,11 +142,7 @@ func (h *CalendarHandler) ICSOversizedAttachments(w http.ResponseWriter, r *http
 // every owned Calendar ICSAll itself would include, Subscribed Calendars
 // excluded the same way (a frozen snapshot is the wrong artifact for one).
 func (h *CalendarHandler) ICSAllOversizedAttachments(w http.ResponseWriter, r *http.Request) {
-	userID, ok := httpauth.UserIDFromContext(r.Context())
-	if !ok {
-		httpresponse.Error(w, http.StatusUnauthorized, "unauthorized", "authentication required")
-		return
-	}
+	userID := httpauth.MustUserID(r.Context())
 
 	calendars, err := h.calendars.List(r.Context(), userID)
 	if err != nil {

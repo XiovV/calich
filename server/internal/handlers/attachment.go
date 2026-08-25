@@ -46,11 +46,7 @@ var attachmentDeleteErrors = alsoHandling(attachmentNotFoundErrors,
 // Upload serves POST /api/events/{id}/attachments: a multipart upload
 // carrying a single "file" part.
 func (h *AttachmentHandler) Upload(w http.ResponseWriter, r *http.Request) {
-	userID, ok := httpauth.UserIDFromContext(r.Context())
-	if !ok {
-		httpresponse.Error(w, http.StatusUnauthorized, "unauthorized", "authentication required")
-		return
-	}
+	userID := httpauth.MustUserID(r.Context())
 
 	eventID := chi.URLParam(r, "id")
 
@@ -89,11 +85,7 @@ func (h *AttachmentHandler) Upload(w http.ResponseWriter, r *http.Request) {
 // httpresponse.Attachment for the headers ADR-0040 requires on every
 // response.
 func (h *AttachmentHandler) Download(w http.ResponseWriter, r *http.Request) {
-	userID, ok := httpauth.UserIDFromContext(r.Context())
-	if !ok {
-		httpresponse.Error(w, http.StatusUnauthorized, "unauthorized", "authentication required")
-		return
-	}
+	userID := httpauth.MustUserID(r.Context())
 
 	attachmentID := chi.URLParam(r, "attachmentId")
 
@@ -110,11 +102,7 @@ func (h *AttachmentHandler) Download(w http.ResponseWriter, r *http.Request) {
 // confirmation step server-side; the web app's inline remove is the only
 // confirmation this action gets (ADR-0040).
 func (h *AttachmentHandler) Delete(w http.ResponseWriter, r *http.Request) {
-	userID, ok := httpauth.UserIDFromContext(r.Context())
-	if !ok {
-		httpresponse.Error(w, http.StatusUnauthorized, "unauthorized", "authentication required")
-		return
-	}
+	userID := httpauth.MustUserID(r.Context())
 
 	attachmentID := chi.URLParam(r, "attachmentId")
 

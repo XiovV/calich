@@ -283,11 +283,7 @@ var eventNotFoundErrors = []errorCase{
 }
 
 func (h *EventHandler) List(w http.ResponseWriter, r *http.Request) {
-	userID, ok := httpauth.UserIDFromContext(r.Context())
-	if !ok {
-		httpresponse.Error(w, http.StatusUnauthorized, "unauthorized", "authentication required")
-		return
-	}
+	userID := httpauth.MustUserID(r.Context())
 
 	from, ok := parseOptionalTimeParam(w, r, "from")
 	if !ok {
@@ -381,11 +377,7 @@ func parseEventTimes(rawStart, rawEnd string, allDay bool) (start, end time.Time
 }
 
 func (h *EventHandler) Create(w http.ResponseWriter, r *http.Request) {
-	userID, ok := httpauth.UserIDFromContext(r.Context())
-	if !ok {
-		httpresponse.Error(w, http.StatusUnauthorized, "unauthorized", "authentication required")
-		return
-	}
+	userID := httpauth.MustUserID(r.Context())
 
 	var req createEventRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -436,11 +428,7 @@ func (h *EventHandler) Create(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *EventHandler) Get(w http.ResponseWriter, r *http.Request) {
-	userID, ok := httpauth.UserIDFromContext(r.Context())
-	if !ok {
-		httpresponse.Error(w, http.StatusUnauthorized, "unauthorized", "authentication required")
-		return
-	}
+	userID := httpauth.MustUserID(r.Context())
 
 	id := chi.URLParam(r, "id")
 
@@ -473,11 +461,7 @@ type updateEventRequest struct {
 }
 
 func (h *EventHandler) Update(w http.ResponseWriter, r *http.Request) {
-	userID, ok := httpauth.UserIDFromContext(r.Context())
-	if !ok {
-		httpresponse.Error(w, http.StatusUnauthorized, "unauthorized", "authentication required")
-		return
-	}
+	userID := httpauth.MustUserID(r.Context())
 
 	id := chi.URLParam(r, "id")
 
@@ -514,11 +498,7 @@ func (h *EventHandler) Update(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *EventHandler) Delete(w http.ResponseWriter, r *http.Request) {
-	userID, ok := httpauth.UserIDFromContext(r.Context())
-	if !ok {
-		httpresponse.Error(w, http.StatusUnauthorized, "unauthorized", "authentication required")
-		return
-	}
+	userID := httpauth.MustUserID(r.Context())
 
 	id := chi.URLParam(r, "id")
 
@@ -538,11 +518,7 @@ type createExceptionRequest struct {
 // "this event" on a recurring Occurrence), storing it as an iCalendar EXDATE
 // (ADR-0016).
 func (h *EventHandler) AddException(w http.ResponseWriter, r *http.Request) {
-	userID, ok := httpauth.UserIDFromContext(r.Context())
-	if !ok {
-		httpresponse.Error(w, http.StatusUnauthorized, "unauthorized", "authentication required")
-		return
-	}
+	userID := httpauth.MustUserID(r.Context())
 
 	id := chi.URLParam(r, "id")
 
@@ -569,11 +545,7 @@ type reparentRequest struct {
 // fromStart to belong to newParentId instead — the "this and following" split
 // reparenting overrides/exceptions at the boundary (ADR-0016).
 func (h *EventHandler) Reparent(w http.ResponseWriter, r *http.Request) {
-	userID, ok := httpauth.UserIDFromContext(r.Context())
-	if !ok {
-		httpresponse.Error(w, http.StatusUnauthorized, "unauthorized", "authentication required")
-		return
-	}
+	userID := httpauth.MustUserID(r.Context())
 
 	id := chi.URLParam(r, "id")
 
@@ -646,11 +618,7 @@ var setResponseErrors = []errorCase{
 // id, open to anyone who can see id at all — existing Calendar Access, or
 // being an Attendee themselves (#161, ADR-0046).
 func (h *EventHandler) ListAttendees(w http.ResponseWriter, r *http.Request) {
-	userID, ok := httpauth.UserIDFromContext(r.Context())
-	if !ok {
-		httpresponse.Error(w, http.StatusUnauthorized, "unauthorized", "authentication required")
-		return
-	}
+	userID := httpauth.MustUserID(r.Context())
 
 	id := chi.URLParam(r, "id")
 
@@ -680,11 +648,7 @@ type addAttendeeRequest struct {
 // email as an Attendee of id, callable only by an Editor of id's Calendar
 // (#161, ADR-0046, #200/ADR-0058).
 func (h *EventHandler) AddAttendee(w http.ResponseWriter, r *http.Request) {
-	userID, ok := httpauth.UserIDFromContext(r.Context())
-	if !ok {
-		httpresponse.Error(w, http.StatusUnauthorized, "unauthorized", "authentication required")
-		return
-	}
+	userID := httpauth.MustUserID(r.Context())
 
 	id := chi.URLParam(r, "id")
 
@@ -738,11 +702,7 @@ type addGroupAttendeeRequest struct {
 // snapshot expansion rather than a dynamic Group Share (#162, ADR-0046).
 // Callable only by an Editor of id's Calendar, same as AddAttendee.
 func (h *EventHandler) AddGroupAttendee(w http.ResponseWriter, r *http.Request) {
-	userID, ok := httpauth.UserIDFromContext(r.Context())
-	if !ok {
-		httpresponse.Error(w, http.StatusUnauthorized, "unauthorized", "authentication required")
-		return
-	}
+	userID := httpauth.MustUserID(r.Context())
 
 	id := chi.URLParam(r, "id")
 
@@ -772,11 +732,7 @@ func (h *EventHandler) AddGroupAttendee(w http.ResponseWriter, r *http.Request) 
 // userId's Attendee invite to id, callable only by an Editor of id's
 // Calendar (#161, ADR-0046).
 func (h *EventHandler) RemoveAttendee(w http.ResponseWriter, r *http.Request) {
-	userID, ok := httpauth.UserIDFromContext(r.Context())
-	if !ok {
-		httpresponse.Error(w, http.StatusUnauthorized, "unauthorized", "authentication required")
-		return
-	}
+	userID := httpauth.MustUserID(r.Context())
 
 	id := chi.URLParam(r, "id")
 
@@ -800,11 +756,7 @@ func (h *EventHandler) RemoveAttendee(w http.ResponseWriter, r *http.Request) {
 // chi.URLParam returns it verbatim rather than decoded, since chi routes
 // off r.URL.RawPath whenever it's present, so it's unescaped by hand here.
 func (h *EventHandler) RemoveAttendeeByEmail(w http.ResponseWriter, r *http.Request) {
-	userID, ok := httpauth.UserIDFromContext(r.Context())
-	if !ok {
-		httpresponse.Error(w, http.StatusUnauthorized, "unauthorized", "authentication required")
-		return
-	}
+	userID := httpauth.MustUserID(r.Context())
 
 	id := chi.URLParam(r, "id")
 	targetEmail, err := url.PathUnescape(chi.URLParam(r, "email"))
@@ -830,11 +782,7 @@ type setAttendeeResponseRequest struct {
 // organizer or Editor can never set someone else's response through it
 // (#161, ADR-0046).
 func (h *EventHandler) SetAttendeeResponse(w http.ResponseWriter, r *http.Request) {
-	userID, ok := httpauth.UserIDFromContext(r.Context())
-	if !ok {
-		httpresponse.Error(w, http.StatusUnauthorized, "unauthorized", "authentication required")
-		return
-	}
+	userID := httpauth.MustUserID(r.Context())
 
 	id := chi.URLParam(r, "id")
 

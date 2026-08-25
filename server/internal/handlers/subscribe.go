@@ -54,20 +54,12 @@ type subscribePreviewResponse struct {
 // commits — creating the Calendar with req.URL as its source and importing
 // every series the feed holds (#83).
 func (h *CalendarHandler) Subscribe(w http.ResponseWriter, r *http.Request) {
-	userID, ok := httpauth.UserIDFromContext(r.Context())
-	if !ok {
-		httpresponse.Error(w, http.StatusUnauthorized, "unauthorized", "authentication required")
-		return
-	}
+	userID := httpauth.MustUserID(r.Context())
 
 	// Resolved for both branches, even though only the commit path below
 	// actually needs it — cheap, and keeps this handler's shape simple
 	// (#155, ADR-0045).
-	workspaceID, ok := httpauth.WorkspaceIDFromContext(r.Context())
-	if !ok {
-		httpresponse.Error(w, http.StatusForbidden, "forbidden", "not a member of this workspace")
-		return
-	}
+	workspaceID := httpauth.MustWorkspaceID(r.Context())
 
 	dryRun, ok := parseDryRun(r.URL.Query().Get("dryRun"))
 	if !ok {
@@ -134,11 +126,7 @@ type subscriptionRefreshResponse struct {
 // never a visible no-op even when the server believes the feed is
 // unchanged.
 func (h *CalendarHandler) Refresh(w http.ResponseWriter, r *http.Request) {
-	userID, ok := httpauth.UserIDFromContext(r.Context())
-	if !ok {
-		httpresponse.Error(w, http.StatusUnauthorized, "unauthorized", "authentication required")
-		return
-	}
+	userID := httpauth.MustUserID(r.Context())
 
 	id := chi.URLParam(r, "id")
 

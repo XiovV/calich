@@ -28,11 +28,7 @@ var remindersErrors = []errorCase{
 // Anyone who can see the Event may call this — Owner, Editor, Viewer, or a
 // User-backed Attendee with no Calendar Access at all (#211).
 func (h *EventHandler) GetReminders(w http.ResponseWriter, r *http.Request) {
-	userID, ok := httpauth.UserIDFromContext(r.Context())
-	if !ok {
-		httpresponse.Error(w, http.StatusUnauthorized, "unauthorized", "authentication required")
-		return
-	}
+	userID := httpauth.MustUserID(r.Context())
 
 	id := chi.URLParam(r, "id")
 
@@ -54,11 +50,7 @@ type setRemindersRequest struct {
 // write Access to the Event — the same caller set as GetReminders may call
 // this (#211).
 func (h *EventHandler) SetReminders(w http.ResponseWriter, r *http.Request) {
-	userID, ok := httpauth.UserIDFromContext(r.Context())
-	if !ok {
-		httpresponse.Error(w, http.StatusUnauthorized, "unauthorized", "authentication required")
-		return
-	}
+	userID := httpauth.MustUserID(r.Context())
 
 	id := chi.URLParam(r, "id")
 

@@ -142,17 +142,8 @@ var workspaceMembershipErrors = []errorCase{
 var createCalendarErrors = alsoHandling(calendarWriteErrors, workspaceMembershipErrors...)
 
 func (h *CalendarHandler) List(w http.ResponseWriter, r *http.Request) {
-	userID, ok := httpauth.UserIDFromContext(r.Context())
-	if !ok {
-		httpresponse.Error(w, http.StatusUnauthorized, "unauthorized", "authentication required")
-		return
-	}
-
-	workspaceID, ok := httpauth.WorkspaceIDFromContext(r.Context())
-	if !ok {
-		httpresponse.Error(w, http.StatusForbidden, "forbidden", "not a member of this workspace")
-		return
-	}
+	userID := httpauth.MustUserID(r.Context())
+	workspaceID := httpauth.MustWorkspaceID(r.Context())
 
 	calendars, err := h.calendars.ListAccessibleInWorkspace(r.Context(), userID, workspaceID)
 	if err != nil {
@@ -175,17 +166,8 @@ type createCalendarRequest struct {
 }
 
 func (h *CalendarHandler) Create(w http.ResponseWriter, r *http.Request) {
-	userID, ok := httpauth.UserIDFromContext(r.Context())
-	if !ok {
-		httpresponse.Error(w, http.StatusUnauthorized, "unauthorized", "authentication required")
-		return
-	}
-
-	workspaceID, ok := httpauth.WorkspaceIDFromContext(r.Context())
-	if !ok {
-		httpresponse.Error(w, http.StatusForbidden, "forbidden", "not a member of this workspace")
-		return
-	}
+	userID := httpauth.MustUserID(r.Context())
+	workspaceID := httpauth.MustWorkspaceID(r.Context())
 
 	var req createCalendarRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -207,11 +189,7 @@ func (h *CalendarHandler) Create(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *CalendarHandler) Get(w http.ResponseWriter, r *http.Request) {
-	userID, ok := httpauth.UserIDFromContext(r.Context())
-	if !ok {
-		httpresponse.Error(w, http.StatusUnauthorized, "unauthorized", "authentication required")
-		return
-	}
+	userID := httpauth.MustUserID(r.Context())
 
 	id := chi.URLParam(r, "id")
 
@@ -261,11 +239,7 @@ var updateSourceURLErrorsWithNotFound = alsoHandling(updateSourceURLErrors, cale
 var nonOwnerColorUpdateErrors = alsoHandling(calendarWriteErrors, calendarNotFoundErrors...)
 
 func (h *CalendarHandler) Update(w http.ResponseWriter, r *http.Request) {
-	userID, ok := httpauth.UserIDFromContext(r.Context())
-	if !ok {
-		httpresponse.Error(w, http.StatusUnauthorized, "unauthorized", "authentication required")
-		return
-	}
+	userID := httpauth.MustUserID(r.Context())
 
 	id := chi.URLParam(r, "id")
 
@@ -339,11 +313,7 @@ func (h *CalendarHandler) Update(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *CalendarHandler) Delete(w http.ResponseWriter, r *http.Request) {
-	userID, ok := httpauth.UserIDFromContext(r.Context())
-	if !ok {
-		httpresponse.Error(w, http.StatusUnauthorized, "unauthorized", "authentication required")
-		return
-	}
+	userID := httpauth.MustUserID(r.Context())
 
 	id := chi.URLParam(r, "id")
 
@@ -405,11 +375,7 @@ var icsErrors = []errorCase{
 // Refresh will overwrite anyway — the URL in the sidebar is what actually
 // carries it elsewhere.
 func (h *CalendarHandler) ICS(w http.ResponseWriter, r *http.Request) {
-	userID, ok := httpauth.UserIDFromContext(r.Context())
-	if !ok {
-		httpresponse.Error(w, http.StatusUnauthorized, "unauthorized", "authentication required")
-		return
-	}
+	userID := httpauth.MustUserID(r.Context())
 
 	id := chi.URLParam(r, "id")
 
@@ -473,11 +439,7 @@ func buildSubscriptionsListing(calendars []repository.Calendar) []byte {
 // with no owned Calendars still produces a valid (possibly .ics-entry-free)
 // archive.
 func (h *CalendarHandler) ICSAll(w http.ResponseWriter, r *http.Request) {
-	userID, ok := httpauth.UserIDFromContext(r.Context())
-	if !ok {
-		httpresponse.Error(w, http.StatusUnauthorized, "unauthorized", "authentication required")
-		return
-	}
+	userID := httpauth.MustUserID(r.Context())
 
 	calendars, err := h.calendars.List(r.Context(), userID)
 	if err != nil {
