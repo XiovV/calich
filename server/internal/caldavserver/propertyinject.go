@@ -1,12 +1,15 @@
 // propertyinject.go generalizes the XML-patching technique ctag.go
-// introduced for getctag (ADR-0025, #65) so any PROPFIND property go-webdav
-// has no hook to inject or override — getctag, calendar-color (ADR-0028),
-// current-user-privilege-set (ADR-0032, #89), and any future one — can reuse
-// the same "record via httptest.Recorder, then regex-patch the existing
-// propstat into a new 200 one" mechanism instead of duplicating it.
+// originally introduced for getctag (ADR-0025, #65) so any PROPFIND
+// property go-webdav has no hook to inject or override can reuse the same
+// "record via httptest.Recorder, then regex-patch the existing propstat
+// into a new 200 one" mechanism instead of duplicating it.
 // injectProperty renders the replacement value as escaped text;
 // injectPropertyRaw splices it in as literal XML for a property, like
 // current-user-privilege-set, whose value is nested elements.
+//
+// getctag and calendar-color (ADR-0028) have since moved to
+// propertyinject_tree.go's structural counterpart (#278); see that file's
+// doc comment for which properties still dispatch through this regex path.
 package caldavserver
 
 import (

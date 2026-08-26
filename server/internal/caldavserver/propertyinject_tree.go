@@ -5,14 +5,12 @@
 // <response>/<propstat>/<prop> in the serialized bytes and string-splicing
 // replacements in.
 //
-// Nothing calls injectPropertyTree/injectPropertyTreeRaw yet: ctag.go and
-// propfind.go still dispatch through propertyinject.go's injectProperty/
-// injectPropertyRaw, and continue to be the mechanism actually serving
-// getctag, calendar-color, current-user-privilege-set,
-// managed-attachments-server-URL, max-attachment-size and
-// max-attachments-per-resource. This file exists to prove the structural
-// approach out and be exercised by its own tests; migrating the six patches
-// over is deliberately a separate change.
+// getctag (ctag.go) and calendar-color (propfind.go) dispatch through
+// injectPropertyTree (#278); the remaining four extensions —
+// current-user-privilege-set, managed-attachments-server-URL,
+// max-attachment-size and max-attachments-per-resource — still dispatch
+// through propertyinject.go's injectProperty/injectPropertyRaw. Migrating
+// those over is deliberately a separate change.
 package caldavserver
 
 import (
@@ -52,6 +50,16 @@ func injectPropertyTreeRaw(ctx context.Context, body []byte, localName, xmlns st
 	return injectPropertyTreeValue(ctx, body, localName, xmlns, valueFor, func(value string) ([]*xmlNode, error) {
 		return decodeXMLDocument([]byte(value))
 	})
+}
+
+// injectPropertyTreeOrUnchanged is injectPropertyTree's caller-facing form
+// for propfindPatch.apply (propfind.go), whose signature predates
+// injectPropertyTree being fallible: it discards a parse/encode error by
+// falling back to the original body, the same "leave this block alone"
+// semantics injectPropertyTree already uses for a value valueFor declines.
+func injectPropertyTreeOrUnchanged(ctx context.Context, body []byte, localName, xmlns string, valueFor propertyValueFunc) []byte {
+	result, _ := injectPropertyTree(ctx, body, localName, xmlns, valueFor)
+	return result
 }
 
 // injectPropertyTreeValue is injectPropertyTree and injectPropertyTreeRaw's
@@ -142,5 +150,9 @@ func injectPropertyTreeValue(ctx context.Context, body []byte, localName, xmlns 
 		response.children = append(response.children, newPropstat)
 	}
 
-	return encodeXMLDocument(nodes)
+	encoded, err := encodeXMLDocument(nodes)
+	if err != nil {
+		return body, err
+	}
+	return encoded, nil
 }

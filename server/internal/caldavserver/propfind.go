@@ -86,12 +86,12 @@ func applyGetCTagPatch(ctx context.Context, h *dispatchHandler, userID int64, bo
 // applyPrivilegeSetPatch below — is what lets a shared Calendar show green
 // to one caller and blue to another over CalDAV.
 func applyCalendarColorPatch(ctx context.Context, h *dispatchHandler, userID int64, body []byte) []byte {
-	return injectProperty(ctx, body, "calendar-color", calendarColorNamespace, collectionValueFunc(userID, func(ctx context.Context, calendarID string) (string, bool) {
-		result, err := h.backend.calendars.AccessWithColor(ctx, userID, calendarID)
-		if err != nil || !result.Access.CanRead() {
+	return injectPropertyTreeOrUnchanged(ctx, body, "calendar-color", calendarColorNamespace, collectionValueFunc(userID, func(ctx context.Context, calendarID string) (string, bool) {
+		accessResult, err := h.backend.calendars.AccessWithColor(ctx, userID, calendarID)
+		if err != nil || !accessResult.Access.CanRead() {
 			return "", false
 		}
-		return result.Color, true
+		return accessResult.Color, true
 	}))
 }
 

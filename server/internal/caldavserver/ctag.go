@@ -1,11 +1,12 @@
 // ctag.go injects the Apple/DAVx⁵ CS:getctag property into PROPFIND
-// responses for Calendar collections (ADR-0025, #65), via propertyinject.go's
-// shared XML-patching mechanism (also used for calendar-color, ADR-0028):
-// the library already emits an empty <getctag></getctag> (or, defensively, a
-// self-closed <getctag/>) in a 404 propstat for any unknown property, so
-// patching means finding that fragment and replacing it with a real value
-// in a 200 propstat. Dispatch (deciding when to patch, and running exactly
-// one recorder pass per request) lives in propfind.go.
+// responses for Calendar collections (ADR-0025, #65), via
+// propertyinject_tree.go's shared tree-based XML-patching mechanism (also
+// used for calendar-color, ADR-0028; #278): the library already emits an
+// empty <getctag></getctag> (or, defensively, a self-closed <getctag/>) in a
+// 404 propstat for any unknown property, so patching means finding that
+// element and replacing it with a real value in a 200 propstat. Dispatch
+// (deciding when to patch, and running exactly one recorder pass per
+// request) lives in propfind.go.
 package caldavserver
 
 import "context"
@@ -15,7 +16,9 @@ const getctagNamespace = "http://calendarserver.org/ns/"
 // injectGetCTag rewrites every <response> block in body whose href resolves
 // via ctagFor to replace its empty, 404 <getctag/> with a 200 propstat
 // carrying the real value. Blocks ctagFor declines (not a Calendar
-// collection, or no getctag present) are returned unchanged.
+// collection, or no getctag present) are returned unchanged. If body fails
+// to parse as XML, it is returned unchanged — the same "leave it alone"
+// behavior as a declined block, rather than a crashed request handler.
 func injectGetCTag(ctx context.Context, body []byte, ctagFor propertyValueFunc) []byte {
-	return injectProperty(ctx, body, "getctag", getctagNamespace, ctagFor)
+	return injectPropertyTreeOrUnchanged(ctx, body, "getctag", getctagNamespace, ctagFor)
 }
