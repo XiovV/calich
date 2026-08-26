@@ -1,13 +1,12 @@
-// xmlnode.go is the structural counterpart to propertyinject.go's
-// byte-level regexes (#277): a generic, ordered XML node tree that decodes
-// any XML document via encoding/xml's token stream, exposes its elements for
+// xmlnode.go underlies propertyinject_tree.go's structural property
+// injection (#277): a generic, ordered XML node tree that decodes any XML
+// document via encoding/xml's token stream, exposes its elements for
 // matching by xml.Name rather than by tag-name substring, and re-encodes
 // losslessly. Decoding through the standard tokenizer means self-closed
 // (<foo/>) and open/close (<foo></foo>) empty elements are already
-// indistinguishable by the time they reach a node — unlike the regex
-// mechanism, this tree has no separate "defensive" case for that — and
-// matching by xml.Name (namespace + local name, not a tag-name string) makes
-// a "prop" tag ever matching "propstat" structurally impossible.
+// indistinguishable by the time they reach a node, and matching by xml.Name
+// (namespace + local name, not a tag-name string) makes a "prop" tag ever
+// matching "propstat" structurally impossible.
 package caldavserver
 
 import (

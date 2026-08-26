@@ -108,7 +108,7 @@ const subscribedReadOnlyPrivilegeSet = `<privilege><read/></privilege>`
 // ADR-0035) alike — declining (ok=false) for anything writable leaves the
 // library's default untouched.
 func applyPrivilegeSetPatch(ctx context.Context, h *dispatchHandler, userID int64, body []byte) []byte {
-	return injectPropertyRaw(ctx, body, "current-user-privilege-set", davNamespace, collectionValueFunc(userID, func(ctx context.Context, calendarID string) (string, bool) {
+	return injectPropertyTreeRawOrUnchanged(ctx, body, "current-user-privilege-set", davNamespace, collectionValueFunc(userID, func(ctx context.Context, calendarID string) (string, bool) {
 		// The synthetic Invitations collection (#163) has no
 		// repository.Calendar row to resolve Access against — it is
 		// always read-only, the same clamp a Subscribed Calendar or a
@@ -145,7 +145,7 @@ func homeSetValueFunc(userID int64, value func(ctx context.Context) (string, boo
 // its own request, so this server never needs to know its own external base
 // URL.
 func applyManagedAttachmentsURLPatch(ctx context.Context, h *dispatchHandler, userID int64, body []byte) []byte {
-	return injectPropertyRaw(ctx, body, "managed-attachments-server-URL", caldavNamespace, homeSetValueFunc(userID, func(ctx context.Context) (string, bool) {
+	return injectPropertyTreeRawOrUnchanged(ctx, body, "managed-attachments-server-URL", caldavNamespace, homeSetValueFunc(userID, func(ctx context.Context) (string, bool) {
 		return fmt.Sprintf(`<href xmlns=%q>%s</href>`, davNamespace, attachmentsBasePath), true
 	}))
 }
@@ -155,7 +155,7 @@ func applyManagedAttachmentsURLPatch(ctx context.Context, h *dispatchHandler, us
 // limits (config.go) on every Calendar collection the caller can at least
 // read (#133, ADR-0040) — the same access gate applyCalendarColorPatch uses.
 func applyMaxAttachmentSizePatch(ctx context.Context, h *dispatchHandler, userID int64, body []byte) []byte {
-	return injectProperty(ctx, body, "max-attachment-size", caldavNamespace, collectionValueFunc(userID, func(ctx context.Context, calendarID string) (string, bool) {
+	return injectPropertyTreeOrUnchanged(ctx, body, "max-attachment-size", caldavNamespace, collectionValueFunc(userID, func(ctx context.Context, calendarID string) (string, bool) {
 		access, _, err := h.backend.calendars.Access(ctx, userID, calendarID)
 		if err != nil || !access.CanRead() {
 			return "", false
@@ -165,7 +165,7 @@ func applyMaxAttachmentSizePatch(ctx context.Context, h *dispatchHandler, userID
 }
 
 func applyMaxAttachmentsPerResourcePatch(ctx context.Context, h *dispatchHandler, userID int64, body []byte) []byte {
-	return injectProperty(ctx, body, "max-attachments-per-resource", caldavNamespace, collectionValueFunc(userID, func(ctx context.Context, calendarID string) (string, bool) {
+	return injectPropertyTreeOrUnchanged(ctx, body, "max-attachments-per-resource", caldavNamespace, collectionValueFunc(userID, func(ctx context.Context, calendarID string) (string, bool) {
 		access, _, err := h.backend.calendars.Access(ctx, userID, calendarID)
 		if err != nil || !access.CanRead() {
 			return "", false

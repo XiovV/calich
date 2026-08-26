@@ -1,22 +1,23 @@
-// propertyinject_tree.go is a parallel, structural reimplementation of
-// propertyinject.go's regex-based property injection (#277): decode the
-// recorded PROPFIND response into the xmlNode tree (xmlnode.go), patch the
-// matching elements by xml.Name, and re-encode — instead of regex-matching
-// <response>/<propstat>/<prop> in the serialized bytes and string-splicing
-// replacements in.
-//
-// getctag (ctag.go) and calendar-color (propfind.go) dispatch through
-// injectPropertyTree (#278); the remaining four extensions —
-// current-user-privilege-set, managed-attachments-server-URL,
-// max-attachment-size and max-attachments-per-resource — still dispatch
-// through propertyinject.go's injectProperty/injectPropertyRaw. Migrating
-// those over is deliberately a separate change.
+// propertyinject_tree.go is the structural mechanism every PROPFIND
+// extension property (getctag, calendar-color, current-user-privilege-set,
+// managed-attachments-server-URL, max-attachment-size,
+// max-attachments-per-resource) dispatches through (#277, #278, #279):
+// decode the recorded PROPFIND response into the xmlNode tree (xmlnode.go),
+// patch the matching elements by xml.Name, and re-encode. It superseded an
+// earlier regex-based mechanism that matched <response>/<propstat>/<prop>
+// in the serialized bytes and string-spliced replacements in; that
+// mechanism has no remaining callers.
 package caldavserver
 
 import (
 	"context"
 	"encoding/xml"
 )
+
+// propertyValueFunc resolves the value href's response should carry for one
+// property, or ok=false to leave that block's existing propstat alone (not
+// a Calendar collection, or nothing to report).
+type propertyValueFunc func(ctx context.Context, href string) (value string, ok bool)
 
 var (
 	responseElementName = xml.Name{Space: davNamespace, Local: "response"}
@@ -26,12 +27,12 @@ var (
 	statusElementName   = xml.Name{Space: davNamespace, Local: "status"}
 )
 
-// injectPropertyTree is injectProperty's (propertyinject.go) tree-based
-// counterpart: it rewrites every <response> in body whose href resolves via
-// valueFor to replace its empty, 404 <localName/> with a 200 propstat in
-// namespace xmlns carrying the real value, escaped as text. Blocks valueFor
-// declines are returned unchanged, and body is returned unchanged (with err
-// set) if it fails to parse as XML.
+// injectPropertyTree rewrites every <response> in body whose href resolves
+// via valueFor to replace its existing <localName> (empty/404, if unknown to
+// go-webdav, or already carrying a default value in a 200) with a 200
+// propstat in namespace xmlns carrying the real value, escaped as text.
+// Blocks valueFor declines are returned unchanged, and body is returned
+// unchanged (with err set) if it fails to parse as XML.
 func injectPropertyTree(ctx context.Context, body []byte, localName, xmlns string, valueFor propertyValueFunc) ([]byte, error) {
 	return injectPropertyTreeValue(ctx, body, localName, xmlns, valueFor, func(value string) ([]*xmlNode, error) {
 		return []*xmlNode{newXMLTextNode(value)}, nil
@@ -44,8 +45,7 @@ func injectPropertyTree(ctx context.Context, body []byte, localName, xmlns strin
 // return well-formed XML; it is parsed into its own nodes and spliced in as
 // the target element's children. A valueFor that breaks that contract
 // surfaces the same way a malformed body does — an error, not a crashed
-// request handler — same as injectProperty's escape-hatch: bad-but-fatal is
-// reported, not panicked.
+// request handler: bad-but-fatal is reported, not panicked.
 func injectPropertyTreeRaw(ctx context.Context, body []byte, localName, xmlns string, valueFor propertyValueFunc) ([]byte, error) {
 	return injectPropertyTreeValue(ctx, body, localName, xmlns, valueFor, func(value string) ([]*xmlNode, error) {
 		return decodeXMLDocument([]byte(value))
@@ -59,6 +59,15 @@ func injectPropertyTreeRaw(ctx context.Context, body []byte, localName, xmlns st
 // semantics injectPropertyTree already uses for a value valueFor declines.
 func injectPropertyTreeOrUnchanged(ctx context.Context, body []byte, localName, xmlns string, valueFor propertyValueFunc) []byte {
 	result, _ := injectPropertyTree(ctx, body, localName, xmlns, valueFor)
+	return result
+}
+
+// injectPropertyTreeRawOrUnchanged is injectPropertyTreeRaw's counterpart to
+// injectPropertyTreeOrUnchanged, for propfindPatch.apply callers — like
+// current-user-privilege-set and managed-attachments-server-URL — whose
+// value is nested elements rather than text.
+func injectPropertyTreeRawOrUnchanged(ctx context.Context, body []byte, localName, xmlns string, valueFor propertyValueFunc) []byte {
+	result, _ := injectPropertyTreeRaw(ctx, body, localName, xmlns, valueFor)
 	return result
 }
 
@@ -108,12 +117,17 @@ func injectPropertyTreeValue(ctx context.Context, body []byte, localName, xmlns 
 
 			// A malformed PROPFIND request can list the same property
 			// more than once; go-webdav doesn't deduplicate (server.go
-			// walks propfind.Prop.Raw verbatim), so every empty
-			// targetName sibling must go, not just the first.
+			// walks propfind.Prop.Raw verbatim), so every targetName
+			// sibling must go, not just the first. This removes a
+			// matching sibling whether go-webdav left it empty (an
+			// unknown property like getctag, 404'd) or already filled
+			// in with its own default (a known property like
+			// current-user-privilege-set's hardcoded read+write,
+			// 200'd) — either way the override below replaces it.
 			var remaining []*xmlNode
 			removedAny := false
 			for _, p := range prop.children {
-				if name, ok := p.Name(); ok && name == targetName && p.isEmptyElement() {
+				if name, ok := p.Name(); ok && name == targetName {
 					removedAny = true
 					continue
 				}
