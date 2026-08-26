@@ -25,7 +25,7 @@ type xmlNode struct {
 }
 
 // newXMLTextNode wraps s as the escaped-on-encode text content of an
-// element — the tree equivalent of propertyinject.go's xml.EscapeText call.
+// element.
 func newXMLTextNode(s string) *xmlNode {
 	return &xmlNode{token: xml.CharData(s)}
 }
