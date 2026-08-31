@@ -122,7 +122,7 @@ export function ImportPreviewDialog({
 
           {showDetails && (
             <details className="mt-2">
-              <summary className="cursor-pointer text-label-sm text-accent">Details</summary>
+              <summary className="cursor-pointer text-label-sm text-accent-ink">Details</summary>
               <div className="mt-2">
                 <ImportSummaryDetails summary={summary} showFilenames={isZip} />
               </div>

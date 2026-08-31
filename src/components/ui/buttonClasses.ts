@@ -28,7 +28,7 @@ const SIZE: Record<ButtonSize, string> = {
 };
 
 const FOCUS_OUTLINE: Record<ButtonColor, string> = {
-  primary: "outline-accent",
+  primary: "outline-accent-ink",
   secondary: "outline-ink",
   danger: "outline-danger",
   success: "outline-success",
@@ -37,7 +37,7 @@ const FOCUS_OUTLINE: Record<ButtonColor, string> = {
 };
 
 const FILLED: Record<ButtonColor, string> = {
-  primary: "bg-primary text-ink-inverse hover:bg-primary/80",
+  primary: "bg-primary text-on-accent hover:bg-primary/80",
   secondary: "bg-ink text-ink-inverse hover:bg-ink/80",
   danger: "bg-danger text-ink-inverse hover:bg-danger/80",
   success: "bg-success text-ink-inverse hover:bg-success/80",
@@ -46,7 +46,7 @@ const FILLED: Record<ButtonColor, string> = {
 };
 
 const OUTLINE: Record<ButtonColor, string> = {
-  primary: "border border-primary bg-primary/10 text-primary hover:bg-primary/20",
+  primary: "border border-accent-ink bg-primary/10 text-accent-ink hover:bg-primary/20",
   secondary: "border border-border bg-surface text-ink hover:bg-surface-hover",
   danger: "border border-danger bg-danger/10 text-danger hover:bg-danger/20",
   success: "border border-success bg-success/10 text-success hover:bg-success/20",
@@ -55,7 +55,7 @@ const OUTLINE: Record<ButtonColor, string> = {
 };
 
 const GHOST: Record<ButtonColor, string> = {
-  primary: "text-primary hover:bg-primary-50",
+  primary: "text-accent-ink hover:bg-primary-50",
   secondary: "text-ink hover:bg-surface-hover",
   danger: "text-danger hover:bg-danger-50",
   success: "text-success hover:bg-success-50",

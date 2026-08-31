@@ -47,7 +47,7 @@ export function RegisterPage() {
           </p>
 
           <p className="mt-4 text-label-sm text-ink-muted">
-            <Link to="/login" className="text-accent">Sign in</Link>
+            <Link to="/login" className="text-accent-ink">Sign in</Link>
           </p>
         </div>
       </div>
@@ -132,7 +132,7 @@ export function RegisterPage() {
         </Button>
 
         <p className="mt-4 text-label-sm text-ink-muted">
-          Already have an account? <Link to="/login" className="text-accent">Sign in</Link>
+          Already have an account? <Link to="/login" className="text-accent-ink">Sign in</Link>
         </p>
       </form>
     </div>

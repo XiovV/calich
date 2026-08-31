@@ -173,7 +173,7 @@ export function CustomRecurrenceDialog({
                       onClick={() => toggleWeekday(chip.index)}
                       className={`flex size-8 items-center justify-center rounded-shell-pill text-label-sm ${
                         selected
-                          ? "bg-accent text-ink-inverse"
+                          ? "bg-accent text-on-accent"
                           : "bg-surface-sunken text-ink ring-1 ring-border hover:bg-surface-hover"
                       }`}
                     >
@@ -228,7 +228,7 @@ export function CustomRecurrenceDialog({
                     if (parsed) setEndDate(parsed);
                     setEndType("on");
                   }}
-                  className="flex-1 rounded-shell-md bg-surface-sunken px-3 py-1.5 text-body text-ink ring-1 ring-border outline-none focus:ring-2 focus:ring-accent"
+                  className="flex-1 rounded-shell-md bg-surface-sunken px-3 py-1.5 text-body text-ink ring-1 ring-border outline-none focus:ring-2 focus:ring-accent-ink"
                 />
               </label>
 
@@ -249,7 +249,7 @@ export function CustomRecurrenceDialog({
                     setEndCount(Number(event.target.value));
                     setEndType("after");
                   }}
-                  className="w-20 rounded-shell-md bg-surface-sunken px-3 py-1.5 text-body text-ink ring-1 ring-border outline-none focus:ring-2 focus:ring-accent"
+                  className="w-20 rounded-shell-md bg-surface-sunken px-3 py-1.5 text-body text-ink ring-1 ring-border outline-none focus:ring-2 focus:ring-accent-ink"
                 />
                 <span className="text-ink-muted">occurrences</span>
               </label>

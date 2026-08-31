@@ -84,7 +84,7 @@ export function LoginPage() {
 
         {signupsEnabled && (
           <p className="mt-4 text-label-sm text-ink-muted">
-            No account yet? <Link to="/register" className="text-accent">Create one</Link>
+            No account yet? <Link to="/register" className="text-accent-ink">Create one</Link>
           </p>
         )}
       </form>

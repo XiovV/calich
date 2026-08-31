@@ -1037,7 +1037,7 @@ export function EventModal(props: EventModalProps) {
             onDrop={handleModalDrop}
             className={`fixed top-1/2 left-1/2 z-50 max-h-[85vh] w-[28rem] -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-shell-lg bg-surface p-5 shadow-elevation-3 transition-colors ${
               isDraggingOverModal && !isReadOnlyEvent
-                ? "outline-2 outline-dashed outline-accent outline-offset-[-8px] bg-surface-hover"
+                ? "outline-2 outline-dashed outline-accent-ink outline-offset-[-8px] bg-surface-hover"
                 : ""
             }`}
           >
@@ -1184,7 +1184,7 @@ export function EventModal(props: EventModalProps) {
                         <button
                           type="button"
                           onClick={() => setIsCreateCalendarOpen(true)}
-                          className="mt-1.5 cursor-pointer text-label-sm text-accent hover:underline"
+                          className="mt-1.5 cursor-pointer text-label-sm text-accent-ink hover:underline"
                         >
                           Create a calendar
                         </button>
@@ -1217,7 +1217,7 @@ export function EventModal(props: EventModalProps) {
                         aria-hidden
                         className={`size-5 shrink-0 rounded-shell-pill ${
                           color !== undefined
-                            ? "ring-2 ring-accent ring-offset-2 ring-offset-surface"
+                            ? "ring-2 ring-accent-ink ring-offset-2 ring-offset-surface"
                             : ""
                         }`}
                         style={{
@@ -1230,7 +1230,7 @@ export function EventModal(props: EventModalProps) {
                           aria-label="Event colour"
                           className={`size-5 shrink-0 cursor-pointer rounded-shell-pill transition-shadow ${
                             color !== undefined
-                              ? "ring-2 ring-accent ring-offset-2 ring-offset-surface"
+                              ? "ring-2 ring-accent-ink ring-offset-2 ring-offset-surface"
                               : "ring-1 ring-border"
                           }`}
                           style={{
@@ -1252,7 +1252,7 @@ export function EventModal(props: EventModalProps) {
                                 <button
                                   type="button"
                                   onClick={() => setColor(undefined)}
-                                  className="mt-2 cursor-pointer text-label-sm text-accent hover:underline"
+                                  className="mt-2 cursor-pointer text-label-sm text-accent-ink hover:underline"
                                 >
                                   Use Calendar colour
                                 </button>
@@ -1269,7 +1269,7 @@ export function EventModal(props: EventModalProps) {
                 <button
                   type="button"
                   onClick={() => setIsExpanded(true)}
-                  className="mt-4 cursor-pointer text-label-sm text-accent hover:underline"
+                  className="mt-4 cursor-pointer text-label-sm text-accent-ink hover:underline"
                 >
                   More options
                 </button>
@@ -1347,7 +1347,7 @@ export function EventModal(props: EventModalProps) {
                     <button
                       type="button"
                       onClick={() => setIsCustomDialogOpen(true)}
-                      className={`mt-1.5 ${ICON_GUTTER_INDENT} cursor-pointer text-label-sm text-accent hover:underline`}
+                      className={`mt-1.5 ${ICON_GUTTER_INDENT} cursor-pointer text-label-sm text-accent-ink hover:underline`}
                     >
                       Edit custom recurrence
                     </button>
@@ -1412,7 +1412,7 @@ export function EventModal(props: EventModalProps) {
                           <button
                             type="button"
                             onClick={() => attachmentInputRef.current?.click()}
-                            className="mt-1.5 cursor-pointer text-label-sm text-accent hover:underline"
+                            className="mt-1.5 cursor-pointer text-label-sm text-accent-ink hover:underline"
                           >
                             Add attachment
                           </button>

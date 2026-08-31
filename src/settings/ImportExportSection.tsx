@@ -218,7 +218,7 @@ export function ImportExportSection() {
 
       <div
         className={`mt-4 flex flex-col items-center gap-2 rounded-shell-md border border-dashed p-8 text-center transition-colors ${
-          isDraggingOver ? "border-accent bg-surface-hover" : "border-border"
+          isDraggingOver ? "border-accent-ink bg-surface-hover" : "border-border"
         }`}
         onDragOver={(domEvent) => {
           domEvent.preventDefault();

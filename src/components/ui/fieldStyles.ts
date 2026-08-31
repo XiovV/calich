@@ -22,7 +22,7 @@ export function fieldContainerClasses({
     "flex w-full items-center rounded-shell-md bg-surface-sunken ring-1 transition-colors",
     invalid
       ? "ring-danger focus-within:ring-2 focus-within:ring-danger"
-      : "ring-border focus-within:ring-2 focus-within:ring-accent",
+      : "ring-border focus-within:ring-2 focus-within:ring-accent-ink",
     disabled && "opacity-60",
     className,
   ]

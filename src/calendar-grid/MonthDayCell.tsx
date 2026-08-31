@@ -88,7 +88,7 @@ export function MonthDayCell({
         }}
         className={`shrink-0 self-start text-label-sm ${inCurrentMonth ? "text-ink" : "text-ink-muted"} ${
           isToday
-            ? "flex h-5 w-5 items-center justify-center rounded-shell-pill bg-accent text-ink-inverse"
+            ? "flex h-5 w-5 items-center justify-center rounded-shell-pill bg-accent text-on-accent"
             : "cursor-pointer rounded-shell-sm px-1 hover:bg-surface-hover"
         }`}
       >

@@ -36,7 +36,7 @@ export function ThemeToggle() {
                 <Icon className="size-4" />
                 <span className="flex-1">{label}</span>
                 <Check
-                  className={`size-4 text-accent ${
+                  className={`size-4 text-accent-ink ${
                     preference === value ? "opacity-100" : "opacity-0"
                   }`}
                 />

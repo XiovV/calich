@@ -61,9 +61,9 @@ export function ScopePicker({ action, scopes, onConfirm, onClose }: ScopePickerP
               >
                 <Radio.Root
                   value={option.value}
-                  className="flex size-4 items-center justify-center rounded-full border border-border data-[checked]:border-accent"
+                  className="flex size-4 items-center justify-center rounded-full border border-border data-[checked]:border-accent-ink"
                 >
-                  <Radio.Indicator className="size-2 rounded-full bg-accent" />
+                  <Radio.Indicator className="size-2 rounded-full bg-accent-ink" />
                 </Radio.Root>
                 {option.label}
               </label>

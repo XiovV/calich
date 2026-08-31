@@ -53,7 +53,7 @@ export function Select<T extends string>({
       <BaseSelect.Trigger
         aria-label={ariaLabel}
         aria-labelledby={label ? labelId : undefined}
-        className={`flex cursor-pointer items-center gap-1.5 rounded-shell-pill bg-surface-sunken px-4 py-1.5 text-body text-ink ring-1 ring-border transition-colors outline-none hover:bg-surface-hover data-[popup-open]:ring-2 data-[popup-open]:ring-accent data-[disabled]:cursor-not-allowed data-[disabled]:opacity-60 data-[disabled]:hover:bg-surface-sunken ${className ?? ""}`}
+        className={`flex cursor-pointer items-center gap-1.5 rounded-shell-pill bg-surface-sunken px-4 py-1.5 text-body text-ink ring-1 ring-border transition-colors outline-none hover:bg-surface-hover data-[popup-open]:ring-2 data-[popup-open]:ring-accent-ink data-[disabled]:cursor-not-allowed data-[disabled]:opacity-60 data-[disabled]:hover:bg-surface-sunken ${className ?? ""}`}
       >
         <BaseSelect.Value className="min-w-0 truncate">
           {(selected: T) =>
@@ -76,7 +76,7 @@ export function Select<T extends string>({
               >
                 <BaseSelect.ItemText>{option.label}</BaseSelect.ItemText>
                 <BaseSelect.ItemIndicator className="ms-auto flex">
-                  <Check className="size-4 text-accent" />
+                  <Check className="size-4 text-accent-ink" />
                 </BaseSelect.ItemIndicator>
               </BaseSelect.Item>
             ))}

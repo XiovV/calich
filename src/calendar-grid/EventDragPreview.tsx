@@ -24,7 +24,7 @@ export function EventDragPreview({
 }: EventDragPreviewProps) {
   return (
     <div
-      className="pointer-events-none absolute overflow-hidden rounded-shell-sm opacity-90 ring-2 ring-accent transition-[top,height,left,width] duration-100 ease-out"
+      className="pointer-events-none absolute overflow-hidden rounded-shell-sm opacity-90 ring-2 ring-accent-ink transition-[top,height,left,width] duration-100 ease-out"
       style={{
         top: `${top}px`,
         height: `${height}px`,

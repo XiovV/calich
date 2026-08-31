@@ -13,9 +13,9 @@ const SIZE: Record<IconButtonSize, string> = {
 };
 
 const COLOR: Record<IconButtonColor, string> = {
-  secondary: "text-ink-muted hover:bg-surface-hover hover:text-ink",
-  primary: "text-primary hover:bg-primary-50",
-  danger: "text-danger hover:bg-danger-50",
+  secondary: "text-ink-muted outline-ink hover:bg-surface-hover hover:text-ink",
+  primary: "text-accent-ink outline-accent-ink hover:bg-primary-50",
+  danger: "text-danger outline-danger hover:bg-danger-50",
 };
 
 export interface IconButtonClassOptions {

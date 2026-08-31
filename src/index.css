@@ -110,6 +110,8 @@
   --color-accent: var(--immich-ui-primary-500);
   --color-accent-hover: var(--immich-ui-primary-600);
   --color-accent-soft: var(--immich-ui-primary-100);
+  --color-accent-ink: var(--immich-ui-primary-ink);
+  --color-on-accent: var(--immich-ui-on-primary);
 }
 
 @custom-variant dark (&:where(.dark, .dark *):not(.light));
@@ -117,17 +119,24 @@
 @layer base {
   :root {
     /* light */
-    --immich-ui-primary-50: oklch(0.9616 0.0166 271.24);
-    --immich-ui-primary-100: oklch(0.897 0.033 281.96);
-    --immich-ui-primary-200: oklch(0.787 0.07 281.03);
-    --immich-ui-primary-300: oklch(0.686 0.106 278.96);
-    --immich-ui-primary-400: oklch(0.577 0.142 275.93);
-    --immich-ui-primary-500: #4250af;
-    --immich-ui-primary-600: oklch(0.404 0.129 273.18);
-    --immich-ui-primary-700: oklch(0.343 0.109 272.56);
-    --immich-ui-primary-800: oklch(0.272 0.088 272.94);
-    --immich-ui-primary-900: oklch(0.211 0.068 273.01);
-    --immich-ui-primary-950: oklch(0.15 0.05 273.01);
+    --immich-ui-primary-50: oklch(0.975 0.009 89.25);
+    --immich-ui-primary-100: oklch(0.945 0.02 88.05);
+    --immich-ui-primary-200: oklch(0.905 0.032 86.45);
+    --immich-ui-primary-300: oklch(0.865 0.098 84.85);
+    --immich-ui-primary-400: oklch(0.822 0.112 83.13);
+    --immich-ui-primary-500: #e6a817;
+    --immich-ui-primary-600: oklch(0.7 0.139 78.25);
+    --immich-ui-primary-700: oklch(0.61 0.122 74.65);
+    --immich-ui-primary-800: oklch(0.505 0.104 70.45);
+    --immich-ui-primary-900: oklch(0.395 0.072 66.05);
+    --immich-ui-primary-950: oklch(0.285 0.054 61.65);
+
+    /* The accent is a light amber, so it can't also serve as ink: `on-primary`
+       is what sits *on* an accent fill, `primary-ink` is the accent drawn *as*
+       ink (text, icons, hairline strokes) on a page surface, darkened here so
+       it stays legible against a white background. */
+    --immich-ui-on-primary: oklch(0.24 0.03 68);
+    --immich-ui-primary-ink: oklch(0.565 0.114 72.85);
 
     --immich-ui-success-50: oklch(0.983 0.0115 162.06);
     --immich-ui-success-100: oklch(0.937 0.109 148.66);
@@ -196,17 +205,19 @@
   }
 
   .dark {
-    --immich-ui-primary-950: oklch(0.982 0.007 268.63);
-    --immich-ui-primary-900: oklch(0.966 0.015 260.75);
-    --immich-ui-primary-800: oklch(0.932 0.03 262.55);
-    --immich-ui-primary-700: oklch(0.906 0.041 260.95);
-    --immich-ui-primary-600: oklch(0.871 0.057 259.89);
-    --immich-ui-primary-500: oklch(0.836 0.074 258.58);
-    --immich-ui-primary-400: oklch(0.526 0.063 256.86);
-    --immich-ui-primary-300: oklch(0.449 0.054 257.6);
-    --immich-ui-primary-200: oklch(0.372 0.045 257.42);
-    --immich-ui-primary-100: oklch(0.258 0.032 258.31);
-    --immich-ui-primary-50: oklch(0.198 0.023 257.29);
+    --immich-ui-primary-950: oklch(0.975 0.009 87.79);
+    --immich-ui-primary-900: oklch(0.95 0.017 86.76);
+    --immich-ui-primary-800: oklch(0.91 0.029 85.12);
+    --immich-ui-primary-700: oklch(0.87 0.082 83.47);
+    --immich-ui-primary-600: oklch(0.83 0.103 81.82);
+    --immich-ui-primary-500: #e8a94d;
+    --immich-ui-primary-400: oklch(0.56 0.111 70.71);
+    --immich-ui-primary-300: oklch(0.47 0.096 67);
+    --immich-ui-primary-200: oklch(0.38 0.069 63.29);
+    --immich-ui-primary-100: oklch(0.27 0.051 58.76);
+    --immich-ui-primary-50: oklch(0.205 0.04 56.09);
+
+    --immich-ui-primary-ink: var(--immich-ui-primary-500);
 
     --immich-ui-success-950: oklch(0.979 0.027 157.32);
     --immich-ui-success-900: oklch(0.969 0.043 155.86);
@@ -310,7 +321,7 @@ body {
 }
 
 :root .rdp-root {
-  --rdp-accent-color: var(--color-accent);
+  --rdp-accent-color: var(--color-accent-ink);
   --rdp-accent-background-color: var(--color-accent-soft);
   --rdp-day-height: 32px;
   --rdp-day-width: 32px;

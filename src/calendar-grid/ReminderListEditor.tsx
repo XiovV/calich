@@ -57,7 +57,7 @@ export function ReminderListEditor({
       <button
         type="button"
         onClick={handleAdd}
-        className="mt-1.5 cursor-pointer text-label-sm text-accent hover:underline"
+        className="mt-1.5 cursor-pointer text-label-sm text-accent-ink hover:underline"
       >
         Add reminder
       </button>
