@@ -136,8 +136,8 @@ func TestSubscribeService_Subscribe_Success(t *testing.T) {
 	if err != nil {
 		t.Fatalf("subscribe: %v", err)
 	}
-	if calendar.SourceURL == nil || *calendar.SourceURL != srv.URL+"/feed.ics" {
-		t.Fatalf("expected SourceURL to be stored, got %+v", calendar.SourceURL)
+	if calendar.Source.SourceURL == nil || *calendar.Source.SourceURL != srv.URL+"/feed.ics" {
+		t.Fatalf("expected SourceURL to be stored, got %+v", calendar.Source.SourceURL)
 	}
 
 	cals, err := calendars.List(ctx, userID)
@@ -422,9 +422,9 @@ func TestSubscribeService_Refresh_BlocksPrivateAddress(t *testing.T) {
 	ctx := context.Background()
 
 	sourceURL := "http://127.0.0.1:9999/feed.ics"
-	cal, err := calendars.Create(ctx, userID, workspaceID, "cal-private", CalendarWrite{
-		Name: "Private", Color: "#12809CFF", SourceURL: &sourceURL,
-	})
+	cal, err := calendars.CreateSubscribed(ctx, userID, workspaceID, "cal-private", CalendarWrite{
+		Name: "Private", Color: "#12809CFF",
+	}, repository.SourceFields{Kind: repository.SourceKindSubscription, Mode: repository.SourceModeReadOnly, SourceURL: &sourceURL})
 	if err != nil {
 		t.Fatalf("create calendar: %v", err)
 	}
@@ -438,8 +438,8 @@ func TestSubscribeService_Refresh_BlocksPrivateAddress(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get calendar: %v", err)
 	}
-	if got.ErrorClass == nil || *got.ErrorClass != ErrorClassNeedsAttention {
-		t.Fatalf("expected ErrorClassNeedsAttention, got %+v", got.ErrorClass)
+	if got.Source.ErrorClass == nil || *got.Source.ErrorClass != ErrorClassNeedsAttention {
+		t.Fatalf("expected ErrorClassNeedsAttention, got %+v", got.Source.ErrorClass)
 	}
 }
 
@@ -551,7 +551,7 @@ func TestSubscribeService_Refresh_ETagShortCircuitsUnchangedFeed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get calendar: %v", err)
 	}
-	if got.LastSyncedAt == nil {
+	if got.Source.LastSyncedAt == nil {
 		t.Fatalf("expected LastSyncedAt to be set after a successful refresh")
 	}
 
@@ -1006,13 +1006,13 @@ func TestSubscribeService_Subscribe_SchedulesInitialNextRefresh(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get calendar: %v", err)
 	}
-	if got.NextRefreshAt == nil {
+	if got.Source.NextRefreshAt == nil {
 		t.Fatalf("expected NextRefreshAt to be set at subscribe time, got nil")
 	}
 	// Default interval is 1h (DefaultRefreshInterval), plus a stagger of at
 	// most a quarter of it.
-	if got.NextRefreshAt.Before(fixedNow.Add(time.Hour)) || got.NextRefreshAt.After(fixedNow.Add(time.Hour+15*time.Minute)) {
-		t.Fatalf("expected NextRefreshAt within [1h, 1h15m) of subscribe time, got %v (now=%v)", got.NextRefreshAt, fixedNow)
+	if got.Source.NextRefreshAt.Before(fixedNow.Add(time.Hour)) || got.Source.NextRefreshAt.After(fixedNow.Add(time.Hour+15*time.Minute)) {
+		t.Fatalf("expected NextRefreshAt within [1h, 1h15m) of subscribe time, got %v (now=%v)", got.Source.NextRefreshAt, fixedNow)
 	}
 }
 
@@ -1044,14 +1044,14 @@ func TestSubscribeService_Refresh_SuccessSchedulesNextRefreshAndClearsPriorFailu
 	if err != nil {
 		t.Fatalf("get calendar: %v", err)
 	}
-	if got.FailureCount != 0 {
-		t.Fatalf("expected a success to reset FailureCount, got %d", got.FailureCount)
+	if got.Source.FailureCount != 0 {
+		t.Fatalf("expected a success to reset FailureCount, got %d", got.Source.FailureCount)
 	}
-	if got.ErrorClass != nil {
-		t.Fatalf("expected a success to clear ErrorClass, got %v", *got.ErrorClass)
+	if got.Source.ErrorClass != nil {
+		t.Fatalf("expected a success to clear ErrorClass, got %v", *got.Source.ErrorClass)
 	}
-	if got.NextRefreshAt == nil || !got.NextRefreshAt.After(fixedNow) {
-		t.Fatalf("expected NextRefreshAt to move into the future, got %v", got.NextRefreshAt)
+	if got.Source.NextRefreshAt == nil || !got.Source.NextRefreshAt.After(fixedNow) {
+		t.Fatalf("expected NextRefreshAt to move into the future, got %v", got.Source.NextRefreshAt)
 	}
 }
 
@@ -1085,14 +1085,14 @@ func TestSubscribeService_Refresh_AuthFailureClassifiedNeedsAttention(t *testing
 	if err != nil {
 		t.Fatalf("get calendar: %v", err)
 	}
-	if got.ErrorClass == nil || *got.ErrorClass != ErrorClassNeedsAttention {
-		t.Fatalf("expected ErrorClass needs_attention, got %v", got.ErrorClass)
+	if got.Source.ErrorClass == nil || *got.Source.ErrorClass != ErrorClassNeedsAttention {
+		t.Fatalf("expected ErrorClass needs_attention, got %v", got.Source.ErrorClass)
 	}
-	if got.ErrorMessage == nil || !strings.Contains(*got.ErrorMessage, "rejected the credentials") {
-		t.Fatalf("expected ErrorMessage to describe the auth failure, got %v", got.ErrorMessage)
+	if got.Source.ErrorMessage == nil || !strings.Contains(*got.Source.ErrorMessage, "rejected the credentials") {
+		t.Fatalf("expected ErrorMessage to describe the auth failure, got %v", got.Source.ErrorMessage)
 	}
-	if got.FailureCount != 1 {
-		t.Fatalf("expected FailureCount 1, got %d", got.FailureCount)
+	if got.Source.FailureCount != 1 {
+		t.Fatalf("expected FailureCount 1, got %d", got.Source.FailureCount)
 	}
 }
 
@@ -1126,8 +1126,8 @@ func TestSubscribeService_Refresh_NotFoundClassifiedNeedsAttention(t *testing.T)
 	if err != nil {
 		t.Fatalf("get calendar: %v", err)
 	}
-	if got.ErrorClass == nil || *got.ErrorClass != ErrorClassNeedsAttention {
-		t.Fatalf("expected ErrorClass needs_attention, got %v", got.ErrorClass)
+	if got.Source.ErrorClass == nil || *got.Source.ErrorClass != ErrorClassNeedsAttention {
+		t.Fatalf("expected ErrorClass needs_attention, got %v", got.Source.ErrorClass)
 	}
 }
 
@@ -1163,16 +1163,16 @@ func TestSubscribeService_Refresh_FeedGoesDown_ClassifiedRetryingAndBacksOff(t *
 	if err != nil {
 		t.Fatalf("get calendar: %v", err)
 	}
-	if afterFirst.FailureCount != 1 {
-		t.Fatalf("expected FailureCount 1 after the first failure, got %d", afterFirst.FailureCount)
+	if afterFirst.Source.FailureCount != 1 {
+		t.Fatalf("expected FailureCount 1 after the first failure, got %d", afterFirst.Source.FailureCount)
 	}
-	if afterFirst.ErrorClass == nil || *afterFirst.ErrorClass != ErrorClassRetrying {
-		t.Fatalf("expected ErrorClass retrying, got %v", afterFirst.ErrorClass)
+	if afterFirst.Source.ErrorClass == nil || *afterFirst.Source.ErrorClass != ErrorClassRetrying {
+		t.Fatalf("expected ErrorClass retrying, got %v", afterFirst.Source.ErrorClass)
 	}
-	if afterFirst.LastSyncedAt != nil {
-		t.Fatalf("expected a failure to leave LastSyncedAt untouched (still nil pre-first-success), got %v", afterFirst.LastSyncedAt)
+	if afterFirst.Source.LastSyncedAt != nil {
+		t.Fatalf("expected a failure to leave LastSyncedAt untouched (still nil pre-first-success), got %v", afterFirst.Source.LastSyncedAt)
 	}
-	firstBackoff := afterFirst.NextRefreshAt.Sub(fixedNow)
+	firstBackoff := afterFirst.Source.NextRefreshAt.Sub(fixedNow)
 
 	if _, err := svc.Refresh(ctx, userID, cal.ID, false); err == nil {
 		t.Fatalf("expected the second refresh to still fail")
@@ -1181,10 +1181,10 @@ func TestSubscribeService_Refresh_FeedGoesDown_ClassifiedRetryingAndBacksOff(t *
 	if err != nil {
 		t.Fatalf("get calendar: %v", err)
 	}
-	if afterSecond.FailureCount != 2 {
-		t.Fatalf("expected FailureCount 2 after the second failure, got %d", afterSecond.FailureCount)
+	if afterSecond.Source.FailureCount != 2 {
+		t.Fatalf("expected FailureCount 2 after the second failure, got %d", afterSecond.Source.FailureCount)
 	}
-	secondBackoff := afterSecond.NextRefreshAt.Sub(fixedNow)
+	secondBackoff := afterSecond.Source.NextRefreshAt.Sub(fixedNow)
 	if secondBackoff <= firstBackoff {
 		t.Fatalf("expected backoff to grow across consecutive failures: first=%v second=%v", firstBackoff, secondBackoff)
 	}
@@ -1199,11 +1199,11 @@ func TestSubscribeService_Refresh_FeedGoesDown_ClassifiedRetryingAndBacksOff(t *
 	if err != nil {
 		t.Fatalf("get calendar: %v", err)
 	}
-	if recovered.FailureCount != 0 {
-		t.Fatalf("expected recovery to reset FailureCount, got %d", recovered.FailureCount)
+	if recovered.Source.FailureCount != 0 {
+		t.Fatalf("expected recovery to reset FailureCount, got %d", recovered.Source.FailureCount)
 	}
-	if recovered.ErrorClass != nil {
-		t.Fatalf("expected recovery to clear ErrorClass, got %v", recovered.ErrorClass)
+	if recovered.Source.ErrorClass != nil {
+		t.Fatalf("expected recovery to clear ErrorClass, got %v", recovered.Source.ErrorClass)
 	}
 }
 
@@ -1274,7 +1274,7 @@ func TestSubscribeService_Subscribe_KeepAlarmsTrue_ReminderKept(t *testing.T) {
 	if err != nil {
 		t.Fatalf("subscribe: %v", err)
 	}
-	if !calendar.KeepAlarms {
+	if !calendar.Source.KeepAlarms {
 		t.Fatalf("expected KeepAlarms to be stored true, got %+v", calendar)
 	}
 
@@ -1355,7 +1355,7 @@ func TestSubscribeService_UpdateKeepAlarms_TurningOffClearsRemindersImmediately(
 	if err != nil {
 		t.Fatalf("update keep alarms: %v", err)
 	}
-	if updated.KeepAlarms {
+	if updated.Source.KeepAlarms {
 		t.Fatalf("expected KeepAlarms to be stored false, got %+v", updated)
 	}
 
@@ -1487,11 +1487,11 @@ func TestSubscribeService_Subscribe_FeedNameColorShadowTracksFeedNotUsersChoice(
 	if calendar.Name != "My Calendar" || calendar.Color != "#123456FF" {
 		t.Fatalf("expected the User's chosen name/color to be stored, got %+v", calendar)
 	}
-	if calendar.FeedName == nil || *calendar.FeedName != "Team Holidays" {
-		t.Fatalf("expected the shadow to track the feed's own name regardless, got %+v", calendar.FeedName)
+	if calendar.Source.FeedName == nil || *calendar.Source.FeedName != "Team Holidays" {
+		t.Fatalf("expected the shadow to track the feed's own name regardless, got %+v", calendar.Source.FeedName)
 	}
-	if calendar.FeedColor == nil || *calendar.FeedColor != "#8E44ADFF" {
-		t.Fatalf("expected the shadow to track the feed's own color regardless, got %+v", calendar.FeedColor)
+	if calendar.Source.FeedColor == nil || *calendar.Source.FeedColor != "#8E44ADFF" {
+		t.Fatalf("expected the shadow to track the feed's own color regardless, got %+v", calendar.Source.FeedColor)
 	}
 
 	got, err := calendars.Get(ctx, userID, calendar.ID)
@@ -1531,11 +1531,11 @@ func TestSubscribeService_Refresh_UntouchedNameFollowsPublisherRename(t *testing
 	if got.Color != "#2ECC71FF" {
 		t.Fatalf("expected the untouched Color to follow the publisher's recolor, got %q", got.Color)
 	}
-	if got.FeedName == nil || *got.FeedName != "Company Holidays" {
-		t.Fatalf("expected the shadow to track the new name, got %+v", got.FeedName)
+	if got.Source.FeedName == nil || *got.Source.FeedName != "Company Holidays" {
+		t.Fatalf("expected the shadow to track the new name, got %+v", got.Source.FeedName)
 	}
-	if got.FeedColor == nil || *got.FeedColor != "#2ECC71FF" {
-		t.Fatalf("expected the shadow to track the new color, got %+v", got.FeedColor)
+	if got.Source.FeedColor == nil || *got.Source.FeedColor != "#2ECC71FF" {
+		t.Fatalf("expected the shadow to track the new color, got %+v", got.Source.FeedColor)
 	}
 }
 
@@ -1570,11 +1570,11 @@ func TestSubscribeService_Refresh_CustomizedNameNeverOverwritten(t *testing.T) {
 	// The shadow still tracks the feed's latest value even while
 	// overridden — the comparison alone is the "overridden" flag, so a
 	// later coincidental match would resume tracking.
-	if got.FeedName == nil || *got.FeedName != "Company Holidays" {
-		t.Fatalf("expected the shadow to still track the new feed name, got %+v", got.FeedName)
+	if got.Source.FeedName == nil || *got.Source.FeedName != "Company Holidays" {
+		t.Fatalf("expected the shadow to still track the new feed name, got %+v", got.Source.FeedName)
 	}
-	if got.FeedColor == nil || *got.FeedColor != "#2ECC71FF" {
-		t.Fatalf("expected the shadow to still track the new feed color, got %+v", got.FeedColor)
+	if got.Source.FeedColor == nil || *got.Source.FeedColor != "#2ECC71FF" {
+		t.Fatalf("expected the shadow to still track the new feed color, got %+v", got.Source.FeedColor)
 	}
 }
 
@@ -1604,11 +1604,11 @@ func TestSubscribeService_Refresh_FeedStopsSupplyingNameColor_DoesNotBlank(t *te
 	if got.Color != "#8E44ADFF" {
 		t.Fatalf("expected the existing Color to survive a feed that stops supplying one, got %q", got.Color)
 	}
-	if got.FeedName == nil || *got.FeedName != "Team Holidays" {
-		t.Fatalf("expected the shadow to survive unchanged too, got %+v", got.FeedName)
+	if got.Source.FeedName == nil || *got.Source.FeedName != "Team Holidays" {
+		t.Fatalf("expected the shadow to survive unchanged too, got %+v", got.Source.FeedName)
 	}
-	if got.FeedColor == nil || *got.FeedColor != "#8E44ADFF" {
-		t.Fatalf("expected the shadow to survive unchanged too, got %+v", got.FeedColor)
+	if got.Source.FeedColor == nil || *got.Source.FeedColor != "#8E44ADFF" {
+		t.Fatalf("expected the shadow to survive unchanged too, got %+v", got.Source.FeedColor)
 	}
 }
 
@@ -1633,8 +1633,8 @@ func TestSubscribeService_UpdateSourceURL_ReconcilesAgainstNewSourceOnNextRefres
 	if err != nil {
 		t.Fatalf("update source url: %v", err)
 	}
-	if updated.SourceURL == nil || *updated.SourceURL != newSrv.URL+"/feed.ics" {
-		t.Fatalf("expected SourceURL updated, got %+v", updated.SourceURL)
+	if updated.Source.SourceURL == nil || *updated.Source.SourceURL != newSrv.URL+"/feed.ics" {
+		t.Fatalf("expected SourceURL updated, got %+v", updated.Source.SourceURL)
 	}
 
 	if _, err := svc.Refresh(ctx, userID, calendar.ID, false); err != nil {
@@ -1659,8 +1659,8 @@ func TestSubscribeService_UpdateSourceURL_ReconcilesAgainstNewSourceOnNextRefres
 	if err != nil {
 		t.Fatalf("get calendar: %v", err)
 	}
-	if got.SourceURL == nil || *got.SourceURL != newSrv.URL+"/feed.ics" {
-		t.Fatalf("expected the new SourceURL to persist, got %+v", got.SourceURL)
+	if got.Source.SourceURL == nil || *got.Source.SourceURL != newSrv.URL+"/feed.ics" {
+		t.Fatalf("expected the new SourceURL to persist, got %+v", got.Source.SourceURL)
 	}
 }
 

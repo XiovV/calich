@@ -152,7 +152,7 @@ func (h *CalendarHandler) ICSAllOversizedAttachments(w http.ResponseWriter, r *h
 
 	var omitted []icalendar.OmittedAttachment
 	for _, calendar := range calendars {
-		if calendar.SourceURL != nil {
+		if calendar.Source != nil {
 			continue
 		}
 

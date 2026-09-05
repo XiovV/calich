@@ -48,6 +48,7 @@ type Graph struct {
 	UserRepo             *repository.UserRepository
 	SessionRepo          *repository.SessionRepository
 	CalendarRepo         *repository.CalendarRepository
+	SourceRepo           *repository.SourceRepository
 	ShareRepo            *repository.CalendarShareRepository
 	GroupShareRepo       *repository.CalendarGroupShareRepository
 	ColorOverrideRepo    *repository.CalendarUserColorRepository
@@ -147,6 +148,7 @@ func NewGraph(sqlDB *sql.DB, cfg config.Config, opts ...GraphOption) (*Graph, er
 		UserRepo:             repository.NewUserRepository(sqlDB),
 		SessionRepo:          repository.NewSessionRepository(sqlDB),
 		CalendarRepo:         repository.NewCalendarRepository(sqlDB),
+		SourceRepo:           repository.NewSourceRepository(sqlDB),
 		ShareRepo:            repository.NewCalendarShareRepository(sqlDB),
 		GroupShareRepo:       repository.NewCalendarGroupShareRepository(sqlDB),
 		ColorOverrideRepo:    repository.NewCalendarUserColorRepository(sqlDB),
@@ -173,7 +175,7 @@ func NewGraph(sqlDB *sql.DB, cfg config.Config, opts ...GraphOption) (*Graph, er
 	g.RateLimiter = NewAuthRateLimiter(g.RateLimitRepo, cfg.AuthRateLimitPerEmail, cfg.AuthRateLimitPerIP, cfg.RegisterRateLimitPerIP)
 	g.Workspaces = NewWorkspaceService(sqlDB, g.WorkspaceRepo, g.WorkspaceInviteRepo, g.CalendarRepo, g.ShareRepo)
 	g.Groups = NewGroupService(g.GroupRepo, g.WorkspaceRepo)
-	g.Calendars = NewCalendarService(sqlDB, g.CalendarRepo, g.ShareRepo, g.UserRepo, g.EventReminderRepo, g.DefaultReminderRepo, g.ExplicitReminderRepo, g.ColorOverrideRepo, g.WorkspaceRepo, g.GroupShareRepo, g.GroupRepo)
+	g.Calendars = NewCalendarService(sqlDB, g.CalendarRepo, g.SourceRepo, g.ShareRepo, g.UserRepo, g.EventReminderRepo, g.DefaultReminderRepo, g.ExplicitReminderRepo, g.ColorOverrideRepo, g.WorkspaceRepo, g.GroupShareRepo, g.GroupRepo)
 	g.Auth = NewAuthService(sqlDB, g.UserRepo, g.SessionRepo, g.Workspaces, g.WorkspaceInviteRepo, g.Calendars, g.AttendeeRepo, g.JWTSecret, cfg.InitialName, cfg.InitialEmail, cfg.InitialPassword, cfg.EnableSignups)
 	g.Events = NewEventService(sqlDB, g.EventRepo, g.EventExceptionRepo, g.EventReminderRepo, g.DefaultReminderRepo, g.ExplicitReminderRepo, g.SyncRepo, g.Calendars, g.UserRepo, g.AttachmentRepo, g.AttendeeRepo, g.WorkspaceRepo, g.GroupRepo, g.NotificationRepo, g.OutboxRepo, cfg.InviteRateLimitPerHour)
 	g.Attachments = NewAttachmentService(g.AttachmentRepo, g.EventRepo, g.Calendars, g.Events, g.AttachmentStore, cfg.MaxAttachmentsPerEvent)

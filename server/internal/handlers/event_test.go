@@ -15,6 +15,7 @@ import (
 
 	"github.com/XiovV/calich/server/internal/apptest"
 	"github.com/XiovV/calich/server/internal/httpauth"
+	"github.com/XiovV/calich/server/internal/repository"
 	"github.com/XiovV/calich/server/internal/service"
 )
 
@@ -83,7 +84,7 @@ func (d *decodedEvent) UnmarshalJSON(data []byte) error {
 
 func newEventTestServer(t *testing.T) (baseURL, accessToken, calendarID string) {
 	t.Helper()
-	baseURL, accessToken, calendarID, _, _, _, _ = newEventTestServerWithServices(t)
+	baseURL, accessToken, calendarID, _, _, _, _, _ = newEventTestServerWithServices(t)
 	return baseURL, accessToken, calendarID
 }
 
@@ -91,7 +92,7 @@ func newEventTestServer(t *testing.T) (baseURL, accessToken, calendarID string) 
 // workspaceID, and the raw CalendarService/EventService, for tests that need
 // to seed state (e.g. a Subscribed Calendar, ADR-0032) no REST endpoint can
 // produce.
-func newEventTestServerWithServices(t *testing.T) (baseURL, accessToken, calendarID string, userID int64, workspaceID int64, calendars *service.CalendarService, events *service.EventService) {
+func newEventTestServerWithServices(t *testing.T) (baseURL, accessToken, calendarID string, userID int64, workspaceID int64, calendars *service.CalendarService, events *service.EventService, sources *repository.SourceRepository) {
 	t.Helper()
 
 	cfg := apptest.Config(t)
@@ -100,6 +101,7 @@ func newEventTestServerWithServices(t *testing.T) (baseURL, accessToken, calenda
 
 	workspaces := g.Workspaces
 	calendars = g.Calendars
+	sources = g.SourceRepo
 	auth := g.Auth
 	bootstrapUser, _, err := auth.Bootstrap(context.Background())
 	if err != nil {
@@ -150,7 +152,7 @@ func newEventTestServerWithServices(t *testing.T) (baseURL, accessToken, calenda
 
 	srv := httptest.NewServer(r)
 	t.Cleanup(srv.Close)
-	return srv.URL, loginResult.AccessToken, cal.ID, userID, workspaceID, calendars, events
+	return srv.URL, loginResult.AccessToken, cal.ID, userID, workspaceID, calendars, events, sources
 }
 
 func TestEventHandler_CreateAndList(t *testing.T) {
@@ -434,7 +436,7 @@ func TestEventHandler_RoundTripsURL(t *testing.T) {
 // from the accompanying repository.User rather than dropped by
 // toEventResponse.
 func TestEventHandler_RoundTripsCreatorAttribution(t *testing.T) {
-	baseURL, accessToken, calendarID, userID, _, _, _ := newEventTestServerWithServices(t)
+	baseURL, accessToken, calendarID, userID, _, _, _, _ := newEventTestServerWithServices(t)
 
 	createResp := postJSON(t, baseURL, accessToken, "/api/events/", createEventRequest{
 		ID:         "22222222-2222-2222-2222-222222222222",
@@ -568,12 +570,12 @@ func TestEventHandler_Create_RejectsUnknownCalendar(t *testing.T) {
 // (ADR-0032); every REST write against one names the reason as a 403, not a
 // plain validation 400.
 func TestEventHandler_Create_RejectsSubscribedCalendarWith403(t *testing.T) {
-	baseURL, accessToken, _, userID, workspaceID, calendars, _ := newEventTestServerWithServices(t)
+	baseURL, accessToken, _, userID, workspaceID, calendars, _, _ := newEventTestServerWithServices(t)
 
 	sourceURL := "https://example.com/feed.ics"
-	subCalendar, err := calendars.Create(context.Background(), userID, workspaceID, "33333333-3333-3333-3333-333333333333", service.CalendarWrite{
-		Name: "Feed", Color: "#123456FF", SourceURL: &sourceURL,
-	})
+	subCalendar, err := calendars.CreateSubscribed(context.Background(), userID, workspaceID, "33333333-3333-3333-3333-333333333333", service.CalendarWrite{
+		Name: "Feed", Color: "#123456FF",
+	}, repository.SourceFields{Kind: repository.SourceKindSubscription, Mode: repository.SourceModeReadOnly, SourceURL: &sourceURL})
 	if err != nil {
 		t.Fatalf("create subscribed calendar: %v", err)
 	}
@@ -1138,7 +1140,7 @@ func TestEventHandler_SetReminders_RejectsInvalidReminderChannel(t *testing.T) {
 // (PATCH 403s), but PUT .../reminders still succeeds through the same
 // clamp, since setting a Reminder isn't an Event write (ADR-0064).
 func TestEventHandler_SetReminders_AllowedOnSourceClampedCalendar(t *testing.T) {
-	baseURL, accessToken, calendarID, userID, _, calendars, _ := newEventTestServerWithServices(t)
+	baseURL, accessToken, calendarID, _, _, _, _, sources := newEventTestServerWithServices(t)
 
 	createResp := createEvent(t, baseURL, accessToken, "22222222-2222-2222-2222-222222222222", calendarID, "Standup", "2026-01-01T09:00:00Z", "2026-01-01T10:00:00Z")
 	var created decodedEvent
@@ -1146,8 +1148,9 @@ func TestEventHandler_SetReminders_AllowedOnSourceClampedCalendar(t *testing.T) 
 		t.Fatalf("decode: %v", err)
 	}
 
-	if _, err := calendars.UpdateSourceURL(context.Background(), userID, calendarID, "https://example.com/feed.ics"); err != nil {
-		t.Fatalf("update source url: %v", err)
+	sourceURL := "https://example.com/feed.ics"
+	if _, err := sources.Create(context.Background(), calendarID, repository.SourceFields{Kind: repository.SourceKindSubscription, Mode: repository.SourceModeReadOnly, SourceURL: &sourceURL}); err != nil {
+		t.Fatalf("attach subscription source: %v", err)
 	}
 
 	patchResp := patchEvent(t, baseURL, accessToken, created.ID, calendarID, "Nope", "2026-01-01T09:00:00Z", "2026-01-01T10:00:00Z")

@@ -461,9 +461,9 @@ func TestCalendarHandler_ICS_SubscribedCalendarIsForbidden(t *testing.T) {
 	env := newICSTestEnv(t)
 
 	sourceURL := "https://user:hunter2@example.com/feed.ics"
-	subCalendar, err := env.calendars.Create(context.Background(), env.userID, env.workspaceID, "33333333-3333-3333-3333-333333333333", service.CalendarWrite{
-		Name: "Feed", Color: "#123456FF", SourceURL: &sourceURL,
-	})
+	subCalendar, err := env.calendars.CreateSubscribed(context.Background(), env.userID, env.workspaceID, "33333333-3333-3333-3333-333333333333", service.CalendarWrite{
+		Name: "Feed", Color: "#123456FF",
+	}, repository.SourceFields{Kind: repository.SourceKindSubscription, Mode: repository.SourceModeReadOnly, SourceURL: &sourceURL})
 	if err != nil {
 		t.Fatalf("create subscribed calendar: %v", err)
 	}
@@ -642,9 +642,9 @@ func TestCalendarHandler_ICSAll_ExcludesSubscribedCalendarsAndListsThemInsteadWi
 	}
 
 	sourceURL := "https://user:hunter2@example.com/feed.ics"
-	if _, err := env.calendars.Create(ctx, env.userID, env.workspaceID, "33333333-3333-3333-3333-333333333333", service.CalendarWrite{
-		Name: "Feed", Color: "#123456FF", SourceURL: &sourceURL,
-	}); err != nil {
+	if _, err := env.calendars.CreateSubscribed(ctx, env.userID, env.workspaceID, "33333333-3333-3333-3333-333333333333", service.CalendarWrite{
+		Name: "Feed", Color: "#123456FF",
+	}, repository.SourceFields{Kind: repository.SourceKindSubscription, Mode: repository.SourceModeReadOnly, SourceURL: &sourceURL}); err != nil {
 		t.Fatalf("create subscribed calendar: %v", err)
 	}
 
@@ -727,9 +727,9 @@ func TestCalendarHandler_ICSAll_OnlySubscribedCalendars_StillProducesValidArchiv
 	}
 
 	sourceURL := "https://example.com/feed.ics"
-	if _, err := env.calendars.Create(ctx, env.userID, env.workspaceID, "33333333-3333-3333-3333-333333333333", service.CalendarWrite{
-		Name: "Feed", Color: "#123456FF", SourceURL: &sourceURL,
-	}); err != nil {
+	if _, err := env.calendars.CreateSubscribed(ctx, env.userID, env.workspaceID, "33333333-3333-3333-3333-333333333333", service.CalendarWrite{
+		Name: "Feed", Color: "#123456FF",
+	}, repository.SourceFields{Kind: repository.SourceKindSubscription, Mode: repository.SourceModeReadOnly, SourceURL: &sourceURL}); err != nil {
 		t.Fatalf("create subscribed calendar: %v", err)
 	}
 

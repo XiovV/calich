@@ -489,7 +489,7 @@ func (s *ImportService) proposeTarget(ctx context.Context, userID int64, filenam
 			}
 			return FileSummary{}, "", err
 		}
-		if calendar.SourceURL != nil {
+		if calendar.Source != nil {
 			return FileSummary{}, "", fmt.Errorf("%w: %q", ErrImportTargetSubscribed, target.CalendarID)
 		}
 		summary.CalendarName = calendar.Name

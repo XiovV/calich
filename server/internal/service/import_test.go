@@ -262,7 +262,9 @@ func TestImportService_ExistingCalendar_RejectsSubscribedTarget(t *testing.T) {
 	ctx := context.Background()
 
 	sourceURL := "https://example.com/feed.ics"
-	subCalendar, err := calendars.Create(ctx, userID, workspaceID, "sub-cal-1", CalendarWrite{Name: "Feed", Color: "#123456FF", SourceURL: &sourceURL})
+	subCalendar, err := calendars.CreateSubscribed(ctx, userID, workspaceID, "sub-cal-1", CalendarWrite{Name: "Feed", Color: "#123456FF"}, repository.SourceFields{
+		Kind: repository.SourceKindSubscription, Mode: repository.SourceModeReadOnly, SourceURL: &sourceURL,
+	})
 	if err != nil {
 		t.Fatalf("create subscribed calendar: %v", err)
 	}

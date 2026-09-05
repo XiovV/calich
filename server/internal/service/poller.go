@@ -16,11 +16,11 @@ import (
 	"github.com/XiovV/calich/server/internal/repository"
 )
 
-// DueSubscriptionLister is Poller's read path: every Subscribed Calendar,
-// across every user, whose next_refresh_at has come due. Satisfied by
+// DueSubscriptionLister is Poller's read path: every Subscription, across
+// every user, whose next_refresh_at has come due. Satisfied by
 // *CalendarService.
 type DueSubscriptionLister interface {
-	ListDueForRefresh(ctx context.Context, now time.Time) ([]repository.Calendar, error)
+	ListDueForRefresh(ctx context.Context, now time.Time) ([]repository.DueRefresh, error)
 }
 
 // SubscriptionRefresher is Poller's write path: one Refresh attempt against
@@ -58,9 +58,9 @@ func (p *Poller) Tick(ctx context.Context) error {
 		return fmt.Errorf("list due subscriptions: %w", err)
 	}
 
-	for _, calendar := range due {
-		if _, err := p.refresher.Refresh(ctx, calendar.UserID, calendar.ID, false); err != nil {
-			log.Printf("subscription poller refresh (calendar=%s): %v", calendar.ID, err)
+	for _, d := range due {
+		if _, err := p.refresher.Refresh(ctx, d.UserID, d.CalendarID, false); err != nil {
+			log.Printf("subscription poller refresh (calendar=%s): %v", d.CalendarID, err)
 		}
 	}
 

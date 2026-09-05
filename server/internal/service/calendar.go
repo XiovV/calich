@@ -54,6 +54,7 @@ var (
 type CalendarService struct {
 	db             *sql.DB
 	calendars      *repository.CalendarRepository
+	sources        *repository.SourceRepository
 	shares         *repository.CalendarShareRepository
 	users          *repository.UserRepository
 	eventReminders *repository.EventReminderRepository
@@ -71,8 +72,44 @@ type CalendarService struct {
 	groups            *repository.GroupRepository
 }
 
-func NewCalendarService(db *sql.DB, calendars *repository.CalendarRepository, shares *repository.CalendarShareRepository, users *repository.UserRepository, eventReminders *repository.EventReminderRepository, defaultReminders *repository.CalendarDefaultReminderRepository, explicitReminders *repository.EventReminderExplicitRepository, colorOverrides *repository.CalendarUserColorRepository, workspaces *repository.WorkspaceRepository, groupShares *repository.CalendarGroupShareRepository, groups *repository.GroupRepository) *CalendarService {
-	return &CalendarService{db: db, calendars: calendars, shares: shares, users: users, eventReminders: eventReminders, defaultReminders: defaultReminders, explicitReminders: explicitReminders, colorOverrides: colorOverrides, workspaces: workspaces, groupShares: groupShares, groups: groups}
+func NewCalendarService(db *sql.DB, calendars *repository.CalendarRepository, sources *repository.SourceRepository, shares *repository.CalendarShareRepository, users *repository.UserRepository, eventReminders *repository.EventReminderRepository, defaultReminders *repository.CalendarDefaultReminderRepository, explicitReminders *repository.EventReminderExplicitRepository, colorOverrides *repository.CalendarUserColorRepository, workspaces *repository.WorkspaceRepository, groupShares *repository.CalendarGroupShareRepository, groups *repository.GroupRepository) *CalendarService {
+	return &CalendarService{db: db, calendars: calendars, sources: sources, shares: shares, users: users, eventReminders: eventReminders, defaultReminders: defaultReminders, explicitReminders: explicitReminders, colorOverrides: colorOverrides, workspaces: workspaces, groupShares: groupShares, groups: groups}
+}
+
+// attachSource populates c.Source from the calendar_sources table (#284,
+// ADR-0052) — every Calendar-reading path's single point of contact with
+// Source, so a caller never has to remember to ask for it separately.
+// Leaves c.Source nil, rather than erroring, for an ordinary Calendar.
+func (s *CalendarService) attachSource(ctx context.Context, c repository.Calendar) (repository.Calendar, error) {
+	source, err := s.sources.GetByCalendarID(ctx, c.ID)
+	if err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			return c, nil
+		}
+		return repository.Calendar{}, fmt.Errorf("get calendar source: %w", err)
+	}
+	c.Source = &source
+	return c, nil
+}
+
+// attachSources is attachSource's batched sibling, for a caller that just
+// listed many Calendars and would otherwise pay one query per row.
+func (s *CalendarService) attachSources(ctx context.Context, calendars []repository.Calendar) ([]repository.Calendar, error) {
+	ids := make([]string, len(calendars))
+	for i, c := range calendars {
+		ids[i] = c.ID
+	}
+	sources, err := s.sources.ListByCalendarIDs(ctx, ids)
+	if err != nil {
+		return nil, fmt.Errorf("list calendar sources: %w", err)
+	}
+	for i := range calendars {
+		if source, ok := sources[calendars[i].ID]; ok {
+			source := source
+			calendars[i].Source = &source
+		}
+	}
+	return calendars, nil
 }
 
 // requireMember refuses userID unless they're a Member of workspaceID (#155,
@@ -94,30 +131,11 @@ func (s *CalendarService) requireMember(ctx context.Context, userID, workspaceID
 type CalendarWrite struct {
 	Name  string
 	Color string
-	// SourceURL is non-nil only when Create is subscribing to an external
-	// feed (#83, ADR-0032) — never set by the plain create/update paths.
-	SourceURL *string
-	// KeepAlarms is set only alongside SourceURL, at Subscribe time (#87,
-	// ADR-0032) — a later change goes through UpdateKeepAlarms instead,
-	// since Update ignores this field just like SourceURL.
-	KeepAlarms bool
-	// FeedName and FeedColor are set only alongside SourceURL too, at
-	// Subscribe time (#88, ADR-0032) — a later change goes through
-	// RecordRefreshSuccess instead, since Update ignores these fields just
-	// like SourceURL.
-	FeedName, FeedColor *string
 }
 
 // fields projects the write onto the columns the repository stores.
 func (w CalendarWrite) fields() repository.CalendarFields {
-	return repository.CalendarFields{
-		Name:       w.Name,
-		Color:      w.Color,
-		SourceURL:  w.SourceURL,
-		KeepAlarms: w.KeepAlarms,
-		FeedName:   w.FeedName,
-		FeedColor:  w.FeedColor,
-	}
+	return repository.CalendarFields{Name: w.Name, Color: w.Color}
 }
 
 func (s *CalendarService) Create(ctx context.Context, userID, workspaceID int64, id string, write CalendarWrite) (repository.Calendar, error) {
@@ -142,6 +160,46 @@ func (s *CalendarService) Create(ctx context.Context, userID, workspaceID int64,
 	return calendar, nil
 }
 
+// CreateSubscribed creates a Calendar and its Source together, atomically
+// (ADR-0018) — SubscribeService.Subscribe's write path, the one caller
+// allowed to give a brand new Calendar a Source at creation time. A failure
+// midway leaves neither row behind, unlike the ordinary Create/attach two
+// steps every other caller uses.
+func (s *CalendarService) CreateSubscribed(ctx context.Context, userID, workspaceID int64, id string, write CalendarWrite, source repository.SourceFields) (repository.Calendar, error) {
+	write.Name = strings.TrimSpace(write.Name)
+	if write.Name == "" {
+		return repository.Calendar{}, ErrInvalidName
+	}
+	color, ok := NormalizeColor(write.Color)
+	if !ok {
+		return repository.Calendar{}, ErrInvalidColor
+	}
+	write.Color = color
+
+	if err := s.requireMember(ctx, userID, workspaceID); err != nil {
+		return repository.Calendar{}, err
+	}
+
+	var calendar repository.Calendar
+	err := repository.WithTx(ctx, s.db, func(tx *sql.Tx) error {
+		var err error
+		calendar, err = s.calendars.WithTx(tx).Create(ctx, userID, workspaceID, id, write.fields())
+		if err != nil {
+			return err
+		}
+		createdSource, err := s.sources.WithTx(tx).Create(ctx, id, source)
+		if err != nil {
+			return err
+		}
+		calendar.Source = &createdSource
+		return nil
+	})
+	if err != nil {
+		return repository.Calendar{}, fmt.Errorf("create subscribed calendar: %w", err)
+	}
+	return calendar, nil
+}
+
 // List returns userID's owned Calendars only — for callers that name
 // Calendars purely by ownership (Owner-only management, ADR-0034). A caller
 // that wants everything userID has any Access to — owned and shared alike,
@@ -152,7 +210,7 @@ func (s *CalendarService) List(ctx context.Context, userID int64) ([]repository.
 	if err != nil {
 		return nil, fmt.Errorf("list calendars: %w", err)
 	}
-	return calendars, nil
+	return s.attachSources(ctx, calendars)
 }
 
 // CalendarWithAccess pairs a Calendar with the caller's resolved Access to
@@ -232,6 +290,27 @@ func (s *CalendarService) mergeAccessible(ctx context.Context, userID int64, own
 	// query's own ordering.
 	sort.Slice(shared, func(i, j int) bool { return shared[i].ID < shared[j].ID })
 
+	// Sources are attached here, once per batch, rather than inside
+	// toCalendarWithAccess per row — this is the hot CalDAV home-set and
+	// REST list path, and attachSources exists specifically so listing many
+	// Calendars costs one query, not one per row.
+	var err error
+	owned, err = s.attachSources(ctx, owned)
+	if err != nil {
+		return nil, err
+	}
+	sharedCalendars := make([]repository.Calendar, len(shared))
+	for i, c := range shared {
+		sharedCalendars[i] = c.Calendar
+	}
+	sharedCalendars, err = s.attachSources(ctx, sharedCalendars)
+	if err != nil {
+		return nil, err
+	}
+	for i := range shared {
+		shared[i].Calendar = sharedCalendars[i]
+	}
+
 	result := make([]CalendarWithAccess, 0, len(owned)+len(shared))
 	for _, c := range owned {
 		withAccess, err := s.toCalendarWithAccess(ctx, userID, c, nil)
@@ -262,7 +341,8 @@ func (s *CalendarService) mergeAccessible(ctx context.Context, userID int64, own
 // for a shared one, mirroring ResolveAccess's own signature), resolved
 // display colour, and ownership metadata — the per-item logic ListAccessible
 // and ListAccessibleInWorkspace both apply to every owned and shared row
-// they fetch.
+// they fetch. c's Source must already be attached — mergeAccessible does
+// that once, batched, before calling this per row.
 func (s *CalendarService) toCalendarWithAccess(ctx context.Context, userID int64, c repository.Calendar, role *string) (CalendarWithAccess, error) {
 	color, err := s.resolveDisplayColor(ctx, userID, c)
 	if err != nil {
@@ -475,6 +555,10 @@ func (s *CalendarService) SetDefaultReminders(ctx context.Context, userID int64,
 // compute the answer rather than assume it.
 func (s *CalendarService) Access(ctx context.Context, userID int64, id string) (Access, repository.Calendar, error) {
 	calendar, err := s.calendars.GetByIDAny(ctx, id)
+	if err != nil {
+		return AccessNone, repository.Calendar{}, err
+	}
+	calendar, err = s.attachSource(ctx, calendar)
 	if err != nil {
 		return AccessNone, repository.Calendar{}, err
 	}
@@ -891,7 +975,11 @@ func (s *CalendarService) Update(ctx context.Context, userID int64, id string, w
 	}
 	write.Color = color
 
-	return s.calendars.Update(ctx, userID, id, write.fields())
+	updated, err := s.calendars.Update(ctx, userID, id, write.fields())
+	if err != nil {
+		return repository.Calendar{}, err
+	}
+	return s.attachSource(ctx, updated)
 }
 
 // Delete is an Owner-only management operation (CONTEXT.md's Owner entry)
@@ -903,50 +991,58 @@ func (s *CalendarService) Delete(ctx context.Context, userID int64, id string) e
 	return s.calendars.Delete(ctx, userID, id)
 }
 
-// RecordRefreshSuccess records a successful Refresh's outcome on id's
-// Calendar (#85, #86, ADR-0033): the response validators (or content hash)
-// to send back on the next conditional GET, when it completed, when the
-// poller should attempt it next, and the publisher's stated cadence if
-// observed. Always resets the failure/backoff state.
+// RecordRefreshSuccess records a successful Refresh's outcome on id's Source
+// and Calendar together, atomically (ADR-0018): the response validators (or
+// content hash) to send back on the next conditional GET, when it
+// completed, when the poller should attempt it next, and the publisher's
+// stated cadence if observed, all on calendar_sources; the displayed
+// Name/Color this attempt resolved, on calendars. Always resets the
+// failure/backoff state.
 func (s *CalendarService) RecordRefreshSuccess(ctx context.Context, userID int64, id string, success repository.RefreshSuccess) error {
-	return s.calendars.RecordRefreshSuccess(ctx, userID, id, success)
+	return repository.WithTx(ctx, s.db, func(tx *sql.Tx) error {
+		if err := s.sources.WithTx(tx).RecordRefreshSuccess(ctx, userID, id, success); err != nil {
+			return err
+		}
+		_, err := s.calendars.WithTx(tx).Update(ctx, userID, id, repository.CalendarFields{Name: success.Name, Color: success.Color})
+		return err
+	})
 }
 
-// RecordRefreshFailure records a failed Refresh attempt on id's Calendar
+// RecordRefreshFailure records a failed Refresh attempt on id's Source
 // (#86, ADR-0033): the classified reason, the new consecutive-failure count,
-// and when to retry. Never disables or deletes the Calendar.
+// and when to retry. Never disables or deletes the Source.
 func (s *CalendarService) RecordRefreshFailure(ctx context.Context, userID int64, id string, failure repository.RefreshFailure) error {
-	return s.calendars.RecordRefreshFailure(ctx, userID, id, failure)
+	return s.sources.RecordRefreshFailure(ctx, userID, id, failure)
 }
 
-// ScheduleNextRefresh sets a brand new Subscription's first due time (#86,
+// ScheduleNextRefresh sets a brand new Source's first due time (#86,
 // ADR-0033), before any Refresh has run against it.
 func (s *CalendarService) ScheduleNextRefresh(ctx context.Context, userID int64, id string, nextRefreshAt time.Time) error {
-	return s.calendars.ScheduleNextRefresh(ctx, userID, id, nextRefreshAt)
+	return s.sources.ScheduleNextRefresh(ctx, userID, id, nextRefreshAt)
 }
 
-// UpdateKeepAlarms changes id's keep_alarms setting alone (#87, ADR-0032).
-// SubscribeService.UpdateKeepAlarms is the caller that actually enforces
-// the Subscribed-Calendar-only rule and cascades the reminder cleanup a
+// UpdateKeepAlarms changes id's Source's keep_alarms setting alone (#87,
+// ADR-0032). SubscribeService.UpdateKeepAlarms is the caller that actually
+// enforces the Subscription-only rule and cascades the reminder cleanup a
 // turn-off requires; this method is the plain column write underneath it.
-func (s *CalendarService) UpdateKeepAlarms(ctx context.Context, userID int64, id string, keepAlarms bool) (repository.Calendar, error) {
-	return s.calendars.UpdateKeepAlarms(ctx, userID, id, keepAlarms)
+func (s *CalendarService) UpdateKeepAlarms(ctx context.Context, userID int64, id string, keepAlarms bool) error {
+	return s.sources.UpdateKeepAlarms(ctx, userID, id, keepAlarms)
 }
 
-// UpdateSourceURL changes id's source_url alone, resetting the
+// UpdateSourceURL changes id's Source's source_url alone, resetting the
 // conditional-GET validators earned from the old URL (#88, ADR-0032).
 // SubscribeService.UpdateSourceURL is the caller that enforces the
-// Subscribed-Calendar-only rule and normalizes/validates the URL; this
-// method is the plain column write underneath it.
-func (s *CalendarService) UpdateSourceURL(ctx context.Context, userID int64, id, url string) (repository.Calendar, error) {
-	return s.calendars.UpdateSourceURL(ctx, userID, id, url)
+// Subscription-only rule and normalizes/validates the URL; this method is
+// the plain column write underneath it.
+func (s *CalendarService) UpdateSourceURL(ctx context.Context, userID int64, id, url string) error {
+	return s.sources.UpdateSourceURL(ctx, userID, id, url)
 }
 
-// ListDueForRefresh returns every Subscribed Calendar, across every user,
-// whose next_refresh_at has come due — the background poller's read path
-// (#86, ADR-0033).
-func (s *CalendarService) ListDueForRefresh(ctx context.Context, now time.Time) ([]repository.Calendar, error) {
-	return s.calendars.ListDueForRefresh(ctx, now)
+// ListDueForRefresh returns every Subscription, across every user, whose
+// next_refresh_at has come due — the background poller's read path (#86,
+// ADR-0033).
+func (s *CalendarService) ListDueForRefresh(ctx context.Context, now time.Time) ([]repository.DueRefresh, error) {
+	return s.sources.ListDueForRefresh(ctx, now)
 }
 
 type defaultCalendar struct {

@@ -13,62 +13,73 @@ import (
 func TestResolveAccess(t *testing.T) {
 	const owner, stranger, shared int64 = 1, 2, 3
 
+	readOnlySource := &repository.Source{Kind: repository.SourceKindSubscription, Mode: repository.SourceModeReadOnly, SourceURL: strPtr("https://example.com/feed.ics")}
+	writableSource := &repository.Source{Kind: repository.SourceKindConnection, Mode: repository.SourceModeWritable}
+
 	cases := []struct {
 		name       string
 		userID     int64
-		sourceURL  *string
+		source     *repository.Source
 		shareRole  *string
 		wantAccess Access
 	}{
 		{
 			name:       "owner of an ordinary calendar gets Owner",
 			userID:     owner,
-			sourceURL:  nil,
 			wantAccess: AccessOwner,
 		},
 		{
 			name:       "stranger to an ordinary calendar gets None",
 			userID:     stranger,
-			sourceURL:  nil,
 			wantAccess: AccessNone,
 		},
 		{
-			name:       "owner of a subscribed calendar clamps to Viewer",
+			name:       "owner of a calendar with a read-only source clamps to Viewer",
 			userID:     owner,
-			sourceURL:  strPtr("https://example.com/feed.ics"),
+			source:     readOnlySource,
 			wantAccess: AccessViewer,
 		},
 		{
-			name:       "stranger to a subscribed calendar still gets None",
+			name:       "stranger to a calendar with a read-only source still gets None",
 			userID:     stranger,
-			sourceURL:  strPtr("https://example.com/feed.ics"),
+			source:     readOnlySource,
 			wantAccess: AccessNone,
+		},
+		{
+			name:       "owner of a calendar with a writable source keeps Owner — the clamp keys off mode, never mere existence",
+			userID:     owner,
+			source:     writableSource,
+			wantAccess: AccessOwner,
 		},
 		{
 			name:       "editor share resolves to Editor",
 			userID:     shared,
-			sourceURL:  nil,
 			shareRole:  strPtr(repository.RoleEditor),
 			wantAccess: AccessEditor,
 		},
 		{
 			name:       "viewer share resolves to Viewer",
 			userID:     shared,
-			sourceURL:  nil,
 			shareRole:  strPtr(repository.RoleViewer),
 			wantAccess: AccessViewer,
 		},
 		{
-			name:       "editor share on a subscribed calendar clamps to Viewer",
+			name:       "editor share on a calendar with a read-only source clamps to Viewer",
 			userID:     shared,
-			sourceURL:  strPtr("https://example.com/feed.ics"),
+			source:     readOnlySource,
 			shareRole:  strPtr(repository.RoleEditor),
 			wantAccess: AccessViewer,
 		},
 		{
+			name:       "editor share on a calendar with a writable source stays Editor",
+			userID:     shared,
+			source:     writableSource,
+			shareRole:  strPtr(repository.RoleEditor),
+			wantAccess: AccessEditor,
+		},
+		{
 			name:       "the owner's own share row, if any, never overrides ownership",
 			userID:     owner,
-			sourceURL:  nil,
 			shareRole:  strPtr(repository.RoleViewer),
 			wantAccess: AccessOwner,
 		},
@@ -76,7 +87,7 @@ func TestResolveAccess(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			calendar := repository.Calendar{UserID: owner, SourceURL: tc.sourceURL}
+			calendar := repository.Calendar{UserID: owner, Source: tc.source}
 			got := ResolveAccess(tc.userID, calendar, tc.shareRole)
 			if got != tc.wantAccess {
 				t.Fatalf("ResolveAccess(%d, calendar, %v) = %v, want %v", tc.userID, tc.shareRole, got, tc.wantAccess)
@@ -155,7 +166,9 @@ func TestCalendarService_Access(t *testing.T) {
 		t.Fatalf("stranger Access = %v, %v; want AccessNone, nil err", access, err)
 	}
 
-	subscribed, err := svc.Create(ctx, owner.ID, workspace.ID, "cal-2", CalendarWrite{Name: "Feed", Color: "#12809CFF", SourceURL: strPtr("https://example.com/feed.ics")})
+	subscribed, err := svc.CreateSubscribed(ctx, owner.ID, workspace.ID, "cal-2", CalendarWrite{Name: "Feed", Color: "#12809CFF"}, repository.SourceFields{
+		Kind: repository.SourceKindSubscription, Mode: repository.SourceModeReadOnly, SourceURL: strPtr("https://example.com/feed.ics"),
+	})
 	if err != nil {
 		t.Fatalf("create subscribed calendar: %v", err)
 	}

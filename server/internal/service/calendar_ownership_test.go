@@ -21,7 +21,9 @@ func TestCalendarService_OwnershipMeta_UnclampedByAccess(t *testing.T) {
 	}
 	workspaceID := ownerWorkspaces[0].ID
 
-	subscribed, err := svc.Create(ctx, ownerID, workspaceID, "cal-sub", CalendarWrite{Name: "Feed", Color: "#12809CFF", SourceURL: strPtr("https://example.com/feed.ics")})
+	subscribed, err := svc.CreateSubscribed(ctx, ownerID, workspaceID, "cal-sub", CalendarWrite{Name: "Feed", Color: "#12809CFF"}, repository.SourceFields{
+		Kind: repository.SourceKindSubscription, Mode: repository.SourceModeReadOnly, SourceURL: strPtr("https://example.com/feed.ics"),
+	})
 	if err != nil {
 		t.Fatalf("create subscribed calendar: %v", err)
 	}

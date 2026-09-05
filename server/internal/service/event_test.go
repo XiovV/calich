@@ -1088,8 +1088,9 @@ func TestEventService_SetReminders_AllowedOnSourceClampedCalendar(t *testing.T) 
 		t.Fatalf("create: %v", err)
 	}
 
-	if _, err := svc.calendars.UpdateSourceURL(ctx, userID, calendarID, "https://example.com/feed.ics"); err != nil {
-		t.Fatalf("update source url: %v", err)
+	sourceURL := "https://example.com/feed.ics"
+	if _, err := svc.calendars.sources.Create(ctx, calendarID, repository.SourceFields{Kind: repository.SourceKindSubscription, Mode: repository.SourceModeReadOnly, SourceURL: &sourceURL}); err != nil {
+		t.Fatalf("attach subscription source: %v", err)
 	}
 
 	// The clamp is actually in effect: even the Owner can no longer write
@@ -2230,7 +2231,9 @@ func newTestSubscribedCalendar(t *testing.T, svc *EventService, userID int64) st
 		t.Fatalf("list user workspaces: %v", err)
 	}
 	sourceURL := "https://example.com/feed.ics"
-	cal, err := svc.calendars.Create(ctx, userID, workspaces[0].ID, "sub-cal-1", CalendarWrite{Name: "Feed", Color: "#123456FF", SourceURL: &sourceURL})
+	cal, err := svc.calendars.CreateSubscribed(ctx, userID, workspaces[0].ID, "sub-cal-1", CalendarWrite{Name: "Feed", Color: "#123456FF"}, repository.SourceFields{
+		Kind: repository.SourceKindSubscription, Mode: repository.SourceModeReadOnly, SourceURL: &sourceURL,
+	})
 	if err != nil {
 		t.Fatalf("create subscribed calendar: %v", err)
 	}

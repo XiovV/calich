@@ -53,10 +53,10 @@ var (
 	// Update, Delete, AddException, ReparentFrom, ImportSeries, PutSeries)
 	// when the caller's Access to the Calendar a write targets doesn't
 	// clear CanWrite — a Viewer Share (ADR-0034), or a Calendar carrying a
-	// SourceURL, whose Events are written only by Refresh's bypass,
-	// ImportSubscribedSeries, for Owner and Editor alike (ADR-0032). The
-	// guard lives here rather than at the REST/CalDAV edges so every entry
-	// point is covered by construction.
+	// read-only-mode Source, whose Events are written only by Refresh's
+	// bypass, ImportSubscribedSeries, for Owner and Editor alike (ADR-0032,
+	// ADR-0052). The guard lives here rather than at the REST/CalDAV edges
+	// so every entry point is covered by construction.
 	ErrCalendarReadOnly = errors.New("calendar is read-only")
 	// ErrAttendeeTargetNotInWorkspace is returned by AddAttendee when
 	// targetUserID, or by AddGroupAttendee when groupID, doesn't belong to
@@ -266,12 +266,13 @@ func (s *EventService) reminderOwnerID(ctx context.Context, calendarID string) (
 
 // requireWritableCalendar resolves the caller's Access to calendarID and
 // refuses it unless that Access can write — false for a stranger (None), a
-// Viewer Share (ADR-0034), and, per ADR-0032's clamp, for a Subscribed
-// Calendar's Owner and Editor alike (Viewer) — in one call: the guard every
-// mutating method except ImportSubscribedSeries applies to every Calendar
-// its write touches. This is the Subscribed Calendar write guard expressed
-// through the Access resolver rather than beside it: ResolveAccess is what
-// now decides it's read-only, not a SourceURL check made here.
+// Viewer Share (ADR-0034), and, per ADR-0032/ADR-0052's clamp, for a
+// Calendar with a read-only-mode Source, Owner and Editor alike (Viewer) —
+// in one call: the guard every mutating method except
+// ImportSubscribedSeries applies to every Calendar its write touches. This
+// is the Source write guard expressed through the Access resolver rather
+// than beside it: ResolveAccess is what decides read-only, keyed off the
+// Source's Mode, not a check made here.
 //
 // Returns the Calendar the Access resolution already fetched, so a caller
 // that also needs it — its WorkspaceID, typically — reads it here instead of

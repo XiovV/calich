@@ -66,6 +66,19 @@ var (
 	ErrSubscribeURLBlocked = errors.New("subscription URL resolves to a non-public address")
 )
 
+// requireSubscription returns calendar's Source if it's a Subscription
+// (#284, ADR-0052), ErrRefreshNotSubscribed otherwise — the guard every
+// Subscription-only method (Refresh, UpdateSourceURL, UpdateKeepAlarms)
+// applies before touching Source-specific state, replacing the old
+// SourceURL-is-non-nil check with the same question asked of the Source
+// itself.
+func requireSubscription(calendar repository.Calendar) (*repository.Source, error) {
+	if calendar.Source == nil || calendar.Source.Kind != repository.SourceKindSubscription {
+		return nil, ErrRefreshNotSubscribed
+	}
+	return calendar.Source, nil
+}
+
 const (
 	// maxSubscribeFetchBytes matches handlers.maxImportUploadBytes (#77):
 	// the same 10MB cap import applies to an uploaded file applies here to a
@@ -183,9 +196,12 @@ func (s *SubscribeService) Subscribe(ctx context.Context, userID, workspaceID in
 		feedColor = &normalizedFeedColor
 	}
 
-	calendar, err := s.calendars.Create(ctx, userID, workspaceID, uuid.NewString(), CalendarWrite{
-		Name:       name,
-		Color:      color,
+	calendar, err := s.calendars.CreateSubscribed(ctx, userID, workspaceID, uuid.NewString(), CalendarWrite{
+		Name:  name,
+		Color: color,
+	}, repository.SourceFields{
+		Kind:       repository.SourceKindSubscription,
+		Mode:       repository.SourceModeReadOnly,
 		SourceURL:  &normalized,
 		KeepAlarms: keepAlarms,
 		FeedName:   feedName,
@@ -251,8 +267,8 @@ func (s *SubscribeService) UpdateSourceURL(ctx context.Context, userID int64, ca
 	if err != nil {
 		return repository.Calendar{}, err
 	}
-	if calendar.SourceURL == nil {
-		return repository.Calendar{}, ErrRefreshNotSubscribed
+	if _, err := requireSubscription(calendar); err != nil {
+		return repository.Calendar{}, err
 	}
 
 	normalized, err := normalizeSubscribeURL(rawURL)
@@ -260,11 +276,10 @@ func (s *SubscribeService) UpdateSourceURL(ctx context.Context, userID int64, ca
 		return repository.Calendar{}, err
 	}
 
-	updated, err := s.calendars.UpdateSourceURL(ctx, userID, calendarID, normalized)
-	if err != nil {
+	if err := s.calendars.UpdateSourceURL(ctx, userID, calendarID, normalized); err != nil {
 		return repository.Calendar{}, fmt.Errorf("update source url: %w", err)
 	}
-	return updated, nil
+	return s.calendars.Get(ctx, userID, calendarID)
 }
 
 // UpdateKeepAlarms changes calendarID's Subscription KeepAlarms setting
@@ -284,12 +299,11 @@ func (s *SubscribeService) UpdateKeepAlarms(ctx context.Context, userID int64, c
 	if err != nil {
 		return repository.Calendar{}, err
 	}
-	if calendar.SourceURL == nil {
-		return repository.Calendar{}, ErrRefreshNotSubscribed
+	if _, err := requireSubscription(calendar); err != nil {
+		return repository.Calendar{}, err
 	}
 
-	updated, err := s.calendars.UpdateKeepAlarms(ctx, userID, calendarID, keepAlarms)
-	if err != nil {
+	if err := s.calendars.UpdateKeepAlarms(ctx, userID, calendarID, keepAlarms); err != nil {
 		return repository.Calendar{}, fmt.Errorf("update keep alarms: %w", err)
 	}
 
@@ -299,7 +313,7 @@ func (s *SubscribeService) UpdateKeepAlarms(ctx context.Context, userID int64, c
 		}
 	}
 
-	return updated, nil
+	return s.calendars.Get(ctx, userID, calendarID)
 }
 
 // RefreshResult is what Refresh actually did, for its caller (the HTTP
@@ -337,8 +351,9 @@ func (s *SubscribeService) Refresh(ctx context.Context, userID int64, calendarID
 	if err != nil {
 		return RefreshResult{}, err
 	}
-	if calendar.SourceURL == nil {
-		return RefreshResult{}, ErrRefreshNotSubscribed
+	source, err := requireSubscription(calendar)
+	if err != nil {
+		return RefreshResult{}, err
 	}
 
 	result, syncOutcome, refreshErr := s.doRefresh(ctx, userID, calendar, force)
@@ -348,8 +363,8 @@ func (s *SubscribeService) Refresh(ctx context.Context, userID int64, calendarID
 		// The last good Events, and the validators that produced them, are
 		// left exactly as they were (#86, ADR-0033) — only the failure/
 		// backoff columns move.
-		failureCount := calendar.FailureCount + 1
-		base := effectiveRefreshInterval(s.defaultRefreshInterval, calendar.RefreshIntervalSeconds)
+		failureCount := source.FailureCount + 1
+		base := effectiveRefreshInterval(s.defaultRefreshInterval, source.RefreshIntervalSeconds)
 		next := nextRefreshTime(now, calendar.ID, backoffInterval(base, failureCount), base)
 		class, message := classifyRefreshError(refreshErr)
 		if err := s.calendars.RecordRefreshFailure(ctx, userID, calendarID, repository.RefreshFailure{
@@ -360,7 +375,7 @@ func (s *SubscribeService) Refresh(ctx context.Context, userID int64, calendarID
 		return RefreshResult{}, refreshErr
 	}
 
-	intervalSeconds := calendar.RefreshIntervalSeconds
+	intervalSeconds := source.RefreshIntervalSeconds
 	if syncOutcome.refreshIntervalSeconds != nil {
 		intervalSeconds = syncOutcome.refreshIntervalSeconds
 	}
@@ -415,12 +430,16 @@ type refreshSyncOutcome struct {
 // so the action is never a visible no-op even when the server believes
 // nothing has changed.
 func (s *SubscribeService) doRefresh(ctx context.Context, userID int64, calendar repository.Calendar, force bool) (RefreshResult, refreshSyncOutcome, error) {
+	// Refresh has already validated calendar carries a Subscription Source
+	// before calling doRefresh.
+	source := calendar.Source
+
 	var etag, lastModified *string
 	if !force {
-		etag, lastModified = calendar.ETag, calendar.LastModified
+		etag, lastModified = source.ETag, source.LastModified
 	}
 
-	fetched, err := s.fetchICSConditional(ctx, *calendar.SourceURL, etag, lastModified)
+	fetched, err := s.fetchICSConditional(ctx, *source.SourceURL, etag, lastModified)
 	if err != nil {
 		return RefreshResult{}, refreshSyncOutcome{}, err
 	}
@@ -432,16 +451,16 @@ func (s *SubscribeService) doRefresh(ctx context.Context, userID int64, calendar
 		// overwriting them with the empty response would leave nothing to
 		// send and turn every later Refresh into an unconditional fetch.
 		return RefreshResult{NotModified: true}, refreshSyncOutcome{
-			etag: calendar.ETag, lastModified: calendar.LastModified, contentHash: calendar.ContentHash,
-			name: calendar.Name, color: calendar.Color, feedName: calendar.FeedName, feedColor: calendar.FeedColor,
+			etag: source.ETag, lastModified: source.LastModified, contentHash: source.ContentHash,
+			name: calendar.Name, color: calendar.Color, feedName: source.FeedName, feedColor: source.FeedColor,
 		}, nil
 	}
 
 	hash := contentHash(fetched.Data)
-	if !force && calendar.ContentHash != nil && *calendar.ContentHash == hash {
+	if !force && source.ContentHash != nil && *source.ContentHash == hash {
 		return RefreshResult{NotModified: true}, refreshSyncOutcome{
 			etag: fetched.ETag, lastModified: fetched.LastModified, contentHash: &hash,
-			name: calendar.Name, color: calendar.Color, feedName: calendar.FeedName, feedColor: calendar.FeedColor,
+			name: calendar.Name, color: calendar.Color, feedName: source.FeedName, feedColor: source.FeedColor,
 		}, nil
 	}
 
@@ -451,7 +470,7 @@ func (s *SubscribeService) doRefresh(ctx context.Context, userID int64, calendar
 	// every ATTACH parseSeriesAttachments sees is declined, never accepted.
 	parsed, err := icalendar.ParseImportFile(bytes.NewReader(fetched.Data), 0, 0)
 	if err != nil {
-		return RefreshResult{}, refreshSyncOutcome{}, fmt.Errorf("%w: %s", ErrSubscribeUnparseable, MaskURL(*calendar.SourceURL))
+		return RefreshResult{}, refreshSyncOutcome{}, fmt.Errorf("%w: %s", ErrSubscribeUnparseable, MaskURL(*source.SourceURL))
 	}
 
 	// dropUnstorableSeries records each series it drops on parsed.Skipped
@@ -459,7 +478,7 @@ func (s *SubscribeService) doRefresh(ctx context.Context, userID int64, calendar
 	// this fetch couldn't decode and one it decoded but can't store: either
 	// way the feed still lists that UID, and ReconcileSeries must leave the
 	// stored row alone rather than tombstone it (#228, ADR-0033).
-	writes := dropUnstorableSeries(parsed, buildWrites(parsed, calendar.KeepAlarms))
+	writes := dropUnstorableSeries(parsed, buildWrites(parsed, source.KeepAlarms))
 	incoming := make([]IncomingSeries, 0, len(writes))
 	for _, w := range writes {
 		incoming = append(incoming, IncomingSeries{ExternalUID: w.ExternalUID, Write: w})
@@ -488,12 +507,12 @@ func (s *SubscribeService) doRefresh(ctx context.Context, userID int64, calendar
 		return RefreshResult{}, refreshSyncOutcome{}, err
 	}
 
-	newName, newFeedName := resolveFollowedField(calendar.Name, calendar.FeedName, parsed.CalendarName)
+	newName, newFeedName := resolveFollowedField(calendar.Name, source.FeedName, parsed.CalendarName)
 	feedColorValue := ""
 	if normalized, ok := NormalizeColor(parsed.Color); ok {
 		feedColorValue = normalized
 	}
-	newColor, newFeedColor := resolveFollowedField(calendar.Color, calendar.FeedColor, feedColorValue)
+	newColor, newFeedColor := resolveFollowedField(calendar.Color, source.FeedColor, feedColorValue)
 
 	return RefreshResult{
 			Created:     summary.Created,

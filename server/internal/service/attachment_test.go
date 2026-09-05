@@ -293,9 +293,12 @@ func TestAttachmentService_Upload_SubscribedCalendarRefused(t *testing.T) {
 	}
 
 	sourceURL := "https://example.com/feed.ics"
-	cal, err := g.CalendarRepo.Create(ctx, owner.ID, workspace.ID, "cal-1", repository.CalendarFields{Name: "Feed", Color: "peacock", SourceURL: &sourceURL})
+	cal, err := g.CalendarRepo.Create(ctx, owner.ID, workspace.ID, "cal-1", repository.CalendarFields{Name: "Feed", Color: "peacock"})
 	if err != nil {
-		t.Fatalf("create subscribed calendar: %v", err)
+		t.Fatalf("create calendar: %v", err)
+	}
+	if _, err := g.SourceRepo.Create(ctx, cal.ID, repository.SourceFields{Kind: repository.SourceKindSubscription, Mode: repository.SourceModeReadOnly, SourceURL: &sourceURL}); err != nil {
+		t.Fatalf("create subscription source: %v", err)
 	}
 
 	events := g.Events

@@ -77,16 +77,20 @@ type calendarResponse struct {
 func toCalendarResponse(c repository.Calendar, isOwner bool, ownerName string, shareCount int) calendarResponse {
 	// respondWithOwnership's callers (Create, Update, Subscribe) always hand
 	// back the caller's own Calendar, so Access is Owner — except a just-
-	// Subscribed Calendar, whose SourceURL clamps it to Viewer even for its
-	// Owner (ADR-0032), same as ResolveAccess applies for every other caller.
-	access := service.AccessOwner
-	if c.SourceURL != nil {
-		access = service.AccessViewer
-	}
-	response := calendarResponse{ID: c.ID, Name: c.Name, Color: c.Color, LastSyncedAt: c.LastSyncedAt, ErrorClass: c.ErrorClass, ErrorMessage: c.ErrorMessage, KeepAlarms: c.KeepAlarms, Access: access.String(), IsOwner: isOwner, OwnerName: ownerName, ShareCount: shareCount}
-	if c.SourceURL != nil {
-		masked := service.MaskURL(*c.SourceURL)
-		response.SourceURL = &masked
+	// Subscribed Calendar, whose Source clamps it to Viewer even for its
+	// Owner (ADR-0032, ADR-0052) — ResolveAccess applied here exactly as it
+	// is for every other caller, since c is always its own Owner's Calendar.
+	access := service.ResolveAccess(c.UserID, c, nil)
+	response := calendarResponse{ID: c.ID, Name: c.Name, Color: c.Color, Access: access.String(), IsOwner: isOwner, OwnerName: ownerName, ShareCount: shareCount}
+	if c.Source != nil {
+		response.LastSyncedAt = c.Source.LastSyncedAt
+		response.ErrorClass = c.Source.ErrorClass
+		response.ErrorMessage = c.Source.ErrorMessage
+		response.KeepAlarms = c.Source.KeepAlarms
+		if c.Source.SourceURL != nil {
+			masked := service.MaskURL(*c.Source.SourceURL)
+			response.SourceURL = &masked
+		}
 	}
 	return response
 }
@@ -379,7 +383,7 @@ func (h *CalendarHandler) ICS(w http.ResponseWriter, r *http.Request) {
 	if respondError(w, err, calendarNotFoundErrors, "failed to load calendar") {
 		return
 	}
-	if calendar.SourceURL != nil {
+	if calendar.Source != nil {
 		httpresponse.Error(w, http.StatusForbidden, "forbidden", "subscribed calendars have no per-calendar download; use the subscription URL instead")
 		return
 	}
@@ -415,14 +419,16 @@ func writeZipEntry(zw *zip.Writer, name string, body []byte) error {
 // buildSubscriptionsListing renders one "Name: URL" line per Subscribed
 // Calendar in calendars, URL masked via service.MaskURL — every surface
 // that renders a Subscription URL must hide its password (ADR-0032), export
-// included since an archive is a file that travels.
+// included since an archive is a file that travels. A Connection-derived
+// Linked Calendar has no URL to list and is skipped the same as an ordinary
+// Calendar (#284, ADR-0052).
 func buildSubscriptionsListing(calendars []repository.Calendar) []byte {
 	var buf bytes.Buffer
 	for _, calendar := range calendars {
-		if calendar.SourceURL == nil {
+		if calendar.Source == nil || calendar.Source.Kind != repository.SourceKindSubscription {
 			continue
 		}
-		fmt.Fprintf(&buf, "%s: %s\n", calendar.Name, service.MaskURL(*calendar.SourceURL))
+		fmt.Fprintf(&buf, "%s: %s\n", calendar.Name, service.MaskURL(*calendar.Source.SourceURL))
 	}
 	return buf.Bytes()
 }
@@ -447,7 +453,7 @@ func (h *CalendarHandler) ICSAll(w http.ResponseWriter, r *http.Request) {
 	zw := zip.NewWriter(&buf)
 	usedNames := make(map[string]int, len(calendars))
 	for _, calendar := range calendars {
-		if calendar.SourceURL != nil {
+		if calendar.Source != nil {
 			continue
 		}
 

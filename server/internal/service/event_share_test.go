@@ -16,6 +16,7 @@ import (
 type eventShareFixture struct {
 	events                                  *EventService
 	calendars                               *CalendarService
+	sources                                 *repository.SourceRepository
 	users                                   *repository.UserRepository
 	ownerID, editorID, viewerID, strangerID int64
 	calendarID                              string
@@ -78,7 +79,7 @@ func newEventShareFixture(t *testing.T) eventShareFixture {
 	events := g.Events
 
 	return eventShareFixture{
-		events: events, calendars: calendars, users: users,
+		events: events, calendars: calendars, sources: g.SourceRepo, users: users,
 		ownerID: owner.ID, editorID: editor.ID, viewerID: viewer.ID, strangerID: stranger.ID,
 		calendarID: cal.ID,
 	}
@@ -571,7 +572,8 @@ func TestEventService_SubscriptionClampsEditorToo(t *testing.T) {
 	f := newEventShareFixture(t)
 	ctx := context.Background()
 
-	if _, err := f.calendars.UpdateSourceURL(ctx, f.ownerID, f.calendarID, "https://example.com/feed.ics"); err != nil {
+	sourceURL := "https://example.com/feed.ics"
+	if _, err := f.sources.Create(ctx, f.calendarID, repository.SourceFields{Kind: repository.SourceKindSubscription, Mode: repository.SourceModeReadOnly, SourceURL: &sourceURL}); err != nil {
 		t.Fatalf("attach subscription: %v", err)
 	}
 

@@ -13,13 +13,13 @@ import (
 // in for CalendarService.ListDueForRefresh in Poller tests that don't need
 // real persistence.
 type fakeDueSubscriptionLister struct {
-	due []repository.Calendar
+	due []repository.DueRefresh
 	// lastNow captures the argument the last ListDueForRefresh call
 	// received, so a test can assert Poller passed its own clock through.
 	lastNow time.Time
 }
 
-func (f *fakeDueSubscriptionLister) ListDueForRefresh(_ context.Context, now time.Time) ([]repository.Calendar, error) {
+func (f *fakeDueSubscriptionLister) ListDueForRefresh(_ context.Context, now time.Time) ([]repository.DueRefresh, error) {
 	f.lastNow = now
 	return f.due, nil
 }
@@ -44,9 +44,9 @@ func (f *fakeRefresher) Refresh(_ context.Context, userID int64, calendarID stri
 }
 
 func TestPoller_Tick_RefreshesEveryDueSubscription(t *testing.T) {
-	lister := &fakeDueSubscriptionLister{due: []repository.Calendar{
-		{ID: "cal-1", UserID: 1},
-		{ID: "cal-2", UserID: 1},
+	lister := &fakeDueSubscriptionLister{due: []repository.DueRefresh{
+		{CalendarID: "cal-1", UserID: 1},
+		{CalendarID: "cal-2", UserID: 1},
 	}}
 	refresher := &fakeRefresher{}
 	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
@@ -80,9 +80,9 @@ func TestPoller_Tick_NoDueSubscriptionsRefreshesNothing(t *testing.T) {
 // A broken feed's Refresh error must not stop the pass — every other due
 // Subscription still gets its turn.
 func TestPoller_Tick_OneFailingRefreshDoesNotBlockOthers(t *testing.T) {
-	lister := &fakeDueSubscriptionLister{due: []repository.Calendar{
-		{ID: "cal-broken", UserID: 1},
-		{ID: "cal-healthy", UserID: 1},
+	lister := &fakeDueSubscriptionLister{due: []repository.DueRefresh{
+		{CalendarID: "cal-broken", UserID: 1},
+		{CalendarID: "cal-healthy", UserID: 1},
 	}}
 	refresher := &fakeRefresher{failFor: map[string]error{"cal-broken": errors.New("boom")}}
 	poller := NewPoller(lister, refresher, time.Now)
@@ -96,7 +96,7 @@ func TestPoller_Tick_OneFailingRefreshDoesNotBlockOthers(t *testing.T) {
 }
 
 func TestPoller_Tick_NeverForcesARefresh(t *testing.T) {
-	lister := &fakeDueSubscriptionLister{due: []repository.Calendar{{ID: "cal-1", UserID: 1}}}
+	lister := &fakeDueSubscriptionLister{due: []repository.DueRefresh{{CalendarID: "cal-1", UserID: 1}}}
 	refresher := &fakeRefresher{}
 	poller := NewPoller(lister, refresher, time.Now)
 
@@ -117,6 +117,6 @@ func TestPoller_Tick_ListErrorIsPropagated(t *testing.T) {
 
 type failingLister struct{}
 
-func (failingLister) ListDueForRefresh(context.Context, time.Time) ([]repository.Calendar, error) {
+func (failingLister) ListDueForRefresh(context.Context, time.Time) ([]repository.DueRefresh, error) {
 	return nil, errors.New("db is down")
 }

@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/XiovV/calich/server/internal/repository"
 	"github.com/XiovV/calich/server/internal/service"
 )
 
@@ -35,9 +36,9 @@ func TestPropfind_CurrentUserPrivilegeSet_SubscribedCalendarIsReadOnly(t *testin
 	env := newTestCalDAVEnv(t)
 
 	sourceURL := "https://example.com/feed.ics"
-	subCalendar, err := env.calendarService.Create(t.Context(), env.userID, env.workspaceID, "sub-cal-1", service.CalendarWrite{
-		Name: "Feed", Color: "#123456FF", SourceURL: &sourceURL,
-	})
+	subCalendar, err := env.calendarService.CreateSubscribed(t.Context(), env.userID, env.workspaceID, "sub-cal-1", service.CalendarWrite{
+		Name: "Feed", Color: "#123456FF",
+	}, repository.SourceFields{Kind: repository.SourceKindSubscription, Mode: repository.SourceModeReadOnly, SourceURL: &sourceURL})
 	if err != nil {
 		t.Fatalf("create subscribed calendar: %v", err)
 	}

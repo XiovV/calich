@@ -154,35 +154,9 @@ CREATE UNIQUE INDEX idx_workspace_invites_token_hash ON workspace_invites(invite
 -- workspace_id is required, set at creation from whichever Workspace is
 -- active, and never changes (#155, ADR-0045).
 --
--- source_url makes a Calendar a Subscribed Calendar (#83, ADR-0032): a
--- non-null value binds it to an external .ics feed. NULL means an ordinary
--- Calendar, and every column below is NULL/0 for one.
---
--- etag / last_modified / content_hash / last_synced_at are Refresh's
--- conditional-GET and no-op-detection state (ADR-0033). etag and
--- last_modified mirror the feed's own response validators when it sends
--- them; content_hash is the fallback for a publisher that sends neither, so
--- a feed with no validators still costs a parse only when its body actually
--- changed.
---
--- next_refresh_at / refresh_interval_seconds / failure_count / error_class /
--- error_message are the background poller's scheduling and failure state
--- (#86, ADR-0033). refresh_interval_seconds is the publisher's own stated
--- cadence (RFC 7986 REFRESH-INTERVAL or X-PUBLISHED-TTL), honoured only when
--- longer than the poller's default. A broken feed is never disabled or
--- deleted: failure_count drives exponential backoff and resets to 0 on the
--- next success, and error_class is "needs_attention" (a human must fix
--- something) or "retrying" (expected to clear on its own).
---
--- keep_alarms (#87, ADR-0032) is off by default: a Refresh then drops the
--- feed's VALARMs exactly as Subscribe's initial import does; when true they
--- become Reminders on both Channels, matching ICS import.
---
--- feed_name / feed_color are shadow columns (#88, ADR-0032): the last value
--- the feed itself supplied (X-WR-CALNAME / X-APPLE-CALENDAR-COLOR), as
--- opposed to name/color, which are what's displayed. A Refresh updates the
--- displayed value only while it still equals its shadow — that comparison
--- alone is the "overridden by the User" flag, with no separate column.
+-- A Calendar's external state — Subscription or Connection-derived —
+-- lives entirely in calendar_sources below (#284, ADR-0052), not here: a
+-- Calendar has zero or one Source, joined by calendar_id.
 --
 -- color is an arbitrary sRGB hex value, not a member of a fixed enum
 -- (ADR-0029); the eight Swatches the web app offers are a convenience for
@@ -193,7 +167,85 @@ CREATE TABLE calendars (
     workspace_id INTEGER NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
     name TEXT NOT NULL,
     color TEXT NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX idx_calendars_user_id ON calendars(user_id);
+CREATE INDEX idx_calendars_workspace_id ON calendars(workspace_id);
+
+-- connections is a Connection (#284, ADR-0052): one User's authorized grant
+-- to one account at one Provider, carrying the tokens, that account's
+-- Email, its granted scopes and whether it is live, expired or revoked.
+-- Belongs to the User rather than to any Workspace (one grant serves every
+-- Workspace they're in), and is the entity a calendar_sources row of kind
+-- 'connection' points back to — one grant, many Calendars. refresh_token is
+-- encrypted at rest with a key from the environment, never stored in
+-- DATA_DIR (ADR-0052); that encryption, and everything else that actually
+-- populates this table, is #285's.
+CREATE TABLE connections (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    provider TEXT NOT NULL,
+    account_email TEXT NOT NULL,
+    access_token TEXT,
+    refresh_token TEXT NOT NULL,
+    scopes TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('live', 'expired', 'revoked')),
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (user_id, provider, account_email)
+);
+
+CREATE INDEX idx_connections_user_id ON connections(user_id);
+
+-- calendar_sources is a Source (#284, ADR-0052): the mark on a Calendar
+-- meaning "these Events come from somewhere else, and this is not where
+-- they are written". A Calendar has zero or one, joined by calendar_id —
+-- the table ADR-0032's fourteen columns bolted onto calendars moved into.
+--
+-- kind discriminates the two Source kinds this app knows: 'subscription'
+-- (bound to an external .ics feed via source_url) and 'connection' (mirrored
+-- from one calendar of a connections row via connection_id) — mutually
+-- exclusive per the CHECK below, since only one kind's identifying column is
+-- ever set on a given row.
+--
+-- mode is read-only or writable, and is what every Access/CalDAV-privilege
+-- clamp actually keys off — never whether a Source merely exists. Every
+-- Source is 'read_only' today (ADR-0032), but the column is drawn now,
+-- ahead of write-back, so "has a Source" and "may not be written here" don't
+-- fuse into one question across every guard that has to unlearn it later
+-- (ADR-0052).
+--
+-- last_synced_at / etag / last_modified / content_hash are Refresh's
+-- conditional-GET and no-op-detection state (ADR-0033). etag and
+-- last_modified mirror the feed's own response validators when it sends
+-- them; content_hash is the fallback for a publisher that sends neither, so
+-- a feed with no validators still costs a parse only when its body actually
+-- changed.
+--
+-- next_refresh_at / refresh_interval_seconds / failure_count / error_class /
+-- error_message are the background poller's scheduling and failure state
+-- (#86, ADR-0033). refresh_interval_seconds is the publisher's own stated
+-- cadence (RFC 7986 REFRESH-INTERVAL or X-PUBLISHED-TTL), honoured only when
+-- longer than the poller's default. A broken Source is never disabled or
+-- deleted: failure_count drives exponential backoff and resets to 0 on the
+-- next success, and error_class is "needs_attention" (a human must fix
+-- something) or "retrying" (expected to clear on its own).
+--
+-- keep_alarms (#87, ADR-0032) is off by default: a Refresh then drops the
+-- feed's VALARMs exactly as Subscribe's initial import does; when true they
+-- become Reminders on both Channels, matching ICS import.
+--
+-- feed_name / feed_color are shadow columns (#88, ADR-0032): the last value
+-- the feed itself supplied (X-WR-CALNAME / X-APPLE-CALENDAR-COLOR), as
+-- opposed to the Calendar's own name/color, which are what's displayed. A
+-- Refresh updates the displayed value only while it still equals its
+-- shadow — that comparison alone is the "overridden by the User" flag, with
+-- no separate column.
+CREATE TABLE calendar_sources (
+    calendar_id TEXT PRIMARY KEY REFERENCES calendars(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL CHECK (kind IN ('subscription', 'connection')),
+    mode TEXT NOT NULL CHECK (mode IN ('read_only', 'writable')),
+    connection_id INTEGER REFERENCES connections(id) ON DELETE CASCADE,
     source_url TEXT,
     last_synced_at TIMESTAMP,
     etag TEXT,
@@ -206,11 +258,18 @@ CREATE TABLE calendars (
     error_message TEXT,
     keep_alarms BOOLEAN NOT NULL DEFAULT 0,
     feed_name TEXT,
-    feed_color TEXT
+    feed_color TEXT,
+    CHECK (
+        (kind = 'subscription' AND source_url IS NOT NULL AND connection_id IS NULL)
+        OR
+        (kind = 'connection' AND connection_id IS NOT NULL AND source_url IS NULL)
+    )
 );
 
-CREATE INDEX idx_calendars_user_id ON calendars(user_id);
-CREATE INDEX idx_calendars_workspace_id ON calendars(workspace_id);
+-- Supports Poller's due-listing (#86, ADR-0033): every Source whose
+-- next_refresh_at has come due. Partial since an ordinary Calendar has no
+-- row here at all and a Source that has never been scheduled has NULL.
+CREATE INDEX idx_calendar_sources_next_refresh_at ON calendar_sources(next_refresh_at) WHERE next_refresh_at IS NOT NULL;
 
 -- calendar_shares is the Share (ADR-0034): the grant binding one Calendar to
 -- one User with one Role. The Owner never has a row here. The user_id index
@@ -650,6 +709,8 @@ DROP TABLE calendar_group_shares;
 DROP TABLE group_members;
 DROP TABLE groups;
 DROP TABLE calendar_shares;
+DROP TABLE calendar_sources;
+DROP TABLE connections;
 DROP TABLE calendars;
 DROP TABLE workspace_invites;
 DROP TABLE workspace_members;

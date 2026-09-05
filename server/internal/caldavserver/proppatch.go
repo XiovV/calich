@@ -180,16 +180,23 @@ type stagedProp struct {
 // byte-identical up to case (ADR-0029); an unparseable value stages 409
 // Conflict regardless of who's asking. Who the write actually lands on
 // differs (ADR-0038): the Owner's stages against calendars.color and is
-// still 403 while a Subscription governs it (ADR-0032); any other
+// still 403 while a Source governs it (ADR-0032, ADR-0052); any other
 // principal's stages as their own colour override instead, unaffected by
-// the Subscription clamp, since an override never touches the tracked
-// column. A <set> of displayname is Owner-only regardless of Subscription —
-// a non-owner's is 403 Forbidden; the Owner's stages the trimmed value, an
-// empty one stages 409 Conflict (the Name column is NOT NULL, the same
-// constraint the REST API enforces as ErrInvalidName, surfaced as 400
-// there since PROPPATCH and the REST API report property/field errors
-// differently), and a Subscribed Calendar's is 403 Forbidden (renaming
-// stays a web-app action). A <remove> of displayname, or of the Owner's own
+// the Source clamp, since an override never touches the tracked column. A
+// <set> of displayname is Owner-only regardless of a Source — a non-owner's
+// is 403 Forbidden; the Owner's stages the trimmed value, an empty one
+// stages 409 Conflict (the Name column is NOT NULL, the same constraint the
+// REST API enforces as ErrInvalidName, surfaced as 400 there since
+// PROPPATCH and the REST API report property/field errors differently),
+// and a Calendar with any Source's is 403 Forbidden (renaming stays a
+// web-app action). Both checks key off Source *existing*, not its Mode —
+// deliberately unlike ResolveAccess's write clamp (#284, ADR-0052): a Source
+// carrying a writable Mode still tracks the Provider's own name/colour via
+// the shadow columns (ADR-0032, ADR-0052's "presentation is local"), and a
+// raw CalDAV property write has no way to signal "I know this diverges from
+// the feed" the way the web app's rename flow does — so the web-app-only
+// rule stands regardless of whether the underlying Source can otherwise be
+// written to. A <remove> of displayname, or of the Owner's own
 // calendar-color, is 403 Forbidden (both backing columns are NOT NULL —
 // there is no "unset"); a non-owner's <remove> of calendar-color instead
 // clears their override and stages 200 OK. Any <set>/<remove> of any other
@@ -216,7 +223,7 @@ func (h *dispatchHandler) applyPropPatch(ctx context.Context, userID int64, cale
 					stage(calendarColorPropName, proppatchStatusConflict, false, "")
 					continue
 				}
-				if isOwner && existing.SourceURL != nil {
+				if isOwner && existing.Source != nil {
 					stage(calendarColorPropName, proppatchStatusForbidden, false, "")
 					continue
 				}
@@ -231,7 +238,7 @@ func (h *dispatchHandler) applyPropPatch(ctx context.Context, userID int64, cale
 					stage(displayNamePropName, proppatchStatusConflict, false, "")
 					continue
 				}
-				if existing.SourceURL != nil {
+				if existing.Source != nil {
 					stage(displayNamePropName, proppatchStatusForbidden, false, "")
 					continue
 				}

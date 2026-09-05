@@ -45,14 +45,17 @@ func (a Access) IsOwner() bool { return a == AccessOwner }
 
 // ResolveAccess computes Access(user, calendar) (ADR-0034): Owner if userID
 // owns calendar, else shareRole's Access if a Share grants one, else None —
-// then clamped to Viewer if calendar carries a Subscription, since a
-// Subscribed Calendar is read-only for its Owner and every Editor alike
-// (ADR-0032). shareRole is nil when no Share row exists for userID; the
-// caller (CalendarService.Access) looks it up, since only it knows whether
-// userID is the Owner and can skip the lookup entirely in that case. The
-// clamp is applied here, at resolution time, rather than when a Share is
-// granted, because a source URL can be attached to an already-shared
-// Calendar after the fact (ADR-0034).
+// then clamped to Viewer if calendar carries a Source whose Mode is
+// read-only, since a Subscribed or Linked Calendar is read-only for its
+// Owner and every Editor alike (ADR-0032, ADR-0052). The clamp keys off the
+// Source's Mode, never merely whether a Source exists (#284, ADR-0052) — the
+// same Source that carries a writable Mode one day clamps nobody. shareRole
+// is nil when no Share row exists for userID; the caller
+// (CalendarService.Access) looks it up, since only it knows whether userID
+// is the Owner and can skip the lookup entirely in that case. The clamp is
+// applied here, at resolution time, rather than when a Share is granted,
+// because a Source can be attached to an already-shared Calendar after the
+// fact (ADR-0034).
 func ResolveAccess(userID int64, calendar repository.Calendar, shareRole *string) Access {
 	base := AccessNone
 	switch {
@@ -62,7 +65,7 @@ func ResolveAccess(userID int64, calendar repository.Calendar, shareRole *string
 		base = roleAccess(*shareRole)
 	}
 
-	if calendar.SourceURL != nil && base > AccessViewer {
+	if calendar.Source != nil && calendar.Source.Mode == repository.SourceModeReadOnly && base > AccessViewer {
 		base = AccessViewer
 	}
 
