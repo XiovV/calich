@@ -25,11 +25,16 @@ type CalendarHandler struct {
 	events        *service.EventService
 	imports       *service.ImportService
 	subscriptions *service.SubscribeService
-	attachments   *attachmentstore.Store
+	// connections backs the Calendar picker (#286) and the sidebar's
+	// per-Connection heading join — a Connection's own CRUD stays
+	// ConnectionHandler's, but a picked calendar becomes an ordinary
+	// Calendar, which is this handler's domain.
+	connections *service.ConnectionService
+	attachments *attachmentstore.Store
 }
 
-func NewCalendarHandler(calendars *service.CalendarService, events *service.EventService, imports *service.ImportService, subscriptions *service.SubscribeService, attachments *attachmentstore.Store) *CalendarHandler {
-	return &CalendarHandler{calendars: calendars, events: events, imports: imports, subscriptions: subscriptions, attachments: attachments}
+func NewCalendarHandler(calendars *service.CalendarService, events *service.EventService, imports *service.ImportService, subscriptions *service.SubscribeService, connections *service.ConnectionService, attachments *attachmentstore.Store) *CalendarHandler {
+	return &CalendarHandler{calendars: calendars, events: events, imports: imports, subscriptions: subscriptions, connections: connections, attachments: attachments}
 }
 
 type calendarResponse struct {
@@ -55,6 +60,17 @@ type calendarResponse struct {
 	// VALARMs on both Channels, off by default and meaningless on an
 	// ordinary Calendar (#87, ADR-0032).
 	KeepAlarms bool `json:"keepAlarms"`
+	// SourceKind is "subscription" or "connection" when the Calendar carries
+	// a Source, omitted for an ordinary Calendar (#286, ADR-0052) — the
+	// sidebar's only way to tell a Linked Calendar apart from a Subscribed
+	// one, now that both carry a Source.
+	SourceKind *string `json:"sourceKind,omitempty"`
+	// ConnectionAccountEmail is set only by List (#286): the connected
+	// account's Email for a Linked Calendar, which the sidebar groups Linked
+	// Calendars under, one heading per Connection. Never populated by
+	// toCalendarResponse itself — a Calendar's own Source carries only the
+	// Connection's id, so this is filled in by a batched join afterward.
+	ConnectionAccountEmail *string `json:"connectionAccountEmail,omitempty"`
 	// Access is the caller's resolved Access to this Calendar (ADR-0034):
 	// "owner", "editor", or "viewer" — never "none", since a Calendar the
 	// caller has no Access to is never listed at all. Drives what the web
@@ -87,6 +103,8 @@ func toCalendarResponse(c repository.Calendar, isOwner bool, ownerName string, s
 		response.ErrorClass = c.Source.ErrorClass
 		response.ErrorMessage = c.Source.ErrorMessage
 		response.KeepAlarms = c.Source.KeepAlarms
+		kind := string(c.Source.Kind)
+		response.SourceKind = &kind
 		if c.Source.SourceURL != nil {
 			masked := service.MaskURL(*c.Source.SourceURL)
 			response.SourceURL = &masked
@@ -157,7 +175,51 @@ func (h *CalendarHandler) List(w http.ResponseWriter, r *http.Request) {
 		response[i] = toCalendarWithAccessResponse(c)
 	}
 
+	// Joins each Linked Calendar to its Connection's account Email (#286,
+	// ADR-0052) — the sidebar's only way to group Linked Calendars under one
+	// heading per Connection, since a Calendar's own Source carries only the
+	// Connection's id.
+	if err := h.attachConnectionEmails(r.Context(), calendars, response); err != nil {
+		httpresponse.Error(w, http.StatusInternalServerError, "internal_error", "failed to list calendars")
+		return
+	}
+
 	httpresponse.JSON(w, http.StatusOK, response)
+}
+
+// attachConnectionEmails fills ConnectionAccountEmail on every response row
+// whose Calendar carries a Connection-kind Source, batched into one query
+// for every distinct Connection referenced regardless of how many rows
+// share it (#286).
+func (h *CalendarHandler) attachConnectionEmails(ctx context.Context, calendars []service.CalendarWithAccess, responses []calendarResponse) error {
+	ids := make([]int64, 0)
+	seen := make(map[int64]bool)
+	for _, c := range calendars {
+		if c.Source != nil && c.Source.Kind == repository.SourceKindConnection && c.Source.ConnectionID != nil {
+			id := *c.Source.ConnectionID
+			if !seen[id] {
+				seen[id] = true
+				ids = append(ids, id)
+			}
+		}
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+
+	emails, err := h.connections.AccountEmailsByIDs(ctx, ids)
+	if err != nil {
+		return fmt.Errorf("resolve connection account emails: %w", err)
+	}
+	for i, c := range calendars {
+		if c.Source == nil || c.Source.ConnectionID == nil {
+			continue
+		}
+		if email, ok := emails[*c.Source.ConnectionID]; ok {
+			responses[i].ConnectionAccountEmail = &email
+		}
+	}
+	return nil
 }
 
 type createCalendarRequest struct {

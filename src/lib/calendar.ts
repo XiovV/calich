@@ -32,6 +32,15 @@ export interface Calendar {
   // VALARMs on both Channels (including Email), off by default and
   // meaningless on an ordinary Calendar (#87).
   keepAlarms?: boolean;
+  // sourceKind is "subscription" or "connection" when the Calendar carries a
+  // Source, undefined for an ordinary Calendar (#286, ADR-0052) — the only
+  // way to tell a Linked Calendar apart from a Subscribed one, now that both
+  // carry a Source.
+  sourceKind?: "subscription" | "connection";
+  // connectionAccountEmail is set only on a Linked Calendar (#286): the
+  // connected account's Email, which the sidebar groups Linked Calendars
+  // under, one heading per Connection.
+  connectionAccountEmail?: string;
 }
 
 // isBrokenSubscription reports whether calendar's last Refresh failed —
@@ -62,6 +71,14 @@ export function getCheckedCalendars(
 // asking this.
 export function isSubscribedCalendar(calendar: Calendar | undefined): boolean {
   return Boolean(calendar?.sourceUrl);
+}
+
+// isLinkedCalendar reports whether calendar is a Linked Calendar (#286,
+// ADR-0052): mirrored from one calendar of a Connection, and read-only here
+// until write-back ships — see calendarReadOnlyReason. Grouped in the
+// sidebar under its Connection's heading rather than under "My calendars".
+export function isLinkedCalendar(calendar: Calendar | undefined): boolean {
+  return calendar?.sourceKind === "connection";
 }
 
 // canWriteCalendarEvents reports whether the caller may create, edit, and
@@ -107,13 +124,14 @@ export function calendarPickerLabel(calendar: Calendar): string {
 // for gating (#111). "subscription" wins over "viewer" when a Calendar is
 // both, since a subscriber already knows their feed is read-only in a way
 // a Viewer without an Owner's context does not (#109).
-export type CalendarReadOnlyReason = "subscription" | "viewer" | undefined;
+export type CalendarReadOnlyReason = "subscription" | "connection" | "viewer" | undefined;
 
 export function calendarReadOnlyReason(
   calendar: Calendar | undefined,
 ): CalendarReadOnlyReason {
   if (canWriteCalendarEvents(calendar)) return undefined;
   if (isSubscribedCalendar(calendar)) return "subscription";
+  if (isLinkedCalendar(calendar)) return "connection";
   return "viewer";
 }
 

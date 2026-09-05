@@ -87,7 +87,7 @@ func newShareTestServer(t *testing.T) shareTestServer {
 	attachmentStore := g.AttachmentStore
 	imports := g.Imports
 	subscriptions := g.Subscriptions
-	calendarHandler := NewCalendarHandler(calendars, events, imports, subscriptions, attachmentStore)
+	calendarHandler := NewCalendarHandler(calendars, events, imports, subscriptions, g.Connections, attachmentStore)
 
 	r := chi.NewRouter()
 	r.Route("/api/calendars", func(r chi.Router) {

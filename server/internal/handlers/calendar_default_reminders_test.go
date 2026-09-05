@@ -71,7 +71,7 @@ func newDefaultRemindersTestServer(t *testing.T) defaultRemindersTestServer {
 		t.Fatalf("create event: %v", err)
 	}
 
-	calendarHandler := NewCalendarHandler(calendars, events, nil, nil, nil)
+	calendarHandler := NewCalendarHandler(calendars, events, nil, nil, nil, nil)
 
 	r := chi.NewRouter()
 	r.Route("/api/calendars", func(r chi.Router) {

@@ -241,11 +241,19 @@ CREATE INDEX idx_connections_user_id ON connections(user_id);
 -- Refresh updates the displayed value only while it still equals its
 -- shadow — that comparison alone is the "overridden by the User" flag, with
 -- no separate column.
+--
+-- external_calendar_id (#286, ADR-0052) is set only on a 'connection' row:
+-- the Provider's own id for the one calendar of the Connection this Source
+-- mirrors (Google's calendarList entry id, e.g. "primary" or a group
+-- calendar's address). It is what the Calendar picker uses to tell "already
+-- imported into this Workspace" apart from "not yet", and what a later
+-- Refresh addresses this Source's calendar back at the Provider by.
 CREATE TABLE calendar_sources (
     calendar_id TEXT PRIMARY KEY REFERENCES calendars(id) ON DELETE CASCADE,
     kind TEXT NOT NULL CHECK (kind IN ('subscription', 'connection')),
     mode TEXT NOT NULL CHECK (mode IN ('read_only', 'writable')),
     connection_id INTEGER REFERENCES connections(id) ON DELETE CASCADE,
+    external_calendar_id TEXT,
     source_url TEXT,
     last_synced_at TIMESTAMP,
     etag TEXT,
@@ -260,9 +268,9 @@ CREATE TABLE calendar_sources (
     feed_name TEXT,
     feed_color TEXT,
     CHECK (
-        (kind = 'subscription' AND source_url IS NOT NULL AND connection_id IS NULL)
+        (kind = 'subscription' AND source_url IS NOT NULL AND connection_id IS NULL AND external_calendar_id IS NULL)
         OR
-        (kind = 'connection' AND connection_id IS NOT NULL AND source_url IS NULL)
+        (kind = 'connection' AND connection_id IS NOT NULL AND external_calendar_id IS NOT NULL AND source_url IS NULL)
     )
 );
 
@@ -270,6 +278,11 @@ CREATE TABLE calendar_sources (
 -- next_refresh_at has come due. Partial since an ordinary Calendar has no
 -- row here at all and a Source that has never been scheduled has NULL.
 CREATE INDEX idx_calendar_sources_next_refresh_at ON calendar_sources(next_refresh_at) WHERE next_refresh_at IS NOT NULL;
+
+-- Supports the sidebar's per-Connection heading join (#286) and a future
+-- Refresh's "every Source this Connection owns" query — both keyed on
+-- connection_id, never dense enough to need combining with another column.
+CREATE INDEX idx_calendar_sources_connection_id ON calendar_sources(connection_id) WHERE connection_id IS NOT NULL;
 
 -- calendar_shares is the Share (ADR-0034): the grant binding one Calendar to
 -- one User with one Role. The Owner never has a row here. The user_id index

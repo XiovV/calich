@@ -4,6 +4,7 @@
 package handlers
 
 import (
+	"fmt"
 	"net/http"
 	"time"
 
@@ -92,12 +93,17 @@ func (h *ConnectionHandler) Callback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if _, err := h.connections.Callback(r.Context(), code, state, connectRedirectURI(r)); err != nil {
+	connection, err := h.connections.Callback(r.Context(), code, state, connectRedirectURI(r))
+	if err != nil {
 		http.Redirect(w, r, settingsConnectionsPath+"?connect_error=failed", http.StatusFound)
 		return
 	}
 
-	http.Redirect(w, r, settingsConnectionsPath+"?connected=1", http.StatusFound)
+	// Carries the new Connection's id so the SPA can open the Calendar
+	// picker for it immediately (#286's "the picker opens immediately after
+	// authorizing") — Connect is otherwise the only place that ever learns
+	// this id, and it happened on a request the browser has already left.
+	http.Redirect(w, r, fmt.Sprintf("%s?connected=1&connection_id=%d", settingsConnectionsPath, connection.ID), http.StatusFound)
 }
 
 func (h *ConnectionHandler) List(w http.ResponseWriter, r *http.Request) {

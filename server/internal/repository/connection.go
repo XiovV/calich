@@ -120,6 +120,48 @@ func (r *ConnectionRepository) ListByUser(ctx context.Context, userID int64) ([]
 	return collectRows(rows, scanConnection)
 }
 
+// GetByID returns userID's Connection with the given id, or ErrNotFound if
+// no such Connection belongs to them — the Calendar picker's (#286) way of
+// resolving which account to call Google as, scoped by user the same way
+// Delete already is so a caller can never reach someone else's grant.
+func (r *ConnectionRepository) GetByID(ctx context.Context, userID, id int64) (Connection, error) {
+	return scanConnection(r.db.QueryRowContext(ctx,
+		`SELECT `+connectionColumns+` FROM connections WHERE id = ? AND user_id = ?`,
+		id, userID,
+	))
+}
+
+// ListByIDs returns every one of ids' Connections, keyed by id — deliberately
+// unscoped by user, unlike GetByID/Delete: its only caller is the sidebar's
+// per-Connection heading join (#286), a read-only display lookup where the
+// Calendar already visible to the caller is what established this data is
+// theirs to see, and it is never used to authorize a write.
+func (r *ConnectionRepository) ListByIDs(ctx context.Context, ids []int64) (map[int64]Connection, error) {
+	result := make(map[int64]Connection, len(ids))
+	if len(ids) == 0 {
+		return result, nil
+	}
+
+	args := make([]any, len(ids))
+	for i, id := range ids {
+		args[i] = id
+	}
+	rows, err := r.db.QueryContext(ctx,
+		`SELECT `+connectionColumns+` FROM connections WHERE id IN (`+placeholders(len(ids))+`)`, args...,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list connections by ids: %w", err)
+	}
+	connections, err := collectRows(rows, scanConnection)
+	if err != nil {
+		return nil, err
+	}
+	for _, c := range connections {
+		result[c.ID] = c
+	}
+	return result, nil
+}
+
 // Delete removes userID's Connection with the given id. It returns
 // ErrNotFound if no such Connection belongs to that user, so a User can
 // never disconnect someone else's grant.

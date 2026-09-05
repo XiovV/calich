@@ -4,7 +4,7 @@ import { Menu } from "@base-ui/react/menu";
 import { MoreVertical, Plus, TriangleAlert, Users } from "lucide-react";
 import { IconButton } from "../ui/IconButton";
 import { iconButtonClasses } from "../ui/iconButtonClasses";
-import { canManageCalendar, shareCountTooltip, type Calendar } from "../../lib/calendar";
+import { canManageCalendar, isLinkedCalendar, shareCountTooltip, type Calendar } from "../../lib/calendar";
 import { resolveCalendarFill } from "../../lib/calendarColors";
 import { useAuthStore } from "../../lib/authStore";
 import { useCalendarsStore } from "../../lib/calendarsStore";
@@ -77,15 +77,27 @@ export function CalendarList() {
   const [isConfirmingExport, setIsConfirmingExport] = useState(false);
 
   // A Calendar shared with the viewer is grouped by whose it is, not by
-  // where its Events come from (#114) — a Subscribed Calendar someone else
-  // owns groups with the shared ones, since its Subscription controls
-  // aren't the viewer's in any case.
+  // where its Events come from (#114) — a Subscribed or Linked Calendar
+  // someone else owns groups with the shared ones, since its Subscription/
+  // Connection controls aren't the viewer's in any case.
   const myCalendars = calendars.filter(
-    (calendar) => canManageCalendar(calendar) && !calendar.sourceUrl,
+    (calendar) =>
+      canManageCalendar(calendar) && !calendar.sourceUrl && !isLinkedCalendar(calendar),
   );
   const subscribedCalendars = calendars.filter(
-    (calendar) => canManageCalendar(calendar) && calendar.sourceUrl,
+    (calendar) => canManageCalendar(calendar) && Boolean(calendar.sourceUrl),
   );
+  // Linked Calendars group under one heading per Connection rather than
+  // beside every other owned Calendar (#286) — the sidebar's only way to
+  // show "these came from that Google account".
+  const linkedCalendarsByConnection = new Map<string, Calendar[]>();
+  for (const calendar of calendars) {
+    if (!canManageCalendar(calendar) || !isLinkedCalendar(calendar)) continue;
+    const email = calendar.connectionAccountEmail ?? "Unknown account";
+    const group = linkedCalendarsByConnection.get(email) ?? [];
+    group.push(calendar);
+    linkedCalendarsByConnection.set(email, group);
+  }
   const sharedCalendars = calendars.filter(
     (calendar) => !canManageCalendar(calendar),
   );
@@ -358,6 +370,18 @@ export function CalendarList() {
         </IconButton>
       </div>
       <ul>{subscribedCalendars.map(renderCalendarItem)}</ul>
+
+      {/* One heading per Connection, labelled with the connected account's
+          Email (#286) — two connected accounts produce two separate
+          headings, since each is its own Map entry. */}
+      {Array.from(linkedCalendarsByConnection.entries()).map(([accountEmail, connectionCalendars]) => (
+        <div key={accountEmail}>
+          <div className="flex items-center justify-between py-2 ps-5 pe-2">
+            <p className="text-label-sm font-medium text-ink-muted">{accountEmail}</p>
+          </div>
+          <ul>{connectionCalendars.map(renderCalendarItem)}</ul>
+        </div>
+      ))}
 
       {sharedCalendars.length > 0 && (
         <>

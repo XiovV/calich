@@ -8,6 +8,7 @@ import {
   canWriteCalendarEvents,
   defaultCalendarId,
   isBrokenSubscription,
+  isLinkedCalendar,
   isSubscribedCalendar,
   shareCountTooltip,
   type Calendar,
@@ -26,6 +27,22 @@ describe("isSubscribedCalendar", () => {
     expect(
       isSubscribedCalendar(makeCalendar({ sourceUrl: "https://example.com/feed.ics" })),
     ).toBe(true);
+  });
+});
+
+describe("isLinkedCalendar", () => {
+  it("is false for an ordinary Calendar", () => {
+    expect(isLinkedCalendar(makeCalendar())).toBe(false);
+  });
+
+  it("is false for a Subscribed Calendar", () => {
+    expect(
+      isLinkedCalendar(makeCalendar({ sourceUrl: "https://example.com/feed.ics", sourceKind: "subscription" })),
+    ).toBe(false);
+  });
+
+  it("is true for a Calendar whose sourceKind is connection", () => {
+    expect(isLinkedCalendar(makeCalendar({ sourceKind: "connection" }))).toBe(true);
   });
 });
 
@@ -76,7 +93,7 @@ describe("the permission predicates", () => {
     overrides: Partial<Calendar>;
     canWrite: boolean;
     canManage: boolean;
-    reason: "subscription" | "viewer" | undefined;
+    reason: "subscription" | "connection" | "viewer" | undefined;
   }> = [
     {
       name: "owner of an ordinary calendar",
@@ -128,6 +145,17 @@ describe("the permission predicates", () => {
       canWrite: false,
       canManage: false,
       reason: "viewer",
+    },
+    {
+      // A Linked Calendar's Owner keeps management the same way a
+      // Subscribed Calendar's does (#286) — it's read-only here for a
+      // different reason (write-back doesn't exist yet), so the copy must
+      // say so distinctly rather than reusing "subscription".
+      name: "owner of a linked calendar",
+      overrides: { access: "viewer", isOwner: true, sourceKind: "connection" },
+      canWrite: false,
+      canManage: true,
+      reason: "connection",
     },
   ];
 

@@ -1,4 +1,6 @@
 import { authedFetch, errorFromResponse } from "./apiClient";
+import type { Calendar } from "./calendar";
+import { workspaceHeaders } from "./workspaceHeaders";
 
 // A Connection (#285, ADR-0052): one User's authorized grant to one account
 // at one Provider — Google is the only one this app speaks to. Status is
@@ -32,6 +34,23 @@ function fromWire(wire: ConnectionWire): Connection {
   };
 }
 
+// PickerCalendar is one row the Calendar picker offers (#286): everything a
+// Connection's account can see at Google — its own calendars, the ones it
+// subscribed to, and the ones other people shared to it.
+export interface PickerCalendar {
+  id: string;
+  name: string;
+  color: string;
+  // selected mirrors Google's own sidebar checkbox — the picker's default
+  // checked state.
+  selected: boolean;
+  // writable reports whether Google's own ACL lets the account write to
+  // this calendar there — rendered as a read-only badge when false. Not a
+  // claim about what this app itself will let a User do: every Linked
+  // Calendar is read-only here until write-back ships.
+  writable: boolean;
+}
+
 export const connectionsApi = {
   async list(accessToken: string): Promise<Connection[]> {
     const response = await authedFetch(accessToken, "/api/connections/", {
@@ -63,5 +82,40 @@ export const connectionsApi = {
       credentials: "include",
     });
     if (!response.ok) throw await errorFromResponse(response);
+  },
+
+  // listPickerCalendars is the Calendar picker's read side (#286):
+  // everything Connection id's account can see at Google. Workspace-scoped
+  // the same way calendarsApi.subscribe is, even though the picker itself
+  // doesn't read the active Workspace's calendars — it's what
+  // importCalendars below places the picked ones into, and the server's
+  // RequireWorkspace gate applies to this route too.
+  async listPickerCalendars(accessToken: string, id: number): Promise<PickerCalendar[]> {
+    const response = await authedFetch(accessToken, `/api/connections/${id}/calendars`, {
+      credentials: "include",
+      headers: workspaceHeaders(),
+    });
+    if (!response.ok) throw await errorFromResponse(response);
+
+    return (await response.json()) as PickerCalendar[];
+  },
+
+  // importCalendars is the Calendar picker's write side (#286): confirming
+  // creates a Linked Calendar in the active Workspace for each of
+  // calendarIds.
+  async importCalendars(
+    accessToken: string,
+    id: number,
+    calendarIds: string[],
+  ): Promise<Calendar[]> {
+    const response = await authedFetch(accessToken, `/api/connections/${id}/calendars`, {
+      method: "POST",
+      credentials: "include",
+      headers: workspaceHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({ calendarIds }),
+    });
+    if (!response.ok) throw await errorFromResponse(response);
+
+    return (await response.json()) as Calendar[];
   },
 };

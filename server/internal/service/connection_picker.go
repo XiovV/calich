@@ -1,0 +1,185 @@
+// connection_picker.go implements the Calendar picker (#286, ADR-0052): the
+// step after authorizing where a User chooses which of the account's
+// calendars come in. ListCalendars is the picker's read side — everything
+// the account can see, with Google's own selected flag and accessRole
+// surfaced for the picker to render — and ImportCalendars is its write side,
+// turning the chosen rows into Linked Calendars in the caller's active
+// Workspace.
+package service
+
+import (
+	"context"
+	"errors"
+	"fmt"
+
+	"github.com/google/uuid"
+
+	"github.com/XiovV/calich/server/internal/repository"
+)
+
+// ErrConnectionCalendarsUnavailable is returned by ListCalendars/
+// ImportCalendars when connectionID carries no access token yet to call
+// Google with — unreachable in practice, since Callback always populates one
+// on the same request that creates the Connection, but guarded rather than
+// dereferenced blindly.
+var ErrConnectionCalendarsUnavailable = errors.New("this connection has no usable google access token")
+
+// PickerCalendar is one row the Calendar picker offers (#286): everything
+// the connected account can see at Google — its own calendars, the ones it
+// subscribed to, and the ones other people shared to it.
+type PickerCalendar struct {
+	// ExternalID is the Provider's own id for this calendar — what
+	// ImportCalendars matches the caller's selection against, and what a
+	// picked row's Linked Calendar stores as its Source's
+	// ExternalCalendarID.
+	ExternalID string
+	Name       string
+	Color      string
+	// Selected mirrors Google's own sidebar checkbox — the default checked
+	// state the picker's UI pre-fills from (#286's acceptance criteria: "the
+	// Provider's own selection flag drives which rows are pre-checked").
+	Selected bool
+	// Writable reports whether Google's own ACL lets this account write to
+	// the calendar there. Rendered as the picker's read-only badge when
+	// false — never what decides a Linked Calendar's own Access here: every
+	// Source ImportCalendars creates is read-only regardless (see
+	// ImportCalendars), since write-back doesn't exist yet.
+	Writable bool
+}
+
+func toPickerCalendars(entries []googleCalendarListEntry) []PickerCalendar {
+	calendars := make([]PickerCalendar, len(entries))
+	for i, e := range entries {
+		calendars[i] = toPickerCalendar(e, i)
+	}
+	return calendars
+}
+
+// toPickerCalendar maps one Google calendarList entry to a PickerCalendar.
+// index feeds importColorRotation's fallback for a calendar with no
+// BackgroundColor Google sends (rare, but not guaranteed) — mirroring
+// SubscribeService's own proposeNameColor.
+func toPickerCalendar(e googleCalendarListEntry, index int) PickerCalendar {
+	name := e.displayName()
+	if name == "" {
+		// A calendar with no Summary at all would otherwise fail
+		// CalendarService's name validation on import for a reason the User
+		// never typed — the Provider's own id is at least stable and
+		// visible, unlike a blank string (#286).
+		name = e.ID
+	}
+
+	color, ok := NormalizeColor(e.BackgroundColor)
+	if !ok {
+		color = importColorRotation[index%len(importColorRotation)]
+	}
+
+	return PickerCalendar{
+		ExternalID: e.ID,
+		Name:       name,
+		Color:      color,
+		Selected:   e.Selected,
+		Writable:   e.writable(),
+	}
+}
+
+// accessTokenFor returns connectionID's usable access token, or
+// ErrConnectionNotFound/ErrConnectionCalendarsUnavailable.
+func (s *ConnectionService) accessTokenFor(ctx context.Context, userID, connectionID int64) (repository.Connection, string, error) {
+	conn, err := s.connections.GetByID(ctx, userID, connectionID)
+	if err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			return repository.Connection{}, "", ErrConnectionNotFound
+		}
+		return repository.Connection{}, "", fmt.Errorf("get connection: %w", err)
+	}
+	if conn.AccessToken == nil || *conn.AccessToken == "" {
+		return repository.Connection{}, "", ErrConnectionCalendarsUnavailable
+	}
+	return conn, *conn.AccessToken, nil
+}
+
+// ListCalendars returns every calendar connectionID's account can see (#286)
+// — the picker's read side, called right after Connect/Callback while the
+// access token Callback just minted is still fresh.
+func (s *ConnectionService) ListCalendars(ctx context.Context, userID, connectionID int64) ([]PickerCalendar, error) {
+	if !s.configured {
+		return nil, ErrGoogleNotConfigured
+	}
+
+	_, accessToken, err := s.accessTokenFor(ctx, userID, connectionID)
+	if err != nil {
+		return nil, err
+	}
+
+	entries, err := s.google.listCalendarList(ctx, accessToken)
+	if err != nil {
+		return nil, err
+	}
+
+	return toPickerCalendars(entries), nil
+}
+
+// ImportCalendars creates a Linked Calendar in workspaceID for every one of
+// externalIDs that connectionID's account still carries, ignoring any id
+// that no longer matches — the picker showed a snapshot, and Google's own
+// listing is re-fetched here rather than trusted from the picker's own
+// response, so a User's confirmed selection can only ever import calendars
+// the account can currently see, never ones a client happened to send.
+//
+// Every Source created here is read-only (ADR-0052, ADR-0075): Google's own
+// AccessRole is surfaced to the picker as a badge, but write-back — the
+// queue, the field-scoped patch compiler, echo suppression — doesn't exist
+// yet, and Access's read-only clamp is the only thing standing between a
+// User and an edit this app cannot push anywhere. Mode gets re-derived once
+// write-back reads it for real.
+//
+// A failure partway through leaves whichever calendars already succeeded in
+// place, mirroring calling Subscribe once per selected calendar: each one is
+// an independent Calendar+Source pair (CalendarService.CreateSubscribed),
+// so there is no larger unit to roll back to.
+func (s *ConnectionService) ImportCalendars(ctx context.Context, userID, workspaceID, connectionID int64, externalIDs []string) ([]repository.Calendar, error) {
+	if !s.configured {
+		return nil, ErrGoogleNotConfigured
+	}
+
+	conn, accessToken, err := s.accessTokenFor(ctx, userID, connectionID)
+	if err != nil {
+		return nil, err
+	}
+
+	entries, err := s.google.listCalendarList(ctx, accessToken)
+	if err != nil {
+		return nil, err
+	}
+
+	wanted := make(map[string]bool, len(externalIDs))
+	for _, id := range externalIDs {
+		wanted[id] = true
+	}
+
+	var created []repository.Calendar
+	for i, e := range entries {
+		if !wanted[e.ID] {
+			continue
+		}
+		picker := toPickerCalendar(e, i)
+		externalCalendarID := picker.ExternalID
+
+		calendar, err := s.calendars.CreateSubscribed(ctx, userID, workspaceID, uuid.NewString(), CalendarWrite{
+			Name:  picker.Name,
+			Color: picker.Color,
+		}, repository.SourceFields{
+			Kind:               repository.SourceKindConnection,
+			Mode:               repository.SourceModeReadOnly,
+			ConnectionID:       &conn.ID,
+			ExternalCalendarID: &externalCalendarID,
+		})
+		if err != nil {
+			return created, fmt.Errorf("import calendar %q: %w", picker.Name, err)
+		}
+		created = append(created, calendar)
+	}
+
+	return created, nil
+}

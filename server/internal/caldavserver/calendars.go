@@ -57,9 +57,18 @@ func (b *Backend) ListCalendars(ctx context.Context) ([]caldav.Calendar, error) 
 		return nil, err
 	}
 
-	result := make([]caldav.Calendar, len(calendars))
-	for i, c := range calendars {
-		result[i] = toCalDAVCalendar(userID, c.Calendar)
+	result := make([]caldav.Calendar, 0, len(calendars))
+	for _, c := range calendars {
+		// A Linked Calendar is absent from every principal's home-set,
+		// unconditionally — not just its Owner's (ADR-0074, superseding
+		// ADR-0054): the connecting User almost certainly already syncs
+		// Google natively, and a Workspace Member it was Shared to gets the
+		// same exclusion rather than a viewer-dependent rule that would pass
+		// every test written from the Owner's seat alone.
+		if c.Source != nil && c.Source.Kind == repository.SourceKindConnection {
+			continue
+		}
+		result = append(result, toCalDAVCalendar(userID, c.Calendar))
 	}
 
 	if len(attendeeMasters) > 0 {
@@ -101,6 +110,12 @@ func (b *Backend) GetCalendar(ctx context.Context, path string) (*caldav.Calenda
 	}
 	if err != nil {
 		return nil, fmt.Errorf("get calendar: %w", err)
+	}
+	if c.Source != nil && c.Source.Kind == repository.SourceKindConnection {
+		// Mirrors ListCalendars' own exclusion (ADR-0074) — a stale or
+		// guessed URL to a Linked Calendar 404s exactly like one that never
+		// appeared in the home-set to begin with.
+		return nil, webdav.NewHTTPError(http.StatusNotFound, fmt.Errorf("linked calendar is not exposed over caldav"))
 	}
 
 	result := toCalDAVCalendar(userID, c)

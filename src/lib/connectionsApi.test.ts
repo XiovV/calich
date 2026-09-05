@@ -1,5 +1,6 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { connectionsApi } from "./connectionsApi";
+import { useWorkspacesStore } from "./workspacesStore";
 
 function jsonResponse(status: number, body: unknown): Response {
   return new Response(JSON.stringify(body), {
@@ -12,8 +13,13 @@ function emptyResponse(status: number): Response {
   return new Response(null, { status });
 }
 
+beforeEach(() => {
+  useWorkspacesStore.setState({ activeWorkspaceId: 7 });
+});
+
 afterEach(() => {
   vi.unstubAllGlobals();
+  useWorkspacesStore.setState({ activeWorkspaceId: null });
 });
 
 describe("connectionsApi.list", () => {
@@ -52,7 +58,13 @@ describe("connectionsApi.list", () => {
   });
 
   it("throws an ApiError on failure", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(
+    // mockImplementation, not mockResolvedValue: a 401 makes authedFetch
+    // attempt a session refresh over the same stubbed fetch, so the mock
+    // must hand back a fresh Response per call — a single shared instance's
+    // body would already be consumed by the refresh attempt's own read
+    // before errorFromResponse ever gets to it (mirrors calendarsApi.test.ts's
+    // own 401 case).
+    const fetchMock = vi.fn().mockImplementation(() =>
       jsonResponse(401, { error: { code: "unauthorized", message: "authentication required" } }),
     );
     vi.stubGlobal("fetch", fetchMock);
@@ -116,5 +128,69 @@ describe("connectionsApi.disconnect", () => {
     await expect(connectionsApi.disconnect("token-123", 999)).rejects.toMatchObject({
       code: "not_found",
     });
+  });
+});
+
+describe("connectionsApi.listPickerCalendars", () => {
+  it("sends the bearer token and the active workspace, and maps the response", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(200, [
+        { id: "primary", name: "someone@gmail.com", color: "#0B8043FF", selected: true, writable: true },
+      ]),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await connectionsApi.listPickerCalendars("token-123", 1);
+
+    expect(result).toEqual([
+      { id: "primary", name: "someone@gmail.com", color: "#0B8043FF", selected: true, writable: true },
+    ]);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/connections/1/calendars",
+      expect.objectContaining({
+        credentials: "include",
+        headers: { Authorization: "Bearer token-123", "X-Workspace-Id": "7" },
+      }),
+    );
+  });
+
+  it("throws an ApiError on failure", async () => {
+    // mockImplementation, not mockResolvedValue — see connectionsApi.list's
+    // own 401 test for why a shared Response instance doesn't survive the
+    // session-refresh attempt authedFetch makes on a 401.
+    const fetchMock = vi.fn().mockImplementation(() =>
+      jsonResponse(400, { error: { code: "invalid_request", message: "this connection has no usable google access token" } }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(connectionsApi.listPickerCalendars("token-123", 1)).rejects.toMatchObject({
+      code: "invalid_request",
+    });
+  });
+});
+
+describe("connectionsApi.importCalendars", () => {
+  it("sends the selected ids and the active workspace, and returns the created calendars", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(201, [{ id: "cal-1", name: "someone@gmail.com", color: "#0B8043FF" }]),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await connectionsApi.importCalendars("token-123", 1, ["primary"]);
+
+    expect(result).toEqual([{ id: "cal-1", name: "someone@gmail.com", color: "#0B8043FF" }]);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/connections/1/calendars",
+      expect.objectContaining({
+        method: "POST",
+        credentials: "include",
+        headers: {
+          Authorization: "Bearer token-123",
+          "X-Workspace-Id": "7",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ calendarIds: ["primary"] }),
+      }),
+    );
   });
 });

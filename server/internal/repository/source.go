@@ -47,6 +47,12 @@ type Source struct {
 	Kind         SourceKind
 	Mode         SourceMode
 	ConnectionID *int64
+	// ExternalCalendarID is set only on a Connection-kind Source (#286,
+	// ADR-0052): the Provider's own id for the one calendar of ConnectionID
+	// this Source mirrors (Google's calendarList entry id). What the Calendar
+	// picker addresses "already imported into this Workspace" by, and what a
+	// later Refresh reads this Source's calendar back from the Provider by.
+	ExternalCalendarID *string
 	// SourceURL is set only on a Subscription (#83, ADR-0032): the external
 	// .ics feed URL it was created from. Editable later via UpdateSourceURL
 	// (#88), which also resets the conditional-GET validators below since
@@ -101,13 +107,14 @@ type Source struct {
 // argument, the same shape CalendarFields already gathers a Calendar's own
 // writable columns into.
 type SourceFields struct {
-	Kind         SourceKind
-	Mode         SourceMode
-	ConnectionID *int64
-	SourceURL    *string
-	KeepAlarms   bool
-	FeedName     *string
-	FeedColor    *string
+	Kind               SourceKind
+	Mode               SourceMode
+	ConnectionID       *int64
+	ExternalCalendarID *string
+	SourceURL          *string
+	KeepAlarms         bool
+	FeedName           *string
+	FeedColor          *string
 }
 
 // RefreshSuccess is what a completed, successful Refresh persists (#85, #86,
@@ -169,12 +176,12 @@ func (r *SourceRepository) WithTx(tx *sql.Tx) *SourceRepository {
 	return &SourceRepository{db: tx}
 }
 
-const sourceColumns = `calendar_id, kind, mode, connection_id, source_url, last_synced_at, etag, last_modified, content_hash, next_refresh_at, refresh_interval_seconds, failure_count, error_class, error_message, keep_alarms, feed_name, feed_color`
+const sourceColumns = `calendar_id, kind, mode, connection_id, external_calendar_id, source_url, last_synced_at, etag, last_modified, content_hash, next_refresh_at, refresh_interval_seconds, failure_count, error_class, error_message, keep_alarms, feed_name, feed_color`
 
 func (r *SourceRepository) Create(ctx context.Context, calendarID string, fields SourceFields) (Source, error) {
 	if _, err := r.db.ExecContext(ctx,
-		`INSERT INTO calendar_sources (calendar_id, kind, mode, connection_id, source_url, keep_alarms, feed_name, feed_color) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		calendarID, fields.Kind, fields.Mode, fields.ConnectionID, fields.SourceURL, fields.KeepAlarms, fields.FeedName, fields.FeedColor,
+		`INSERT INTO calendar_sources (calendar_id, kind, mode, connection_id, external_calendar_id, source_url, keep_alarms, feed_name, feed_color) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		calendarID, fields.Kind, fields.Mode, fields.ConnectionID, fields.ExternalCalendarID, fields.SourceURL, fields.KeepAlarms, fields.FeedName, fields.FeedColor,
 	); err != nil {
 		return Source{}, fmt.Errorf("insert calendar source: %w", err)
 	}
@@ -347,7 +354,7 @@ func (r *SourceRepository) RecordRefreshFailure(ctx context.Context, userID int6
 
 func scanSourceRow(row rowScanner) (Source, error) {
 	var s Source
-	err := row.Scan(&s.CalendarID, &s.Kind, &s.Mode, &s.ConnectionID, &s.SourceURL, &s.LastSyncedAt, &s.ETag, &s.LastModified, &s.ContentHash,
+	err := row.Scan(&s.CalendarID, &s.Kind, &s.Mode, &s.ConnectionID, &s.ExternalCalendarID, &s.SourceURL, &s.LastSyncedAt, &s.ETag, &s.LastModified, &s.ContentHash,
 		&s.NextRefreshAt, &s.RefreshIntervalSeconds, &s.FailureCount, &s.ErrorClass, &s.ErrorMessage, &s.KeepAlarms, &s.FeedName, &s.FeedColor)
 	if err != nil {
 		return Source{}, err

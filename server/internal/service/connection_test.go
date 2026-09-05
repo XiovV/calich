@@ -13,17 +13,22 @@ import (
 	"github.com/XiovV/calich/server/internal/repository"
 )
 
-// fakeGoogleServer stands in for Google's token and userinfo endpoints
-// (#285's testing decisions: a real local test server serving canned
-// Provider JSON, not a mocked fetcher). refreshToken/email/scope are what
-// the token/userinfo responses carry; tokenStatus/userinfoStatus let a test
-// force a non-200 (a denied consent, a broken exchange); verifiedEmail
+// fakeGoogleServer stands in for Google's token, userinfo, and calendarList
+// endpoints (#285/#286's testing decisions: a real local test server serving
+// canned Provider JSON, not a mocked fetcher). refreshToken/email/scope are
+// what the token/userinfo responses carry; tokenStatus/userinfoStatus let a
+// test force a non-200 (a denied consent, a broken exchange); verifiedEmail
 // overrides the userinfo response's verified_email, nil meaning true.
+// calendarListItems/calendarListStatus are the picker's own fixture (#286):
+// nil items renders an empty calendarList, calendarListStatus forces a
+// non-200 (an expired access token).
 type fakeGoogleServer struct {
 	*httptest.Server
 	refreshToken, email, scope  string
 	tokenStatus, userinfoStatus int
 	verifiedEmail               *bool
+	calendarListItems           []map[string]any
+	calendarListStatus          int
 }
 
 func newFakeGoogleServer(t *testing.T) *fakeGoogleServer {
@@ -63,6 +68,17 @@ func newFakeGoogleServer(t *testing.T) *fakeGoogleServer {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{"email": f.email, "verified_email": verifiedEmail})
 	})
+	mux.HandleFunc("/calendarList", func(w http.ResponseWriter, r *http.Request) {
+		if f.calendarListStatus != 0 && f.calendarListStatus != http.StatusOK {
+			w.WriteHeader(f.calendarListStatus)
+			return
+		}
+		if r.Header.Get("Authorization") != "Bearer fake-access-token" {
+			t.Fatalf("expected calendarList request to carry the exchanged access token, got %q", r.Header.Get("Authorization"))
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"items": f.calendarListItems})
+	})
 
 	f.Server = httptest.NewServer(mux)
 	t.Cleanup(f.Close)
@@ -80,9 +96,9 @@ func newTestConnectionService(t *testing.T, google *fakeGoogleServer) (*Connecti
 	}
 
 	connections := repository.NewConnectionRepository(g.DB)
-	svc := NewConnectionService(connections, g.Auth, "test-client-id", "test-client-secret", "test-encryption-key", true,
+	svc := NewConnectionService(connections, g.Auth, g.Calendars, "test-client-id", "test-client-secret", "test-encryption-key", true,
 		withGoogleHTTPClient(google.Client()),
-		withGoogleEndpoints(google.URL+"/authorize", google.URL+"/token", google.URL+"/userinfo"),
+		withGoogleEndpoints(google.URL+"/authorize", google.URL+"/token", google.URL+"/userinfo", google.URL+"/calendarList"),
 	)
 
 	return svc, g.Auth, user.ID

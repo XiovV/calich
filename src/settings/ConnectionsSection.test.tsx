@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router";
@@ -15,6 +15,8 @@ vi.mock("../lib/connectionsApi", async () => {
       list: vi.fn(),
       connectGoogle: vi.fn(),
       disconnect: vi.fn(),
+      listPickerCalendars: vi.fn(),
+      importCalendars: vi.fn(),
     },
   };
 });
@@ -22,6 +24,7 @@ vi.mock("../lib/connectionsApi", async () => {
 const { connectionsApi } = await import("../lib/connectionsApi");
 const { useAuthStore } = await import("../lib/authStore");
 const { useConnectionsStore } = await import("../lib/connectionsStore");
+const { useWorkspacesStore } = await import("../lib/workspacesStore");
 const { ConnectionsSection } = await import("./ConnectionsSection");
 
 const user = {
@@ -60,11 +63,17 @@ beforeEach(() => {
   vi.clearAllMocks();
   useAuthStore.setState({ status: "authenticated", user, accessToken: "token-123" });
   useConnectionsStore.setState({ connections: [] });
+  useWorkspacesStore.setState({ activeWorkspaceId: 7 });
   vi.mocked(connectionsApi.list).mockResolvedValue([]);
+  vi.mocked(connectionsApi.listPickerCalendars).mockResolvedValue([]);
   Object.defineProperty(window, "location", {
     value: { ...window.location, href: "" },
     writable: true,
   });
+});
+
+afterEach(() => {
+  useWorkspacesStore.setState({ activeWorkspaceId: null });
 });
 
 describe("ConnectionsSection — listing", () => {
@@ -136,6 +145,20 @@ describe("ConnectionsSection — the Google round trip's return (#285)", () => {
     renderAt("/settings/connections?connect_error=something_unexpected");
 
     expect(await screen.findByText("Google couldn't be connected.")).toBeInTheDocument();
+  });
+
+  it("opens the Calendar picker for the connection the redirect names (#286)", async () => {
+    renderAt("/settings/connections?connected=1&connection_id=42");
+
+    expect(await screen.findByText("Choose calendars to bring in")).toBeInTheDocument();
+    await waitFor(() => expect(connectionsApi.listPickerCalendars).toHaveBeenCalledWith("token-123", 42));
+  });
+
+  it("does not open the picker when connection_id is absent", async () => {
+    renderAt("/settings/connections?connected=1");
+
+    expect(await screen.findByText("Google account connected.")).toBeInTheDocument();
+    expect(screen.queryByText("Choose calendars to bring in")).not.toBeInTheDocument();
   });
 });
 

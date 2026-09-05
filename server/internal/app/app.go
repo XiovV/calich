@@ -104,7 +104,7 @@ func newFromGraph(graph *service.Graph, cfg config.Config) *App {
 	}
 
 	a.AuthHandler = handlers.NewAuthHandler(a.Auth, a.RateLimiter, cfg.SMTPConfigured(), cfg.ImapConfigured(), cfg.GoogleConfigured(), cfg.CookieSecure)
-	a.CalendarHandler = handlers.NewCalendarHandler(a.Calendars, a.Events, a.Imports, a.Subscriptions, a.AttachmentStore)
+	a.CalendarHandler = handlers.NewCalendarHandler(a.Calendars, a.Events, a.Imports, a.Subscriptions, a.Connections, a.AttachmentStore)
 	a.EventHandler = handlers.NewEventHandler(a.Events, a.AttachmentStore)
 	a.AttachmentHandler = handlers.NewAttachmentHandler(a.Attachments, cfg.MaxAttachmentSize)
 	a.NotificationHandler = handlers.NewNotificationHandler(a.Notifications)

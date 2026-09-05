@@ -7,6 +7,7 @@ import { useAuthStore } from "../lib/authStore";
 import { useConnectionsStore } from "../lib/connectionsStore";
 import { useAsyncAction } from "../hooks/useAsyncAction";
 import { errorMessage } from "../lib/errorMessage";
+import { CalendarPickerModal } from "./CalendarPickerModal";
 
 // The Google callback redirect (handlers.ConnectionHandler.Callback, #285)
 // lands back here with one of these query params — read once on mount, then
@@ -49,6 +50,18 @@ export function ConnectionsSection() {
       };
     }
     return null;
+  });
+
+  // The Calendar picker opens immediately after authorizing (#286): the
+  // Callback redirect carries the new Connection's own id precisely so this
+  // Section can open it without a separate lookup. Read once at mount, the
+  // same way banner is — the id is a one-time instruction from the redirect
+  // that just landed, not state to keep reacting to afterward.
+  const [pickerConnectionId, setPickerConnectionId] = useState<number | null>(() => {
+    const raw = searchParams.get("connection_id");
+    if (!raw) return null;
+    const parsed = Number(raw);
+    return Number.isFinite(parsed) ? parsed : null;
   });
 
   useEffect(() => {
@@ -152,6 +165,13 @@ export function ConnectionsSection() {
           </p>
         )}
       </div>
+
+      {pickerConnectionId !== null && (
+        <CalendarPickerModal
+          connectionId={pickerConnectionId}
+          onClose={() => setPickerConnectionId(null)}
+        />
+      )}
     </section>
   );
 }

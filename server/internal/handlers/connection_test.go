@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/go-chi/chi/v5"
@@ -45,6 +46,10 @@ func newFakeGoogleTestServer(t *testing.T) *fakeGoogleTestServer {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{"email": f.email, "verified_email": true})
 	})
+	mux.HandleFunc("/calendarList", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"items": []map[string]any{}})
+	})
 
 	f.Server = httptest.NewServer(mux)
 	t.Cleanup(f.Close)
@@ -59,7 +64,7 @@ func newConnectionTestServer(t *testing.T) (*httptest.Server, string, *fakeGoogl
 	cfg := apptest.GoogleConfig(t)
 	g := newTestGraphWithConfig(t, cfg,
 		service.WithGoogleHTTPClient(google.Client()),
-		service.WithGoogleEndpoints(google.URL+"/authorize", google.URL+"/token", google.URL+"/userinfo"),
+		service.WithGoogleEndpoints(google.URL+"/authorize", google.URL+"/token", google.URL+"/userinfo", google.URL+"/calendarList"),
 	)
 
 	auth := g.Auth
@@ -179,9 +184,11 @@ func TestConnectionHandler_Callback_RoundTripsIntoAConnection(t *testing.T) {
 	if callbackResp.StatusCode != http.StatusFound {
 		t.Fatalf("expected a redirect (302), got %d", callbackResp.StatusCode)
 	}
+	// Carries the new Connection's id (#286) so the SPA can open the
+	// Calendar picker for it immediately, without a separate lookup.
 	location := callbackResp.Header.Get("Location")
-	if location != "/settings/connections?connected=1" {
-		t.Fatalf("expected redirect to /settings/connections?connected=1, got %q", location)
+	if !strings.HasPrefix(location, "/settings/connections?connected=1&connection_id=") {
+		t.Fatalf("expected redirect to carry connected=1 and a connection_id, got %q", location)
 	}
 
 	listReq, _ := http.NewRequest(http.MethodGet, srv.URL+"/api/connections/", nil)

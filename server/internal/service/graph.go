@@ -107,15 +107,15 @@ type graphOptions struct {
 	jwtSecret           []byte
 	subscribeHTTPClient *http.Client
 	googleHTTPClient    *http.Client
-	// googleEndpoints, when set, overrides the three Google URLs
+	// googleEndpoints, when set, overrides the four Google URLs
 	// ConnectionService calls — googleAuthorizeURL/googleTokenURL/
-	// googleUserinfoURL — with an httptest.Server's own, alongside
-	// googleHTTPClient (#285's testing decisions).
+	// googleUserinfoURL/googleCalendarListURL — with an httptest.Server's
+	// own, alongside googleHTTPClient (#285's testing decisions).
 	googleEndpoints *googleEndpointOverride
 }
 
 type googleEndpointOverride struct {
-	authorizeURL, tokenURL, userinfoURL string
+	authorizeURL, tokenURL, userinfoURL, calendarListURL string
 }
 
 // WithJWTSecret pins the secret AuthService signs Access tokens with,
@@ -141,12 +141,12 @@ func WithGoogleHTTPClient(client *http.Client) GraphOption {
 	return func(o *graphOptions) { o.googleHTTPClient = client }
 }
 
-// WithGoogleEndpoints replaces the three URLs ConnectionService calls, in
+// WithGoogleEndpoints replaces the four URLs ConnectionService calls, in
 // place of Google's real ones — the other half of the same test seam
 // WithGoogleHTTPClient provides the transport for.
-func WithGoogleEndpoints(authorizeURL, tokenURL, userinfoURL string) GraphOption {
+func WithGoogleEndpoints(authorizeURL, tokenURL, userinfoURL, calendarListURL string) GraphOption {
 	return func(o *graphOptions) {
-		o.googleEndpoints = &googleEndpointOverride{authorizeURL: authorizeURL, tokenURL: tokenURL, userinfoURL: userinfoURL}
+		o.googleEndpoints = &googleEndpointOverride{authorizeURL: authorizeURL, tokenURL: tokenURL, userinfoURL: userinfoURL, calendarListURL: calendarListURL}
 	}
 }
 
@@ -225,9 +225,9 @@ func NewGraph(sqlDB *sql.DB, cfg config.Config, opts ...GraphOption) (*Graph, er
 		connectionOpts = append(connectionOpts, withGoogleHTTPClient(built.googleHTTPClient))
 	}
 	if built.googleEndpoints != nil {
-		connectionOpts = append(connectionOpts, withGoogleEndpoints(built.googleEndpoints.authorizeURL, built.googleEndpoints.tokenURL, built.googleEndpoints.userinfoURL))
+		connectionOpts = append(connectionOpts, withGoogleEndpoints(built.googleEndpoints.authorizeURL, built.googleEndpoints.tokenURL, built.googleEndpoints.userinfoURL, built.googleEndpoints.calendarListURL))
 	}
-	g.Connections = NewConnectionService(g.ConnectionRepo, g.Auth, cfg.GoogleClientID, cfg.GoogleClientSecret, cfg.ConnectionsEncryptionKey, cfg.GoogleConfigured(), connectionOpts...)
+	g.Connections = NewConnectionService(g.ConnectionRepo, g.Auth, g.Calendars, cfg.GoogleClientID, cfg.GoogleClientSecret, cfg.ConnectionsEncryptionKey, cfg.GoogleConfigured(), connectionOpts...)
 
 	return g, nil
 }

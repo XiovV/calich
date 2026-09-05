@@ -84,6 +84,75 @@ func TestSourceRepository_CreateAndGetByCalendarID(t *testing.T) {
 	}
 }
 
+// TestSourceRepository_CreateConnectionSource covers #286's Connection-kind
+// Source: a Calendar carries a connection_id and an external_calendar_id
+// rather than a source_url, and Mode is read_only just like a Subscription
+// today (ADR-0052, ADR-0075) — write-back hasn't shipped, so nothing sets it
+// to writable yet. Self-contained (rather than built on
+// newTestSourceRepository) because a connection_id needs a real row in
+// connections to satisfy calendar_sources' foreign key, and that repository
+// needs the same underlying *sql.DB the Source/Calendar repositories do.
+func TestSourceRepository_CreateConnectionSource(t *testing.T) {
+	sqlDB, err := db.OpenInMemory()
+	if err != nil {
+		t.Fatalf("open in-memory db: %v", err)
+	}
+	t.Cleanup(func() { sqlDB.Close() })
+	ctx := context.Background()
+
+	users := NewUserRepository(sqlDB)
+	user, err := users.Create(ctx, "user-a", "user-a@example.com", "hash", false)
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	workspaces := NewWorkspaceRepository(sqlDB)
+	workspace, err := workspaces.Create(ctx, "workspace-a", user.ID)
+	if err != nil {
+		t.Fatalf("create workspace: %v", err)
+	}
+	if err := workspaces.AddMember(ctx, workspace.ID, user.ID, WorkspaceRoleOwner); err != nil {
+		t.Fatalf("add workspace member: %v", err)
+	}
+
+	connections := NewConnectionRepository(sqlDB)
+	conn, err := connections.Upsert(ctx, user.ID, ProviderGoogle, "someone@gmail.com", ConnectionFields{
+		RefreshToken: "encrypted-refresh", Status: ConnectionStatusLive,
+	})
+	if err != nil {
+		t.Fatalf("upsert connection: %v", err)
+	}
+
+	calendars := NewCalendarRepository(sqlDB)
+	calendar, err := calendars.Create(ctx, user.ID, workspace.ID, "cal-linked", CalendarFields{Name: "Work", Color: "peacock"})
+	if err != nil {
+		t.Fatalf("create calendar: %v", err)
+	}
+
+	sources := NewSourceRepository(sqlDB)
+	externalCalendarID := "primary"
+	created, err := sources.Create(ctx, calendar.ID, SourceFields{
+		Kind:               SourceKindConnection,
+		Mode:               SourceModeReadOnly,
+		ConnectionID:       &conn.ID,
+		ExternalCalendarID: &externalCalendarID,
+	})
+	if err != nil {
+		t.Fatalf("create connection source: %v", err)
+	}
+	if created.Kind != SourceKindConnection {
+		t.Fatalf("expected kind connection, got %q", created.Kind)
+	}
+	if created.ExternalCalendarID == nil || *created.ExternalCalendarID != externalCalendarID {
+		t.Fatalf("expected ExternalCalendarID %q, got %v", externalCalendarID, created.ExternalCalendarID)
+	}
+	if created.SourceURL != nil {
+		t.Fatalf("expected SourceURL nil on a connection source, got %v", created.SourceURL)
+	}
+	if created.ConnectionID == nil || *created.ConnectionID != conn.ID {
+		t.Fatalf("expected ConnectionID %d, got %v", conn.ID, created.ConnectionID)
+	}
+}
+
 func TestSourceRepository_GetByCalendarID_NotFound(t *testing.T) {
 	sources, calendars, userID, _, workspaceID := newTestSourceRepository(t)
 	ctx := context.Background()

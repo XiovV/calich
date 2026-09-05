@@ -51,11 +51,18 @@ type connectStateCodec interface {
 
 // ConnectionService orchestrates Connect a Google account: it owns no
 // storage beyond the repository, delegating the OAuth calls themselves to
-// googleClient (google.go).
+// googleClient (google.go). The Calendar picker (#286, connection_picker.go)
+// lives here too rather than in its own service — it's the same Connection,
+// the same googleClient, and the same "is this account still usable" guard.
 type ConnectionService struct {
 	connections *repository.ConnectionRepository
 	states      connectStateCodec
 	google      *googleClient
+	// calendars is what ImportCalendars hands a picked calendar to, to
+	// become a Linked Calendar (#286) — the same CreateSubscribed write path
+	// SubscribeService uses to give a brand new Calendar a Source at
+	// creation time.
+	calendars *CalendarService
 	// encryptionKey is config.Config.ConnectionsEncryptionKey — a refresh
 	// token is encrypted under it before Upsert and never stored raw
 	// (ADR-0052).
@@ -83,14 +90,15 @@ func withGoogleHTTPClient(client *http.Client) ConnectionOption {
 	return func(s *ConnectionService) { s.google.httpClient = client }
 }
 
-// withGoogleEndpoints overrides the three URLs googleClient calls, in place
+// withGoogleEndpoints overrides the four URLs googleClient calls, in place
 // of Google's real ones — the other half of the same test seam
 // withGoogleHTTPClient provides the transport for.
-func withGoogleEndpoints(authorizeURL, tokenURL, userinfoURL string) ConnectionOption {
+func withGoogleEndpoints(authorizeURL, tokenURL, userinfoURL, calendarListURL string) ConnectionOption {
 	return func(s *ConnectionService) {
 		s.google.authorizeURL = authorizeURL
 		s.google.tokenURL = tokenURL
 		s.google.userinfoURL = userinfoURL
+		s.google.calendarListURL = calendarListURL
 	}
 }
 
@@ -100,11 +108,12 @@ func withGoogleEndpoints(authorizeURL, tokenURL, userinfoURL string) ConnectionO
 // there is exactly one place that decides whether the Google Provider is
 // usable, and Settings' Connect button (which reads the same GoogleConfigured
 // call) can never disagree with what Connect/Callback actually refuse.
-func NewConnectionService(connections *repository.ConnectionRepository, states connectStateCodec, clientID, clientSecret, encryptionKey string, configured bool, opts ...ConnectionOption) *ConnectionService {
+func NewConnectionService(connections *repository.ConnectionRepository, states connectStateCodec, calendars *CalendarService, clientID, clientSecret, encryptionKey string, configured bool, opts ...ConnectionOption) *ConnectionService {
 	s := &ConnectionService{
 		connections:   connections,
 		states:        states,
 		google:        newGoogleClient(clientID, clientSecret),
+		calendars:     calendars,
 		encryptionKey: encryptionKey,
 		configured:    configured,
 	}
@@ -212,6 +221,23 @@ func (s *ConnectionService) List(ctx context.Context, userID int64) ([]repositor
 		return nil, fmt.Errorf("list connections: %w", err)
 	}
 	return connections, nil
+}
+
+// AccountEmailsByIDs resolves connectionIDs' account Emails, keyed by id —
+// the sidebar's join (#286) that groups Linked Calendars under one heading
+// per Connection, since a Calendar's own Source carries only the
+// Connection's id. Never a Connection's tokens, which this doesn't even
+// select for.
+func (s *ConnectionService) AccountEmailsByIDs(ctx context.Context, connectionIDs []int64) (map[int64]string, error) {
+	connections, err := s.connections.ListByIDs(ctx, connectionIDs)
+	if err != nil {
+		return nil, fmt.Errorf("list connections: %w", err)
+	}
+	emails := make(map[int64]string, len(connections))
+	for id, c := range connections {
+		emails[id] = c.AccountEmail
+	}
+	return emails, nil
 }
 
 // Disconnect removes userID's Connection with the given id. No Linked

@@ -1164,7 +1164,9 @@ export function EventModal(props: EventModalProps) {
                     <p className="min-w-0 flex-1 text-label-sm text-ink-muted">
                       {readOnlyReason === "subscription"
                         ? `Calendar: ${editedCalendar.name} (subscribed) — read-only; only Refresh can update it.`
-                        : `Calendar: ${editedCalendar.name} — read-only; you have Viewer access.`}
+                        : readOnlyReason === "connection"
+                          ? `Calendar: ${editedCalendar.name} (linked from Google) — read-only; editing here isn't available yet.`
+                          : `Calendar: ${editedCalendar.name} — read-only; you have Viewer access.`}
                     </p>
                   ) : mode === "edit" && !editedCalendar ? (
                     // editedCalendar is undefined: this Event's Calendar carries

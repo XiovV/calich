@@ -252,6 +252,14 @@ func New(logger *slog.Logger, authHandler *handlers.AuthHandler, calendarHandler
 				r.Get("/", connectionHandler.List)
 				r.Get("/google/connect", connectionHandler.Connect)
 				r.Delete("/{id}", connectionHandler.Disconnect)
+
+				// The Calendar picker (#286): List/Import both create or read
+				// against the caller's active Workspace, the same
+				// RequireWorkspace gate /calendars/... uses above — a picked
+				// calendar becomes an ordinary Calendar there, so these live
+				// on calendarHandler rather than connectionHandler.
+				r.With(httpauth.RequireWorkspace(workspaceMembershipChecker)).Get("/{id}/calendars", calendarHandler.ListConnectionCalendars)
+				r.With(httpauth.RequireWorkspace(workspaceMembershipChecker)).Post("/{id}/calendars", calendarHandler.ImportConnectionCalendars)
 			})
 		})
 

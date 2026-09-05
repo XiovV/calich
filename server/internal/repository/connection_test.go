@@ -218,6 +218,76 @@ func TestConnectionRepository_Delete_NotFound(t *testing.T) {
 	}
 }
 
+func TestConnectionRepository_GetByID_ScopedToOwner(t *testing.T) {
+	connections, users := newTestConnectionRepository(t)
+	ctx := context.Background()
+
+	userA, err := users.Create(ctx, "admin", "admin@example.com", "hash", true)
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	userB, err := users.Create(ctx, "someone-else", "someone-else@example.com", "hash", true)
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+
+	created, err := connections.Upsert(ctx, userA.ID, ProviderGoogle, "a@gmail.com", ConnectionFields{
+		RefreshToken: "encrypted-a", Status: ConnectionStatusLive,
+	})
+	if err != nil {
+		t.Fatalf("upsert connection: %v", err)
+	}
+
+	got, err := connections.GetByID(ctx, userA.ID, created.ID)
+	if err != nil {
+		t.Fatalf("get by id: %v", err)
+	}
+	if got.AccountEmail != "a@gmail.com" {
+		t.Fatalf("expected account email %q, got %q", "a@gmail.com", got.AccountEmail)
+	}
+
+	if _, err := connections.GetByID(ctx, userB.ID, created.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected ErrNotFound fetching another user's connection, got %v", err)
+	}
+}
+
+func TestConnectionRepository_ListByIDs(t *testing.T) {
+	connections, users := newTestConnectionRepository(t)
+	ctx := context.Background()
+
+	userA, err := users.Create(ctx, "admin", "admin@example.com", "hash", true)
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+
+	work, err := connections.Upsert(ctx, userA.ID, ProviderGoogle, "work@gmail.com", ConnectionFields{
+		RefreshToken: "encrypted-work", Status: ConnectionStatusLive,
+	})
+	if err != nil {
+		t.Fatalf("upsert work connection: %v", err)
+	}
+	personal, err := connections.Upsert(ctx, userA.ID, ProviderGoogle, "personal@gmail.com", ConnectionFields{
+		RefreshToken: "encrypted-personal", Status: ConnectionStatusLive,
+	})
+	if err != nil {
+		t.Fatalf("upsert personal connection: %v", err)
+	}
+
+	byID, err := connections.ListByIDs(ctx, []int64{work.ID, personal.ID, 999})
+	if err != nil {
+		t.Fatalf("list by ids: %v", err)
+	}
+	if len(byID) != 2 {
+		t.Fatalf("expected 2 resolved connections, got %d", len(byID))
+	}
+	if byID[work.ID].AccountEmail != "work@gmail.com" {
+		t.Fatalf("expected work connection's account email, got %+v", byID[work.ID])
+	}
+	if byID[personal.ID].AccountEmail != "personal@gmail.com" {
+		t.Fatalf("expected personal connection's account email, got %+v", byID[personal.ID])
+	}
+}
+
 func TestConnectionRepository_Delete_ScopedToOwner(t *testing.T) {
 	connections, users := newTestConnectionRepository(t)
 	ctx := context.Background()

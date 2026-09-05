@@ -2,6 +2,7 @@ package caldavserver
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"io"
 	"net/http"
@@ -40,6 +41,10 @@ type testCalDAVEnv struct {
 	attachmentService  *service.AttachmentService
 	users              *repository.UserRepository
 	workspaces         *repository.WorkspaceRepository
+	// db is the graph's own handle, exposed only for a test that needs a
+	// repository newTestCalDAVEnv doesn't otherwise wire through — e.g. a
+	// Connection row to hang a Linked Calendar's Source off of (#286).
+	db *sql.DB
 }
 
 func newTestCalDAVEnv(t *testing.T) testCalDAVEnv {
@@ -104,6 +109,7 @@ func newTestCalDAVEnv(t *testing.T) testCalDAVEnv {
 		attachmentService:  attachmentService,
 		users:              users,
 		workspaces:         workspaceRepo,
+		db:                 g.DB,
 	}
 }
 

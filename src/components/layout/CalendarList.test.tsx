@@ -68,3 +68,46 @@ describe("CalendarList row menu", () => {
     expect(screen.queryByRole("menuitem", { name: "Share" })).not.toBeInTheDocument();
   });
 });
+
+// #286: a Linked Calendar groups under a heading labelled with its
+// Connection's account Email, distinct from "My calendars" and from every
+// other Connection's own heading.
+describe("Linked Calendar grouping", () => {
+  const workLinked: Calendar = {
+    id: "cal-work",
+    name: "Work",
+    color: "#8E44ADFF",
+    access: "viewer",
+    isOwner: true,
+    sourceKind: "connection",
+    connectionAccountEmail: "work@gmail.com",
+  };
+  const personalLinked: Calendar = {
+    id: "cal-personal",
+    name: "Personal (Google)",
+    color: "#3498DBFF",
+    access: "viewer",
+    isOwner: true,
+    sourceKind: "connection",
+    connectionAccountEmail: "personal@gmail.com",
+  };
+
+  it("shows one heading per Connection's account email", () => {
+    useCalendarsStore.setState({ calendars: [owned, workLinked, personalLinked] });
+    render(<CalendarList />);
+
+    expect(screen.getByText("work@gmail.com")).toBeInTheDocument();
+    expect(screen.getByText("personal@gmail.com")).toBeInTheDocument();
+    expect(screen.getByText("Work")).toBeInTheDocument();
+    expect(screen.getByText("Personal (Google)")).toBeInTheDocument();
+  });
+
+  it("keeps a Linked Calendar out of My calendars", () => {
+    useCalendarsStore.setState({ calendars: [owned, workLinked] });
+    render(<CalendarList />);
+
+    expect(screen.getByText("My calendars")).toBeInTheDocument();
+    // "Work" only ever renders under its Connection's own heading.
+    expect(screen.getAllByText("Work")).toHaveLength(1);
+  });
+});

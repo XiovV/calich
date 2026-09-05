@@ -113,7 +113,7 @@ func newICSTestEnv(t *testing.T) icsTestEnv {
 	attachmentStore := g.AttachmentStore
 	attachments := g.Attachments
 	eventHandler := NewEventHandler(events, attachmentStore)
-	calendarHandler := NewCalendarHandler(calendars, events, g.Imports, g.Subscriptions, attachmentStore)
+	calendarHandler := NewCalendarHandler(calendars, events, g.Imports, g.Subscriptions, g.Connections, attachmentStore)
 
 	r := chi.NewRouter()
 	r.Route("/api/events", func(r chi.Router) {
