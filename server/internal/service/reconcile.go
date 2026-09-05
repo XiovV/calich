@@ -132,6 +132,18 @@ func seriesContentEqual(a, b SeriesWrite) bool {
 	if !reminderSetEqual(a.Reminders, b.Reminders) {
 		return false
 	}
+	if !stringPtrEqual(a.ProviderEtag, b.ProviderEtag) {
+		return false
+	}
+	if !stringPtrEqual(a.RSVPStatus, b.RSVPStatus) {
+		return false
+	}
+	if !stringPtrEqual(a.ConferenceURL, b.ConferenceURL) {
+		return false
+	}
+	if a.GuestCount != b.GuestCount {
+		return false
+	}
 	return overrideSetEqual(a.Overrides, b.Overrides)
 }
 
@@ -199,7 +211,19 @@ func overrideContentEqual(a, b OverrideWrite) bool {
 	if !stringPtrEqual(a.Tzid, b.Tzid) {
 		return false
 	}
-	return reminderSetEqual(a.Reminders, b.Reminders)
+	if !reminderSetEqual(a.Reminders, b.Reminders) {
+		return false
+	}
+	if !stringPtrEqual(a.ProviderEtag, b.ProviderEtag) {
+		return false
+	}
+	if !stringPtrEqual(a.RSVPStatus, b.RSVPStatus) {
+		return false
+	}
+	if !stringPtrEqual(a.ConferenceURL, b.ConferenceURL) {
+		return false
+	}
+	return a.GuestCount == b.GuestCount
 }
 
 // reminderSetEqual compares two Reminder slices as a set of (offset,

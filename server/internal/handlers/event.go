@@ -177,6 +177,16 @@ type eventResponse struct {
 	// present so a caller deciding whether to render an Event expanded knows
 	// synchronously, without a separate round-trip to the Attendees endpoint.
 	AttendeeCount int `json:"attendeeCount,omitempty"`
+	// RSVPStatus is the connecting User's own response at the Provider, on a
+	// Linked Calendar's Event (#287, ADR-0052) — absent on every Event this
+	// app itself owns. Read-only: rendered as a badge, never editable here.
+	RSVPStatus *string `json:"rsvpStatus,omitempty"`
+	// ConferenceURL is the Provider's own conference join link (#287,
+	// ADR-0052) — its own field rather than smuggled into Location.
+	ConferenceURL *string `json:"conferenceUrl,omitempty"`
+	// GuestCount is a bare count of a Linked Calendar Event's Provider-side
+	// guests (#287, ADR-0052) — conferring nothing, never Attendee rows.
+	GuestCount int `json:"guestCount,omitempty"`
 }
 
 func toEventResponse(e repository.Event) eventResponse {
@@ -203,6 +213,9 @@ func toEventResponse(e repository.Event) eventResponse {
 		CalendarName:  e.CalendarName,
 		CalendarColor: e.CalendarColor,
 		AttendeeCount: e.AttendeeCount,
+		RSVPStatus:    e.RSVPStatus,
+		ConferenceURL: e.ConferenceURL,
+		GuestCount:    e.GuestCount,
 	}
 }
 

@@ -235,37 +235,46 @@ func parseEventColor(v ical.Event) *string {
 	return &hex
 }
 
+// ResolveAnchorZone decides the (allDay, tzid) half of the (instant, allDay,
+// tzid) triple ADR-0019 defines, from the three primitives every source of
+// one this app reads can supply: whether the value is date-only, the
+// TZID/timeZone it names explicitly (empty for none), and whether the raw
+// value carries a trailing "Z" (an explicit UTC marker) when no zone was
+// named. A date-only value is an all-day date; a named zone is a zoned
+// Event's Anchor zone (including "Etc/UTC" for an absolute instant, since
+// this package's own encoder always writes TZID for a named zone); a bare
+// "Z"-suffixed value with no named zone is an absolute instant this app's
+// own encoder never produces but another client, or a Provider, may send,
+// normalized here to tzid "Etc/UTC"; anything else is a Floating Event
+// (nil tzid). Exported so a Provider mapper (google_mapper.go, #287)
+// applies this package's own rule rather than a second, hand-maintained
+// copy that can silently drift from it.
+func ResolveAnchorZone(isDateOnly bool, namedZone string, valueEndsInZ bool) (allDay bool, tzid *string) {
+	if isDateOnly {
+		return true, nil
+	}
+	if namedZone != "" {
+		zone := namedZone
+		return false, &zone
+	}
+	if valueEndsInZ {
+		utcZone := "Etc/UTC"
+		return false, &utcZone
+	}
+	return false, nil
+}
+
 // parseEventTime decodes a DTSTART/DTEND/RECURRENCE-ID/EXDATE property into
-// the (instant, allDay, tzid) triple newDateTimeProp encodes (ADR-0019): a
-// VALUE=DATE property is an all-day date; a TZID param names a zoned
-// Event's anchor (including "Etc/UTC" for an absolute instant, since
-// newDateTimeProp always writes TZID for a named zone); a bare "Z"-suffixed
-// value with no TZID param is an absolute instant our own encoder never
-// produces but other clients may send, normalized here to tzid "Etc/UTC";
-// anything else is a Floating Event (nil tzid).
+// the (instant, allDay, tzid) triple newDateTimeProp encodes (ADR-0019) —
+// ResolveAnchorZone's decision rule applied to this property's own value
+// type, TZID param, and raw value.
 func parseEventTime(prop *ical.Prop) (t time.Time, allDay bool, tzid *string, err error) {
-	if prop.ValueType() == ical.ValueDate {
-		t, err = prop.DateTime(nil)
-		return t.UTC(), true, nil, err
-	}
-
-	if tz := prop.Params.Get(ical.PropTimezoneID); tz != "" {
-		t, err = prop.DateTime(nil)
-		if err != nil {
-			return time.Time{}, false, nil, err
-		}
-		return t.UTC(), false, &tz, nil
-	}
-
 	t, err = prop.DateTime(nil)
 	if err != nil {
 		return time.Time{}, false, nil, err
 	}
-	if strings.HasSuffix(prop.Value, "Z") {
-		utcZone := "Etc/UTC"
-		return t.UTC(), false, &utcZone, nil
-	}
-	return t.UTC(), false, nil, nil
+	allDay, tzid = ResolveAnchorZone(prop.ValueType() == ical.ValueDate, prop.Params.Get(ical.PropTimezoneID), strings.HasSuffix(prop.Value, "Z"))
+	return t.UTC(), allDay, tzid, nil
 }
 
 // parseExdates decodes every EXDATE on a Master VEVENT.

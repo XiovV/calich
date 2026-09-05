@@ -93,4 +93,15 @@ export interface Event {
   // without waiting on EventAttendeesSection's own fetch. Undefined/0 both
   // mean no Attendees.
   attendeeCount?: number;
+  // The connecting User's own response to this Event at its Linked
+  // Calendar's Provider (#287, ADR-0052) — undefined on every Event this
+  // app itself owns. Read-only: rendered as a badge, never editable here.
+  rsvpStatus?: "needsAction" | "declined" | "tentative" | "accepted";
+  // The Provider's own conference join link (#287, ADR-0052) — its own
+  // field rather than smuggled into location.
+  conferenceUrl?: string;
+  // A bare count of this Linked Calendar Event's Provider-side guests
+  // (#287, ADR-0052) — conferring nothing, never Attendee rows. Undefined/0
+  // both mean no guests.
+  guestCount?: number;
 }

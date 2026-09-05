@@ -331,6 +331,13 @@ type RefreshResult struct {
 	// NoOp is how many series the feed still lists, unchanged from what was
 	// already stored.
 	NoOp int
+	// DroppedRecurrenceLines is set only by a Linked Calendar's Full Refresh
+	// (#287, ADR-0050): how many RDATE/EXRULE recurrence lines this fetch
+	// carried that this app's model (RRULE plus EXDATE, ADR-0016) has no
+	// home for — counted and surfaced rather than silently dropped, in the
+	// spirit of the Import summary (ADR-0030). Always zero for a
+	// Subscription's own Refresh, which has no such lines to count.
+	DroppedRecurrenceLines int
 }
 
 // Refresh brings calendarID's Subscribed Calendar up to date with its feed
@@ -490,19 +497,7 @@ func (s *SubscribeService) doRefresh(ctx context.Context, userID int64, calendar
 		}
 	}
 
-	masters, overridesByParent, err := s.events.ListSeriesByCalendar(ctx, userID, calendar.ID)
-	if err != nil {
-		return RefreshResult{}, refreshSyncOutcome{}, fmt.Errorf("list existing series: %w", err)
-	}
-	storedReminders, err := s.events.ListStoredReminders(ctx, userID, seriesEventIDs(masters, overridesByParent))
-	if err != nil {
-		return RefreshResult{}, refreshSyncOutcome{}, fmt.Errorf("list stored reminders: %w", err)
-	}
-	existing := existingSeriesFromMasters(masters, overridesByParent, storedReminders)
-
-	result := ReconcileSeries(existing, incoming, unparseable)
-
-	summary, err := s.events.ReconcileSubscribedSeries(ctx, userID, calendar.ID, result)
+	result, summary, err := reconcileAgainstStored(ctx, s.events, userID, calendar.ID, incoming, unparseable)
 	if err != nil {
 		return RefreshResult{}, refreshSyncOutcome{}, err
 	}
@@ -552,6 +547,34 @@ func resolveFollowedField(currentDisplay string, currentShadow *string, feedValu
 	return currentDisplay, &feedValue
 }
 
+// reconcileAgainstStored is doRefresh (this file) and doFullRefresh
+// (connection_refresh.go)'s shared tail (#287): list calendarID's existing
+// series (Masters, Overrides, Reminders), diff them against incoming by
+// ExternalUID (ReconcileSeries), and apply the result via
+// EventService.ReconcileSubscribedSeries — the one bypass of the Subscribed
+// Calendar write guard (ADR-0032) every Refresh source shares once it has a
+// fetch's already-mapped []IncomingSeries in hand, whichever Source kind
+// produced it.
+func reconcileAgainstStored(ctx context.Context, events *EventService, userID int64, calendarID string, incoming []IncomingSeries, unparseable map[string]bool) (ReconcileResult, ReconcileSummary, error) {
+	masters, overridesByParent, err := events.ListSeriesByCalendar(ctx, userID, calendarID)
+	if err != nil {
+		return ReconcileResult{}, ReconcileSummary{}, fmt.Errorf("list existing series: %w", err)
+	}
+	storedReminders, err := events.ListStoredReminders(ctx, userID, seriesEventIDs(masters, overridesByParent))
+	if err != nil {
+		return ReconcileResult{}, ReconcileSummary{}, fmt.Errorf("list stored reminders: %w", err)
+	}
+	existing := existingSeriesFromMasters(masters, overridesByParent, storedReminders)
+
+	result := ReconcileSeries(existing, incoming, unparseable)
+
+	summary, err := events.ReconcileSubscribedSeries(ctx, userID, calendarID, result)
+	if err != nil {
+		return ReconcileResult{}, ReconcileSummary{}, err
+	}
+	return result, summary, nil
+}
+
 // existingSeriesFromMasters converts a Subscribed Calendar's current
 // Masters and Overrides (as ListSeriesByCalendar reads them) into
 // ReconcileSeries' existing-side input, keyed by ExternalUID. A Master with
@@ -572,30 +595,38 @@ func existingSeriesFromMasters(masters []repository.Event, overridesByParent map
 		}
 
 		content := SeriesWrite{
-			Title:       m.Title,
-			Description: m.Description,
-			Location:    m.Location,
-			URL:         m.URL,
-			Start:       m.Start,
-			End:         m.End,
-			AllDay:      m.AllDay,
-			Tzid:        m.Tzid,
-			Rrule:       m.Rrule,
-			Exdates:     m.Exdates,
-			Reminders:   storedReminders[m.ID],
+			Title:         m.Title,
+			Description:   m.Description,
+			Location:      m.Location,
+			URL:           m.URL,
+			Start:         m.Start,
+			End:           m.End,
+			AllDay:        m.AllDay,
+			Tzid:          m.Tzid,
+			Rrule:         m.Rrule,
+			Exdates:       m.Exdates,
+			Reminders:     storedReminders[m.ID],
+			ProviderEtag:  m.ProviderEtag,
+			RSVPStatus:    m.RSVPStatus,
+			ConferenceURL: m.ConferenceURL,
+			GuestCount:    m.GuestCount,
 		}
 		for _, o := range overridesByParent[m.ID] {
 			content.Overrides = append(content.Overrides, OverrideWrite{
-				RecurrenceID: *o.RecurrenceID,
-				Title:        o.Title,
-				Description:  o.Description,
-				Location:     o.Location,
-				URL:          o.URL,
-				Start:        o.Start,
-				End:          o.End,
-				AllDay:       o.AllDay,
-				Tzid:         o.Tzid,
-				Reminders:    storedReminders[o.ID],
+				RecurrenceID:  *o.RecurrenceID,
+				Title:         o.Title,
+				Description:   o.Description,
+				Location:      o.Location,
+				URL:           o.URL,
+				Start:         o.Start,
+				End:           o.End,
+				AllDay:        o.AllDay,
+				Tzid:          o.Tzid,
+				Reminders:     storedReminders[o.ID],
+				ProviderEtag:  o.ProviderEtag,
+				RSVPStatus:    o.RSVPStatus,
+				ConferenceURL: o.ConferenceURL,
+				GuestCount:    o.GuestCount,
 			})
 		}
 

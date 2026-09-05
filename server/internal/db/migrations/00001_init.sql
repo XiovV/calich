@@ -394,6 +394,21 @@ CREATE TABLE calendar_user_colors (
 -- without wiping anyone's Response. Scoped to this row alone, not the whole
 -- series: an Override tracks its own SEQUENCE independently of its Master's,
 -- since each is its own VEVENT on the wire.
+--
+-- provider_etag / rsvp_status / conference_url / guest_count are a Linked
+-- Calendar's own Full Refresh state (#287, ADR-0052, ADR-0075): NULL/0 on
+-- every Event this app itself owns, populated only by the Google mapper.
+-- provider_etag is this row's own per-series validator from Google (a
+-- Master and each of its Overrides addresses its own instance there and
+-- carries its own etag) — stored from the outset per ADR-0052, since it is
+-- unreconstructable later without a full resync and is what write-back's
+-- future If-Match needs. rsvp_status is the connecting User's own
+-- responseStatus, read-only here (ADR-0052's "the connecting User's own
+-- RSVP status ... rendered as a read-only badge"); guest_count is a bare
+-- number, never Attendee rows, counting attendees who are neither the
+-- connecting User nor a resource (a room, say). conference_url is Google's
+-- conferenceData join link, its own field rather than smuggled into
+-- location.
 CREATE TABLE events (
     id TEXT PRIMARY KEY,
     calendar_id TEXT NOT NULL REFERENCES calendars(id) ON DELETE CASCADE,
@@ -413,7 +428,11 @@ CREATE TABLE events (
     external_uid TEXT,
     created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
     color TEXT,
-    sequence INTEGER NOT NULL DEFAULT 0
+    sequence INTEGER NOT NULL DEFAULT 0,
+    provider_etag TEXT,
+    rsvp_status TEXT,
+    conference_url TEXT,
+    guest_count INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE INDEX idx_events_calendar_id ON events(calendar_id);

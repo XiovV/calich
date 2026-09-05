@@ -318,6 +318,15 @@ type SeriesWrite struct {
 	// Attachments arrive only through Import's own POST actions or ICS
 	// import, never through a PUT or an unattended poll.
 	Attachments []AttachmentWrite
+	// ProviderEtag/RSVPStatus/ConferenceURL/GuestCount are set only by a
+	// Linked Calendar's Full Refresh (#287, ADR-0052) — every other
+	// SeriesWrite source (CalDAV PUT, ICS import, a Subscription's own
+	// fetched Events) leaves them at their zero value, mirroring how
+	// ExternalUID/Attachments are each populated by exactly one source.
+	ProviderEtag  *string
+	RSVPStatus    *string
+	ConferenceURL *string
+	GuestCount    int
 }
 
 // AttachmentWrite is one Attachment whose bytes are already on disk under
@@ -345,6 +354,15 @@ type OverrideWrite struct {
 	// Color mirrors SeriesWrite.Color, scoped to this Override alone
 	// (ADR-0043).
 	Color *string
+	// ProviderEtag/RSVPStatus/ConferenceURL/GuestCount mirror SeriesWrite's
+	// own fields, scoped to this Override alone (#287, ADR-0052) — Google
+	// models each Occurrence as its own addressable instance, so an
+	// Override's etag/RSVP/conference/guest data can differ from its
+	// Master's.
+	ProviderEtag  *string
+	RSVPStatus    *string
+	ConferenceURL *string
+	GuestCount    int
 }
 
 // fields projects the Master's own columns onto repository.EventFields for
@@ -355,18 +373,22 @@ type OverrideWrite struct {
 // same way for a whole series (Master and every Override alike).
 func (w SeriesWrite) fields(calendarID string) repository.EventFields {
 	return repository.EventFields{
-		CalendarID:  calendarID,
-		Title:       w.Title,
-		Start:       w.Start,
-		End:         w.End,
-		AllDay:      w.AllDay,
-		Rrule:       w.Rrule,
-		Tzid:        w.Tzid,
-		Description: w.Description,
-		Location:    w.Location,
-		URL:         w.URL,
-		Color:       w.Color,
-		ExternalUID: nonEmptyPtr(w.ExternalUID),
+		CalendarID:    calendarID,
+		Title:         w.Title,
+		Start:         w.Start,
+		End:           w.End,
+		AllDay:        w.AllDay,
+		Rrule:         w.Rrule,
+		Tzid:          w.Tzid,
+		Description:   w.Description,
+		Location:      w.Location,
+		URL:           w.URL,
+		Color:         w.Color,
+		ExternalUID:   nonEmptyPtr(w.ExternalUID),
+		ProviderEtag:  w.ProviderEtag,
+		RSVPStatus:    w.RSVPStatus,
+		ConferenceURL: w.ConferenceURL,
+		GuestCount:    w.GuestCount,
 	}
 }
 
@@ -379,19 +401,23 @@ func (w SeriesWrite) fields(calendarID string) repository.EventFields {
 // column list.
 func (o OverrideWrite) fields(calendarID, masterID string) repository.EventFields {
 	return repository.EventFields{
-		CalendarID:   calendarID,
-		Title:        o.Title,
-		Start:        o.Start,
-		End:          o.End,
-		AllDay:       o.AllDay,
-		Tzid:         o.Tzid,
-		Description:  o.Description,
-		Location:     o.Location,
-		URL:          o.URL,
-		Color:        o.Color,
-		ParentID:     &masterID,
-		RecurrenceID: &o.RecurrenceID,
-		ExternalUID:  nonEmptyPtr(o.ExternalUID),
+		CalendarID:    calendarID,
+		Title:         o.Title,
+		Start:         o.Start,
+		End:           o.End,
+		AllDay:        o.AllDay,
+		Tzid:          o.Tzid,
+		Description:   o.Description,
+		Location:      o.Location,
+		URL:           o.URL,
+		Color:         o.Color,
+		ParentID:      &masterID,
+		RecurrenceID:  &o.RecurrenceID,
+		ExternalUID:   nonEmptyPtr(o.ExternalUID),
+		ProviderEtag:  o.ProviderEtag,
+		RSVPStatus:    o.RSVPStatus,
+		ConferenceURL: o.ConferenceURL,
+		GuestCount:    o.GuestCount,
 	}
 }
 

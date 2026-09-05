@@ -1021,6 +1021,22 @@ func (s *CalendarService) ScheduleNextRefresh(ctx context.Context, userID int64,
 	return s.sources.ScheduleNextRefresh(ctx, userID, id, nextRefreshAt)
 }
 
+// RecordConnectionRefreshSuccess records a completed Full Refresh on a
+// Connection-kind Source (#287) — the Connection counterpart to
+// RecordRefreshSuccess, narrower since a Connection carries no
+// conditional-GET validators or poller cadence yet (#288).
+func (s *CalendarService) RecordConnectionRefreshSuccess(ctx context.Context, userID int64, id string, syncedAt time.Time) error {
+	return s.sources.RecordConnectionRefreshSuccess(ctx, userID, id, syncedAt)
+}
+
+// RecordConnectionRefreshFailure records a failed Full Refresh attempt on a
+// Connection-kind Source (#287) — the Connection counterpart to
+// RecordRefreshFailure, narrower since there is no poller retry schedule to
+// advance yet (#288). Never disables or deletes the Source.
+func (s *CalendarService) RecordConnectionRefreshFailure(ctx context.Context, userID int64, id, errorClass, errorMessage string, failureCount int) error {
+	return s.sources.RecordConnectionRefreshFailure(ctx, userID, id, errorClass, errorMessage, failureCount)
+}
+
 // UpdateKeepAlarms changes id's Source's keep_alarms setting alone (#87,
 // ADR-0032). SubscribeService.UpdateKeepAlarms is the caller that actually
 // enforces the Subscription-only rule and cascades the reminder cleanup a

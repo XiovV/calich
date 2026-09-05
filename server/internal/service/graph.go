@@ -112,10 +112,20 @@ type graphOptions struct {
 	// googleUserinfoURL/googleCalendarListURL — with an httptest.Server's
 	// own, alongside googleHTTPClient (#285's testing decisions).
 	googleEndpoints *googleEndpointOverride
+	// googleEventsURL, when set, overrides events.list's own base URL (#287)
+	// the same way googleEndpoints does for the other four.
+	googleEventsURL *googleEventsURLOverride
 }
 
 type googleEndpointOverride struct {
 	authorizeURL, tokenURL, userinfoURL, calendarListURL string
+}
+
+// googleEventsURLOverride, when set, overrides events.list's own base URL
+// (#287) — kept separate from googleEndpointOverride since it's a single
+// URL, not a bundle of four.
+type googleEventsURLOverride struct {
+	eventsURL string
 }
 
 // WithJWTSecret pins the secret AuthService signs Access tokens with,
@@ -148,6 +158,13 @@ func WithGoogleEndpoints(authorizeURL, tokenURL, userinfoURL, calendarListURL st
 	return func(o *graphOptions) {
 		o.googleEndpoints = &googleEndpointOverride{authorizeURL: authorizeURL, tokenURL: tokenURL, userinfoURL: userinfoURL, calendarListURL: calendarListURL}
 	}
+}
+
+// WithGoogleEventsURL replaces events.list's own base URL ConnectionService
+// calls, in place of Google's real one (#287) — withGoogleEndpoints'
+// sibling, kept separate since events.list is scoped to one calendar.
+func WithGoogleEventsURL(eventsURL string) GraphOption {
+	return func(o *graphOptions) { o.googleEventsURL = &googleEventsURLOverride{eventsURL: eventsURL} }
 }
 
 // NewGraph builds every repository and service from a database handle and a
@@ -227,7 +244,10 @@ func NewGraph(sqlDB *sql.DB, cfg config.Config, opts ...GraphOption) (*Graph, er
 	if built.googleEndpoints != nil {
 		connectionOpts = append(connectionOpts, withGoogleEndpoints(built.googleEndpoints.authorizeURL, built.googleEndpoints.tokenURL, built.googleEndpoints.userinfoURL, built.googleEndpoints.calendarListURL))
 	}
-	g.Connections = NewConnectionService(g.ConnectionRepo, g.Auth, g.Calendars, cfg.GoogleClientID, cfg.GoogleClientSecret, cfg.ConnectionsEncryptionKey, cfg.GoogleConfigured(), connectionOpts...)
+	if built.googleEventsURL != nil {
+		connectionOpts = append(connectionOpts, withGoogleEventsURL(built.googleEventsURL.eventsURL))
+	}
+	g.Connections = NewConnectionService(g.ConnectionRepo, g.Auth, g.Calendars, g.Events, cfg.GoogleClientID, cfg.GoogleClientSecret, cfg.ConnectionsEncryptionKey, cfg.GoogleConfigured(), connectionOpts...)
 
 	return g, nil
 }

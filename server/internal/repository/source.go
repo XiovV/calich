@@ -352,6 +352,46 @@ func (r *SourceRepository) RecordRefreshFailure(ctx context.Context, userID int6
 	return requireAffected(res)
 }
 
+// RecordConnectionRefreshSuccess records a completed Full Refresh on a
+// Connection-kind Source (#287): last_synced_at moves and any prior
+// failure clears, unconditionally, mirroring RecordRefreshSuccess's own
+// "a Refresh that found nothing new still counts as having synced
+// successfully". Deliberately narrower than RecordRefreshSuccess: etag,
+// last_modified, content_hash, next_refresh_at, refresh_interval_seconds,
+// feed_name and feed_color are a Subscription's own conditional-GET and
+// poller state (ADR-0033) that a Connection's Full Refresh has no
+// equivalent for yet — its own cursor and cadence are #288's Delta Refresh
+// and poller to design, not this ticket's to guess at.
+func (r *SourceRepository) RecordConnectionRefreshSuccess(ctx context.Context, userID int64, calendarID string, syncedAt time.Time) error {
+	res, err := r.db.ExecContext(ctx,
+		`UPDATE calendar_sources SET last_synced_at = ?, failure_count = 0, error_class = NULL, error_message = NULL
+		 WHERE `+ownedSourceWhere,
+		syncedAt, calendarID, userID,
+	)
+	if err != nil {
+		return fmt.Errorf("record connection refresh success: %w", err)
+	}
+	return requireAffected(res)
+}
+
+// RecordConnectionRefreshFailure records a failed Full Refresh attempt on a
+// Connection-kind Source (#287). It never disables or deletes the Source,
+// and never schedules a retry — there is no poller to hand next_refresh_at
+// to yet (#288) — only the error/failure-count columns move, exactly as
+// ADR-0033 requires: last good state (the Events a prior success produced)
+// is left exactly as it was.
+func (r *SourceRepository) RecordConnectionRefreshFailure(ctx context.Context, userID int64, calendarID, errorClass, errorMessage string, failureCount int) error {
+	res, err := r.db.ExecContext(ctx,
+		`UPDATE calendar_sources SET failure_count = ?, error_class = ?, error_message = ?
+		 WHERE `+ownedSourceWhere,
+		failureCount, errorClass, errorMessage, calendarID, userID,
+	)
+	if err != nil {
+		return fmt.Errorf("record connection refresh failure: %w", err)
+	}
+	return requireAffected(res)
+}
+
 func scanSourceRow(row rowScanner) (Source, error) {
 	var s Source
 	err := row.Scan(&s.CalendarID, &s.Kind, &s.Mode, &s.ConnectionID, &s.ExternalCalendarID, &s.SourceURL, &s.LastSyncedAt, &s.ETag, &s.LastModified, &s.ContentHash,

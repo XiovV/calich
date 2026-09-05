@@ -38,6 +38,11 @@ interface EventWire {
   calendarName?: string;
   calendarColor?: string;
   attendeeCount?: number;
+  // Absent on every Event this app itself owns — present only on a Linked
+  // Calendar's Event (#287, ADR-0052).
+  rsvpStatus?: "needsAction" | "declined" | "tentative" | "accepted";
+  conferenceUrl?: string;
+  guestCount?: number;
 }
 
 interface AttachmentWire {
@@ -109,6 +114,9 @@ function fromWire(wire: EventWire): Event {
     calendarName: wire.calendarName || undefined,
     calendarColor: wire.calendarColor || undefined,
     attendeeCount: wire.attendeeCount || undefined,
+    rsvpStatus: wire.rsvpStatus,
+    conferenceUrl: wire.conferenceUrl || undefined,
+    guestCount: wire.guestCount || undefined,
   };
 }
 

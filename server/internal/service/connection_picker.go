@@ -11,6 +11,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 
 	"github.com/google/uuid"
 
@@ -138,6 +139,17 @@ func (s *ConnectionService) ListCalendars(ctx context.Context, userID, connectio
 // place, mirroring calling Subscribe once per selected calendar: each one is
 // an independent Calendar+Source pair (CalendarService.CreateSubscribed),
 // so there is no larger unit to roll back to.
+//
+// Each newly created Linked Calendar's first Full Refresh (#287) runs here,
+// synchronously, before ImportCalendars returns — the same shape Subscribe
+// already uses for a feed's initial import, so the picker's own "Confirm"
+// button (already awaited, already showing a loading state) is what makes
+// the fetch's pagination visibly take time rather than silently happening
+// later. A Full Refresh failing does not undo the Calendar it belongs to
+// (ADR-0033: failure never deletes anything) — it is recorded as the
+// Source's own needs-attention/retrying state, discoverable the same way a
+// Subscription's failed Refresh already is, and logged here since nothing
+// in this ticket surfaces a per-import summary of its own yet.
 func (s *ConnectionService) ImportCalendars(ctx context.Context, userID, workspaceID, connectionID int64, externalIDs []string) ([]repository.Calendar, error) {
 	if !s.configured {
 		return nil, ErrGoogleNotConfigured
@@ -179,7 +191,25 @@ func (s *ConnectionService) ImportCalendars(ctx context.Context, userID, workspa
 			return created, fmt.Errorf("import calendar %q: %w", picker.Name, err)
 		}
 		created = append(created, calendar)
+
+		s.runInitialFullRefresh(ctx, userID, calendar)
 	}
 
 	return created, nil
+}
+
+// runInitialFullRefresh drives calendar's first Full Refresh right after
+// ImportCalendars creates it, logging rather than failing the import on
+// error or on an unmapped recurrence feature — see ImportCalendars' own doc
+// comment for why.
+func (s *ConnectionService) runInitialFullRefresh(ctx context.Context, userID int64, calendar repository.Calendar) {
+	result, err := s.FullRefresh(ctx, userID, calendar.ID)
+	if err != nil {
+		log.Printf("linked calendar initial full refresh (calendar=%s): %v", calendar.ID, err)
+		return
+	}
+	if result.DroppedRecurrenceLines > 0 || result.Unparseable > 0 {
+		log.Printf("linked calendar initial full refresh (calendar=%s): %d unsupported recurrence line(s) dropped, %d series unmappable",
+			calendar.ID, result.DroppedRecurrenceLines, result.Unparseable)
+	}
 }

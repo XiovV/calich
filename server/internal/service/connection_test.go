@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -21,7 +22,13 @@ import (
 // overrides the userinfo response's verified_email, nil meaning true.
 // calendarListItems/calendarListStatus are the picker's own fixture (#286):
 // nil items renders an empty calendarList, calendarListStatus forces a
-// non-200 (an expired access token).
+// non-200 (an expired access token). eventsByCalendar/eventsStatus/
+// eventsPageSize are Full Refresh's own fixture (#287): eventsByCalendar
+// keys one calendar's raw Events.list items by its external id,
+// eventsStatus forces a non-200, and eventsPageSize — when set — serves
+// eventsByCalendar a few items at a time via pageToken/nextPageToken, so a
+// test can assert listEvents actually follows pagination rather than
+// trusting a single page.
 type fakeGoogleServer struct {
 	*httptest.Server
 	refreshToken, email, scope  string
@@ -29,6 +36,15 @@ type fakeGoogleServer struct {
 	verifiedEmail               *bool
 	calendarListItems           []map[string]any
 	calendarListStatus          int
+	eventsByCalendar            map[string][]map[string]any
+	eventsStatus                int
+	eventsPageSize              int
+	// eventsFailFirstNCalls forces the first N calls to /events to answer
+	// 401 regardless of the token presented, then serve normally — a
+	// Connection's cached access_token having actually expired at Google
+	// (#287), which doFullRefresh's own retry-once-with-a-fresh-token path
+	// is what a test forcing this exercises.
+	eventsFailFirstNCalls, eventsCallCount int
 }
 
 func newFakeGoogleServer(t *testing.T) *fakeGoogleServer {
@@ -79,6 +95,49 @@ func newFakeGoogleServer(t *testing.T) *fakeGoogleServer {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{"items": f.calendarListItems})
 	})
+	mux.HandleFunc("/{calendarId}/events", func(w http.ResponseWriter, r *http.Request) {
+		f.eventsCallCount++
+		if f.eventsFailFirstNCalls > 0 && f.eventsCallCount <= f.eventsFailFirstNCalls {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		if f.eventsStatus != 0 && f.eventsStatus != http.StatusOK {
+			w.WriteHeader(f.eventsStatus)
+			return
+		}
+		if r.Header.Get("Authorization") != "Bearer fake-access-token" {
+			t.Fatalf("expected events request to carry the exchanged access token, got %q", r.Header.Get("Authorization"))
+		}
+		if got := r.URL.Query().Get("singleEvents"); got != "false" {
+			t.Fatalf("expected singleEvents=false (ADR-0053: no time window, preserve Master+instances), got %q", got)
+		}
+
+		calendarID := r.PathValue("calendarId")
+		items := f.eventsByCalendar[calendarID]
+
+		start := 0
+		if pageToken := r.URL.Query().Get("pageToken"); pageToken != "" {
+			parsed, err := strconv.Atoi(pageToken)
+			if err != nil {
+				t.Fatalf("unexpected pageToken %q: %v", pageToken, err)
+			}
+			start = parsed
+		}
+
+		pageSize := f.eventsPageSize
+		if pageSize <= 0 || start+pageSize >= len(items) {
+			pageSize = len(items) - start
+		}
+		page := items[start : start+pageSize]
+
+		body := map[string]any{"items": page}
+		if start+pageSize < len(items) {
+			body["nextPageToken"] = strconv.Itoa(start + pageSize)
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(body)
+	})
 
 	f.Server = httptest.NewServer(mux)
 	t.Cleanup(f.Close)
@@ -96,9 +155,10 @@ func newTestConnectionService(t *testing.T, google *fakeGoogleServer) (*Connecti
 	}
 
 	connections := repository.NewConnectionRepository(g.DB)
-	svc := NewConnectionService(connections, g.Auth, g.Calendars, "test-client-id", "test-client-secret", "test-encryption-key", true,
+	svc := NewConnectionService(connections, g.Auth, g.Calendars, g.Events, "test-client-id", "test-client-secret", "test-encryption-key", true,
 		withGoogleHTTPClient(google.Client()),
 		withGoogleEndpoints(google.URL+"/authorize", google.URL+"/token", google.URL+"/userinfo", google.URL+"/calendarList"),
+		withGoogleEventsURL(google.URL),
 	)
 
 	return svc, g.Auth, user.ID

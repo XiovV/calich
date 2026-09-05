@@ -327,6 +327,18 @@ _Avoid_: incremental sync, partial refresh
 The foreign identifier a Refresh matches a series on — a feed's iCalendar `UID`, or a Provider's own event id — stored alongside the Event rather than as its id. The id stays a minted UUID, so a Calendar with a Source keeps the `{masterId}.ics` shape ADR-0025 requires and a 200-character foreign id never reaches a URL. The narrow reopening of ADR-0030's discard-the-foreign-UID rule, and the reason a Refresh can leave an unchanged series untouched instead of rewriting the whole Calendar. See ADR-0033.
 _Avoid_: source UID, foreign ID, original UID
 
+**Provider RSVP**:
+On a Linked Calendar's Event, the connecting User's own answer to it at the Provider — accepted, declined, tentative, or awaiting one — read-only here and rendered as a badge on the Event, since a declined meeting still occupying the grid is actively misleading. Distinct from Response, which is a Member's own answer to an Attendee invite this app issued: a Provider RSVP confers no Attendee row of its own and is never the target of an Invitation. See ADR-0052.
+_Avoid_: RSVP alone (ambiguous with Response), RSVP status, response status
+
+**Conference URL**:
+On a Linked Calendar's Event, the Provider's own video-conference join link, stored in its own field rather than smuggled into Location. Distinct from Event URL, which is a User-set link to more information and is never carried inbound from a Provider at all. See ADR-0052.
+_Avoid_: conference link, meeting link, join URL
+
+**Guest count**:
+On a Linked Calendar's Event, a bare number of the Provider's attendees who are neither the connecting User nor a resource (a meeting room, say) — conferring nothing, never Attendee rows, so a bare time block that is secretly a fourteen-person meeting is never silently misleading. Distinct from an Event's Attendees, which this app writes its own Invitations against. See ADR-0052.
+_Avoid_: attendee count (that's an ordinary Event's own Attendee tally), guests, invitee count
+
 ## Deployment
 
 **Data directory**:

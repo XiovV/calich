@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/XiovV/calich/server/internal/repository"
 )
@@ -63,6 +64,13 @@ type ConnectionService struct {
 	// SubscribeService uses to give a brand new Calendar a Source at
 	// creation time.
 	calendars *CalendarService
+	// events is what FullRefresh reads a Linked Calendar's existing series
+	// from and reconciles a fetch's mapped result into (#287) — the same
+	// ListSeriesByCalendar/ListStoredReminders/ReconcileSubscribedSeries
+	// SubscribeService's own doRefresh drives, since "what a Calendar
+	// already stores" and "apply this reconciled result" don't care which
+	// Source kind produced the incoming side.
+	events *EventService
 	// encryptionKey is config.Config.ConnectionsEncryptionKey — a refresh
 	// token is encrypted under it before Upsert and never stored raw
 	// (ADR-0052).
@@ -73,6 +81,9 @@ type ConnectionService struct {
 	// existing Connection shouldn't become unreachable just because the
 	// self-hoster later unset their OAuth credentials.
 	configured bool
+	// now is FullRefresh's clock (#287) — always time.Now outside a test,
+	// mirroring SubscribeService's own now field.
+	now func() time.Time
 }
 
 // ConnectionOption configures a ConnectionService beyond
@@ -102,20 +113,29 @@ func withGoogleEndpoints(authorizeURL, tokenURL, userinfoURL, calendarListURL st
 	}
 }
 
+// withGoogleEventsURL overrides events.list's own base URL (#287), in place
+// of Google's real one — withGoogleEndpoints' sibling, kept separate since
+// events.list is scoped to one calendar and every other endpoint isn't.
+func withGoogleEventsURL(eventsURL string) ConnectionOption {
+	return func(s *ConnectionService) { s.google.eventsURL = eventsURL }
+}
+
 // NewConnectionService builds a ConnectionService. configured is
 // config.Config.GoogleConfigured() — computed once by the caller (graph.go)
 // rather than re-derived here from clientID/clientSecret/encryptionKey, so
 // there is exactly one place that decides whether the Google Provider is
 // usable, and Settings' Connect button (which reads the same GoogleConfigured
 // call) can never disagree with what Connect/Callback actually refuse.
-func NewConnectionService(connections *repository.ConnectionRepository, states connectStateCodec, calendars *CalendarService, clientID, clientSecret, encryptionKey string, configured bool, opts ...ConnectionOption) *ConnectionService {
+func NewConnectionService(connections *repository.ConnectionRepository, states connectStateCodec, calendars *CalendarService, events *EventService, clientID, clientSecret, encryptionKey string, configured bool, opts ...ConnectionOption) *ConnectionService {
 	s := &ConnectionService{
 		connections:   connections,
 		states:        states,
 		google:        newGoogleClient(clientID, clientSecret),
 		calendars:     calendars,
+		events:        events,
 		encryptionKey: encryptionKey,
 		configured:    configured,
+		now:           time.Now,
 	}
 	for _, opt := range opts {
 		opt(s)

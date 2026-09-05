@@ -142,6 +142,31 @@ interface InitialFormState {
   color: string | undefined;
 }
 
+/**
+ * Maps a Linked Calendar Event's rsvpStatus to the modal header's read-only
+ * badge (#287, ADR-0052) — undefined for an Event with no RSVP at all
+ * (every Event this app itself owns), which renders no badge.
+ */
+function rsvpBadgeFor(
+  rsvpStatus: Event["rsvpStatus"],
+): { label: string; className: string } | undefined {
+  switch (rsvpStatus) {
+    case "accepted":
+      return { label: "Accepted", className: "bg-success/10 text-success" };
+    case "declined":
+      return { label: "Declined", className: "bg-danger/10 text-danger" };
+    case "tentative":
+      return { label: "Maybe", className: "bg-warning/10 text-warning" };
+    case "needsAction":
+      return {
+        label: "Awaiting response",
+        className: "bg-ink-muted/10 text-ink-muted",
+      };
+    default:
+      return undefined;
+  }
+}
+
 function deriveInitialFormState(
   props: EventModalProps,
   master: Event | undefined,
@@ -312,6 +337,16 @@ export function EventModal(props: EventModalProps) {
   const isReadOnlyEvent =
     mode === "edit" && !canWriteCalendarEvents(editedCalendar);
   const readOnlyReason = calendarReadOnlyReason(editedCalendar);
+  // The connecting User's own RSVP on a Linked Calendar's Event, read-only
+  // here — a declined meeting still occupying the grid is actively
+  // misleading, so this needs to show even though it confers no Attendee
+  // row of its own (#287, ADR-0052). Read off eventForOptions (the actual
+  // edited row — occurrence.event), never master: an Override addresses its
+  // own instance at the Provider independently of its Master (google_mapper.go),
+  // so resolveMaster's Master-not-Override return for an Override occurrence
+  // would otherwise show the wrong RSVP for the one being edited.
+  const rsvpBadge =
+    mode === "edit" ? rsvpBadgeFor(eventForOptions?.rsvpStatus) : undefined;
   // resolveOccurrenceColor's Calendar fallback for an Attendee-only Event
   // (ADR-0046):
   // editedCalendar is undefined (no calendarsStore entry, no Calendar
@@ -1042,9 +1077,18 @@ export function EventModal(props: EventModalProps) {
             }`}
           >
             <div className="flex items-center justify-between gap-2">
-              <Dialog.Title className="text-heading font-medium text-ink">
-                {mode === "edit" ? "Edit event" : "New event"}
-              </Dialog.Title>
+              <div className="flex min-w-0 items-center gap-2">
+                <Dialog.Title className="text-heading font-medium text-ink">
+                  {mode === "edit" ? "Edit event" : "New event"}
+                </Dialog.Title>
+                {rsvpBadge && (
+                  <span
+                    className={`shrink-0 rounded-full px-2 py-0.5 text-label-sm ${rsvpBadge.className}`}
+                  >
+                    {rsvpBadge.label}
+                  </span>
+                )}
+              </div>
               <div className="flex items-center gap-1">
                 {/* Download's own trigger is hidden rather than deleted — its
                     scope picker, oversized-attachment pre-flight, and export

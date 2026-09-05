@@ -162,6 +162,22 @@ func (r *ConnectionRepository) ListByIDs(ctx context.Context, ids []int64) (map[
 	return result, nil
 }
 
+// UpdateAccessToken replaces id's stored access_token alone (#287) — a Full
+// Refresh's own token-refresh helper persists what refreshAccessToken just
+// minted here, so a Refresh moments later within the same access token's
+// lifetime doesn't have to mint another. refresh_token, scopes and status
+// are untouched.
+func (r *ConnectionRepository) UpdateAccessToken(ctx context.Context, userID, id int64, accessToken string) error {
+	res, err := r.db.ExecContext(ctx,
+		`UPDATE connections SET access_token = ? WHERE id = ? AND user_id = ?`,
+		accessToken, id, userID,
+	)
+	if err != nil {
+		return fmt.Errorf("update access token: %w", err)
+	}
+	return requireAffected(res)
+}
+
 // Delete removes userID's Connection with the given id. It returns
 // ErrNotFound if no such Connection belongs to that user, so a User can
 // never disconnect someone else's grant.

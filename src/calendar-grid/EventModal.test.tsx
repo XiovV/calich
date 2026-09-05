@@ -319,6 +319,56 @@ describe("EventModal — editing a non-recurring Event", () => {
   });
 });
 
+describe("EventModal — a Linked Calendar Event's RSVP badge (#287)", () => {
+  it("renders the connecting User's own RSVP as a read-only badge", () => {
+    const event = makeEvent({ rsvpStatus: "declined" });
+    renderEdit(event);
+
+    expect(screen.getByText("Declined")).toBeInTheDocument();
+  });
+
+  it("renders nothing for an Event with no RSVP", () => {
+    const event = makeEvent();
+    renderEdit(event);
+
+    expect(screen.queryByText("Declined")).not.toBeInTheDocument();
+    expect(screen.queryByText("Accepted")).not.toBeInTheDocument();
+    expect(screen.queryByText("Maybe")).not.toBeInTheDocument();
+    expect(screen.queryByText("Awaiting response")).not.toBeInTheDocument();
+  });
+
+  it("renders the Override's own RSVP, not its Master's, when editing an overridden Occurrence", () => {
+    // Google addresses a Master and each of its Overrides as independent
+    // instances, so their RSVPs can legitimately differ — resolveMaster
+    // resolves an Override occurrence to its *Master* row (for the Repeat
+    // dropdown's rrule), which is the wrong source for this badge.
+    const master = makeEvent({
+      id: "series-1",
+      rrule: "FREQ=WEEKLY;BYDAY=MO",
+      rsvpStatus: "accepted",
+    });
+    const override = makeEvent({
+      id: "series-1-override",
+      parentId: "series-1",
+      recurrenceId: new Date(2026, 7, 10, 9, 0),
+      start: new Date(2026, 7, 10, 9, 0),
+      end: new Date(2026, 7, 10, 10, 0),
+      rsvpStatus: "declined",
+    });
+    useEventsStore.setState({ events: [master, override] });
+    render(
+      <EventModal
+        mode="edit"
+        occurrence={makeOccurrence(override)}
+        onClose={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText("Declined")).toBeInTheDocument();
+    expect(screen.queryByText("Accepted")).not.toBeInTheDocument();
+  });
+});
+
 describe("EventModal — editing a recurring Occurrence", () => {
   const recurring = () => makeEvent({ rrule: "FREQ=WEEKLY;BYDAY=MO" });
 

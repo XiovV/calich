@@ -1,10 +1,13 @@
-// google.go is the Google half of the Provider seam (#285, ADR-0050, #286):
-// OAuth token exchange, the connected account's own Email, and the
-// calendarList the Calendar picker offers. Event list, patch, insert and
-// instances are later tickets', added to googleClient rather than beside it,
-// so every Google call keeps going through the one overridable httpClient
-// (#285's testing decisions) — a test points this at an httptest.Server
-// serving canned JSON in place of Google, never a mocked fetcher.
+// google.go is the Google half of the Provider seam (#285, ADR-0050, #286,
+// #287): OAuth token exchange (including a stored refresh_token minting a
+// fresh access token, since one is never relied on across requests), the
+// connected account's own Email, the calendarList the Calendar picker
+// offers, and a Linked Calendar's own events.list a Full Refresh fetches.
+// Patch, insert and instances are later tickets', added to googleClient
+// rather than beside it, so every Google call keeps going through the one
+// overridable httpClient (#285's testing decisions) — a test points this at
+// an httptest.Server serving canned JSON in place of Google, never a mocked
+// fetcher.
 package service
 
 import (
@@ -24,6 +27,10 @@ const (
 	googleTokenURL        = "https://oauth2.googleapis.com/token"
 	googleUserinfoURL     = "https://www.googleapis.com/oauth2/v2/userinfo"
 	googleCalendarListURL = "https://www.googleapis.com/calendar/v3/users/me/calendarList"
+	// googleEventsURL is events.list's own base, with one calendar's id
+	// appended per call (eventsURLFor) — there is no single fixed URL the way
+	// there is for calendarList, since events.list is scoped to one calendar.
+	googleEventsURL = "https://www.googleapis.com/calendar/v3/calendars"
 )
 
 // googleCalendarListPageSize is the page size requested of calendarList.list
@@ -56,12 +63,42 @@ var ErrGoogleAuthFailed = errors.New("google rejected the authorization")
 // or revoked access token, an unreachable endpoint, or a malformed response.
 var ErrGoogleCalendarListFailed = errors.New("could not list this connection's calendars from google")
 
+// ErrGoogleTokenRefreshFailed covers everything that can go wrong minting a
+// fresh access token from a Connection's stored refresh_token (#287): a
+// revoked grant, an unreachable endpoint, or a malformed response.
+var ErrGoogleTokenRefreshFailed = errors.New("could not refresh this connection's google access token")
+
+// ErrGoogleEventsFailed covers everything that can go wrong fetching a
+// Linked Calendar's events.list (#287): an expired or revoked access token,
+// the calendar having vanished at Google, an unreachable endpoint, or a
+// malformed response.
+var ErrGoogleEventsFailed = errors.New("could not fetch this linked calendar's events from google")
+
+// googleHTTPError wraps one of the sentinels above with the status code
+// Google's response actually carried, so a caller (classifyGoogleError,
+// connection_refresh.go) can sort ADR-0053's needs-attention/retrying split
+// without parsing an error string. Every other Google-calling method in
+// this file predates that need and keeps reporting its status code as
+// message text only; listEvents and refreshAccessToken are the first
+// callers to need the classification, so they are the first to carry it
+// structurally.
+type googleHTTPError struct {
+	sentinel   error
+	statusCode int
+}
+
+func (e *googleHTTPError) Error() string {
+	return fmt.Sprintf("%s: status %d", e.sentinel, e.statusCode)
+}
+
+func (e *googleHTTPError) Unwrap() error { return e.sentinel }
+
 // googleClient is every HTTP call this app makes to Google, behind one
 // overridable client and one overridable set of endpoint URLs.
 type googleClient struct {
-	clientID, clientSecret                               string
-	authorizeURL, tokenURL, userinfoURL, calendarListURL string
-	httpClient                                           *http.Client
+	clientID, clientSecret                                          string
+	authorizeURL, tokenURL, userinfoURL, calendarListURL, eventsURL string
+	httpClient                                                      *http.Client
 }
 
 func newGoogleClient(clientID, clientSecret string) *googleClient {
@@ -72,6 +109,7 @@ func newGoogleClient(clientID, clientSecret string) *googleClient {
 		tokenURL:        googleTokenURL,
 		userinfoURL:     googleUserinfoURL,
 		calendarListURL: googleCalendarListURL,
+		eventsURL:       googleEventsURL,
 		httpClient:      http.DefaultClient,
 	}
 }
@@ -322,4 +360,225 @@ func (c *googleClient) listCalendarList(ctx context.Context, accessToken string)
 	}
 
 	return entries, nil
+}
+
+// googleRefreshedTokens is what refreshAccessToken returns — just the new
+// access token, since Google only mints a new refresh_token on this grant
+// type when the old one was revoked for security reasons (rare enough that
+// this app treats the stored refresh_token as durable until a Connection is
+// reconnected, a later ticket's concern).
+type googleRefreshedTokens struct {
+	AccessToken string
+}
+
+// refreshAccessToken mints a fresh access token from refreshToken (#287) —
+// never relied on across requests without this, since an access token
+// lasts about an hour and a Full Refresh may run long after the Connection
+// was made. A revoked or expired refreshToken fails here with a 400/401,
+// which classifyGoogleError sorts as needs-attention (connection_refresh.go).
+func (c *googleClient) refreshAccessToken(ctx context.Context, refreshToken string) (googleRefreshedTokens, error) {
+	form := url.Values{}
+	form.Set("client_id", c.clientID)
+	form.Set("client_secret", c.clientSecret)
+	form.Set("refresh_token", refreshToken)
+	form.Set("grant_type", "refresh_token")
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.tokenURL, strings.NewReader(form.Encode()))
+	if err != nil {
+		return googleRefreshedTokens{}, fmt.Errorf("build token refresh request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return googleRefreshedTokens{}, fmt.Errorf("%w: %v", ErrGoogleTokenRefreshFailed, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		io.Copy(io.Discard, resp.Body) //nolint:errcheck // draining for keep-alive reuse; the response carries nothing we need on failure
+		return googleRefreshedTokens{}, &googleHTTPError{sentinel: ErrGoogleTokenRefreshFailed, statusCode: resp.StatusCode}
+	}
+
+	var body struct {
+		AccessToken string `json:"access_token"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		return googleRefreshedTokens{}, fmt.Errorf("%w: %v", ErrGoogleTokenRefreshFailed, err)
+	}
+	if body.AccessToken == "" {
+		return googleRefreshedTokens{}, fmt.Errorf("%w: no access token in the response", ErrGoogleTokenRefreshFailed)
+	}
+
+	return googleRefreshedTokens{AccessToken: body.AccessToken}, nil
+}
+
+// googleEventsPageSize is the page size requested of events.list (#287) —
+// Google's own documented maximum, so a Linked Calendar with many Events
+// still costs a small, bounded number of requests.
+const googleEventsPageSize = 2500
+
+// eventListParams builds events.list's own query parameters, deliberately
+// factored out so a later ticket's Delta Refresh (#288) can send the
+// byte-identical set alongside a syncToken — ADR-0053's "the query
+// parameters on every incremental request must be identical to those on
+// the initial full sync" is enforced by both call sites sharing this one
+// function, not by convention. No time window is requested (ADR-0053: any
+// window chosen here would be locked in for the life of the cursor, and a
+// calendar app that cannot show last year's meeting is broken in a way a
+// slow first sync is not); singleEvents=false preserves a recurring Event
+// as one Master plus its Overrides/Exceptions, which this app's model
+// needs (showDeleted's default of false is left alone — Google still
+// returns a cancelled instance of a recurring Event regardless, and a
+// wholly deleted standalone Event or series is meant to disappear from the
+// listing, which Full mode's own absence-means-deletion rule already
+// handles).
+func eventListParams(pageToken string) url.Values {
+	q := url.Values{}
+	q.Set("singleEvents", "false")
+	q.Set("maxResults", strconv.Itoa(googleEventsPageSize))
+	if pageToken != "" {
+		q.Set("pageToken", pageToken)
+	}
+	return q
+}
+
+// eventsURLFor builds events.list's URL for one calendar (#287) — Google
+// requires the calendar's own id in the path, unescaped except for the
+// standard percent-encoding a "primary" or an opaque group-calendar address
+// needs.
+func (c *googleClient) eventsURLFor(calendarID string) string {
+	return c.eventsURL + "/" + url.PathEscape(calendarID) + "/events"
+}
+
+// googleEventJSON is one Events.list item's wire shape, decoded directly
+// off Google's response before toGoogleEvent narrows it to what
+// google_mapper.go actually consumes.
+type googleEventJSON struct {
+	ID                string                    `json:"id"`
+	ETag              string                    `json:"etag"`
+	Status            string                    `json:"status"`
+	Summary           string                    `json:"summary"`
+	Description       string                    `json:"description"`
+	Location          string                    `json:"location"`
+	Start             googleEventDateTimeJSON   `json:"start"`
+	End               googleEventDateTimeJSON   `json:"end"`
+	RecurringEventID  string                    `json:"recurringEventId"`
+	OriginalStartTime *googleEventDateTimeJSON  `json:"originalStartTime"`
+	Recurrence        []string                  `json:"recurrence"`
+	Attendees         []googleAttendeeJSON      `json:"attendees"`
+	ConferenceData    *googleConferenceDataJSON `json:"conferenceData"`
+}
+
+type googleEventDateTimeJSON struct {
+	Date     string `json:"date"`
+	DateTime string `json:"dateTime"`
+	TimeZone string `json:"timeZone"`
+}
+
+type googleAttendeeJSON struct {
+	Self           bool   `json:"self"`
+	Resource       bool   `json:"resource"`
+	ResponseStatus string `json:"responseStatus"`
+}
+
+type googleConferenceDataJSON struct {
+	EntryPoints []googleEntryPointJSON `json:"entryPoints"`
+}
+
+type googleEntryPointJSON struct {
+	EntryPointType string `json:"entryPointType"`
+	URI            string `json:"uri"`
+}
+
+// toGoogleEvent narrows googleEventJSON to the googleEvent shape
+// google_mapper.go's pure functions consume — the decode boundary and the
+// mapper stay separate so the mapper itself takes no encoding/json
+// dependency and table-tests against plain struct literals.
+func toGoogleEvent(j googleEventJSON) googleEvent {
+	e := googleEvent{
+		ID:               j.ID,
+		ETag:             j.ETag,
+		Status:           j.Status,
+		Summary:          j.Summary,
+		Description:      j.Description,
+		Location:         j.Location,
+		Start:            toGoogleEventDateTime(j.Start),
+		End:              toGoogleEventDateTime(j.End),
+		RecurringEventID: j.RecurringEventID,
+		Recurrence:       j.Recurrence,
+	}
+	if j.OriginalStartTime != nil {
+		dt := toGoogleEventDateTime(*j.OriginalStartTime)
+		e.OriginalStartTime = &dt
+	}
+	for _, a := range j.Attendees {
+		e.Attendees = append(e.Attendees, googleAttendee{Self: a.Self, Resource: a.Resource, ResponseStatus: a.ResponseStatus})
+	}
+	if j.ConferenceData != nil {
+		cd := googleConferenceData{}
+		for _, ep := range j.ConferenceData.EntryPoints {
+			cd.EntryPoints = append(cd.EntryPoints, googleEntryPoint{EntryPointType: ep.EntryPointType, URI: ep.URI})
+		}
+		e.ConferenceData = &cd
+	}
+	return e
+}
+
+func toGoogleEventDateTime(j googleEventDateTimeJSON) googleEventDateTime {
+	return googleEventDateTime{Date: j.Date, DateTime: j.DateTime, TimeZone: j.TimeZone}
+}
+
+// listEvents fetches calendarID's complete event listing (#287, ADR-0053's
+// Full mode): no time window, paginating through Google's own page size so
+// a calendar with many Events still gets a complete listing rather than a
+// truncated first page. Returns the raw, paginated list; grouping instances
+// under their Master and mapping to a domain SeriesWrite is
+// google_mapper.go's job, kept free of any encoding/json or net/http
+// dependency so it table-tests directly.
+func (c *googleClient) listEvents(ctx context.Context, accessToken, calendarID string) ([]googleEvent, error) {
+	var events []googleEvent
+	pageToken := ""
+
+	for {
+		q := eventListParams(pageToken)
+
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.eventsURLFor(calendarID)+"?"+q.Encode(), nil)
+		if err != nil {
+			return nil, fmt.Errorf("build events list request: %w", err)
+		}
+		req.Header.Set("Authorization", "Bearer "+accessToken)
+
+		resp, err := c.httpClient.Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("%w: %v", ErrGoogleEventsFailed, err)
+		}
+
+		if resp.StatusCode != http.StatusOK {
+			io.Copy(io.Discard, resp.Body) //nolint:errcheck // draining for keep-alive reuse; the response carries nothing we need on failure
+			resp.Body.Close()
+			return nil, &googleHTTPError{sentinel: ErrGoogleEventsFailed, statusCode: resp.StatusCode}
+		}
+
+		var body struct {
+			Items         []googleEventJSON `json:"items"`
+			NextPageToken string            `json:"nextPageToken"`
+		}
+		decodeErr := json.NewDecoder(resp.Body).Decode(&body)
+		resp.Body.Close()
+		if decodeErr != nil {
+			return nil, fmt.Errorf("%w: %v", ErrGoogleEventsFailed, decodeErr)
+		}
+
+		for _, item := range body.Items {
+			events = append(events, toGoogleEvent(item))
+		}
+
+		if body.NextPageToken == "" {
+			break
+		}
+		pageToken = body.NextPageToken
+	}
+
+	return events, nil
 }

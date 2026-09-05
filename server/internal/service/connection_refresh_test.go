@@ -1,0 +1,461 @@
+package service
+
+import (
+	"context"
+	"errors"
+	"testing"
+
+	"github.com/XiovV/calich/server/internal/repository"
+)
+
+func googleEventItem(id, summary, startDateTime, endDateTime, tz string) map[string]any {
+	return map[string]any{
+		"id":      id,
+		"etag":    `"etag-` + id + `"`,
+		"summary": summary,
+		"start":   map[string]any{"dateTime": startDateTime, "timeZone": tz},
+		"end":     map[string]any{"dateTime": endDateTime, "timeZone": tz},
+	}
+}
+
+// importOneCalendar drives the Calendar picker's whole round trip — connect,
+// list, import — for one calendar named externalID, returning the resulting
+// Linked Calendar. FullRefresh tests use this as their setup since
+// ImportCalendars now runs the first Full Refresh itself (#287).
+func importOneCalendar(t *testing.T, svc *ConnectionService, auth *AuthService, userID, workspaceID int64, externalID string) repository.Calendar {
+	t.Helper()
+
+	connectionID := connectUser(t, svc, auth, userID)
+	created, err := svc.ImportCalendars(context.Background(), userID, workspaceID, connectionID, []string{externalID})
+	if err != nil {
+		t.Fatalf("import calendars: %v", err)
+	}
+	if len(created) != 1 {
+		t.Fatalf("expected 1 created calendar, got %d", len(created))
+	}
+	return created[0]
+}
+
+func TestConnectionService_ImportCalendars_RunsInitialFullRefreshSynchronously(t *testing.T) {
+	google := newFakeGoogleServer(t)
+	google.calendarListItems = []map[string]any{googleCalendarItem("primary", "someone@gmail.com", "#0b8043", "owner", true)}
+	google.eventsByCalendar = map[string][]map[string]any{
+		"primary": {googleEventItem("evt-1", "Dentist", "2026-01-15T10:00:00-05:00", "2026-01-15T11:00:00-05:00", "America/New_York")},
+	}
+
+	svc, auth, userID, workspaceID := newTestConnectionServiceWithWorkspace(t, google)
+	calendar := importOneCalendar(t, svc, auth, userID, workspaceID, "primary")
+
+	masters, _, err := svc.events.ListSeriesByCalendar(context.Background(), userID, calendar.ID)
+	if err != nil {
+		t.Fatalf("list series: %v", err)
+	}
+	if len(masters) != 1 {
+		t.Fatalf("expected the initial import to have already fetched 1 event, got %d", len(masters))
+	}
+	if masters[0].Title != "Dentist" {
+		t.Fatalf("expected title %q, got %q", "Dentist", masters[0].Title)
+	}
+
+	got, err := svc.calendars.Get(context.Background(), userID, calendar.ID)
+	if err != nil {
+		t.Fatalf("get calendar: %v", err)
+	}
+	if got.Source.LastSyncedAt == nil {
+		t.Fatalf("expected LastSyncedAt to be set after the initial full refresh")
+	}
+}
+
+func TestConnectionService_ImportCalendars_InitialFullRefreshFailureDoesNotUndoTheCalendar(t *testing.T) {
+	google := newFakeGoogleServer(t)
+	google.calendarListItems = []map[string]any{googleCalendarItem("primary", "someone@gmail.com", "#0b8043", "owner", true)}
+
+	svc, auth, userID, workspaceID := newTestConnectionServiceWithWorkspace(t, google)
+	connectionID := connectUser(t, svc, auth, userID)
+
+	// eventsStatus is only forced *after* the calendar list + import calls
+	// above succeeded once already — but ImportCalendars re-fetches
+	// calendarList itself, so force the events endpoint specifically to fail
+	// while everything else keeps working.
+	google.eventsStatus = 401
+
+	created, err := svc.ImportCalendars(context.Background(), userID, workspaceID, connectionID, []string{"primary"})
+	if err != nil {
+		t.Fatalf("expected ImportCalendars to succeed despite the refresh failing, got %v", err)
+	}
+	if len(created) != 1 {
+		t.Fatalf("expected the calendar to still be created, got %d", len(created))
+	}
+
+	got, err := svc.calendars.Get(context.Background(), userID, created[0].ID)
+	if err != nil {
+		t.Fatalf("get calendar: %v", err)
+	}
+	if got.Source.ErrorClass == nil || *got.Source.ErrorClass != ErrorClassNeedsAttention {
+		t.Fatalf("expected the Source to carry a needs-attention error, got %+v", got.Source)
+	}
+}
+
+func TestConnectionService_FullRefresh_CreatesMasterOverrideAndException(t *testing.T) {
+	google := newFakeGoogleServer(t)
+	google.calendarListItems = []map[string]any{googleCalendarItem("primary", "someone@gmail.com", "#0b8043", "owner", true)}
+	google.eventsByCalendar = map[string][]map[string]any{
+		"primary": {
+			{
+				"id":         "series-1",
+				"summary":    "Standup",
+				"start":      map[string]any{"dateTime": "2026-01-05T09:00:00-05:00", "timeZone": "America/New_York"},
+				"end":        map[string]any{"dateTime": "2026-01-05T09:15:00-05:00", "timeZone": "America/New_York"},
+				"recurrence": []string{"RRULE:FREQ=WEEKLY;BYDAY=MO"},
+			},
+			{
+				"id":                "series-1_20260112",
+				"recurringEventId":  "series-1",
+				"originalStartTime": map[string]any{"dateTime": "2026-01-12T09:00:00-05:00", "timeZone": "America/New_York"},
+				"summary":           "Standup (moved)",
+				"start":             map[string]any{"dateTime": "2026-01-12T10:00:00-05:00", "timeZone": "America/New_York"},
+				"end":               map[string]any{"dateTime": "2026-01-12T10:15:00-05:00", "timeZone": "America/New_York"},
+				"status":            "confirmed",
+			},
+			{
+				"id":                "series-1_20260119",
+				"recurringEventId":  "series-1",
+				"originalStartTime": map[string]any{"dateTime": "2026-01-19T09:00:00-05:00", "timeZone": "America/New_York"},
+				"status":            "cancelled",
+			},
+		},
+	}
+
+	svc, auth, userID, workspaceID := newTestConnectionServiceWithWorkspace(t, google)
+	calendar := importOneCalendar(t, svc, auth, userID, workspaceID, "primary")
+
+	masters, overridesByParent, err := svc.events.ListSeriesByCalendar(context.Background(), userID, calendar.ID)
+	if err != nil {
+		t.Fatalf("list series: %v", err)
+	}
+	if len(masters) != 1 {
+		t.Fatalf("expected 1 master, got %d", len(masters))
+	}
+	master := masters[0]
+	if master.Rrule != "FREQ=WEEKLY;BYDAY=MO" {
+		t.Fatalf("expected rrule to survive, got %q", master.Rrule)
+	}
+	if master.ExternalUID == nil || *master.ExternalUID != "series-1" {
+		t.Fatalf("expected ExternalUID series-1, got %v", master.ExternalUID)
+	}
+	if len(master.Exdates) != 1 {
+		t.Fatalf("expected 1 exdate from the cancelled instance, got %d", len(master.Exdates))
+	}
+
+	overrides := overridesByParent[master.ID]
+	if len(overrides) != 1 {
+		t.Fatalf("expected 1 override, got %d", len(overrides))
+	}
+	if overrides[0].Title != "Standup (moved)" {
+		t.Fatalf("expected override title, got %q", overrides[0].Title)
+	}
+}
+
+func TestConnectionService_FullRefresh_StoresRSVPConferenceURLGuestCountAndEtag(t *testing.T) {
+	google := newFakeGoogleServer(t)
+	google.calendarListItems = []map[string]any{googleCalendarItem("primary", "someone@gmail.com", "#0b8043", "owner", true)}
+	google.eventsByCalendar = map[string][]map[string]any{
+		"primary": {
+			{
+				"id":      "evt-1",
+				"etag":    `"the-etag"`,
+				"summary": "Team lunch",
+				"start":   map[string]any{"dateTime": "2026-04-01T12:00:00-04:00", "timeZone": "America/New_York"},
+				"end":     map[string]any{"dateTime": "2026-04-01T13:00:00-04:00", "timeZone": "America/New_York"},
+				"attendees": []map[string]any{
+					{"self": true, "responseStatus": "accepted"},
+					{"responseStatus": "needsAction"},
+					{"resource": true, "responseStatus": "accepted"},
+				},
+				"conferenceData": map[string]any{
+					"entryPoints": []map[string]any{
+						{"entryPointType": "video", "uri": "https://meet.google.com/abc-defg-hij"},
+					},
+				},
+			},
+		},
+	}
+
+	svc, auth, userID, workspaceID := newTestConnectionServiceWithWorkspace(t, google)
+	calendar := importOneCalendar(t, svc, auth, userID, workspaceID, "primary")
+
+	masters, _, err := svc.events.ListSeriesByCalendar(context.Background(), userID, calendar.ID)
+	if err != nil {
+		t.Fatalf("list series: %v", err)
+	}
+	if len(masters) != 1 {
+		t.Fatalf("expected 1 master, got %d", len(masters))
+	}
+	m := masters[0]
+	if m.RSVPStatus == nil || *m.RSVPStatus != "accepted" {
+		t.Fatalf("expected RSVP accepted, got %v", m.RSVPStatus)
+	}
+	if m.ConferenceURL == nil || *m.ConferenceURL != "https://meet.google.com/abc-defg-hij" {
+		t.Fatalf("expected conference URL, got %v", m.ConferenceURL)
+	}
+	if m.GuestCount != 1 {
+		t.Fatalf("expected guest count 1, got %d", m.GuestCount)
+	}
+	if m.ProviderEtag == nil || *m.ProviderEtag != "the-etag" {
+		t.Fatalf("expected provider etag stored with quotes stripped, got %v", m.ProviderEtag)
+	}
+}
+
+func TestConnectionService_FullRefresh_PaginatesThroughEveryPage(t *testing.T) {
+	google := newFakeGoogleServer(t)
+	google.calendarListItems = []map[string]any{googleCalendarItem("primary", "someone@gmail.com", "#0b8043", "owner", true)}
+	var items []map[string]any
+	for i := 0; i < 5; i++ {
+		id := "evt-" + string(rune('a'+i))
+		items = append(items, googleEventItem(id, "Event "+string(rune('A'+i)), "2026-01-0"+string(rune('1'+i))+"T10:00:00-05:00", "2026-01-0"+string(rune('1'+i))+"T11:00:00-05:00", "America/New_York"))
+	}
+	google.eventsByCalendar = map[string][]map[string]any{"primary": items}
+	google.eventsPageSize = 2
+
+	svc, auth, userID, workspaceID := newTestConnectionServiceWithWorkspace(t, google)
+	calendar := importOneCalendar(t, svc, auth, userID, workspaceID, "primary")
+
+	masters, _, err := svc.events.ListSeriesByCalendar(context.Background(), userID, calendar.ID)
+	if err != nil {
+		t.Fatalf("list series: %v", err)
+	}
+	if len(masters) != 5 {
+		t.Fatalf("expected all 5 events across every page to be fetched, got %d", len(masters))
+	}
+}
+
+func TestConnectionService_FullRefresh_SecondRunReconciles(t *testing.T) {
+	google := newFakeGoogleServer(t)
+	google.calendarListItems = []map[string]any{googleCalendarItem("primary", "someone@gmail.com", "#0b8043", "owner", true)}
+	google.eventsByCalendar = map[string][]map[string]any{
+		"primary": {googleEventItem("evt-1", "Dentist", "2026-01-15T10:00:00-05:00", "2026-01-15T11:00:00-05:00", "America/New_York")},
+	}
+
+	svc, auth, userID, workspaceID := newTestConnectionServiceWithWorkspace(t, google)
+	calendar := importOneCalendar(t, svc, auth, userID, workspaceID, "primary")
+
+	// Google renames the event and adds a second one; the stored series
+	// should update in place (same master id) and the new one should be
+	// created — Full mode's ordinary upsert path (ADR-0053).
+	google.eventsByCalendar["primary"] = []map[string]any{
+		googleEventItem("evt-1", "Dentist (rescheduled)", "2026-01-16T10:00:00-05:00", "2026-01-16T11:00:00-05:00", "America/New_York"),
+		googleEventItem("evt-2", "Follow-up", "2026-01-17T10:00:00-05:00", "2026-01-17T11:00:00-05:00", "America/New_York"),
+	}
+
+	result, err := svc.FullRefresh(context.Background(), userID, calendar.ID)
+	if err != nil {
+		t.Fatalf("full refresh: %v", err)
+	}
+	if result.Updated != 1 || result.Created != 1 {
+		t.Fatalf("expected 1 updated and 1 created, got %+v", result)
+	}
+
+	masters, _, err := svc.events.ListSeriesByCalendar(context.Background(), userID, calendar.ID)
+	if err != nil {
+		t.Fatalf("list series: %v", err)
+	}
+	if len(masters) != 2 {
+		t.Fatalf("expected 2 masters, got %d", len(masters))
+	}
+}
+
+func TestConnectionService_FullRefresh_AbsentEventIsTombstoned(t *testing.T) {
+	google := newFakeGoogleServer(t)
+	google.calendarListItems = []map[string]any{googleCalendarItem("primary", "someone@gmail.com", "#0b8043", "owner", true)}
+	google.eventsByCalendar = map[string][]map[string]any{
+		"primary": {googleEventItem("evt-1", "Dentist", "2026-01-15T10:00:00-05:00", "2026-01-15T11:00:00-05:00", "America/New_York")},
+	}
+
+	svc, auth, userID, workspaceID := newTestConnectionServiceWithWorkspace(t, google)
+	calendar := importOneCalendar(t, svc, auth, userID, workspaceID, "primary")
+
+	google.eventsByCalendar["primary"] = nil
+
+	result, err := svc.FullRefresh(context.Background(), userID, calendar.ID)
+	if err != nil {
+		t.Fatalf("full refresh: %v", err)
+	}
+	if result.Tombstoned != 1 {
+		t.Fatalf("expected 1 tombstoned (Full mode: absence means deletion), got %+v", result)
+	}
+
+	masters, _, err := svc.events.ListSeriesByCalendar(context.Background(), userID, calendar.ID)
+	if err != nil {
+		t.Fatalf("list series: %v", err)
+	}
+	if len(masters) != 0 {
+		t.Fatalf("expected no masters left, got %d", len(masters))
+	}
+}
+
+func TestConnectionService_FullRefresh_UnmappableRecurringInstanceIsNeverTombstoned(t *testing.T) {
+	// Regression test for ADR-0053/ADR-0050's own "present but unparseable
+	// is never a reason to tombstone", specifically for a recurring
+	// instance's master somehow missing from a fetch (google_mapper.go's
+	// defensive orphan case) — the stored series must survive untouched.
+	google := newFakeGoogleServer(t)
+	google.calendarListItems = []map[string]any{googleCalendarItem("primary", "someone@gmail.com", "#0b8043", "owner", true)}
+	google.eventsByCalendar = map[string][]map[string]any{
+		"primary": {
+			{
+				"id":         "series-1",
+				"summary":    "Standup",
+				"start":      map[string]any{"dateTime": "2026-01-05T09:00:00-05:00", "timeZone": "America/New_York"},
+				"end":        map[string]any{"dateTime": "2026-01-05T09:15:00-05:00", "timeZone": "America/New_York"},
+				"recurrence": []string{"RRULE:FREQ=WEEKLY;BYDAY=MO"},
+			},
+		},
+	}
+
+	svc, auth, userID, workspaceID := newTestConnectionServiceWithWorkspace(t, google)
+	calendar := importOneCalendar(t, svc, auth, userID, workspaceID, "primary")
+
+	// Next fetch names an instance of series-1 but, pathologically, never
+	// includes series-1's own master row.
+	google.eventsByCalendar["primary"] = []map[string]any{
+		{
+			"id":                "series-1_20260112",
+			"recurringEventId":  "series-1",
+			"originalStartTime": map[string]any{"dateTime": "2026-01-12T09:00:00-05:00", "timeZone": "America/New_York"},
+			"summary":           "Standup (moved)",
+			"start":             map[string]any{"dateTime": "2026-01-12T10:00:00-05:00", "timeZone": "America/New_York"},
+			"end":               map[string]any{"dateTime": "2026-01-12T10:15:00-05:00", "timeZone": "America/New_York"},
+			"status":            "confirmed",
+		},
+	}
+
+	result, err := svc.FullRefresh(context.Background(), userID, calendar.ID)
+	if err != nil {
+		t.Fatalf("full refresh: %v", err)
+	}
+	if result.Tombstoned != 0 {
+		t.Fatalf("expected zero tombstones for an orphaned instance, got %+v", result)
+	}
+	if result.Unparseable != 1 {
+		t.Fatalf("expected the series to be counted as unparseable/skipped, got %+v", result)
+	}
+
+	masters, _, err := svc.events.ListSeriesByCalendar(context.Background(), userID, calendar.ID)
+	if err != nil {
+		t.Fatalf("list series: %v", err)
+	}
+	if len(masters) != 1 {
+		t.Fatalf("expected the original series to still be stored untouched, got %d", len(masters))
+	}
+	if masters[0].Title != "Standup" {
+		t.Fatalf("expected the master's original content untouched, got %q", masters[0].Title)
+	}
+}
+
+func TestConnectionService_FullRefresh_UnsupportedRecurrenceLinesAreDroppedAndCounted(t *testing.T) {
+	google := newFakeGoogleServer(t)
+	google.calendarListItems = []map[string]any{googleCalendarItem("primary", "someone@gmail.com", "#0b8043", "owner", true)}
+	google.eventsByCalendar = map[string][]map[string]any{
+		"primary": {
+			{
+				"id":      "series-1",
+				"summary": "Irregular meeting",
+				"start":   map[string]any{"dateTime": "2026-02-01T09:00:00-05:00", "timeZone": "America/New_York"},
+				"end":     map[string]any{"dateTime": "2026-02-01T09:30:00-05:00", "timeZone": "America/New_York"},
+				"recurrence": []string{
+					"RRULE:FREQ=WEEKLY",
+					"RDATE:20260203T140000Z",
+				},
+			},
+		},
+	}
+
+	svc, auth, userID, workspaceID := newTestConnectionServiceWithWorkspace(t, google)
+	connectionID := connectUser(t, svc, auth, userID)
+
+	result, err := svc.ImportCalendars(context.Background(), userID, workspaceID, connectionID, []string{"primary"})
+	if err != nil {
+		t.Fatalf("import calendars: %v", err)
+	}
+
+	refreshResult, err := svc.FullRefresh(context.Background(), userID, result[0].ID)
+	if err != nil {
+		t.Fatalf("full refresh: %v", err)
+	}
+	if refreshResult.DroppedRecurrenceLines != 1 {
+		t.Fatalf("expected 1 dropped recurrence line surfaced, got %+v", refreshResult)
+	}
+}
+
+func TestConnectionService_FullRefresh_RetriesOnceWithAFreshTokenAfter401(t *testing.T) {
+	google := newFakeGoogleServer(t)
+	google.calendarListItems = []map[string]any{googleCalendarItem("primary", "someone@gmail.com", "#0b8043", "owner", true)}
+	google.eventsByCalendar = map[string][]map[string]any{
+		"primary": {googleEventItem("evt-1", "Dentist", "2026-01-15T10:00:00-05:00", "2026-01-15T11:00:00-05:00", "America/New_York")},
+	}
+
+	svc, auth, userID, workspaceID := newTestConnectionServiceWithWorkspace(t, google)
+	// The cached access_token from Connect/Callback has "expired" by the
+	// time this Full Refresh runs — the first /events call must fail with
+	// 401 before doFullRefresh mints a fresh one and retries.
+	google.eventsFailFirstNCalls = 1
+
+	calendar := importOneCalendar(t, svc, auth, userID, workspaceID, "primary")
+
+	masters, _, err := svc.events.ListSeriesByCalendar(context.Background(), userID, calendar.ID)
+	if err != nil {
+		t.Fatalf("list series: %v", err)
+	}
+	if len(masters) != 1 {
+		t.Fatalf("expected the retry to still fetch the event after the first 401, got %d", len(masters))
+	}
+	if google.eventsCallCount != 2 {
+		t.Fatalf("expected exactly 2 calls to /events (the failed one plus the retry), got %d", google.eventsCallCount)
+	}
+}
+
+func TestConnectionService_FullRefresh_RevokedRefreshTokenIsNeedsAttention(t *testing.T) {
+	google := newFakeGoogleServer(t)
+	google.calendarListItems = []map[string]any{googleCalendarItem("primary", "someone@gmail.com", "#0b8043", "owner", true)}
+	google.eventsByCalendar = map[string][]map[string]any{
+		"primary": {googleEventItem("evt-1", "Dentist", "2026-01-15T10:00:00-05:00", "2026-01-15T11:00:00-05:00", "America/New_York")},
+	}
+
+	svc, auth, userID, workspaceID := newTestConnectionServiceWithWorkspace(t, google)
+	calendar := importOneCalendar(t, svc, auth, userID, workspaceID, "primary")
+
+	// The cached token is now rejected (expired) and the refresh grant
+	// itself fails with Google's standard 400 invalid_grant for a revoked
+	// refresh_token. eventsCallCount is reset so eventsFailFirstNCalls
+	// counts from this call alone, not the initial import's own successful
+	// one.
+	google.eventsCallCount = 0
+	google.eventsFailFirstNCalls = 1
+	google.tokenStatus = 400
+
+	if _, err := svc.FullRefresh(context.Background(), userID, calendar.ID); err == nil {
+		t.Fatalf("expected the refresh to fail")
+	}
+
+	got, err := svc.calendars.Get(context.Background(), userID, calendar.ID)
+	if err != nil {
+		t.Fatalf("get calendar: %v", err)
+	}
+	if got.Source.ErrorClass == nil || *got.Source.ErrorClass != ErrorClassNeedsAttention {
+		t.Fatalf("expected a revoked refresh_token (400) to be classified needs-attention, got %+v", got.Source)
+	}
+}
+
+func TestConnectionService_FullRefresh_NotFoundForNonLinkedCalendar(t *testing.T) {
+	google := newFakeGoogleServer(t)
+	svc, _, userID, workspaceID := newTestConnectionServiceWithWorkspace(t, google)
+
+	ownCalendar, err := svc.calendars.Create(context.Background(), userID, workspaceID, "uuid-1", CalendarWrite{Name: "Personal", Color: "#FF0000FF"})
+	if err != nil {
+		t.Fatalf("create calendar: %v", err)
+	}
+
+	if _, err := svc.FullRefresh(context.Background(), userID, ownCalendar.ID); !errors.Is(err, ErrRefreshNotLinked) {
+		t.Fatalf("expected ErrRefreshNotLinked, got %v", err)
+	}
+}

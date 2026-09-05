@@ -30,9 +30,10 @@ func newTestConnectionServiceWithWorkspace(t *testing.T, google *fakeGoogleServe
 	}
 
 	connections := repository.NewConnectionRepository(g.DB)
-	svc = NewConnectionService(connections, g.Auth, g.Calendars, "test-client-id", "test-client-secret", "test-encryption-key", true,
+	svc = NewConnectionService(connections, g.Auth, g.Calendars, g.Events, "test-client-id", "test-client-secret", "test-encryption-key", true,
 		withGoogleHTTPClient(google.Client()),
 		withGoogleEndpoints(google.URL+"/authorize", google.URL+"/token", google.URL+"/userinfo", google.URL+"/calendarList"),
+		withGoogleEventsURL(google.URL),
 	)
 
 	return svc, g.Auth, user.ID, workspace.ID
