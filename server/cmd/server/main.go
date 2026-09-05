@@ -20,12 +20,12 @@ import (
 // once-a-minute tick is fine-grained enough without being wasteful.
 const reminderTickInterval = time.Minute
 
-// subscriptionPollerTickInterval is how often the background poller checks
-// for due Subscriptions (#86, ADR-0033) — independent of, and much finer
-// than, any individual Subscription's own refresh cadence: this only
-// governs how promptly a due Calendar is noticed, not how often it's
-// actually refreshed.
-const subscriptionPollerTickInterval = time.Minute
+// sourcePollerTickInterval is how often the background poller checks for due
+// Sources — Subscriptions and Linked Calendars alike (#86, #288, ADR-0033) —
+// independent of, and much finer than, any individual Source's own refresh
+// cadence: this only governs how promptly a due Calendar is noticed, not how
+// often it's actually refreshed.
+const sourcePollerTickInterval = time.Minute
 
 // attachmentSweepInterval is how often the Attachment sweeper reclaims
 // orphaned files on top of the startup sweep Run always does first
@@ -103,11 +103,11 @@ func main() {
 	defer stopScheduler()
 	go a.ReminderScheduler.Run(schedulerCtx, reminderTickInterval)
 
-	// The background poller that refreshes Subscribed Calendars on its own,
-	// whether or not a browser is open (#86, ADR-0033).
+	// The background poller that refreshes Subscribed and Linked Calendars on
+	// its own, whether or not a browser is open (#86, #288, ADR-0033).
 	pollerCtx, stopPoller := context.WithCancel(context.Background())
 	defer stopPoller()
-	go a.SubscriptionPoller.Run(pollerCtx, subscriptionPollerTickInterval)
+	go a.SourcePoller.Run(pollerCtx, sourcePollerTickInterval)
 
 	// The Attachment sweeper: reclaims files with no matching row, at
 	// startup and daily thereafter (#132, ADR-0040).

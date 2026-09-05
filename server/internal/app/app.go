@@ -63,9 +63,9 @@ type App struct {
 
 	// The background workers. Each is built here and run by whoever owns the
 	// process — cmd/server gives each its own context and tick interval.
-	ReminderScheduler  *reminder.Scheduler
-	SubscriptionPoller *service.Poller
-	AttachmentSweeper  *service.AttachmentSweeper
+	ReminderScheduler *reminder.Scheduler
+	SourcePoller      *service.Poller
+	AttachmentSweeper *service.AttachmentSweeper
 	// OutboxWorker is nil when no SMTP transport is configured: there is
 	// nothing queued to drain and nothing to send it with (ADR-0059,
 	// ADR-0060).
@@ -129,7 +129,7 @@ func newFromGraph(graph *service.Graph, cfg config.Config) *App {
 	dispatcher := reminder.NotificationDispatcher{Notifications: a.NotificationRepo, Fallback: emailDispatcher, Now: time.Now}
 	a.ReminderScheduler = reminder.NewScheduler(a.Events, a.FiredReminderRepo, a.UserRepo, dispatcher, time.Now)
 
-	a.SubscriptionPoller = service.NewPoller(a.Calendars, a.Subscriptions, time.Now)
+	a.SourcePoller = service.NewPoller(a.Calendars, a.Subscriptions, a.Connections, time.Now)
 	a.AttachmentSweeper = service.NewAttachmentSweeper(a.AttachmentRepo, a.AttachmentStore)
 
 	if a.OutboxRepo != nil {

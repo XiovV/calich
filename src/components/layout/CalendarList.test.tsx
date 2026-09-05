@@ -110,4 +110,16 @@ describe("Linked Calendar grouping", () => {
     // "Work" only ever renders under its Connection's own heading.
     expect(screen.getAllByText("Work")).toHaveLength(1);
   });
+
+  // #288: a Linked Calendar can be refreshed on demand, exactly like a
+  // Subscribed one — and, like one, offers no per-Calendar Export.
+  it("offers Refresh and not Export on a Linked Calendar", async () => {
+    useCalendarsStore.setState({ calendars: [workLinked] });
+    render(<CalendarList />);
+
+    await openMenu("Work");
+
+    expect(await screen.findByRole("menuitem", { name: "Refresh" })).toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: "Export" })).not.toBeInTheDocument();
+  });
 });

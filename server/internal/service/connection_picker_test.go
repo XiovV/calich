@@ -12,7 +12,7 @@ import (
 // sibling for the Calendar picker (#286): ImportCalendars needs an active
 // Workspace to place Linked Calendars into, which none of #285's existing
 // Connect/Callback/Disconnect tests require.
-func newTestConnectionServiceWithWorkspace(t *testing.T, google *fakeGoogleServer) (svc *ConnectionService, auth *AuthService, userID, workspaceID int64) {
+func newTestConnectionServiceWithWorkspace(t *testing.T, google *fakeGoogleServer, opts ...ConnectionOption) (svc *ConnectionService, auth *AuthService, userID, workspaceID int64) {
 	t.Helper()
 
 	g := newTestGraph(t)
@@ -30,11 +30,12 @@ func newTestConnectionServiceWithWorkspace(t *testing.T, google *fakeGoogleServe
 	}
 
 	connections := repository.NewConnectionRepository(g.DB)
-	svc = NewConnectionService(connections, g.Auth, g.Calendars, g.Events, "test-client-id", "test-client-secret", "test-encryption-key", true,
+	allOpts := append([]ConnectionOption{
 		withGoogleHTTPClient(google.Client()),
 		withGoogleEndpoints(google.URL+"/authorize", google.URL+"/token", google.URL+"/userinfo", google.URL+"/calendarList"),
 		withGoogleEventsURL(google.URL),
-	)
+	}, opts...)
+	svc = NewConnectionService(connections, g.Auth, g.Calendars, g.Events, "test-client-id", "test-client-secret", "test-encryption-key", true, allOpts...)
 
 	return svc, g.Auth, user.ID, workspace.ID
 }

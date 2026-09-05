@@ -118,35 +118,12 @@ func (s *GoogleMappingSummary) add(reason, title string) {
 // under DroppedOrphanInstance — present-but-unmappable, never treated as an
 // absence a Full Refresh would tombstone (ADR-0053's third bucket).
 func mapGoogleEvents(events []googleEvent) ([]IncomingSeries, GoogleMappingSummary) {
-	groups := make(map[string][]googleEvent, len(events))
-	order := make([]string, 0, len(events))
-	for _, e := range events {
-		key := e.RecurringEventID
-		if key == "" {
-			key = e.ID
-		}
-		if _, seen := groups[key]; !seen {
-			order = append(order, key)
-		}
-		groups[key] = append(groups[key], e)
-	}
+	order, groups := groupGoogleEventsBySeries(events)
 
 	series := make([]IncomingSeries, 0, len(order))
 	var summary GoogleMappingSummary
 	for _, key := range order {
-		group := groups[key]
-
-		var master *googleEvent
-		var instances []googleEvent
-		for i := range group {
-			if group[i].RecurringEventID == "" {
-				m := group[i]
-				master = &m
-				continue
-			}
-			instances = append(instances, group[i])
-		}
-
+		master, instances := splitMasterAndInstances(groups[key])
 		if master == nil {
 			summary.add(DroppedOrphanInstance, "")
 			summary.OrphanExternalUIDs = append(summary.OrphanExternalUIDs, key)
@@ -163,6 +140,110 @@ func mapGoogleEvents(events []googleEvent) ([]IncomingSeries, GoogleMappingSumma
 	return series, summary
 }
 
+// groupGoogleEventsBySeries buckets events by series key — an instance's
+// RecurringEventID, or a standalone Master's own ID — returning the keys in
+// first-seen order so mapping stays deterministic. Shared by mapGoogleEvents
+// (Full Refresh) and mapGoogleEventChanges (Delta Refresh).
+func groupGoogleEventsBySeries(events []googleEvent) (order []string, groups map[string][]googleEvent) {
+	groups = make(map[string][]googleEvent, len(events))
+	for _, e := range events {
+		key := e.RecurringEventID
+		if key == "" {
+			key = e.ID
+		}
+		if _, seen := groups[key]; !seen {
+			order = append(order, key)
+		}
+		groups[key] = append(groups[key], e)
+	}
+	return order, groups
+}
+
+// splitMasterAndInstances separates one series' group into its Master (the
+// row with no RecurringEventID, nil when this fetch didn't include it) and
+// its recurring instances.
+func splitMasterAndInstances(group []googleEvent) (master *googleEvent, instances []googleEvent) {
+	for i := range group {
+		if group[i].RecurringEventID == "" {
+			m := group[i]
+			master = &m
+			continue
+		}
+		instances = append(instances, group[i])
+	}
+	return master, instances
+}
+
+// DeltaSeriesChange is one series a Delta Refresh's batch touched (#288,
+// ADR-0053), keyed by ExternalUID (the Master's Google event id):
+//
+//   - Master non-nil: the Provider sent the Master in this batch, fully
+//     mapped from it (its own in-batch instances already folded into
+//     Master.Overrides / Master.Exdates). ReconcileDelta overlays these
+//     Master-level fields onto the stored series without disturbing stored
+//     Overrides the batch didn't mention.
+//   - Master nil: only instances of an otherwise-unchanged series changed —
+//     the common Delta case. Overrides and Cancellations carry just those,
+//     to be merged into the stored series.
+//
+// A change is never an instruction to remove anything by absence: a
+// deletion is a separate, explicit signal (mapGoogleEventChanges' second
+// return), so ReconcileDelta's merge only ever adds or replaces.
+type DeltaSeriesChange struct {
+	ExternalUID   string
+	Master        *SeriesWrite
+	Overrides     []OverrideWrite
+	Cancellations []time.Time
+}
+
+// mapGoogleEventChanges maps one Delta Refresh batch (#288, ADR-0053) into
+// the series that changed and the series the Provider explicitly deleted.
+// Absence carries no meaning here — it is the overwhelming majority of every
+// response and means "unchanged" — so nothing about a series not appearing
+// is ever returned. deletions holds only the ExternalUIDs of events the
+// Provider stated are gone (a top-level status=cancelled). The summary's
+// OrphanExternalUIDs collects instance-only changes whose series this
+// Calendar does not store, for the caller to fold into ReconcileDelta's
+// unparseable set — present-but-unmappable, never an absence (ADR-0053's
+// third bucket).
+func mapGoogleEventChanges(events []googleEvent) (changes []DeltaSeriesChange, deletions []string, summary GoogleMappingSummary) {
+	live := make([]googleEvent, 0, len(events))
+	for _, e := range events {
+		if e.RecurringEventID == "" && e.Status == googleStatusCancelled {
+			// A wholly deleted standalone Event or recurring series. The
+			// Provider stating it explicitly is the entire point of Delta mode
+			// — this is the one path that may tombstone, and only this one.
+			deletions = append(deletions, e.ID)
+			continue
+		}
+		live = append(live, e)
+	}
+
+	order, groups := groupGoogleEventsBySeries(live)
+	for _, key := range order {
+		master, instances := splitMasterAndInstances(groups[key])
+
+		if master != nil {
+			write, dropped := mapGoogleMaster(*master, instances)
+			for _, reason := range dropped {
+				summary.add(reason, write.Title)
+			}
+			changes = append(changes, DeltaSeriesChange{ExternalUID: master.ID, Master: &write})
+			continue
+		}
+
+		overrides, cancellations := mapGoogleInstances(instances, key)
+		if len(overrides) == 0 && len(cancellations) == 0 {
+			summary.add(DroppedOrphanInstance, "")
+			summary.OrphanExternalUIDs = append(summary.OrphanExternalUIDs, key)
+			continue
+		}
+		changes = append(changes, DeltaSeriesChange{ExternalUID: key, Overrides: overrides, Cancellations: cancellations})
+	}
+
+	return changes, deletions, summary
+}
+
 // mapGoogleMaster maps one series' Master plus its instances (Overrides and
 // cancelled Exceptions alike) to a SeriesWrite. dropped names, once per
 // unsupported recurrence line actually present, which of RDATE/EXRULE this
@@ -176,6 +257,12 @@ func mapGoogleMaster(master googleEvent, instances []googleEvent) (SeriesWrite, 
 
 	rsvp, guestCount := googleGuestInfo(master.Attendees)
 
+	// exdates is parseGoogleRecurrence's own fresh slice; folding the
+	// cancelled instances into it here is a local mutation, nothing else
+	// holds a reference.
+	overrides, cancellations := mapGoogleInstances(instances, master.ID)
+	exdates = append(exdates, cancellations...)
+
 	write := SeriesWrite{
 		Title:         master.Summary,
 		Description:   master.Description,
@@ -186,6 +273,7 @@ func mapGoogleMaster(master googleEvent, instances []googleEvent) (SeriesWrite, 
 		Tzid:          tzid,
 		Rrule:         rrule,
 		Exdates:       exdates,
+		Overrides:     overrides,
 		ExternalUID:   master.ID,
 		ProviderEtag:  googleEtag(master.ETag),
 		RSVPStatus:    rsvp,
@@ -193,23 +281,33 @@ func mapGoogleMaster(master googleEvent, instances []googleEvent) (SeriesWrite, 
 		GuestCount:    guestCount,
 	}
 
+	return write, dropped
+}
+
+// mapGoogleInstances maps a series' recurring instances — modified ones to
+// Overrides, cancelled ones to Exdate instants — keyed to the Occurrence
+// each replaces by its originalStartTime (iCalendar RECURRENCE-ID). An
+// instance missing originalStartTime carries nothing to anchor to and is
+// silently skipped rather than guessed at; Google always sends it on a real
+// instance. Shared by mapGoogleMaster (Full Refresh, and a Delta Refresh
+// whose batch includes the Master) and mapGoogleEventChanges' Master-absent
+// case (a Delta Refresh that changed one instance of an otherwise-unchanged
+// series).
+func mapGoogleInstances(instances []googleEvent, externalUID string) (overrides []OverrideWrite, cancellations []time.Time) {
 	for _, instance := range instances {
 		if instance.OriginalStartTime == nil {
-			// Google always sends this on a recurring instance; an instance
-			// missing it carries nothing this app could anchor an Override or
-			// Exdate to, so it is silently unusable rather than guessed at.
 			continue
 		}
 		recurrenceID, _, _ := decodeGoogleTime(*instance.OriginalStartTime)
 
 		if instance.Status == googleStatusCancelled {
-			write.Exdates = append(write.Exdates, recurrenceID)
+			cancellations = append(cancellations, recurrenceID)
 			continue
 		}
 
 		iStart, iAllDay, iTzid := decodeGoogleTime(instance.Start)
 		iRsvp, iGuestCount := googleGuestInfo(instance.Attendees)
-		write.Overrides = append(write.Overrides, OverrideWrite{
+		overrides = append(overrides, OverrideWrite{
 			RecurrenceID:  recurrenceID,
 			Title:         instance.Summary,
 			Description:   instance.Description,
@@ -218,15 +316,14 @@ func mapGoogleMaster(master googleEvent, instances []googleEvent) (SeriesWrite, 
 			End:           firstOf(decodeGoogleTime(instance.End)),
 			AllDay:        iAllDay,
 			Tzid:          iTzid,
-			ExternalUID:   master.ID,
+			ExternalUID:   externalUID,
 			ProviderEtag:  googleEtag(instance.ETag),
 			RSVPStatus:    iRsvp,
 			ConferenceURL: googleConferenceURL(instance.ConferenceData),
 			GuestCount:    iGuestCount,
 		})
 	}
-
-	return write, dropped
+	return overrides, cancellations
 }
 
 // firstOf discards decodeGoogleTime's allDay/tzid results — used for an

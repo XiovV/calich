@@ -248,6 +248,16 @@ CREATE INDEX idx_connections_user_id ON connections(user_id);
 -- calendar's address). It is what the Calendar picker uses to tell "already
 -- imported into this Workspace" apart from "not yet", and what a later
 -- Refresh addresses this Source's calendar back at the Provider by.
+--
+-- cursor (#288, ADR-0053) is set only on a 'connection' row: the Delta
+-- Refresh cursor a Linked Calendar presents to the Provider to get back only
+-- what has changed since the last cycle (Google's nextSyncToken). NULL until
+-- the first Full Refresh stores one; a NULL here means the next poll cycle
+-- is a Full Refresh, which is safe — so a failure to store one is a
+-- correctness non-event that is merely logged, never a data risk. Delta mode
+-- is never inferred from this column being non-NULL: the Refresh mode is an
+-- explicit argument threaded from the scheduler, and this column only decides
+-- which mode the poller picks.
 CREATE TABLE calendar_sources (
     calendar_id TEXT PRIMARY KEY REFERENCES calendars(id) ON DELETE CASCADE,
     kind TEXT NOT NULL CHECK (kind IN ('subscription', 'connection')),
@@ -267,6 +277,7 @@ CREATE TABLE calendar_sources (
     keep_alarms BOOLEAN NOT NULL DEFAULT 0,
     feed_name TEXT,
     feed_color TEXT,
+    cursor TEXT,
     CHECK (
         (kind = 'subscription' AND source_url IS NOT NULL AND connection_id IS NULL AND external_calendar_id IS NULL)
         OR

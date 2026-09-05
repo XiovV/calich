@@ -20,6 +20,13 @@ const (
 	// repeated failures — roughly a day, so a genuinely dead feed is
 	// retried a handful of times per day rather than hammered or forgotten.
 	MaxRefreshBackoff = 24 * time.Hour
+	// DefaultConnectionRefreshInterval is how often the poller runs a Delta
+	// Refresh against a Linked Calendar (#288, ADR-0053) — roughly fifteen
+	// minutes rather than a Subscription's hour, since a Delta Refresh
+	// against an unchanged calendar costs one request returning an empty
+	// list, far cheaper than a conditional GET over a whole ICS document.
+	// Configurable per deployment (CONNECTION_REFRESH_INTERVAL).
+	DefaultConnectionRefreshInterval = 15 * time.Minute
 )
 
 // Error classes a broken Subscription's sidebar entry carries (#86,

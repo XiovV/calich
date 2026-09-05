@@ -64,8 +64,8 @@ type ConnectionService struct {
 	// SubscribeService uses to give a brand new Calendar a Source at
 	// creation time.
 	calendars *CalendarService
-	// events is what FullRefresh reads a Linked Calendar's existing series
-	// from and reconciles a fetch's mapped result into (#287) — the same
+	// events is what a Refresh reads a Linked Calendar's existing series
+	// from and reconciles a fetch's mapped result into (#287, #288) — the same
 	// ListSeriesByCalendar/ListStoredReminders/ReconcileSubscribedSeries
 	// SubscribeService's own doRefresh drives, since "what a Calendar
 	// already stores" and "apply this reconciled result" don't care which
@@ -81,9 +81,13 @@ type ConnectionService struct {
 	// existing Connection shouldn't become unreachable just because the
 	// self-hoster later unset their OAuth credentials.
 	configured bool
-	// now is FullRefresh's clock (#287) — always time.Now outside a test,
-	// mirroring SubscribeService's own now field.
+	// now is a Refresh's clock (#287, #288) — always time.Now outside a
+	// test, mirroring SubscribeService's own now field.
 	now func() time.Time
+	// connectionRefreshInterval is the poller cadence a Delta Refresh
+	// reschedules against (#288) — config.Config.ConnectionRefreshInterval,
+	// or DefaultConnectionRefreshInterval when unset.
+	connectionRefreshInterval time.Duration
 }
 
 // ConnectionOption configures a ConnectionService beyond
@@ -120,6 +124,18 @@ func withGoogleEventsURL(eventsURL string) ConnectionOption {
 	return func(s *ConnectionService) { s.google.eventsURL = eventsURL }
 }
 
+// withConnectionNow overrides a Refresh's clock (#288) — tests use it to
+// prove a failed Delta Refresh reschedules next_refresh_at with backoff.
+func withConnectionNow(now func() time.Time) ConnectionOption {
+	return func(s *ConnectionService) { s.now = now }
+}
+
+// withConnectionRefreshInterval overrides the Delta Refresh poll cadence
+// (#288), in place of DefaultConnectionRefreshInterval.
+func withConnectionRefreshInterval(d time.Duration) ConnectionOption {
+	return func(s *ConnectionService) { s.connectionRefreshInterval = d }
+}
+
 // NewConnectionService builds a ConnectionService. configured is
 // config.Config.GoogleConfigured() — computed once by the caller (graph.go)
 // rather than re-derived here from clientID/clientSecret/encryptionKey, so
@@ -139,6 +155,9 @@ func NewConnectionService(connections *repository.ConnectionRepository, states c
 	}
 	for _, opt := range opts {
 		opt(s)
+	}
+	if s.connectionRefreshInterval <= 0 {
+		s.connectionRefreshInterval = DefaultConnectionRefreshInterval
 	}
 	return s
 }

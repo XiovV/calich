@@ -1,8 +1,9 @@
 // google.go is the Google half of the Provider seam (#285, ADR-0050, #286,
-// #287): OAuth token exchange (including a stored refresh_token minting a
-// fresh access token, since one is never relied on across requests), the
+// #287, #288): OAuth token exchange (including a stored refresh_token minting
+// a fresh access token, since one is never relied on across requests), the
 // connected account's own Email, the calendarList the Calendar picker
-// offers, and a Linked Calendar's own events.list a Full Refresh fetches.
+// offers, and a Linked Calendar's events.list — a complete listing for a
+// Full Refresh, or only what changed since a syncToken for a Delta Refresh.
 // Patch, insert and instances are later tickets', added to googleClient
 // rather than beside it, so every Google call keeps going through the one
 // overridable httpClient (#285's testing decisions) — a test points this at
@@ -74,12 +75,20 @@ var ErrGoogleTokenRefreshFailed = errors.New("could not refresh this connection'
 // malformed response.
 var ErrGoogleEventsFailed = errors.New("could not fetch this linked calendar's events from google")
 
+// errGoogleSyncTokenExpired is Google's 410 GONE on a Delta Refresh request
+// whose syncToken it has invalidated (#288, ADR-0053) — routinely, on any
+// ACL change to a calendar shared into the connected account. It is not a
+// failure: the caller catches it and falls back to a Full Refresh
+// reconciled against the stored rows, preserving row ids. Never surfaced to
+// classifyGoogleError, which would wrongly sort it as needs-attention.
+var errGoogleSyncTokenExpired = errors.New("google sync token expired")
+
 // googleHTTPError wraps one of the sentinels above with the status code
 // Google's response actually carried, so a caller (classifyGoogleError,
 // connection_refresh.go) can sort ADR-0053's needs-attention/retrying split
 // without parsing an error string. Every other Google-calling method in
 // this file predates that need and keeps reporting its status code as
-// message text only; listEvents and refreshAccessToken are the first
+// message text only; listEventChanges and refreshAccessToken are the first
 // callers to need the classification, so they are the first to carry it
 // structurally.
 type googleHTTPError struct {
@@ -418,25 +427,28 @@ func (c *googleClient) refreshAccessToken(ctx context.Context, refreshToken stri
 // still costs a small, bounded number of requests.
 const googleEventsPageSize = 2500
 
-// eventListParams builds events.list's own query parameters, deliberately
-// factored out so a later ticket's Delta Refresh (#288) can send the
-// byte-identical set alongside a syncToken — ADR-0053's "the query
-// parameters on every incremental request must be identical to those on
-// the initial full sync" is enforced by both call sites sharing this one
-// function, not by convention. No time window is requested (ADR-0053: any
-// window chosen here would be locked in for the life of the cursor, and a
-// calendar app that cannot show last year's meeting is broken in a way a
-// slow first sync is not); singleEvents=false preserves a recurring Event
-// as one Master plus its Overrides/Exceptions, which this app's model
-// needs (showDeleted's default of false is left alone — Google still
-// returns a cancelled instance of a recurring Event regardless, and a
-// wholly deleted standalone Event or series is meant to disappear from the
-// listing, which Full mode's own absence-means-deletion rule already
-// handles).
-func eventListParams(pageToken string) url.Values {
+// eventListParams builds events.list's own query parameters, shared by the
+// Full and Delta Refresh call paths so ADR-0053's "the query parameters on
+// every incremental request must be identical to those on the initial full
+// sync" holds by construction rather than by convention (#288). No time
+// window is requested (ADR-0053: any window would be locked in for the life
+// of the cursor, and a calendar app that cannot show last year's meeting is
+// broken in a way a slow first sync is not); singleEvents=false preserves a
+// recurring Event as one Master plus its Overrides/Exceptions, which this
+// app's model needs. showDeleted's default of false is left alone — an
+// incremental sync always returns a deleted item as status=cancelled
+// regardless, and in a full listing a wholly deleted Event is meant to be
+// absent, which Full mode's own absence-means-deletion rule handles.
+//
+// syncToken is empty on a Full Refresh and the stored cursor on a Delta
+// Refresh — the only difference between the two requests.
+func eventListParams(pageToken, syncToken string) url.Values {
 	q := url.Values{}
 	q.Set("singleEvents", "false")
 	q.Set("maxResults", strconv.Itoa(googleEventsPageSize))
+	if syncToken != "" {
+		q.Set("syncToken", syncToken)
+	}
 	if pageToken != "" {
 		q.Set("pageToken", pageToken)
 	}
@@ -529,49 +541,73 @@ func toGoogleEventDateTime(j googleEventDateTimeJSON) googleEventDateTime {
 	return googleEventDateTime{Date: j.Date, DateTime: j.DateTime, TimeZone: j.TimeZone}
 }
 
-// listEvents fetches calendarID's complete event listing (#287, ADR-0053's
-// Full mode): no time window, paginating through Google's own page size so
-// a calendar with many Events still gets a complete listing rather than a
-// truncated first page. Returns the raw, paginated list; grouping instances
-// under their Master and mapping to a domain SeriesWrite is
+// googleEventChanges is one listEventChanges call's whole result (#288):
+// every event page the request produced, flattened, plus the fresh
+// nextSyncToken Google hands back only on the final page — the cursor the
+// next Delta Refresh presents. Events carries the complete listing on a
+// Full Refresh (syncToken empty) and only what changed since the cursor on
+// a Delta Refresh, with a deleted item appearing as status=cancelled.
+type googleEventChanges struct {
+	Events        []googleEvent
+	NextSyncToken string
+}
+
+// listEventChanges fetches calendarID's events (#287, #288, ADR-0053):
+// with syncToken empty it is a Full Refresh — the complete listing, no time
+// window, paginated through Google's own page size; with syncToken set it is
+// a Delta Refresh — only what changed since that cursor. Either way it
+// paginates to the end and returns the nextSyncToken from the final page.
+//
+// A 410 GONE on a Delta Refresh (Google having invalidated the cursor,
+// routinely on an ACL change) is returned as errGoogleSyncTokenExpired for
+// the caller to recover from with a Full Refresh — never a *googleHTTPError,
+// which classifyGoogleError would wrongly sort as needs-attention. Grouping
+// instances under their Master and mapping to a domain SeriesWrite is
 // google_mapper.go's job, kept free of any encoding/json or net/http
 // dependency so it table-tests directly.
-func (c *googleClient) listEvents(ctx context.Context, accessToken, calendarID string) ([]googleEvent, error) {
-	var events []googleEvent
+func (c *googleClient) listEventChanges(ctx context.Context, accessToken, calendarID, syncToken string) (googleEventChanges, error) {
+	var result googleEventChanges
 	pageToken := ""
 
 	for {
-		q := eventListParams(pageToken)
+		q := eventListParams(pageToken, syncToken)
 
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.eventsURLFor(calendarID)+"?"+q.Encode(), nil)
 		if err != nil {
-			return nil, fmt.Errorf("build events list request: %w", err)
+			return googleEventChanges{}, fmt.Errorf("build events list request: %w", err)
 		}
 		req.Header.Set("Authorization", "Bearer "+accessToken)
 
 		resp, err := c.httpClient.Do(req)
 		if err != nil {
-			return nil, fmt.Errorf("%w: %v", ErrGoogleEventsFailed, err)
+			return googleEventChanges{}, fmt.Errorf("%w: %v", ErrGoogleEventsFailed, err)
 		}
 
 		if resp.StatusCode != http.StatusOK {
 			io.Copy(io.Discard, resp.Body) //nolint:errcheck // draining for keep-alive reuse; the response carries nothing we need on failure
 			resp.Body.Close()
-			return nil, &googleHTTPError{sentinel: ErrGoogleEventsFailed, statusCode: resp.StatusCode}
+			if resp.StatusCode == http.StatusGone && syncToken != "" {
+				return googleEventChanges{}, errGoogleSyncTokenExpired
+			}
+			return googleEventChanges{}, &googleHTTPError{sentinel: ErrGoogleEventsFailed, statusCode: resp.StatusCode}
 		}
 
 		var body struct {
 			Items         []googleEventJSON `json:"items"`
 			NextPageToken string            `json:"nextPageToken"`
+			NextSyncToken string            `json:"nextSyncToken"`
 		}
 		decodeErr := json.NewDecoder(resp.Body).Decode(&body)
 		resp.Body.Close()
 		if decodeErr != nil {
-			return nil, fmt.Errorf("%w: %v", ErrGoogleEventsFailed, decodeErr)
+			return googleEventChanges{}, fmt.Errorf("%w: %v", ErrGoogleEventsFailed, decodeErr)
 		}
 
 		for _, item := range body.Items {
-			events = append(events, toGoogleEvent(item))
+			result.Events = append(result.Events, toGoogleEvent(item))
+		}
+		if body.NextSyncToken != "" {
+			result.NextSyncToken = body.NextSyncToken
 		}
 
 		if body.NextPageToken == "" {
@@ -580,5 +616,5 @@ func (c *googleClient) listEvents(ctx context.Context, accessToken, calendarID s
 		pageToken = body.NextPageToken
 	}
 
-	return events, nil
+	return result, nil
 }

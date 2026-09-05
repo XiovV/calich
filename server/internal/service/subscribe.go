@@ -547,7 +547,7 @@ func resolveFollowedField(currentDisplay string, currentShadow *string, feedValu
 	return currentDisplay, &feedValue
 }
 
-// reconcileAgainstStored is doRefresh (this file) and doFullRefresh
+// reconcileAgainstStored is doRefresh (this file) and a Full Refresh
 // (connection_refresh.go)'s shared tail (#287): list calendarID's existing
 // series (Masters, Overrides, Reminders), diff them against incoming by
 // ExternalUID (ReconcileSeries), and apply the result via
@@ -556,15 +556,10 @@ func resolveFollowedField(currentDisplay string, currentShadow *string, feedValu
 // fetch's already-mapped []IncomingSeries in hand, whichever Source kind
 // produced it.
 func reconcileAgainstStored(ctx context.Context, events *EventService, userID int64, calendarID string, incoming []IncomingSeries, unparseable map[string]bool) (ReconcileResult, ReconcileSummary, error) {
-	masters, overridesByParent, err := events.ListSeriesByCalendar(ctx, userID, calendarID)
+	existing, err := listExistingSeries(ctx, events, userID, calendarID)
 	if err != nil {
-		return ReconcileResult{}, ReconcileSummary{}, fmt.Errorf("list existing series: %w", err)
+		return ReconcileResult{}, ReconcileSummary{}, err
 	}
-	storedReminders, err := events.ListStoredReminders(ctx, userID, seriesEventIDs(masters, overridesByParent))
-	if err != nil {
-		return ReconcileResult{}, ReconcileSummary{}, fmt.Errorf("list stored reminders: %w", err)
-	}
-	existing := existingSeriesFromMasters(masters, overridesByParent, storedReminders)
 
 	result := ReconcileSeries(existing, incoming, unparseable)
 
@@ -573,6 +568,41 @@ func reconcileAgainstStored(ctx context.Context, events *EventService, userID in
 		return ReconcileResult{}, ReconcileSummary{}, err
 	}
 	return result, summary, nil
+}
+
+// reconcileDeltaAgainstStored is reconcileAgainstStored's Delta-mode sibling
+// (#288, ADR-0053): the same "list what's stored, diff, apply" tail, but the
+// diff is ReconcileDelta — which cannot tombstone a series merely absent
+// from the batch. Only deletions (ExternalUIDs the Provider explicitly
+// listed as gone) reach the tombstone path.
+func reconcileDeltaAgainstStored(ctx context.Context, events *EventService, userID int64, calendarID string, changes []DeltaSeriesChange, deletions []string) (ReconcileResult, ReconcileSummary, error) {
+	existing, err := listExistingSeries(ctx, events, userID, calendarID)
+	if err != nil {
+		return ReconcileResult{}, ReconcileSummary{}, err
+	}
+
+	result := ReconcileDelta(existing, changes, deletions)
+
+	summary, err := events.ReconcileSubscribedSeries(ctx, userID, calendarID, result)
+	if err != nil {
+		return ReconcileResult{}, ReconcileSummary{}, err
+	}
+	return result, summary, nil
+}
+
+// listExistingSeries reads calendarID's current series (Masters, Overrides,
+// and the Owner's stored Reminders) into ReconcileSeries/ReconcileDelta's
+// existing-side input — the shared read both reconcile tails start from.
+func listExistingSeries(ctx context.Context, events *EventService, userID int64, calendarID string) ([]ExistingSeries, error) {
+	masters, overridesByParent, err := events.ListSeriesByCalendar(ctx, userID, calendarID)
+	if err != nil {
+		return nil, fmt.Errorf("list existing series: %w", err)
+	}
+	storedReminders, err := events.ListStoredReminders(ctx, userID, seriesEventIDs(masters, overridesByParent))
+	if err != nil {
+		return nil, fmt.Errorf("list stored reminders: %w", err)
+	}
+	return existingSeriesFromMasters(masters, overridesByParent, storedReminders), nil
 }
 
 // existingSeriesFromMasters converts a Subscribed Calendar's current

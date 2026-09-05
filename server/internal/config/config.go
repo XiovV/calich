@@ -14,6 +14,11 @@ import (
 // SUBSCRIPTION_REFRESH_INTERVAL is unset (#86, ADR-0033).
 const defaultSubscriptionRefreshInterval = time.Hour
 
+// defaultConnectionRefreshInterval is the poller's Delta Refresh cadence for
+// a Linked Calendar when CONNECTION_REFRESH_INTERVAL is unset (#288,
+// ADR-0053) — kept in step with service.DefaultConnectionRefreshInterval.
+const defaultConnectionRefreshInterval = 15 * time.Minute
+
 // defaultMaxAttachmentSize and defaultMaxAttachmentsPerEvent are Attachments'
 // limits (#132, ADR-0040) when MAX_ATTACHMENT_SIZE/MAX_ATTACHMENTS_PER_EVENT
 // are unset. Env-configurable rather than a hardcoded const like
@@ -102,6 +107,11 @@ type Config struct {
 	// (e.g. "1h", "30m"), or defaultSubscriptionRefreshInterval when unset
 	// or unparseable (#86, ADR-0033).
 	SubscriptionRefreshInterval time.Duration
+	// ConnectionRefreshInterval is the background poller's Delta Refresh
+	// cadence for a Linked Calendar — CONNECTION_REFRESH_INTERVAL, parsed as
+	// a Go duration, or service.DefaultConnectionRefreshInterval (~15m) when
+	// unset or unparseable (#288, ADR-0053).
+	ConnectionRefreshInterval time.Duration
 	// EnableSignups gates self-registration (ADR-0044): when false (the
 	// default), a registration attempt is rejected for everyone except the
 	// very first account on the instance, which Bootstrap or a first-run
@@ -147,6 +157,7 @@ func Load() Config {
 		GoogleClientSecret:          getEnv("GOOGLE_CLIENT_SECRET", ""),
 		ConnectionsEncryptionKey:    getEnv("CONNECTIONS_ENCRYPTION_KEY", ""),
 		SubscriptionRefreshInterval: getEnvDuration("SUBSCRIPTION_REFRESH_INTERVAL", defaultSubscriptionRefreshInterval),
+		ConnectionRefreshInterval:   getEnvDuration("CONNECTION_REFRESH_INTERVAL", defaultConnectionRefreshInterval),
 		MaxAttachmentSize:           getEnvInt64("MAX_ATTACHMENT_SIZE", defaultMaxAttachmentSize),
 		MaxAttachmentsPerEvent:      getEnvInt("MAX_ATTACHMENTS_PER_EVENT", defaultMaxAttachmentsPerEvent),
 		InviteRateLimitPerHour:      getEnvInt("INVITE_RATE_LIMIT_PER_HOUR", defaultInviteRateLimitPerHour),

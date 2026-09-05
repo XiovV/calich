@@ -392,3 +392,135 @@ func TestGoogleEtag_StripsQuotes(t *testing.T) {
 		t.Fatalf("expected nil for empty etag, got %v", got)
 	}
 }
+
+func TestMapGoogleEventChanges_TopLevelCancelledIsADeletionNotAnUpsert(t *testing.T) {
+	events := []googleEvent{
+		{ID: "evt-gone", Status: "cancelled"},
+		{
+			ID:      "evt-live",
+			Summary: "Still here",
+			Start:   googleEventDateTime{DateTime: "2026-03-01T10:00:00Z"},
+			End:     googleEventDateTime{DateTime: "2026-03-01T11:00:00Z"},
+		},
+	}
+
+	changes, deletions, _ := mapGoogleEventChanges(events)
+
+	if len(deletions) != 1 || deletions[0] != "evt-gone" {
+		t.Fatalf("expected evt-gone in deletions, got %+v", deletions)
+	}
+	if len(changes) != 1 || changes[0].ExternalUID != "evt-live" {
+		t.Fatalf("expected only evt-live as a change, got %+v", changes)
+	}
+	if changes[0].Master == nil {
+		t.Fatalf("expected the live event to carry a Master")
+	}
+}
+
+func TestMapGoogleEventChanges_MasterInBatchProducesFullSeries(t *testing.T) {
+	events := []googleEvent{
+		{
+			ID:         "series-1",
+			Summary:    "Standup",
+			Start:      googleEventDateTime{DateTime: "2026-01-05T09:00:00-05:00", TimeZone: "America/New_York"},
+			End:        googleEventDateTime{DateTime: "2026-01-05T09:15:00-05:00", TimeZone: "America/New_York"},
+			Recurrence: []string{"RRULE:FREQ=WEEKLY;BYDAY=MO"},
+		},
+		{
+			ID:                "series-1_i1",
+			RecurringEventID:  "series-1",
+			OriginalStartTime: &googleEventDateTime{DateTime: "2026-01-12T09:00:00-05:00", TimeZone: "America/New_York"},
+			Summary:           "Standup (moved)",
+			Start:             googleEventDateTime{DateTime: "2026-01-12T10:00:00-05:00", TimeZone: "America/New_York"},
+			End:               googleEventDateTime{DateTime: "2026-01-12T10:15:00-05:00", TimeZone: "America/New_York"},
+			Status:            "confirmed",
+		},
+	}
+
+	changes, deletions, _ := mapGoogleEventChanges(events)
+
+	if len(deletions) != 0 {
+		t.Fatalf("expected no deletions, got %+v", deletions)
+	}
+	if len(changes) != 1 || changes[0].Master == nil {
+		t.Fatalf("expected one change carrying a Master, got %+v", changes)
+	}
+	if changes[0].Master.Rrule != "FREQ=WEEKLY;BYDAY=MO" {
+		t.Fatalf("expected the RRULE carried, got %q", changes[0].Master.Rrule)
+	}
+	if len(changes[0].Master.Overrides) != 1 {
+		t.Fatalf("expected the in-batch instance folded into the Master, got %+v", changes[0].Master.Overrides)
+	}
+}
+
+func TestMapGoogleEventChanges_InstanceOnlyChangeHasNoMaster(t *testing.T) {
+	events := []googleEvent{
+		{
+			ID:                "series-1_i2",
+			RecurringEventID:  "series-1",
+			OriginalStartTime: &googleEventDateTime{DateTime: "2026-01-19T09:00:00Z"},
+			Summary:           "Standup (moved again)",
+			Start:             googleEventDateTime{DateTime: "2026-01-19T10:00:00Z"},
+			End:               googleEventDateTime{DateTime: "2026-01-19T10:15:00Z"},
+			Status:            "confirmed",
+		},
+		{
+			ID:                "series-1_i3",
+			RecurringEventID:  "series-1",
+			OriginalStartTime: &googleEventDateTime{DateTime: "2026-01-26T09:00:00Z"},
+			Status:            "cancelled",
+		},
+	}
+
+	changes, _, _ := mapGoogleEventChanges(events)
+
+	if len(changes) != 1 {
+		t.Fatalf("expected one merged change for series-1, got %+v", changes)
+	}
+	c := changes[0]
+	if c.ExternalUID != "series-1" || c.Master != nil {
+		t.Fatalf("expected a Master-absent change keyed by series-1, got %+v", c)
+	}
+	if len(c.Overrides) != 1 || len(c.Cancellations) != 1 {
+		t.Fatalf("expected 1 override and 1 cancellation, got %+v", c)
+	}
+}
+
+func TestMapGoogleEventChanges_OrphanInstanceIsCountedNotEmitted(t *testing.T) {
+	events := []googleEvent{
+		{
+			ID:               "orphan_i1",
+			RecurringEventID: "orphan-series",
+			// No OriginalStartTime — nothing to anchor to.
+			Summary: "Ghost",
+			Status:  "confirmed",
+		},
+	}
+
+	changes, _, summary := mapGoogleEventChanges(events)
+
+	if len(changes) != 0 {
+		t.Fatalf("expected no changes for an unanchored orphan, got %+v", changes)
+	}
+	if len(summary.OrphanExternalUIDs) != 1 || summary.OrphanExternalUIDs[0] != "orphan-series" {
+		t.Fatalf("expected orphan-series counted, got %+v", summary.OrphanExternalUIDs)
+	}
+}
+
+func TestMapGoogleEventChanges_RDATEStillCounted(t *testing.T) {
+	events := []googleEvent{
+		{
+			ID:         "series-rdate",
+			Summary:    "Odd cadence",
+			Start:      googleEventDateTime{DateTime: "2026-01-05T09:00:00Z"},
+			End:        googleEventDateTime{DateTime: "2026-01-05T10:00:00Z"},
+			Recurrence: []string{"RRULE:FREQ=WEEKLY", "RDATE:20260210T090000Z"},
+		},
+	}
+
+	_, _, summary := mapGoogleEventChanges(events)
+
+	if countDropped(summary) != 1 {
+		t.Fatalf("expected one dropped recurrence line, got %+v", summary.Dropped)
+	}
+}

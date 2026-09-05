@@ -424,6 +424,114 @@ func TestSourceRepository_ListDueForRefresh(t *testing.T) {
 	if results[0].UserID != userID {
 		t.Fatalf("expected UserID %d, got %d", userID, results[0].UserID)
 	}
+	if results[0].Kind != SourceKindSubscription {
+		t.Fatalf("expected Kind subscription, got %q", results[0].Kind)
+	}
+	if results[0].HasCursor {
+		t.Fatalf("a Subscription never has a Delta Refresh cursor")
+	}
+}
+
+// TestSourceRepository_ConnectionRefreshStateRoundTrips covers #288's Delta
+// Refresh columns on a Connection-kind Source: the cursor and the poller's
+// next-attempt time are stored by RecordConnectionRefreshSuccess and come
+// back on both GetByCalendarID and the poller's due-listing (which now
+// serves Connections too, tagged with their Kind and whether they hold a
+// cursor). Self-contained for the same reason CreateConnectionSource is — a
+// connection_id needs a real connections row.
+func TestSourceRepository_ConnectionRefreshStateRoundTrips(t *testing.T) {
+	sqlDB, err := db.OpenInMemory()
+	if err != nil {
+		t.Fatalf("open in-memory db: %v", err)
+	}
+	t.Cleanup(func() { sqlDB.Close() })
+	ctx := context.Background()
+
+	users := NewUserRepository(sqlDB)
+	user, err := users.Create(ctx, "user-a", "user-a@example.com", "hash", false)
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	workspaces := NewWorkspaceRepository(sqlDB)
+	workspace, err := workspaces.Create(ctx, "workspace-a", user.ID)
+	if err != nil {
+		t.Fatalf("create workspace: %v", err)
+	}
+	if err := workspaces.AddMember(ctx, workspace.ID, user.ID, WorkspaceRoleOwner); err != nil {
+		t.Fatalf("add workspace member: %v", err)
+	}
+	connections := NewConnectionRepository(sqlDB)
+	conn, err := connections.Upsert(ctx, user.ID, ProviderGoogle, "someone@gmail.com", ConnectionFields{
+		RefreshToken: "encrypted-refresh", Status: ConnectionStatusLive,
+	})
+	if err != nil {
+		t.Fatalf("upsert connection: %v", err)
+	}
+	calendars := NewCalendarRepository(sqlDB)
+	calendar, err := calendars.Create(ctx, user.ID, workspace.ID, "cal-linked", CalendarFields{Name: "Work", Color: "peacock"})
+	if err != nil {
+		t.Fatalf("create calendar: %v", err)
+	}
+	sources := NewSourceRepository(sqlDB)
+	externalCalendarID := "primary"
+	created, err := sources.Create(ctx, calendar.ID, SourceFields{
+		Kind:               SourceKindConnection,
+		Mode:               SourceModeReadOnly,
+		ConnectionID:       &conn.ID,
+		ExternalCalendarID: &externalCalendarID,
+	})
+	if err != nil {
+		t.Fatalf("create connection source: %v", err)
+	}
+	if created.Cursor != nil {
+		t.Fatalf("expected no cursor before the first Refresh, got %v", created.Cursor)
+	}
+
+	now := time.Now().UTC().Truncate(time.Second)
+	token := "sync-token-xyz"
+	if err := sources.RecordConnectionRefreshSuccess(ctx, user.ID, calendar.ID, now, &token, now.Add(15*time.Minute)); err != nil {
+		t.Fatalf("record connection refresh success: %v", err)
+	}
+
+	got, err := sources.GetByCalendarID(ctx, calendar.ID)
+	if err != nil {
+		t.Fatalf("get source: %v", err)
+	}
+	if got.Cursor == nil || *got.Cursor != token {
+		t.Fatalf("expected cursor %q stored, got %v", token, got.Cursor)
+	}
+	if got.LastSyncedAt == nil || !got.LastSyncedAt.Equal(now) {
+		t.Fatalf("expected last_synced_at %v, got %v", now, got.LastSyncedAt)
+	}
+	if got.NextRefreshAt == nil || !got.NextRefreshAt.Equal(now.Add(15*time.Minute)) {
+		t.Fatalf("expected next_refresh_at scheduled, got %v", got.NextRefreshAt)
+	}
+
+	due, err := sources.ListDueForRefresh(ctx, now.Add(20*time.Minute))
+	if err != nil {
+		t.Fatalf("list due: %v", err)
+	}
+	if len(due) != 1 || due[0].CalendarID != calendar.ID {
+		t.Fatalf("expected the Linked Calendar due, got %+v", due)
+	}
+	if due[0].Kind != SourceKindConnection || !due[0].HasCursor {
+		t.Fatalf("expected a connection-kind due row holding a cursor, got %+v", due[0])
+	}
+
+	// A failure schedules a backoff retry and never touches the cursor.
+	if err := sources.RecordConnectionRefreshFailure(ctx, user.ID, calendar.ID, "retrying", "boom", 1, now.Add(30*time.Minute)); err != nil {
+		t.Fatalf("record connection refresh failure: %v", err)
+	}
+	got, err = sources.GetByCalendarID(ctx, calendar.ID)
+	if err != nil {
+		t.Fatalf("get source: %v", err)
+	}
+	if got.Cursor == nil || *got.Cursor != token {
+		t.Fatalf("a failed refresh must not touch the cursor, got %v", got.Cursor)
+	}
+	if got.FailureCount != 1 || got.ErrorClass == nil || *got.ErrorClass != "retrying" {
+		t.Fatalf("expected failure recorded, got %+v", got)
+	}
 }
 
 func TestSourceRepository_ScheduleNextRefresh_NotFound(t *testing.T) {

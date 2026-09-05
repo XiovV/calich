@@ -13,6 +13,7 @@ import (
 
 	"github.com/XiovV/calich/server/internal/httpauth"
 	"github.com/XiovV/calich/server/internal/httpresponse"
+	"github.com/XiovV/calich/server/internal/repository"
 	"github.com/XiovV/calich/server/internal/service"
 )
 
@@ -97,6 +98,9 @@ func (h *CalendarHandler) Subscribe(w http.ResponseWriter, r *http.Request) {
 
 var subscriptionRefreshErrors = []errorCase{
 	{service.ErrRefreshNotSubscribed, badRequest("calendar is not a subscribed calendar")},
+	{service.ErrRefreshNotLinked, badRequest("calendar is not a linked calendar")},
+	{service.ErrGoogleNotConfigured, badRequest("the google provider is not configured on this instance")},
+	{service.ErrConnectionNotFound, badRequest("the connection backing this calendar no longer exists")},
 	{service.ErrSubscribeFetchFailed, badRequest("failed to fetch the calendar feed")},
 	{service.ErrSubscribeAuthFailed, badRequest("the calendar feed rejected the credentials")},
 	{service.ErrSubscribeNotFound, badRequest("the calendar feed was not found")},
@@ -118,18 +122,33 @@ type subscriptionRefreshResponse struct {
 	NoOp        int  `json:"noOp"`
 }
 
-// Refresh serves POST /api/calendars/{id}/refresh (#85): a manual trigger
-// for the on-demand equivalent of ADR-0033's Refresh, always forced — it
-// bypasses the conditional-GET/content-hash short-circuit so the action is
-// never a visible no-op even when the server believes the feed is
-// unchanged.
+// Refresh serves POST /api/calendars/{id}/refresh (#85, #288): a manual
+// trigger for the on-demand equivalent of ADR-0033's Refresh. For a
+// Subscribed Calendar it is always forced, bypassing the conditional-GET
+// short-circuit so the action is never a visible no-op. For a Linked
+// Calendar it runs a Delta Refresh when a cursor is stored (a Full Refresh
+// otherwise) via service.RefreshModeForCursor — the same rule the poller
+// uses — passed down as an explicit mode (ADR-0053); triggered directly
+// rather than through the poller's due-list, it bypasses the backoff for
+// free.
 func (h *CalendarHandler) Refresh(w http.ResponseWriter, r *http.Request) {
 	userID := httpauth.MustUserID(r.Context())
 
 	id := chi.URLParam(r, "id")
 
-	result, err := h.subscriptions.Refresh(r.Context(), userID, id, true)
-	if respondError(w, err, subscriptionRefreshErrorsWithNotFound, "failed to refresh subscription") {
+	calendar, err := h.calendars.Get(r.Context(), userID, id)
+	if respondError(w, err, subscriptionRefreshErrorsWithNotFound, "failed to refresh calendar") {
+		return
+	}
+
+	var result service.RefreshResult
+	if calendar.Source != nil && calendar.Source.Kind == repository.SourceKindConnection {
+		mode := service.RefreshModeForCursor(calendar.Source.Cursor != nil)
+		result, err = h.connections.RefreshLinked(r.Context(), userID, id, mode)
+	} else {
+		result, err = h.subscriptions.Refresh(r.Context(), userID, id, true)
+	}
+	if respondError(w, err, subscriptionRefreshErrorsWithNotFound, "failed to refresh calendar") {
 		return
 	}
 

@@ -101,6 +101,16 @@ type Source struct {
 	// updates the displayed value only while it still equals its shadow;
 	// nil means the feed has never supplied one (#88, ADR-0032).
 	FeedName, FeedColor *string
+	// Cursor is a Connection-kind Source's Delta Refresh cursor (#288,
+	// ADR-0053): the opaque token the Provider hands back at the end of a
+	// listing (Google's nextSyncToken), presented on the next cycle to get
+	// only what has changed since. Nil until the first Full Refresh stores
+	// one, and nil again whenever a 410 GONE invalidates it. The Refresh mode
+	// is never inferred from this being non-nil — it is an explicit argument
+	// (see poller.go); this only decides which mode a scheduling site picks.
+	// Named Cursor, not SyncToken, to stay clear of caldavserver's unrelated
+	// CalDAV sync-token.
+	Cursor *string
 }
 
 // SourceFields are a Source's columns set at creation time — Create's one
@@ -152,12 +162,17 @@ type RefreshFailure struct {
 }
 
 // DueRefresh is one Source the background poller must attempt (#86,
-// ADR-0033) — just enough to call SubscriptionRefresher.Refresh with:
-// CalendarID and the Owner's UserID Refresh's own repository.Calendar
-// lookups are scoped by.
+// ADR-0033) — just enough to route and call the right refresher with:
+// CalendarID and the Owner's UserID a Refresh's own repository.Calendar
+// lookups are scoped by, the Source Kind that decides which refresher runs
+// (#288), and HasCursor — whether a Connection-kind Source already holds a
+// Delta Refresh cursor, which is the one fact the poller uses to pick Full
+// vs Delta mode before threading it down as an explicit argument (ADR-0053).
 type DueRefresh struct {
 	CalendarID string
 	UserID     int64
+	Kind       SourceKind
+	HasCursor  bool
 }
 
 type SourceRepository struct {
@@ -176,7 +191,7 @@ func (r *SourceRepository) WithTx(tx *sql.Tx) *SourceRepository {
 	return &SourceRepository{db: tx}
 }
 
-const sourceColumns = `calendar_id, kind, mode, connection_id, external_calendar_id, source_url, last_synced_at, etag, last_modified, content_hash, next_refresh_at, refresh_interval_seconds, failure_count, error_class, error_message, keep_alarms, feed_name, feed_color`
+const sourceColumns = `calendar_id, kind, mode, connection_id, external_calendar_id, source_url, last_synced_at, etag, last_modified, content_hash, next_refresh_at, refresh_interval_seconds, failure_count, error_class, error_message, keep_alarms, feed_name, feed_color, cursor`
 
 func (r *SourceRepository) Create(ctx context.Context, calendarID string, fields SourceFields) (Source, error) {
 	if _, err := r.db.ExecContext(ctx,
@@ -235,34 +250,35 @@ func (r *SourceRepository) ListByCalendarIDs(ctx context.Context, calendarIDs []
 	return result, nil
 }
 
-// ListDueForRefresh returns every Subscription (kind = 'subscription') whose
-// next_refresh_at has come due — the background poller's read path (#86,
-// ADR-0033). A Connection-derived Source never matches: its own poller is a
-// later ticket's (#288).
+// ListDueForRefresh returns every Source — Subscription or Connection —
+// whose next_refresh_at has come due (#86, ADR-0033; #288). Kind tells the
+// poller which refresher to route to, and HasCursor (a Connection-kind
+// Source already holding a cursor) is what it picks Delta vs Full mode
+// from before threading the mode down as an explicit argument (ADR-0053).
 func (r *SourceRepository) ListDueForRefresh(ctx context.Context, now time.Time) ([]DueRefresh, error) {
 	rows, err := r.db.QueryContext(ctx,
-		`SELECT cs.calendar_id, c.user_id
+		`SELECT cs.calendar_id, c.user_id, cs.kind, cs.cursor IS NOT NULL
 		 FROM calendar_sources cs
 		 JOIN calendars c ON c.id = cs.calendar_id
-		 WHERE cs.kind = ? AND cs.next_refresh_at IS NOT NULL AND cs.next_refresh_at <= ?
+		 WHERE cs.next_refresh_at IS NOT NULL AND cs.next_refresh_at <= ?
 		 ORDER BY cs.next_refresh_at, cs.calendar_id`,
-		SourceKindSubscription, now,
+		now,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("list due subscriptions: %w", err)
+		return nil, fmt.Errorf("list due sources: %w", err)
 	}
 	defer rows.Close()
 
 	var due []DueRefresh
 	for rows.Next() {
 		var d DueRefresh
-		if err := rows.Scan(&d.CalendarID, &d.UserID); err != nil {
+		if err := rows.Scan(&d.CalendarID, &d.UserID, &d.Kind, &d.HasCursor); err != nil {
 			return nil, fmt.Errorf("scan due refresh: %w", err)
 		}
 		due = append(due, d)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("list due subscriptions: %w", err)
+		return nil, fmt.Errorf("list due sources: %w", err)
 	}
 	return due, nil
 }
@@ -352,21 +368,25 @@ func (r *SourceRepository) RecordRefreshFailure(ctx context.Context, userID int6
 	return requireAffected(res)
 }
 
-// RecordConnectionRefreshSuccess records a completed Full Refresh on a
-// Connection-kind Source (#287): last_synced_at moves and any prior
-// failure clears, unconditionally, mirroring RecordRefreshSuccess's own
-// "a Refresh that found nothing new still counts as having synced
-// successfully". Deliberately narrower than RecordRefreshSuccess: etag,
-// last_modified, content_hash, next_refresh_at, refresh_interval_seconds,
-// feed_name and feed_color are a Subscription's own conditional-GET and
-// poller state (ADR-0033) that a Connection's Full Refresh has no
-// equivalent for yet — its own cursor and cadence are #288's Delta Refresh
-// and poller to design, not this ticket's to guess at.
-func (r *SourceRepository) RecordConnectionRefreshSuccess(ctx context.Context, userID int64, calendarID string, syncedAt time.Time) error {
+// RecordConnectionRefreshSuccess records a completed Refresh on a
+// Connection-kind Source (#287, #288): last_synced_at moves, the Delta
+// Refresh cursor and the next poll time are stored, and any prior failure
+// clears, unconditionally — mirroring RecordRefreshSuccess's own "a Refresh
+// that found nothing new still counts as having synced successfully".
+//
+// cursor is the fresh Delta Refresh cursor to store (#288, ADR-0053); nil
+// writes NULL, which merely makes the next cycle a Full Refresh — safe, so a
+// storage failure here is a logged non-event, not a data risk. Still
+// narrower than a Subscription's RecordRefreshSuccess: etag, last_modified,
+// content_hash and refresh_interval_seconds are a feed's conditional-GET
+// state a Connection has no equivalent for, and a Linked Calendar's name/
+// colour follow the Provider through their own path, not this one.
+func (r *SourceRepository) RecordConnectionRefreshSuccess(ctx context.Context, userID int64, calendarID string, syncedAt time.Time, cursor *string, nextRefreshAt time.Time) error {
 	res, err := r.db.ExecContext(ctx,
-		`UPDATE calendar_sources SET last_synced_at = ?, failure_count = 0, error_class = NULL, error_message = NULL
+		`UPDATE calendar_sources SET last_synced_at = ?, cursor = ?, next_refresh_at = ?,
+			failure_count = 0, error_class = NULL, error_message = NULL
 		 WHERE `+ownedSourceWhere,
-		syncedAt, calendarID, userID,
+		syncedAt, cursor, nextRefreshAt, calendarID, userID,
 	)
 	if err != nil {
 		return fmt.Errorf("record connection refresh success: %w", err)
@@ -374,17 +394,17 @@ func (r *SourceRepository) RecordConnectionRefreshSuccess(ctx context.Context, u
 	return requireAffected(res)
 }
 
-// RecordConnectionRefreshFailure records a failed Full Refresh attempt on a
-// Connection-kind Source (#287). It never disables or deletes the Source,
-// and never schedules a retry — there is no poller to hand next_refresh_at
-// to yet (#288) — only the error/failure-count columns move, exactly as
-// ADR-0033 requires: last good state (the Events a prior success produced)
-// is left exactly as it was.
-func (r *SourceRepository) RecordConnectionRefreshFailure(ctx context.Context, userID int64, calendarID, errorClass, errorMessage string, failureCount int) error {
+// RecordConnectionRefreshFailure records a failed Refresh attempt on a
+// Connection-kind Source (#287, #288). It never disables or deletes the
+// Source and never touches last_synced_at, cursor, or the Events a prior
+// success produced — only the error/failure-count columns and the
+// backoff-scheduled next_refresh_at move, exactly as ADR-0033 requires: last
+// good state is left exactly as it was.
+func (r *SourceRepository) RecordConnectionRefreshFailure(ctx context.Context, userID int64, calendarID, errorClass, errorMessage string, failureCount int, nextRefreshAt time.Time) error {
 	res, err := r.db.ExecContext(ctx,
-		`UPDATE calendar_sources SET failure_count = ?, error_class = ?, error_message = ?
+		`UPDATE calendar_sources SET failure_count = ?, error_class = ?, error_message = ?, next_refresh_at = ?
 		 WHERE `+ownedSourceWhere,
-		failureCount, errorClass, errorMessage, calendarID, userID,
+		failureCount, errorClass, errorMessage, nextRefreshAt, calendarID, userID,
 	)
 	if err != nil {
 		return fmt.Errorf("record connection refresh failure: %w", err)
@@ -395,7 +415,7 @@ func (r *SourceRepository) RecordConnectionRefreshFailure(ctx context.Context, u
 func scanSourceRow(row rowScanner) (Source, error) {
 	var s Source
 	err := row.Scan(&s.CalendarID, &s.Kind, &s.Mode, &s.ConnectionID, &s.ExternalCalendarID, &s.SourceURL, &s.LastSyncedAt, &s.ETag, &s.LastModified, &s.ContentHash,
-		&s.NextRefreshAt, &s.RefreshIntervalSeconds, &s.FailureCount, &s.ErrorClass, &s.ErrorMessage, &s.KeepAlarms, &s.FeedName, &s.FeedColor)
+		&s.NextRefreshAt, &s.RefreshIntervalSeconds, &s.FailureCount, &s.ErrorClass, &s.ErrorMessage, &s.KeepAlarms, &s.FeedName, &s.FeedColor, &s.Cursor)
 	if err != nil {
 		return Source{}, err
 	}

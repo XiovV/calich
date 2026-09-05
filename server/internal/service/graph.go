@@ -237,7 +237,7 @@ func NewGraph(sqlDB *sql.DB, cfg config.Config, opts ...GraphOption) (*Graph, er
 	}
 	g.Subscriptions = NewSubscribeService(g.Events, g.Calendars, cfg.SubscriptionRefreshInterval, subscribeOpts...)
 
-	var connectionOpts []ConnectionOption
+	connectionOpts := []ConnectionOption{withConnectionRefreshInterval(cfg.ConnectionRefreshInterval)}
 	if built.googleHTTPClient != nil {
 		connectionOpts = append(connectionOpts, withGoogleHTTPClient(built.googleHTTPClient))
 	}

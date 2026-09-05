@@ -182,6 +182,11 @@ export function CalendarList() {
 
   function renderCalendarItem(calendar: Calendar) {
     const isSubscribed = Boolean(calendar.sourceUrl);
+    const isLinked = isLinkedCalendar(calendar);
+    // A Subscribed or Linked Calendar can be refreshed on demand (#85, #288):
+    // the manual trigger bypasses the poller's backoff and its
+    // unchanged-short-circuit, so it is never a visible no-op.
+    const isRefreshable = isSubscribed || isLinked;
     // Rename, recolour, download, refresh, and delete are Calendar
     // management (#111, ADR-0034) — gated on ownership, un-clamped by the
     // Subscription read-only rule, so the Owner of a Subscribed Calendar
@@ -219,7 +224,7 @@ export function CalendarList() {
               Shared by {calendar.ownerName}
             </span>
           )}
-          {isSubscribed && calendar.lastSyncedAt && (
+          {isRefreshable && calendar.lastSyncedAt && (
             <span className="truncate text-label-sm text-ink-muted">
               {isRefreshing
                 ? "Refreshing…"
@@ -293,7 +298,7 @@ export function CalendarList() {
                     Share
                   </Menu.Item>
                 )}
-                {isSubscribed && canManage && (
+                {isRefreshable && canManage && (
                   <Menu.Item
                     onClick={() => handleRefresh(calendar)}
                     disabled={isRefreshing}
@@ -302,11 +307,11 @@ export function CalendarList() {
                     Refresh
                   </Menu.Item>
                 )}
-                {/* A Subscribed Calendar offers no per-Calendar download
-                    (#90, ADR-0032): its source URL is what actually carries
-                    it elsewhere, not a frozen snapshot a Refresh will
-                    overwrite anyway. */}
-                {!isSubscribed && canManage && (
+                {/* A Calendar with a Source offers no per-Calendar download
+                    (#90, ADR-0032): the feed URL or the Provider is what
+                    carries it elsewhere, not a frozen snapshot a Refresh
+                    will overwrite anyway. */}
+                {!isRefreshable && canManage && (
                   <Menu.Item
                     onClick={() => handleDownload(calendar)}
                     className={menuItemClasses}

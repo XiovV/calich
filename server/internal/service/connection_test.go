@@ -42,15 +42,30 @@ type fakeGoogleServer struct {
 	// eventsFailFirstNCalls forces the first N calls to /events to answer
 	// 401 regardless of the token presented, then serve normally — a
 	// Connection's cached access_token having actually expired at Google
-	// (#287), which doFullRefresh's own retry-once-with-a-fresh-token path
-	// is what a test forcing this exercises.
+	// (#287), which doRefresh's own retry-once-with-a-fresh-token path is
+	// what a test forcing this exercises.
 	eventsFailFirstNCalls, eventsCallCount int
+	// nextSyncToken is the cursor /events hands back on the final page of
+	// every listing (#288) — Full and Delta alike. Defaults to a non-empty
+	// value so a Full Refresh always has one to store.
+	nextSyncToken string
+	// eventsDeltaByToken keys a Delta Refresh's changed items by the
+	// syncToken the request presented, so a test can stage "since token-1,
+	// this one series changed". syncTokenExpired instead makes any
+	// syncToken-bearing request answer 410 GONE (a cursor Google invalidated,
+	// routinely on an ACL change).
+	eventsDeltaByToken map[string][]map[string]any
+	syncTokenExpired   bool
+	// lastSyncTokenSeen is the syncToken query param the last /events request
+	// carried, "" for a Full Refresh — a test asserts the Delta path actually
+	// sends the stored cursor.
+	lastSyncTokenSeen string
 }
 
 func newFakeGoogleServer(t *testing.T) *fakeGoogleServer {
 	t.Helper()
 
-	f := &fakeGoogleServer{refreshToken: "1/fake-refresh-token", email: "someone@gmail.com", scope: "openid email https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/calendar.calendarlist.readonly"}
+	f := &fakeGoogleServer{refreshToken: "1/fake-refresh-token", email: "someone@gmail.com", scope: "openid email https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/calendar.calendarlist.readonly", nextSyncToken: "sync-token-1"}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/token", func(w http.ResponseWriter, r *http.Request) {
@@ -113,7 +128,19 @@ func newFakeGoogleServer(t *testing.T) *fakeGoogleServer {
 		}
 
 		calendarID := r.PathValue("calendarId")
-		items := f.eventsByCalendar[calendarID]
+		syncToken := r.URL.Query().Get("syncToken")
+		f.lastSyncTokenSeen = syncToken
+
+		var items []map[string]any
+		if syncToken != "" {
+			if f.syncTokenExpired {
+				w.WriteHeader(http.StatusGone)
+				return
+			}
+			items = f.eventsDeltaByToken[syncToken]
+		} else {
+			items = f.eventsByCalendar[calendarID]
+		}
 
 		start := 0
 		if pageToken := r.URL.Query().Get("pageToken"); pageToken != "" {
@@ -133,6 +160,8 @@ func newFakeGoogleServer(t *testing.T) *fakeGoogleServer {
 		body := map[string]any{"items": page}
 		if start+pageSize < len(items) {
 			body["nextPageToken"] = strconv.Itoa(start + pageSize)
+		} else if f.nextSyncToken != "" {
+			body["nextSyncToken"] = f.nextSyncToken
 		}
 
 		w.Header().Set("Content-Type", "application/json")
