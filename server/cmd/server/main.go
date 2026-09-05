@@ -87,7 +87,7 @@ func main() {
 		}
 	}
 
-	handler, err := router.New(logger, a.AuthHandler, a.CalendarHandler, a.EventHandler, a.AttachmentHandler, a.NotificationHandler, a.AppPasswordHandler, a.AccountHandler, a.UserHandler, a.WorkspaceHandler, a.GroupHandler, a.CalDAVHandler, a.Auth, a.Auth, a.AppPasswords, a.RateLimiter, a.Auth, a.Workspaces)
+	handler, err := router.New(logger, a.AuthHandler, a.CalendarHandler, a.EventHandler, a.AttachmentHandler, a.NotificationHandler, a.AppPasswordHandler, a.AccountHandler, a.UserHandler, a.WorkspaceHandler, a.GroupHandler, a.ConnectionHandler, a.CalDAVHandler, a.Auth, a.Auth, a.AppPasswords, a.RateLimiter, a.Auth, a.Workspaces)
 	if err != nil {
 		logger.Error("failed to build router", "error", err)
 		os.Exit(1)

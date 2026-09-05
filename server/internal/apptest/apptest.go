@@ -71,3 +71,16 @@ func SMTPConfig(t *testing.T) config.Config {
 	cfg.SMTPFrom = "calendar@example.com"
 	return cfg
 }
+
+// GoogleConfig is Config with Google OAuth credentials and a Connections
+// encryption key, which is what makes config.GoogleConfigured true (#285,
+// ADR-0051) — the Provider a test exercising Connect/Callback needs present.
+func GoogleConfig(t *testing.T) config.Config {
+	t.Helper()
+
+	cfg := Config(t)
+	cfg.GoogleClientID = "test-client-id.apps.googleusercontent.com"
+	cfg.GoogleClientSecret = "test-client-secret"
+	cfg.ConnectionsEncryptionKey = "test-connections-encryption-key"
+	return cfg
+}

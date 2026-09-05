@@ -29,7 +29,7 @@ func newTestRouter(t *testing.T) http.Handler {
 		t.Fatalf("bootstrap: %v", err)
 	}
 
-	r, err := New(slog.New(slog.NewTextHandler(io.Discard, nil)), a.AuthHandler, a.CalendarHandler, a.EventHandler, a.AttachmentHandler, a.NotificationHandler, a.AppPasswordHandler, a.AccountHandler, a.UserHandler, a.WorkspaceHandler, a.GroupHandler, a.CalDAVHandler, a.Auth, a.Auth, a.AppPasswords, a.RateLimiter, a.Auth, a.Workspaces)
+	r, err := New(slog.New(slog.NewTextHandler(io.Discard, nil)), a.AuthHandler, a.CalendarHandler, a.EventHandler, a.AttachmentHandler, a.NotificationHandler, a.AppPasswordHandler, a.AccountHandler, a.UserHandler, a.WorkspaceHandler, a.GroupHandler, a.ConnectionHandler, a.CalDAVHandler, a.Auth, a.Auth, a.AppPasswords, a.RateLimiter, a.Auth, a.Workspaces)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

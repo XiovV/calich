@@ -15,7 +15,7 @@ import (
 	"github.com/XiovV/calich/server/internal/static"
 )
 
-func New(logger *slog.Logger, authHandler *handlers.AuthHandler, calendarHandler *handlers.CalendarHandler, eventHandler *handlers.EventHandler, attachmentHandler *handlers.AttachmentHandler, notificationHandler *handlers.NotificationHandler, appPasswordHandler *handlers.AppPasswordHandler, accountHandler *handlers.AccountHandler, userHandler *handlers.UserHandler, workspaceHandler *handlers.WorkspaceHandler, groupHandler *handlers.GroupHandler, calDAVHandler http.Handler, authenticator httpauth.Authenticator, activeUserChecker httpauth.ActiveUserChecker, calDAVAuthenticator httpauth.CalDAVAuthenticator, calDAVRateLimiter httpauth.CalDAVRateLimiter, enabledChecker httpauth.DisabledChecker, workspaceMembershipChecker httpauth.WorkspaceMembershipChecker) (http.Handler, error) {
+func New(logger *slog.Logger, authHandler *handlers.AuthHandler, calendarHandler *handlers.CalendarHandler, eventHandler *handlers.EventHandler, attachmentHandler *handlers.AttachmentHandler, notificationHandler *handlers.NotificationHandler, appPasswordHandler *handlers.AppPasswordHandler, accountHandler *handlers.AccountHandler, userHandler *handlers.UserHandler, workspaceHandler *handlers.WorkspaceHandler, groupHandler *handlers.GroupHandler, connectionHandler *handlers.ConnectionHandler, calDAVHandler http.Handler, authenticator httpauth.Authenticator, activeUserChecker httpauth.ActiveUserChecker, calDAVAuthenticator httpauth.CalDAVAuthenticator, calDAVRateLimiter httpauth.CalDAVRateLimiter, enabledChecker httpauth.DisabledChecker, workspaceMembershipChecker httpauth.WorkspaceMembershipChecker) (http.Handler, error) {
 	r := chi.NewRouter()
 	r.Use(requestLogger(logger))
 	r.Use(middleware.Recoverer)
@@ -233,6 +233,26 @@ func New(logger *slog.Logger, authHandler *handlers.AuthHandler, calendarHandler
 			r.Get("/{id}/members", groupHandler.ListMembers)
 			r.Post("/{id}/members", groupHandler.AddMember)
 			r.Delete("/{id}/members/{userId}", groupHandler.RemoveMember)
+		})
+
+		// Connections (#285, ADR-0050, ADR-0051): Callback sits outside
+		// RequireAuth on purpose — Google's redirect back is an
+		// unauthenticated top-level navigation carrying neither an
+		// Authorization header nor a cookie scoped to this path, so the User
+		// it's acting for comes from the signed "state" ConnectionHandler.
+		// Connect minted, not from a Session.
+		r.Route("/connections", func(r chi.Router) {
+			r.Get("/google/callback", connectionHandler.Callback)
+
+			r.Group(func(r chi.Router) {
+				r.Use(httpauth.RequireAuth(authenticator))
+				r.Use(httpauth.RequireActiveUser(activeUserChecker))
+				r.Use(httpauth.RequireEnabledUser(enabledChecker))
+
+				r.Get("/", connectionHandler.List)
+				r.Get("/google/connect", connectionHandler.Connect)
+				r.Delete("/{id}", connectionHandler.Disconnect)
+			})
 		})
 
 		// Self-service account lifecycle (ADR-0044): a User acting on their

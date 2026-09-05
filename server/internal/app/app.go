@@ -56,6 +56,7 @@ type App struct {
 	UserHandler         *handlers.UserHandler
 	WorkspaceHandler    *handlers.WorkspaceHandler
 	GroupHandler        *handlers.GroupHandler
+	ConnectionHandler   *handlers.ConnectionHandler
 
 	CalDAVBackend *caldavserver.Backend
 	CalDAVHandler http.Handler
@@ -102,7 +103,7 @@ func newFromGraph(graph *service.Graph, cfg config.Config) *App {
 		a.Mailer = mailer.NewSMTPMailer(cfg.SMTPHost, cfg.SMTPPort, cfg.SMTPUser, cfg.SMTPPass, cfg.SMTPFrom)
 	}
 
-	a.AuthHandler = handlers.NewAuthHandler(a.Auth, a.RateLimiter, cfg.SMTPConfigured(), cfg.ImapConfigured(), cfg.CookieSecure)
+	a.AuthHandler = handlers.NewAuthHandler(a.Auth, a.RateLimiter, cfg.SMTPConfigured(), cfg.ImapConfigured(), cfg.GoogleConfigured(), cfg.CookieSecure)
 	a.CalendarHandler = handlers.NewCalendarHandler(a.Calendars, a.Events, a.Imports, a.Subscriptions, a.AttachmentStore)
 	a.EventHandler = handlers.NewEventHandler(a.Events, a.AttachmentStore)
 	a.AttachmentHandler = handlers.NewAttachmentHandler(a.Attachments, cfg.MaxAttachmentSize)
@@ -112,6 +113,7 @@ func newFromGraph(graph *service.Graph, cfg config.Config) *App {
 	a.UserHandler = handlers.NewUserHandler(a.Users)
 	a.WorkspaceHandler = handlers.NewWorkspaceHandler(a.Workspaces)
 	a.GroupHandler = handlers.NewGroupHandler(a.Groups)
+	a.ConnectionHandler = handlers.NewConnectionHandler(a.Connections)
 
 	a.CalDAVBackend = caldavserver.NewBackend(a.Calendars, a.Events, a.Attachments, cfg.MaxAttachmentSize, cfg.MaxAttachmentsPerEvent)
 	a.CalDAVHandler = caldavserver.NewHTTPHandler(a.CalDAVBackend)

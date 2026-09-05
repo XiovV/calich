@@ -27,7 +27,7 @@ func newRateLimitedAuthTestServer(t *testing.T, maxAuthPerEmail, maxAuthPerIP, m
 	cfg.EnableSignups = enableSignups
 	g := newTestGraphWithConfig(t, cfg)
 
-	h := NewAuthHandler(g.Auth, g.RateLimiter, false, false, true)
+	h := NewAuthHandler(g.Auth, g.RateLimiter, false, false, false, true)
 
 	r := chi.NewRouter()
 	r.Post("/api/auth/login", h.Login)

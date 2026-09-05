@@ -49,6 +49,7 @@ type Graph struct {
 	SessionRepo          *repository.SessionRepository
 	CalendarRepo         *repository.CalendarRepository
 	SourceRepo           *repository.SourceRepository
+	ConnectionRepo       *repository.ConnectionRepository
 	ShareRepo            *repository.CalendarShareRepository
 	GroupShareRepo       *repository.CalendarGroupShareRepository
 	ColorOverrideRepo    *repository.CalendarUserColorRepository
@@ -86,6 +87,7 @@ type Graph struct {
 	Imports       *ImportService
 	Notifications *NotificationService
 	Subscriptions *SubscribeService
+	Connections   *ConnectionService
 	Users         *UserService
 	Workspaces    *WorkspaceService
 	// RateLimiter throttles Login, Register, and CalDAV Basic auth (#240,
@@ -104,6 +106,16 @@ type GraphOption func(*graphOptions)
 type graphOptions struct {
 	jwtSecret           []byte
 	subscribeHTTPClient *http.Client
+	googleHTTPClient    *http.Client
+	// googleEndpoints, when set, overrides the three Google URLs
+	// ConnectionService calls — googleAuthorizeURL/googleTokenURL/
+	// googleUserinfoURL — with an httptest.Server's own, alongside
+	// googleHTTPClient (#285's testing decisions).
+	googleEndpoints *googleEndpointOverride
+}
+
+type googleEndpointOverride struct {
+	authorizeURL, tokenURL, userinfoURL string
 }
 
 // WithJWTSecret pins the secret AuthService signs Access tokens with,
@@ -120,6 +132,22 @@ func WithJWTSecret(secret []byte) GraphOption {
 // client here, and a test of the guard itself keeps the default.
 func WithSubscribeHTTPClient(client *http.Client) GraphOption {
 	return func(o *graphOptions) { o.subscribeHTTPClient = client }
+}
+
+// WithGoogleHTTPClient replaces the client ConnectionService makes every
+// Google OAuth call with — a test's seam onto an httptest.Server standing in
+// for Google (#285's testing decisions).
+func WithGoogleHTTPClient(client *http.Client) GraphOption {
+	return func(o *graphOptions) { o.googleHTTPClient = client }
+}
+
+// WithGoogleEndpoints replaces the three URLs ConnectionService calls, in
+// place of Google's real ones — the other half of the same test seam
+// WithGoogleHTTPClient provides the transport for.
+func WithGoogleEndpoints(authorizeURL, tokenURL, userinfoURL string) GraphOption {
+	return func(o *graphOptions) {
+		o.googleEndpoints = &googleEndpointOverride{authorizeURL: authorizeURL, tokenURL: tokenURL, userinfoURL: userinfoURL}
+	}
 }
 
 // NewGraph builds every repository and service from a database handle and a
@@ -149,6 +177,7 @@ func NewGraph(sqlDB *sql.DB, cfg config.Config, opts ...GraphOption) (*Graph, er
 		SessionRepo:          repository.NewSessionRepository(sqlDB),
 		CalendarRepo:         repository.NewCalendarRepository(sqlDB),
 		SourceRepo:           repository.NewSourceRepository(sqlDB),
+		ConnectionRepo:       repository.NewConnectionRepository(sqlDB),
 		ShareRepo:            repository.NewCalendarShareRepository(sqlDB),
 		GroupShareRepo:       repository.NewCalendarGroupShareRepository(sqlDB),
 		ColorOverrideRepo:    repository.NewCalendarUserColorRepository(sqlDB),
@@ -190,6 +219,15 @@ func NewGraph(sqlDB *sql.DB, cfg config.Config, opts ...GraphOption) (*Graph, er
 		subscribeOpts = append(subscribeOpts, WithHTTPClient(built.subscribeHTTPClient))
 	}
 	g.Subscriptions = NewSubscribeService(g.Events, g.Calendars, cfg.SubscriptionRefreshInterval, subscribeOpts...)
+
+	var connectionOpts []ConnectionOption
+	if built.googleHTTPClient != nil {
+		connectionOpts = append(connectionOpts, withGoogleHTTPClient(built.googleHTTPClient))
+	}
+	if built.googleEndpoints != nil {
+		connectionOpts = append(connectionOpts, withGoogleEndpoints(built.googleEndpoints.authorizeURL, built.googleEndpoints.tokenURL, built.googleEndpoints.userinfoURL))
+	}
+	g.Connections = NewConnectionService(g.ConnectionRepo, g.Auth, cfg.GoogleClientID, cfg.GoogleClientSecret, cfg.ConnectionsEncryptionKey, cfg.GoogleConfigured(), connectionOpts...)
 
 	return g, nil
 }

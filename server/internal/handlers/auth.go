@@ -34,6 +34,12 @@ type AuthHandler struct {
 	// (ADR-0059) — meResponse's invitationRepliesConfigured, which Settings
 	// uses to disclose whether an emailed Response ever comes back.
 	imapConfigured bool
+	// googleConfigured is whether the self-hoster has set up Google OAuth
+	// credentials and a Connections encryption key (config.Config.
+	// GoogleConfigured, ADR-0051) — meResponse's googleProviderAvailable,
+	// which hides Settings' Connect Google button entirely rather than
+	// offering one that cannot work.
+	googleConfigured bool
 	// cookieSecure is the Refresh token cookie's Secure attribute
 	// (config.Config.CookieSecure, ADR-0009, #239, #257).
 	cookieSecure bool
@@ -45,8 +51,8 @@ type AuthHandler struct {
 	warnInsecureCookieOnce sync.Once
 }
 
-func NewAuthHandler(auth *service.AuthService, rateLimiter *service.AuthRateLimiter, smtpConfigured, imapConfigured, cookieSecure bool) *AuthHandler {
-	return &AuthHandler{auth: auth, rateLimiter: rateLimiter, smtpConfigured: smtpConfigured, imapConfigured: imapConfigured, cookieSecure: cookieSecure}
+func NewAuthHandler(auth *service.AuthService, rateLimiter *service.AuthRateLimiter, smtpConfigured, imapConfigured, googleConfigured, cookieSecure bool) *AuthHandler {
+	return &AuthHandler{auth: auth, rateLimiter: rateLimiter, smtpConfigured: smtpConfigured, imapConfigured: imapConfigured, googleConfigured: googleConfigured, cookieSecure: cookieSecure}
 }
 
 type loginRequest struct {
@@ -349,6 +355,12 @@ type meResponse struct {
 	// Invitations with this false, those Attendees just stay needs-action
 	// forever. Settings discloses this once, beside the SMTP configuration.
 	InvitationRepliesConfigured bool `json:"invitation_replies_configured"`
+	// GoogleProviderAvailable is whether the self-hoster has configured
+	// Google OAuth credentials and a Connections encryption key (#285,
+	// ADR-0051) — Settings' Connections Section offers Connect a Google
+	// account only when this is true, following the same absent-when-
+	// unconfigured pattern EmailReminderChannelAvailable set for SMTP.
+	GoogleProviderAvailable bool `json:"google_provider_available"`
 	// SyncedDeviceRemindersEnabled is "let my synced devices show reminder
 	// pop-ups (disable in-app reminder notifications)" (ADR-0027).
 	SyncedDeviceRemindersEnabled bool `json:"synced_device_reminders_enabled"`
@@ -369,6 +381,7 @@ func (h *AuthHandler) toMeResponse(user repository.User) meResponse {
 		Email:                         user.Email,
 		EmailReminderChannelAvailable: h.smtpConfigured,
 		InvitationRepliesConfigured:   h.imapConfigured,
+		GoogleProviderAvailable:       h.googleConfigured,
 		SyncedDeviceRemindersEnabled:  user.SyncedDeviceRemindersEnabled,
 		WeekStart:                     user.WeekStart,
 		DefaultView:                   user.DefaultView,

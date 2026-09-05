@@ -87,6 +87,15 @@ type Config struct {
 	IMAPPort string
 	IMAPUser string
 	IMAPPass string
+	// Google OAuth credentials the self-hoster registers themselves (#285,
+	// ADR-0051) — this app ships no client of its own. ConnectionsEncryptionKey
+	// is the key a Connection's refresh token is encrypted with at rest
+	// (ADR-0052); GoogleConfigured requires all three, since a Connection
+	// this instance can't safely encrypt is worse than a Provider that's
+	// simply absent from the UI.
+	GoogleClientID           string
+	GoogleClientSecret       string
+	ConnectionsEncryptionKey string
 	// SubscriptionRefreshInterval is the background poller's default
 	// refresh cadence for a Subscribed Calendar whose feed states none of
 	// its own — SUBSCRIPTION_REFRESH_INTERVAL, parsed as a Go duration
@@ -134,6 +143,9 @@ func Load() Config {
 		IMAPPort:                    getEnv("IMAP_PORT", ""),
 		IMAPUser:                    getEnv("IMAP_USER", ""),
 		IMAPPass:                    getEnv("IMAP_PASS", ""),
+		GoogleClientID:              getEnv("GOOGLE_CLIENT_ID", ""),
+		GoogleClientSecret:          getEnv("GOOGLE_CLIENT_SECRET", ""),
+		ConnectionsEncryptionKey:    getEnv("CONNECTIONS_ENCRYPTION_KEY", ""),
 		SubscriptionRefreshInterval: getEnvDuration("SUBSCRIPTION_REFRESH_INTERVAL", defaultSubscriptionRefreshInterval),
 		MaxAttachmentSize:           getEnvInt64("MAX_ATTACHMENT_SIZE", defaultMaxAttachmentSize),
 		MaxAttachmentsPerEvent:      getEnvInt("MAX_ATTACHMENTS_PER_EVENT", defaultMaxAttachmentsPerEvent),
@@ -201,6 +213,16 @@ func (c Config) SMTPConfigured() bool {
 // needs-action forever.
 func (c Config) ImapConfigured() bool {
 	return c.IMAPHost != "" && c.IMAPPort != "" && c.IMAPUser != "" && c.IMAPPass != ""
+}
+
+// GoogleConfigured reports whether the Google Provider (#285, ADR-0050,
+// ADR-0051) can actually be offered: an OAuth client ID and secret to
+// authenticate with, and an encryption key to store a Connection's refresh
+// token behind. The Provider is absent from the UI entirely otherwise,
+// following the pattern SMTPConfigured already set for Email-Channel
+// Reminders — a button that cannot work should not be offered.
+func (c Config) GoogleConfigured() bool {
+	return c.GoogleClientID != "" && c.GoogleClientSecret != "" && c.ConnectionsEncryptionKey != ""
 }
 
 // getEnvBool parses key as a bool (e.g. "true"/"false", "1"/"0"), falling

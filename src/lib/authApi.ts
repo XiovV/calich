@@ -24,6 +24,12 @@ export interface User {
   // Invitations still send with this false, those Attendees just stay
   // Needs-Action forever.
   invitationRepliesConfigured: boolean;
+  // Whether this instance has Google OAuth credentials and a Connections
+  // encryption key configured (ADR-0051) — the Connections Section offers
+  // Connect a Google account only when this is true, following the same
+  // absent-when-unconfigured pattern emailReminderChannelAvailable set for
+  // SMTP.
+  googleProviderAvailable: boolean;
   // "Let my synced devices show reminder pop-ups (disable in-app reminder
   // notifications)" (ADR-0027). Defaults false.
   syncedDeviceRemindersEnabled: boolean;
@@ -59,6 +65,7 @@ interface MeWire {
   email: string;
   email_reminder_channel_available: boolean;
   invitation_replies_configured: boolean;
+  google_provider_available: boolean;
   synced_device_reminders_enabled: boolean;
   week_start: number;
   default_view: ActiveView;
@@ -75,6 +82,7 @@ function fromMeWire(wire: MeWire): User {
     email: wire.email,
     emailReminderChannelAvailable: wire.email_reminder_channel_available,
     invitationRepliesConfigured: wire.invitation_replies_configured,
+    googleProviderAvailable: wire.google_provider_available,
     syncedDeviceRemindersEnabled: wire.synced_device_reminders_enabled,
     weekStart: wire.week_start,
     defaultView: wire.default_view,

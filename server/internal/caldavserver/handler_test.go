@@ -41,8 +41,8 @@ func TestRequestBaseURL(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := requestBaseURL(tt.req); got != tt.want {
-				t.Fatalf("requestBaseURL() = %q, want %q", got, tt.want)
+			if got := RequestBaseURL(tt.req); got != tt.want {
+				t.Fatalf("RequestBaseURL() = %q, want %q", got, tt.want)
 			}
 		})
 	}

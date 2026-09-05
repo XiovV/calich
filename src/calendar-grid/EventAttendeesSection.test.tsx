@@ -52,6 +52,7 @@ beforeEach(() => {
       mustChangePassword: false,
       email: organizer.email,
       emailReminderChannelAvailable: false,
+      googleProviderAvailable: false,
       invitationRepliesConfigured: false,
       syncedDeviceRemindersEnabled: false,
       weekStart: 1,

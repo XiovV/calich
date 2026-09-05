@@ -788,6 +788,37 @@ func TestAuthenticate_RejectsGarbage(t *testing.T) {
 	}
 }
 
+// TestAuthenticate_RejectsConnectState is a regression test for a
+// pre-authentication bypass found in code review (#285): IssueConnectState
+// signs a bare jwt.RegisteredClaims under the same jwtSecret Authenticate
+// verifies access tokens with. Before accessTokenClaims grew its Purpose
+// field, unmarshaling a connect-state token into accessTokenClaims left
+// TokenVersion at its zero value — which equals every account's
+// token_version until its first password change (ADR-0071) — so a 10-minute
+// connect-state token, visible in a browser's address bar during the Google
+// redirect, authenticated as a full bearer access token for that account.
+func TestAuthenticate_RejectsConnectState(t *testing.T) {
+	svc := newTestAuthService(t, "admin", "admin")
+	ctx := context.Background()
+	if _, _, err := svc.Bootstrap(ctx); err != nil {
+		t.Fatalf("bootstrap: %v", err)
+	}
+
+	user, err := svc.users.GetByEmail(ctx, "admin@example.com")
+	if err != nil {
+		t.Fatalf("get user: %v", err)
+	}
+
+	state, err := svc.IssueConnectState(user.ID)
+	if err != nil {
+		t.Fatalf("issue connect state: %v", err)
+	}
+
+	if _, err := svc.Authenticate(ctx, state); err == nil {
+		t.Fatalf("expected a connect state to be rejected as an access token")
+	}
+}
+
 // TestAuthenticate_RejectsAccessTokenIssuedBeforePasswordChange pins the fix
 // for #242: ChangePassword already revoked the refresh token, but a
 // pre-change access token kept authenticating for its full 15-minute TTL

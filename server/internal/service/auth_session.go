@@ -99,14 +99,27 @@ func (s *AuthService) Login(ctx context.Context, email, password string) (LoginR
 	}, nil
 }
 
+// accessTokenPurpose is accessTokenClaims' own "purpose" value — see its
+// doc comment for why the claim exists at all.
+const accessTokenPurpose = "access"
+
 // accessTokenClaims is the JWT payload AuthService mints and validates for
 // bearer access tokens. TokenVersion pins the token to the account's
 // token_version at mint time (#242, ADR-0071); AuthService.Authenticate
 // rejects a token whose TokenVersion doesn't match the account's current
-// one.
+// one. Purpose distinguishes this claims shape from any other this service
+// signs with the same jwtSecret — IssueConnectState's (#285) — so one can
+// never be silently accepted in place of the other. Without it, a
+// connect-state token (a bare jwt.RegisteredClaims, no "tv") unmarshals into
+// accessTokenClaims with TokenVersion defaulting to its zero value, which
+// equals every account's token_version until its first password change —
+// making a 10-minute connect-state token, visible in a browser's address bar
+// during the Google redirect, a full authentication bypass. Authenticate
+// rejects anything without Purpose == accessTokenPurpose.
 type accessTokenClaims struct {
 	jwt.RegisteredClaims
-	TokenVersion int64 `json:"tv"`
+	TokenVersion int64  `json:"tv"`
+	Purpose      string `json:"purpose"`
 }
 
 // Authenticate validates an access token, returning the user id it was
@@ -137,6 +150,9 @@ func (s *AuthService) Authenticate(ctx context.Context, accessToken string) (int
 	if err != nil {
 		return 0, fmt.Errorf("parse access token: %w", err)
 	}
+	if claims.Purpose != accessTokenPurpose {
+		return 0, ErrInvalidSession
+	}
 
 	userID, err := strconv.ParseInt(claims.Subject, 10, 64)
 	if err != nil {
@@ -163,6 +179,7 @@ func (s *AuthService) newAccessToken(userID, tokenVersion int64) (string, error)
 			ExpiresAt: jwt.NewNumericDate(now.Add(accessTokenTTL)),
 		},
 		TokenVersion: tokenVersion,
+		Purpose:      accessTokenPurpose,
 	}
 
 	return jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString(s.jwtSecret)

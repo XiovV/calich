@@ -84,6 +84,7 @@ const user: User = {
   mustChangePassword: false,
   email: "ada@example.com",
   emailReminderChannelAvailable: false,
+  googleProviderAvailable: false,
   invitationRepliesConfigured: false,
   syncedDeviceRemindersEnabled: false,
   weekStart: 1,

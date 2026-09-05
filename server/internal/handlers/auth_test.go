@@ -51,7 +51,7 @@ func newAuthTestServerWithCookieSecure(t *testing.T, smtpConfigured, imapConfigu
 	// the only path that used to.
 	mustSeedUserRequiringPasswordChange(t, users, "admin", "admin")
 
-	h := NewAuthHandler(auth, g.RateLimiter, smtpConfigured, imapConfigured, cookieSecure)
+	h := NewAuthHandler(auth, g.RateLimiter, smtpConfigured, imapConfigured, false, cookieSecure)
 
 	r := chi.NewRouter()
 	r.Get("/api/auth/setup-status", h.SetupStatus)
@@ -329,7 +329,7 @@ func TestLogin_DisabledAccount_SucceedsButMeIsBlocked(t *testing.T) {
 		t.Fatalf("disable user: %v", err)
 	}
 
-	h := NewAuthHandler(auth, g.RateLimiter, false, false, true)
+	h := NewAuthHandler(auth, g.RateLimiter, false, false, false, true)
 	r := chi.NewRouter()
 	r.Post("/api/auth/login", h.Login)
 	r.With(httpauth.RequireAuth(auth), httpauth.RequireActiveUser(auth), httpauth.RequireEnabledUser(auth)).Get("/api/auth/me", h.Me)
@@ -534,6 +534,33 @@ func TestMe_EmailReminderChannelAvailable_TrueWithSMTPConfigured(t *testing.T) {
 	}
 	if !me.EmailReminderChannelAvailable {
 		t.Fatalf("expected the Email Channel to be available once SMTP is configured")
+	}
+}
+
+// TestMe_GoogleProviderAvailable_FalseWithoutGoogleConfigured is this
+// server's ordinary posture: no self-hoster has supplied Google OAuth
+// credentials, so Settings' Connections Section must offer no Connect
+// button at all (ADR-0051). See connection_test.go's
+// TestMe_GoogleProviderAvailable_TrueWithGoogleConfigured for the other
+// half of the pair.
+func TestMe_GoogleProviderAvailable_FalseWithoutGoogleConfigured(t *testing.T) {
+	srv := newAuthTestServer(t)
+	accessToken := authenticatedAccessToken(t, srv)
+
+	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/api/auth/me", nil)
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET /api/auth/me: %v", err)
+	}
+	defer resp.Body.Close()
+
+	var me meResponse
+	if err := json.NewDecoder(resp.Body).Decode(&me); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if me.GoogleProviderAvailable {
+		t.Fatalf("expected the Google provider to be unavailable without credentials configured")
 	}
 }
 
@@ -753,7 +780,7 @@ func TestUpdateName_DuplicateNameIsAllowed(t *testing.T) {
 		t.Fatalf("change password: %v", err)
 	}
 
-	h := NewAuthHandler(auth, g.RateLimiter, false, false, true)
+	h := NewAuthHandler(auth, g.RateLimiter, false, false, false, true)
 	r := chi.NewRouter()
 	r.Post("/api/auth/login", h.Login)
 	r.With(httpauth.RequireAuth(auth), httpauth.RequireActiveUser(auth)).Put("/api/auth/name", h.UpdateName)
@@ -1668,7 +1695,7 @@ func TestSetupStatus_AccountExistsAndSignupsEnabled(t *testing.T) {
 		t.Fatalf("bootstrap: %v", err)
 	}
 
-	h := NewAuthHandler(g.Auth, g.RateLimiter, false, false, true)
+	h := NewAuthHandler(g.Auth, g.RateLimiter, false, false, false, true)
 	r := chi.NewRouter()
 	r.Get("/api/auth/setup-status", h.SetupStatus)
 	srv := httptest.NewServer(r)
@@ -1691,7 +1718,7 @@ func TestSetupStatus_NoAccountsYet(t *testing.T) {
 	cfg.InitialName, cfg.InitialEmail, cfg.InitialPassword = "", "", ""
 	g := newTestGraphWithConfig(t, cfg)
 
-	h := NewAuthHandler(g.Auth, g.RateLimiter, false, false, true)
+	h := NewAuthHandler(g.Auth, g.RateLimiter, false, false, false, true)
 	r := chi.NewRouter()
 	r.Get("/api/auth/setup-status", h.SetupStatus)
 	srv := httptest.NewServer(r)

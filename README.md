@@ -13,6 +13,7 @@ An open-source, self-hosted Google Calendar alternative with **CalDAV** sync.
 - [Configuration](#configuration)
   - [`COOKIE_SECURE`](#cookie_secure)
   - [Behind a reverse proxy](#behind-a-reverse-proxy)
+  - [Connecting a Google account](#connecting-a-google-account)
 - [Data & backups](#data--backups)
 - [Roadmap](#roadmap)
 
@@ -221,6 +222,8 @@ All configuration is by environment variable.
 | `REGISTER_RATE_LIMIT_PER_IP`                                        | `20`                | Registration attempts per IP per hour.                                                                                                                                           |
 | `SMTP_HOST` / `SMTP_PORT` / `SMTP_USER` / `SMTP_PASS` / `SMTP_FROM` | —                   | Outbound mail. Email reminders and invitations are only offered when **all five** are set.                                                                                       |
 | `IMAP_HOST` / `IMAP_PORT` / `IMAP_USER` / `IMAP_PASS`               | —                   | The mailbox `SMTP_FROM` sends from, polled for invitation replies. Without it, invitations still send but no response ever comes back.                                           |
+| `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET`                         | —                   | Your own Google OAuth client. Connecting a Google account is only offered when both, and `CONNECTIONS_ENCRYPTION_KEY`, are set. See below.                                       |
+| `CONNECTIONS_ENCRYPTION_KEY`                                        | —                   | Encrypts a connected account's refresh token at rest. Losing it costs re-authorization, not data — it isn't stored anywhere Calich manages, so back it up yourself. See below.    |
 
 ### `COOKIE_SECURE`
 
@@ -276,6 +279,35 @@ server {
     }
 }
 ```
+
+### Connecting a Google account
+
+Calich ships no Google client of its own — each instance uses its own, so a
+compromised or disabled credential never takes down every self-hosted instance
+at once. Without one, Connections is simply absent from Settings; nobody sees
+a button that can't work.
+
+1. In the [Google Cloud Console](https://console.cloud.google.com/), create a
+   project and enable the **Google Calendar API**.
+2. Under **APIs & Services → Credentials**, create an **OAuth client ID** of
+   type **Web application**. Add your instance's own origin as an authorized
+   redirect URI, followed by `/api/connections/google/callback` — e.g.
+   `https://calendar.example.com/api/connections/google/callback`. This must
+   match exactly, including scheme and port.
+3. Set `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` from that client.
+4. Set `CONNECTIONS_ENCRYPTION_KEY` to a long random string — it's what
+   encrypts a connected account's refresh token before it's stored. Keep it
+   secret and keep a copy somewhere other than `DATA_DIR`: losing it means
+   every Connection has to be re-authorized, not that any data is lost.
+
+**Your project starts in "Testing" status, and that matters.** A Google Cloud
+project left in Testing issues refresh tokens that **expire after 7 days** —
+a Connection will quietly stop syncing every week. This is not a bug in
+Calich. Once you're happy it works, flip your project to **In production**
+in the OAuth consent screen settings. You'll still see Google's "unverified
+app" warning when connecting — that's expected too, and permanent under this
+per-instance-credential model — but your users' Connections will stop
+expiring on a timer.
 
 ## Data & backups
 

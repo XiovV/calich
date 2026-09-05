@@ -44,6 +44,7 @@ const adminUser = {
   mustChangePassword: false,
   email: "admin@example.com",
   emailReminderChannelAvailable: false,
+  googleProviderAvailable: false,
   invitationRepliesConfigured: false,
   syncedDeviceRemindersEnabled: false,
   weekStart: 1,
