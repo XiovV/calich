@@ -14,7 +14,7 @@ import { useCalendarsStore } from "../../lib/calendarsStore";
 import { useWorkspacesStore } from "../../lib/workspacesStore";
 import { errorMessage } from "../../lib/errorMessage";
 import { toast } from "../../lib/toast";
-import type { Calendar } from "../../lib/calendar";
+import { isLinkedCalendar, type Calendar } from "../../lib/calendar";
 import { Button } from "../ui/Button";
 import { buttonClasses } from "../ui/buttonClasses";
 import { IconButton } from "../ui/IconButton";
@@ -61,11 +61,22 @@ export function ShareCalendarModal({ calendar, onClose }: ShareCalendarModalProp
   const activeWorkspaceId = useWorkspacesStore((state) => state.activeWorkspaceId);
   const workspaces = useWorkspacesStore((state) => state.workspaces);
 
+  // A Linked Calendar's Shares are clamped to Viewer (ADR-0075, #294): an
+  // Editor's write would execute as the connecting User's own Provider
+  // identity. The backend refuses an Editor grant outright, so the Role
+  // picker never offers one here — for a new Share or for changing an
+  // existing one.
+  const linked = isLinkedCalendar(calendar);
+  const roleOptions = linked
+    ? ROLE_OPTIONS.filter((option) => option.value === "viewer")
+    : ROLE_OPTIONS;
+
   // New Shares default to the Workspace's configured default-share-privacy
   // setting (#159): "private" defaults the picker to Viewer, "workspace" to
-  // Editor.
-  const defaultRole: Role =
-    workspaces.find((w) => w.id === activeWorkspaceId)?.defaultSharePrivacy === "workspace"
+  // Editor. A Linked Calendar overrides that to Viewer regardless.
+  const defaultRole: Role = linked
+    ? "viewer"
+    : workspaces.find((w) => w.id === activeWorkspaceId)?.defaultSharePrivacy === "workspace"
       ? "editor"
       : "viewer";
 
@@ -251,7 +262,7 @@ export function ShareCalendarModal({ calendar, onClose }: ShareCalendarModalProp
                       <Select
                         value={share.role}
                         onValueChange={(role) => handleUserRoleChange(share, role)}
-                        options={ROLE_OPTIONS}
+                        options={roleOptions}
                         aria-label={`${share.name}'s role`}
                         className="shrink-0"
                       />
@@ -273,7 +284,7 @@ export function ShareCalendarModal({ calendar, onClose }: ShareCalendarModalProp
                       <Select
                         value={share.role}
                         onValueChange={(role) => handleGroupRoleChange(share, role)}
-                        options={ROLE_OPTIONS}
+                        options={roleOptions}
                         aria-label={`${share.groupName}'s role`}
                         className="shrink-0"
                       />
@@ -306,7 +317,7 @@ export function ShareCalendarModal({ calendar, onClose }: ShareCalendarModalProp
                   <Select
                     value={selectedRole}
                     onValueChange={setSelectedRole}
-                    options={ROLE_OPTIONS}
+                    options={roleOptions}
                     aria-label="Role"
                     className="shrink-0"
                   />
@@ -324,6 +335,12 @@ export function ShareCalendarModal({ calendar, onClose }: ShareCalendarModalProp
                   {availableUsers.length === 0 && availableGroups.length === 0
                     ? "Nobody else in this workspace to share with yet."
                     : "Everyone and every group in this workspace already has Access."}
+                </p>
+              )}
+
+              {linked && (
+                <p className="mt-2 text-label-sm text-ink-muted">
+                  A linked calendar can only be shared with the viewer role.
                 </p>
               )}
 

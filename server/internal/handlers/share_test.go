@@ -29,6 +29,34 @@ type shareTestServer struct {
 	workspaceID            string
 	groups                 *repository.GroupRepository
 	groupID                int64
+	ownerUserID            int64
+	sources                *repository.SourceRepository
+	connections            *repository.ConnectionRepository
+}
+
+// makeLinkedCalendar attaches a Connection-kind Source to s.calendarID,
+// turning it into a Linked Calendar owned by the connecting User — #294's
+// fixture for exercising the "a Linked Calendar can only be Shared as
+// Viewer" rule over the REST seam.
+func (s shareTestServer) makeLinkedCalendar(t *testing.T, mode repository.SourceMode) {
+	t.Helper()
+	ctx := context.Background()
+
+	conn, err := s.connections.Upsert(ctx, s.ownerUserID, repository.ProviderGoogle, "someone@gmail.com", repository.ConnectionFields{
+		RefreshToken: "encrypted-refresh", Status: repository.ConnectionStatusLive,
+	})
+	if err != nil {
+		t.Fatalf("upsert connection: %v", err)
+	}
+	externalCalendarID := "primary"
+	if _, err := s.sources.Create(ctx, s.calendarID, repository.SourceFields{
+		Kind:               repository.SourceKindConnection,
+		Mode:               mode,
+		ConnectionID:       &conn.ID,
+		ExternalCalendarID: &externalCalendarID,
+	}); err != nil {
+		t.Fatalf("create source: %v", err)
+	}
 }
 
 func newShareTestServer(t *testing.T) shareTestServer {
@@ -124,7 +152,7 @@ func newShareTestServer(t *testing.T) shareTestServer {
 		t.Fatalf("create group: %v", err)
 	}
 
-	return shareTestServer{baseURL: srv.URL, ownerToken: ownerLogin.AccessToken, otherToken: otherLogin.AccessToken, calendarID: created.ID, otherUserID: other.ID, calendars: calendars, workspaceID: ownerWorkspaceID, groups: groupRepo, groupID: group.ID}
+	return shareTestServer{baseURL: srv.URL, ownerToken: ownerLogin.AccessToken, otherToken: otherLogin.AccessToken, calendarID: created.ID, otherUserID: other.ID, calendars: calendars, workspaceID: ownerWorkspaceID, groups: groupRepo, groupID: group.ID, ownerUserID: ownerUser.ID, sources: g.SourceRepo, connections: g.ConnectionRepo}
 }
 
 func doJSON(t *testing.T, method, url, accessToken string, body any) *http.Response {
@@ -324,6 +352,39 @@ func TestCalendarHandler_Share_NonOwnerRefused(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("expected 404, got %d", resp.StatusCode)
+	}
+}
+
+// TestCalendarHandler_Share_LinkedCalendarEditorRejected covers #294 over
+// the REST seam: POSTing an Editor Share to a Linked Calendar is a 400, and
+// the Viewer Role on the same Calendar still succeeds.
+func TestCalendarHandler_Share_LinkedCalendarEditorRejected(t *testing.T) {
+	s := newShareTestServer(t)
+	s.makeLinkedCalendar(t, repository.SourceModeWritable)
+
+	editorResp := doJSON(t, http.MethodPost, s.baseURL+"/api/calendars/"+s.calendarID+"/shares", s.ownerToken, shareRequest{Email: "other@example.com", Role: repository.RoleEditor})
+	defer editorResp.Body.Close()
+	if editorResp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("editor share on a linked calendar: expected 400, got %d", editorResp.StatusCode)
+	}
+
+	viewerResp := doJSON(t, http.MethodPost, s.baseURL+"/api/calendars/"+s.calendarID+"/shares", s.ownerToken, shareRequest{Email: "other@example.com", Role: repository.RoleViewer})
+	defer viewerResp.Body.Close()
+	if viewerResp.StatusCode != http.StatusOK {
+		t.Fatalf("viewer share on a linked calendar: expected 200, got %d", viewerResp.StatusCode)
+	}
+}
+
+// TestCalendarHandler_ShareWithGroup_LinkedCalendarEditorRejected mirrors it
+// on the Group-Share route.
+func TestCalendarHandler_ShareWithGroup_LinkedCalendarEditorRejected(t *testing.T) {
+	s := newShareTestServer(t)
+	s.makeLinkedCalendar(t, repository.SourceModeWritable)
+
+	resp := doJSON(t, http.MethodPost, s.baseURL+"/api/calendars/"+s.calendarID+"/group-shares", s.ownerToken, groupShareRequest{GroupID: s.groupID, Role: repository.RoleEditor})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("editor group-share on a linked calendar: expected 400, got %d", resp.StatusCode)
 	}
 }
 

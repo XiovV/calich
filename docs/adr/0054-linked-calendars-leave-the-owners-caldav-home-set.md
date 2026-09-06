@@ -1,6 +1,6 @@
 # A Linked Calendar leaves its Owner's CalDAV home-set, but stays in an accessor's
 
-Status: accepted
+Status: superseded by ADR-0074
 
 A Linked Calendar is excluded by default from the CalDAV home-set of the User whose Connection produced it, and included by default in the home-set of any Workspace Member it was Shared to. Home-set membership therefore depends on who is asking. Both defaults are overridable per Linked Calendar.
 

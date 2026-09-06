@@ -111,6 +111,31 @@ describe("Linked Calendar grouping", () => {
     expect(screen.getAllByText("Work")).toHaveLength(1);
   });
 
+  // #294: a Linked Calendar Shared to the viewer appears under "Shared with
+  // me", never under a Connection heading — those headings are the Owner's
+  // account groupings, and the viewer is not the one who connected Google.
+  it("puts a Linked Calendar shared to the viewer under Shared with me", () => {
+    const sharedLinked: Calendar = {
+      id: "cal-shared-linked",
+      name: "Colleague's Google",
+      color: "#3498DBFF",
+      access: "viewer",
+      isOwner: false,
+      ownerName: "Bob",
+      sourceKind: "connection",
+      connectionAccountEmail: "bob@gmail.com",
+    };
+    useCalendarsStore.setState({ calendars: [owned, sharedLinked] });
+    render(<CalendarList />);
+
+    expect(screen.getByText("Shared with me")).toBeInTheDocument();
+    // No Connection heading is rendered — that grouping is the Owner's, and
+    // the viewer did not connect this account.
+    expect(screen.queryByText("bob@gmail.com")).not.toBeInTheDocument();
+    expect(screen.getAllByText("Colleague's Google")).toHaveLength(1);
+    expect(screen.getByText("Shared by Bob")).toBeInTheDocument();
+  });
+
   // #288: a Linked Calendar can be refreshed on demand, exactly like a
   // Subscribed one — and, like one, offers no per-Calendar Export.
   it("offers Refresh and not Export on a Linked Calendar", async () => {

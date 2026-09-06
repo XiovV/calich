@@ -39,6 +39,7 @@ var shareErrors = []errorCase{
 	{service.ErrUserNotFound, badRequest("user not found")},
 	{service.ErrCannotShareWithSelf, badRequest("cannot share a calendar with its owner")},
 	{service.ErrShareTargetNotInWorkspace, badRequest("share target does not belong to this workspace")},
+	{service.ErrLinkedCalendarEditorShare, badRequest("a linked calendar can only be shared with the viewer role")},
 }
 
 var shareErrorsWithNotFound = alsoHandling(shareErrors, calendarNotFoundErrors...)
@@ -47,6 +48,7 @@ var groupShareErrors = []errorCase{
 	{service.ErrInvalidRole, badRequest("role must be \"viewer\" or \"editor\"")},
 	{service.ErrGroupNotFound, badRequest("group not found")},
 	{service.ErrShareTargetNotInWorkspace, badRequest("share target does not belong to this workspace")},
+	{service.ErrLinkedCalendarEditorShare, badRequest("a linked calendar can only be shared with the viewer role")},
 }
 
 var groupShareErrorsWithNotFound = alsoHandling(groupShareErrors, calendarNotFoundErrors...)

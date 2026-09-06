@@ -166,6 +166,37 @@ func TestConnectionService_ImportCalendars_CreatesLinkedCalendars(t *testing.T) 
 	}
 }
 
+// TestConnectionService_ImportCalendars_ConnectingUserOwnsAProviderSharedCalendar
+// covers #294's "the Owner is the connecting User even for a calendar merely
+// shared to them at the Provider": importing a calendar Google reports as
+// accessRole "reader" still makes the connecting User its Owner here — the
+// Provider's ACL only clamps the Source's Mode to read-only, it never
+// reassigns ownership.
+func TestConnectionService_ImportCalendars_ConnectingUserOwnsAProviderSharedCalendar(t *testing.T) {
+	google := newFakeGoogleServer(t)
+	google.calendarListItems = []map[string]any{
+		googleCalendarItem("shared-in@group.calendar.google.com", "Team calendar", "#7627bb", "reader", false),
+	}
+	svc, auth, userID, workspaceID := newTestConnectionServiceWithWorkspace(t, google)
+	connectionID := connectUser(t, svc, auth, userID)
+
+	calendars, err := svc.ImportCalendars(context.Background(), userID, workspaceID, connectionID, []string{"shared-in@group.calendar.google.com"})
+	if err != nil {
+		t.Fatalf("import calendars: %v", err)
+	}
+	if len(calendars) != 1 {
+		t.Fatalf("expected exactly one imported calendar, got %d", len(calendars))
+	}
+
+	calendar := calendars[0]
+	if calendar.UserID != userID {
+		t.Fatalf("expected the connecting User %d to own the provider-shared calendar, got %d", userID, calendar.UserID)
+	}
+	if calendar.Source == nil || calendar.Source.Mode != repository.SourceModeReadOnly {
+		t.Fatalf("expected a reader-role calendar to seed a read-only Source, got %+v", calendar.Source)
+	}
+}
+
 func TestConnectionService_ImportCalendars_IgnoresIDsGoogleNoLongerLists(t *testing.T) {
 	google := newFakeGoogleServer(t)
 	google.calendarListItems = []map[string]any{

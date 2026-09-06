@@ -65,6 +65,73 @@ func TestPropfind_HomeSet_ExcludesLinkedCalendar(t *testing.T) {
 	}
 }
 
+// TestPropfind_HomeSet_ExcludesLinkedCalendarFromAccessorsSeat covers
+// ADR-0074's "a Linked Calendar appears in no principal's CalDAV home-set"
+// asserted from the accessor's seat rather than the Owner's — the exact
+// failure mode of ADR-0054's superseded rule, where a home-set correct for
+// the Owner was wrong for a Workspace Member it was Shared to. The Member is
+// Shared both an ordinary Calendar and the Linked one; only the ordinary one
+// reaches their home-set.
+func TestPropfind_HomeSet_ExcludesLinkedCalendarFromAccessorsSeat(t *testing.T) {
+	env := newTestCalDAVEnv(t)
+	memberID, memberSecret := env.addWorkspaceMember(t, "member")
+
+	linkedID := uuid.NewString()
+	env.createLinkedCalendar(t, linkedID, "Linked")
+
+	// The ordinary Calendar is Shared to the Member as a control: their
+	// home-set is not simply empty of everything.
+	if _, _, err := env.calendarService.Share(context.Background(), env.userID, env.calendarID, "member@example.com", repository.RoleViewer); err != nil {
+		t.Fatalf("share ordinary calendar: %v", err)
+	}
+	if _, _, err := env.calendarService.Share(context.Background(), env.userID, linkedID, "member@example.com", repository.RoleViewer); err != nil {
+		t.Fatalf("share linked calendar: %v", err)
+	}
+
+	homeSetPath := fmt.Sprintf("/dav/%d/calendars/", memberID)
+	resp := propfind(t, env.srv, homeSetPath, "member@example.com", memberSecret, "1", propfindDisplayName)
+	defer resp.Body.Close()
+
+	body := readBody(t, resp)
+	if strings.Contains(body, "Linked") {
+		t.Fatalf("expected the Shared Linked Calendar to be absent from the accessor's home-set, got:\n%s", body)
+	}
+	wantCollection := fmt.Sprintf("/dav/%d/calendars/%s/", memberID, env.calendarID)
+	if !strings.Contains(body, wantCollection) {
+		t.Fatalf("expected the ordinary Shared calendar to still be listed at the accessor's own path, got:\n%s", body)
+	}
+}
+
+// TestPropfind_HomeSet_StillListsSubscribedCalendar guards the ADR-0074
+// filter against over-reach: it keys on the Source's Kind being Connection,
+// never merely on a Source existing, so a Subscribed Calendar in the same
+// home-set stays exposed over CalDAV exactly as ADR-0032 established.
+func TestPropfind_HomeSet_StillListsSubscribedCalendar(t *testing.T) {
+	env := newTestCalDAVEnv(t)
+
+	subID := uuid.NewString()
+	sourceURL := "https://example.com/feed.ics"
+	if _, err := env.calendarService.CreateSubscribed(context.Background(), env.userID, env.workspaceID, subID, service.CalendarWrite{
+		Name: "Feed", Color: "#12809CFF",
+	}, repository.SourceFields{
+		Kind:      repository.SourceKindSubscription,
+		Mode:      repository.SourceModeReadOnly,
+		SourceURL: &sourceURL,
+	}); err != nil {
+		t.Fatalf("create subscribed calendar: %v", err)
+	}
+
+	homeSetPath := fmt.Sprintf("/dav/%d/calendars/", env.userID)
+	resp := propfind(t, env.srv, homeSetPath, "admin@example.com", env.appPasswordSecret, "1", propfindDisplayName)
+	defer resp.Body.Close()
+
+	body := readBody(t, resp)
+	wantCollection := fmt.Sprintf("/dav/%d/calendars/%s/", env.userID, subID)
+	if !strings.Contains(body, wantCollection) {
+		t.Fatalf("expected the Subscribed calendar to still be listed, got:\n%s", body)
+	}
+}
+
 // TestPropfind_LinkedCalendar_DirectPathReturnsNotFound covers ADR-0074's
 // exclusion holding even for a stale or guessed URL, mirroring ListCalendars'
 // own condition rather than just hiding the collection from a listing.

@@ -41,6 +41,17 @@ var (
 	// ErrGroupNotFound is returned by ShareWithGroup when groupID doesn't
 	// exist.
 	ErrGroupNotFound = errors.New("group not found")
+	// ErrLinkedCalendarEditorShare is returned by Share and ShareWithGroup
+	// when a Share on a Linked Calendar is requested with the Editor Role
+	// (ADR-0075's consequences, #294). An Editor's write on a Linked
+	// Calendar would execute as the connecting User's own Provider identity
+	// — the one place in this app where one User's action would run as
+	// another's at a third party — so a Linked Calendar's Shares are clamped
+	// to Viewer at creation, refused outright rather than silently
+	// downgraded. A Subscribed Calendar is unaffected: an Editor Share on it
+	// is still accepted and resolves to Viewer through ResolveAccess's
+	// read-only clamp.
+	ErrLinkedCalendarEditorShare = errors.New("a linked calendar can only be shared with the viewer role")
 	// ErrCalendarFieldForbidden is returned by Update when a caller who
 	// isn't id's Owner tries to change any field beyond their own Color —
 	// name, Subscription URL, and KeepAlarms stay Owner-only management no
@@ -675,6 +686,25 @@ func isValidRole(role string) bool {
 	return role == repository.RoleViewer || role == repository.RoleEditor
 }
 
+// refuseEditorShareOnLinkedCalendar returns ErrLinkedCalendarEditorShare
+// when role is Editor and calendar is a Linked Calendar (#294) — the rule
+// Share and ShareWithGroup both apply right after requireOwner. requireOwner
+// leaves Source unattached (its other callers don't need it), so this
+// attaches it; a non-Editor role skips that query entirely.
+func (s *CalendarService) refuseEditorShareOnLinkedCalendar(ctx context.Context, calendar repository.Calendar, role string) error {
+	if role != repository.RoleEditor {
+		return nil
+	}
+	withSource, err := s.attachSource(ctx, calendar)
+	if err != nil {
+		return err
+	}
+	if isConnectionSource(withSource) {
+		return ErrLinkedCalendarEditorShare
+	}
+	return nil
+}
+
 // Share grants calendarID a Share to the User named by email, or changes an
 // existing Share's role if they already have one (ADR-0034, ADR-0047). Only
 // calendarID's Owner may call this. Returns the target's display Name
@@ -687,6 +717,10 @@ func (s *CalendarService) Share(ctx context.Context, ownerID int64, calendarID, 
 
 	calendar, err := s.requireOwner(ctx, ownerID, calendarID)
 	if err != nil {
+		return repository.CalendarShare{}, "", err
+	}
+
+	if err := s.refuseEditorShareOnLinkedCalendar(ctx, calendar, role); err != nil {
 		return repository.CalendarShare{}, "", err
 	}
 
@@ -763,6 +797,10 @@ func (s *CalendarService) ShareWithGroup(ctx context.Context, ownerID int64, cal
 
 	calendar, err := s.requireOwner(ctx, ownerID, calendarID)
 	if err != nil {
+		return repository.CalendarGroupShareWithGroupName{}, err
+	}
+
+	if err := s.refuseEditorShareOnLinkedCalendar(ctx, calendar, role); err != nil {
 		return repository.CalendarGroupShareWithGroupName{}, err
 	}
 

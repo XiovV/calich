@@ -136,6 +136,70 @@ describe("ShareCalendarModal roster", () => {
   });
 });
 
+// #294: a Linked Calendar's Shares are clamped to Viewer (ADR-0075) — an
+// Editor's write would run as the connecting User's own Provider identity.
+// The Role picker never offers Editor here, and a new grant is Viewer even
+// where the Workspace defaults new Shares to Editor.
+describe("ShareCalendarModal on a linked calendar", () => {
+  const linkedCalendar: Calendar = {
+    id: "cal-linked",
+    name: "Work (Google)",
+    color: "#8E44ADFF",
+    access: "viewer",
+    isOwner: true,
+    sourceKind: "connection",
+    connectionAccountEmail: "work@gmail.com",
+  };
+
+  it("grants as Viewer even when the workspace defaults new shares to Editor", async () => {
+    useWorkspacesStore.setState({
+      activeWorkspaceId: 7,
+      workspaces: [{ id: 7, name: "Team", defaultSharePrivacy: "workspace" }],
+    });
+    useCalendarsStore.setState({ calendars: [linkedCalendar] });
+    vi.mocked(calendarsApi.listShares).mockResolvedValue([]);
+    vi.mocked(calendarsApi.listGroupShares).mockResolvedValue([]);
+    vi.mocked(calendarsApi.shareTargets).mockResolvedValue({ users: [carolTarget], groups: [] });
+    vi.mocked(calendarsApi.list).mockResolvedValue([linkedCalendar]);
+    vi.mocked(calendarsApi.share).mockResolvedValue({
+      userId: 3,
+      name: "Carol",
+      email: "carol@example.com",
+      role: "viewer",
+      createdAt: "2026-02-01T00:00:00Z",
+    });
+    render(<ShareCalendarModal calendar={linkedCalendar} onClose={vi.fn()} />);
+
+    expect(
+      await screen.findByText("A linked calendar can only be shared with the viewer role."),
+    ).toBeInTheDocument();
+
+    await userEvent.click(await screen.findByRole("button", { name: "Add" }));
+
+    expect(calendarsApi.share).toHaveBeenCalledWith(
+      "token-123",
+      "cal-linked",
+      "carol@example.com",
+      "viewer",
+    );
+  });
+
+  it("offers only Viewer in the new-share Role picker", async () => {
+    useCalendarsStore.setState({ calendars: [linkedCalendar] });
+    vi.mocked(calendarsApi.listShares).mockResolvedValue([]);
+    vi.mocked(calendarsApi.listGroupShares).mockResolvedValue([]);
+    vi.mocked(calendarsApi.shareTargets).mockResolvedValue({ users: [carolTarget], groups: [] });
+    vi.mocked(calendarsApi.list).mockResolvedValue([linkedCalendar]);
+    render(<ShareCalendarModal calendar={linkedCalendar} onClose={vi.fn()} />);
+
+    const roleSelect = await screen.findByLabelText("Role");
+    await userEvent.click(roleSelect);
+
+    expect(await screen.findByRole("option", { name: "Viewer" })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: "Editor" })).not.toBeInTheDocument();
+  });
+});
+
 describe("ShareCalendarModal writes", () => {
   it("appends a granted Share to the roster and drops it from the picker", async () => {
     seedSharing({ targets: { users: [carolTarget], groups: [] } });
