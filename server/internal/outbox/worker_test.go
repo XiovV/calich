@@ -332,6 +332,51 @@ func TestWorker_Tick_ARequestStillBackingOffBlocksItsOwnCancel(t *testing.T) {
 	}
 }
 
+// fakeSenderWithTerminalHandler wraps fakeSender to also implement
+// TerminalFailureHandler (#291, ADR-0075) — recording every call so a test
+// can assert Tick invokes it exactly when, and only when, a message reaches
+// the terminal failed state.
+type fakeSenderWithTerminalHandler struct {
+	fakeSender
+	terminalCalls []int64
+}
+
+func (f *fakeSenderWithTerminalHandler) HandleTerminalFailure(_ context.Context, msg repository.OutboxMessage, _ error) error {
+	f.terminalCalls = append(f.terminalCalls, msg.ID)
+	return nil
+}
+
+// TestWorker_Tick_CallsTerminalFailureHandlerOnlyOnceExhausted covers #291's
+// own hook: a Sender implementing TerminalFailureHandler is called the
+// moment Tick marks a message permanently failed, and not before — a
+// still-retrying failure must never trigger it.
+func TestWorker_Tick_CallsTerminalFailureHandlerOnlyOnceExhausted(t *testing.T) {
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	store := &fakeStore{messages: []repository.OutboxMessage{
+		{ID: 1, EventID: "evt-1", RecipientUserID: userID(10), Status: repository.OutboxStatusPending, Attempts: 0},
+		{ID: 2, EventID: "evt-2", RecipientUserID: userID(20), Status: repository.OutboxStatusPending, Attempts: maxAttemptsFor("") - 1},
+	}}
+	sender := &fakeSenderWithTerminalHandler{fakeSender: fakeSender{fail: map[int64]error{
+		1: errors.New("smtp: connection refused"),
+		2: errors.New("smtp: giving up"),
+	}}}
+	w := NewWorker(store, sender, func() time.Time { return now })
+
+	if err := w.Tick(context.Background()); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+
+	if store.messages[0].Status != repository.OutboxStatusPending {
+		t.Fatalf("expected message 1 to still be retrying, got %+v", store.messages[0])
+	}
+	if store.messages[1].Status != repository.OutboxStatusFailed {
+		t.Fatalf("expected message 2 permanently failed, got %+v", store.messages[1])
+	}
+	if len(sender.terminalCalls) != 1 || sender.terminalCalls[0] != 2 {
+		t.Fatalf("expected the terminal handler called exactly once, for message 2, got %+v", sender.terminalCalls)
+	}
+}
+
 func TestWorker_Tick_NothingPendingIsANoOp(t *testing.T) {
 	store := &fakeStore{}
 	sender := &fakeSender{}

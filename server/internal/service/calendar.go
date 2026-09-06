@@ -1068,6 +1068,14 @@ func (s *CalendarService) RecordConnectionRefreshFailure(ctx context.Context, us
 	return s.sources.RecordConnectionRefreshFailure(ctx, userID, id, errorClass, errorMessage, failureCount, nextRefreshAt)
 }
 
+// RecordWriteBackFailure raises id's Source's error_class/error_message from
+// a permanently failed Write-back push (#291, ADR-0075) — the plain pass
+// through SourceRepository.RecordWriteBackFailure's own doc comment
+// describes; ConnectionService.markWriteBackPermanentlyFailed is the caller.
+func (s *CalendarService) RecordWriteBackFailure(ctx context.Context, userID int64, id, errorClass, errorMessage string) error {
+	return s.sources.RecordWriteBackFailure(ctx, userID, id, errorClass, errorMessage)
+}
+
 // UpdateKeepAlarms changes id's Source's keep_alarms setting alone (#87,
 // ADR-0032). SubscribeService.UpdateKeepAlarms is the caller that actually
 // enforces the Subscription-only rule and cascades the reminder cleanup a

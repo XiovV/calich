@@ -43,6 +43,7 @@ interface EventWire {
   rsvpStatus?: "needsAction" | "declined" | "tentative" | "accepted";
   conferenceUrl?: string;
   guestCount?: number;
+  writeBackError?: string;
 }
 
 interface AttachmentWire {
@@ -117,6 +118,7 @@ function fromWire(wire: EventWire): Event {
     rsvpStatus: wire.rsvpStatus,
     conferenceUrl: wire.conferenceUrl || undefined,
     guestCount: wire.guestCount || undefined,
+    writeBackError: wire.writeBackError || undefined,
   };
 }
 

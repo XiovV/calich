@@ -3,8 +3,8 @@
 // a Write-back push against live state, from the outbox Worker's background
 // context where there is no browser session's userID to resolve Access
 // against. Every other read/write on an Event belongs through the
-// Access-checked methods in event.go instead — these three exist only
-// because that background context genuinely has none to check.
+// Access-checked methods in event.go instead — these exist only because
+// that background context genuinely has none to check.
 package service
 
 import (
@@ -56,7 +56,29 @@ func (s *EventService) MasterIDsWithPendingWriteBack(ctx context.Context) (map[s
 // fresh validator Google's PATCH response carried back, so the next Delta
 // Refresh's own content comparison finds id already matching what the
 // Provider now holds instead of reporting this app's own push back as a
-// remote change.
+// remote change. Also clears any stale permanent-failure marker a previous
+// attempt left behind (#291) — a push landing is exactly the outcome that
+// marker exists to flag the absence of.
 func (s *EventService) RecordWriteBackEtag(ctx context.Context, id string, etag *string) error {
+	if err := s.events.ClearWriteBackError(ctx, id); err != nil {
+		return fmt.Errorf("clear write-back error: %w", err)
+	}
 	return s.events.UpdateProviderEtag(ctx, id, etag)
+}
+
+// MarkWriteBackFailed stamps id's row with the per-Event permanent-failure
+// marker (#291, ADR-0075, ADR-0076) — ConnectionService's own
+// markWriteBackPermanentlyFailed is the only caller, from the same
+// background context GetByIDUnchecked already serves.
+func (s *EventService) MarkWriteBackFailed(ctx context.Context, id, reason string) error {
+	return s.events.MarkWriteBackFailed(ctx, id, reason)
+}
+
+// ApplyProviderOwnedFields moves id's Provider-owned RSVPStatus/
+// ConferenceURL/GuestCount forward from a fresh Provider fetch (#291,
+// ADR-0075) — ConnectionService's own conflict-retry loop
+// (reconcileProviderOwnedFields) is the only caller, reached after a 412
+// forces a refetch anyway.
+func (s *EventService) ApplyProviderOwnedFields(ctx context.Context, id string, rsvpStatus, conferenceURL *string, guestCount int) error {
+	return s.events.ApplyProviderOwnedFields(ctx, id, rsvpStatus, conferenceURL, guestCount)
 }

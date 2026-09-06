@@ -187,35 +187,42 @@ type eventResponse struct {
 	// GuestCount is a bare count of a Linked Calendar Event's Provider-side
 	// guests (#287, ADR-0052) — conferring nothing, never Attendee rows.
 	GuestCount int `json:"guestCount,omitempty"`
+	// WriteBackError is the per-Event permanent-failure marker (#291,
+	// ADR-0075, ADR-0076) — absent while healthy, a human-readable reason
+	// once a queued Write-back push has exhausted its retries and will
+	// never reach the Provider on its own. The grid's own indicator that an
+	// edit here never made it to Google.
+	WriteBackError *string `json:"writeBackError,omitempty"`
 }
 
 func toEventResponse(e repository.Event) eventResponse {
 	return eventResponse{
-		ID:            e.ID,
-		CalendarID:    e.CalendarID,
-		Title:         e.Title,
-		Start:         formatEventTime(e.Start, e.AllDay),
-		End:           formatEventTime(e.End, e.AllDay),
-		AllDay:        e.AllDay,
-		Rrule:         e.Rrule,
-		ParentID:      e.ParentID,
-		RecurrenceID:  e.RecurrenceID,
-		Exdates:       e.Exdates,
-		Tzid:          e.Tzid,
-		Reminders:     toReminderWire(e.Reminders),
-		Description:   e.Description,
-		Location:      e.Location,
-		URL:           e.URL,
-		Color:         e.Color,
-		CreatedBy:     e.CreatedBy,
-		CreatedByName: e.CreatedByName,
-		Attachments:   toAttachmentResponses(e.Attachments),
-		CalendarName:  e.CalendarName,
-		CalendarColor: e.CalendarColor,
-		AttendeeCount: e.AttendeeCount,
-		RSVPStatus:    e.RSVPStatus,
-		ConferenceURL: e.ConferenceURL,
-		GuestCount:    e.GuestCount,
+		ID:             e.ID,
+		CalendarID:     e.CalendarID,
+		Title:          e.Title,
+		Start:          formatEventTime(e.Start, e.AllDay),
+		End:            formatEventTime(e.End, e.AllDay),
+		AllDay:         e.AllDay,
+		Rrule:          e.Rrule,
+		ParentID:       e.ParentID,
+		RecurrenceID:   e.RecurrenceID,
+		Exdates:        e.Exdates,
+		Tzid:           e.Tzid,
+		Reminders:      toReminderWire(e.Reminders),
+		Description:    e.Description,
+		Location:       e.Location,
+		URL:            e.URL,
+		Color:          e.Color,
+		CreatedBy:      e.CreatedBy,
+		CreatedByName:  e.CreatedByName,
+		Attachments:    toAttachmentResponses(e.Attachments),
+		CalendarName:   e.CalendarName,
+		CalendarColor:  e.CalendarColor,
+		AttendeeCount:  e.AttendeeCount,
+		RSVPStatus:     e.RSVPStatus,
+		ConferenceURL:  e.ConferenceURL,
+		GuestCount:     e.GuestCount,
+		WriteBackError: e.WriteBackError,
 	}
 }
 
@@ -230,6 +237,7 @@ var eventWriteErrors = []errorCase{
 	{service.ErrCalendarNotFound, badRequest("calendar not found")},
 	{service.ErrCalendarReadOnly, forbidden("calendar is read-only")},
 	{service.ErrLinkedCalendarWriteUnsupported, forbidden("this kind of write is not yet supported on a linked calendar")},
+	{service.ErrConnectionNeedsReconnect, conflict("connection_needs_reconnect", "this connection needs to be reconnected before it can accept new edits")},
 }
 
 // On create, a missing parent is named as such — parentId is a body field the

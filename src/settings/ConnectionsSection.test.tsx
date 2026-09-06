@@ -162,6 +162,35 @@ describe("ConnectionsSection — the Google round trip's return (#285)", () => {
   });
 });
 
+describe("ConnectionsSection — reconnecting a broken connection (#291)", () => {
+  it("offers no Reconnect action for a live connection", async () => {
+    vi.mocked(connectionsApi.list).mockResolvedValue([connectionA]);
+    renderAt("/settings/connections");
+
+    await screen.findByText("work@gmail.com");
+    expect(screen.queryByRole("button", { name: "Reconnect" })).not.toBeInTheDocument();
+  });
+
+  it("offers a Reconnect action for an expired connection, driving the same OAuth flow", async () => {
+    vi.mocked(connectionsApi.list).mockResolvedValue([{ ...connectionA, status: "expired" }]);
+    vi.mocked(connectionsApi.connectGoogle).mockResolvedValue("https://accounts.google.com/authorize");
+    renderAt("/settings/connections");
+
+    expect(await screen.findByText("Google · Expired — reconnect to keep it syncing")).toBeInTheDocument();
+
+    await userEvent.click(await screen.findByRole("button", { name: "Reconnect" }));
+
+    await waitFor(() => expect(window.location.href).toBe("https://accounts.google.com/authorize"));
+  });
+
+  it("offers a Reconnect action for a revoked connection", async () => {
+    vi.mocked(connectionsApi.list).mockResolvedValue([{ ...connectionA, status: "revoked" }]);
+    renderAt("/settings/connections");
+
+    expect(await screen.findByRole("button", { name: "Reconnect" })).toBeInTheDocument();
+  });
+});
+
 describe("ConnectionsSection — disconnecting", () => {
   it("removes the connection after confirming", async () => {
     vi.mocked(connectionsApi.list).mockResolvedValue([connectionA]);

@@ -34,6 +34,20 @@ type Sender interface {
 	Send(ctx context.Context, msg repository.OutboxMessage) error
 }
 
+// TerminalFailureHandler is an optional Sender extension (#291, ADR-0075):
+// implementing it lets a Sender react the moment Tick gives up on a message
+// for good, immediately after MarkFailed. *service.OutboxDispatcher is the
+// only implementation, routing a permanently failed OutboxKindWriteBack
+// message to ConnectionService's own needs-attention marking (a per-Event
+// grid marker, and the affected Linked Calendar's Source raised into
+// needs-attention). Plain mail's Sender doesn't implement this at all: a
+// permanently failed Invitation has no equivalent concept to raise
+// (ADR-0060 already covers it), and Tick's own type assertion is what keeps
+// that a no-op rather than a nil-check every future Sender has to remember.
+type TerminalFailureHandler interface {
+	HandleTerminalFailure(ctx context.Context, msg repository.OutboxMessage, sendErr error) error
+}
+
 // batchSize is how many Pending messages one Tick considers — comfortably
 // above what a self-hosted instance queues between ticks, so a healthy
 // queue fully drains within a single Tick.
@@ -143,6 +157,11 @@ func (w *Worker) Tick(ctx context.Context) error {
 			if attempts >= maxAttemptsFor(msg.Kind) {
 				if merr := w.store.MarkFailed(ctx, msg.ID, attempts, err.Error()); merr != nil {
 					log.Printf("outbox: mark failed (id=%d): %v", msg.ID, merr)
+				}
+				if handler, ok := w.sender.(TerminalFailureHandler); ok {
+					if herr := handler.HandleTerminalFailure(ctx, msg, err); herr != nil {
+						log.Printf("outbox: terminal failure handler (id=%d): %v", msg.ID, herr)
+					}
 				}
 				continue
 			}

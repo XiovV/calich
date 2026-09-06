@@ -774,3 +774,74 @@ func TestEventRepository_Create_NormalizesNonUTCOffsetsToUTC(t *testing.T) {
 		t.Fatalf("expected the event to fall inside a window given in a non-UTC offset, got %+v", listed)
 	}
 }
+
+// TestEventRepository_MarkWriteBackFailed_ThenClearWriteBackError covers
+// #291's per-Event permanent-failure marker: set, read back, then cleared —
+// EventService.Update's own "a fresh edit deserves a fresh chance" rule
+// (ADR-0075, ADR-0076) rests on ClearWriteBackError actually clearing it.
+func TestEventRepository_MarkWriteBackFailed_ThenClearWriteBackError(t *testing.T) {
+	repo, userID, calendarID, _ := newTestEventRepository(t)
+	ctx := context.Background()
+	mustCreateEvent(t, repo, "evt-1", userID, calendarID, "2026-01-01T09:00:00Z", "2026-01-01T10:00:00Z")
+
+	if err := repo.MarkWriteBackFailed(ctx, "evt-1", "a conflicting edit at google could not be resolved"); err != nil {
+		t.Fatalf("mark write-back failed: %v", err)
+	}
+	got, err := repo.GetByID(ctx, "evt-1")
+	if err != nil {
+		t.Fatalf("get by id: %v", err)
+	}
+	if got.WriteBackError == nil || *got.WriteBackError != "a conflicting edit at google could not be resolved" {
+		t.Fatalf("expected the marker stored, got %v", got.WriteBackError)
+	}
+
+	if err := repo.ClearWriteBackError(ctx, "evt-1"); err != nil {
+		t.Fatalf("clear write-back error: %v", err)
+	}
+	got, err = repo.GetByID(ctx, "evt-1")
+	if err != nil {
+		t.Fatalf("get by id: %v", err)
+	}
+	if got.WriteBackError != nil {
+		t.Fatalf("expected the marker cleared, got %v", *got.WriteBackError)
+	}
+}
+
+func TestEventRepository_MarkWriteBackFailed_NotFound(t *testing.T) {
+	repo, _, _, _ := newTestEventRepository(t)
+	if err := repo.MarkWriteBackFailed(context.Background(), "nope", "reason"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected ErrNotFound, got %v", err)
+	}
+}
+
+// TestEventRepository_ApplyProviderOwnedFields covers #291's conflict-retry
+// helper: RSVPStatus/ConferenceURL/GuestCount move, and nothing else does —
+// in particular the title an ordinary Update would otherwise carry.
+func TestEventRepository_ApplyProviderOwnedFields(t *testing.T) {
+	repo, userID, calendarID, _ := newTestEventRepository(t)
+	ctx := context.Background()
+	mustCreateEvent(t, repo, "evt-1", userID, calendarID, "2026-01-01T09:00:00Z", "2026-01-01T10:00:00Z")
+
+	rsvp := "declined"
+	conferenceURL := "https://meet.example.com/xyz"
+	if err := repo.ApplyProviderOwnedFields(ctx, "evt-1", &rsvp, &conferenceURL, 5); err != nil {
+		t.Fatalf("apply provider-owned fields: %v", err)
+	}
+
+	got, err := repo.GetByID(ctx, "evt-1")
+	if err != nil {
+		t.Fatalf("get by id: %v", err)
+	}
+	if got.RSVPStatus == nil || *got.RSVPStatus != "declined" {
+		t.Fatalf("expected RSVPStatus applied, got %v", got.RSVPStatus)
+	}
+	if got.ConferenceURL == nil || *got.ConferenceURL != "https://meet.example.com/xyz" {
+		t.Fatalf("expected ConferenceURL applied, got %v", got.ConferenceURL)
+	}
+	if got.GuestCount != 5 {
+		t.Fatalf("expected GuestCount applied, got %d", got.GuestCount)
+	}
+	if got.Title != "evt-1" {
+		t.Fatalf("expected the title left untouched, got %q", got.Title)
+	}
+}

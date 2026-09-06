@@ -14,6 +14,7 @@ import (
 
 	"github.com/XiovV/calich/server/internal/apptest"
 	"github.com/XiovV/calich/server/internal/httpauth"
+	"github.com/XiovV/calich/server/internal/repository"
 	"github.com/XiovV/calich/server/internal/service"
 )
 
@@ -314,4 +315,84 @@ func authenticatedGetWithWorkspace(url, accessToken, workspaceID string) (*http.
 	req.Header.Set("Authorization", "Bearer "+accessToken)
 	req.Header.Set("X-Workspace-Id", workspaceID)
 	return http.DefaultClient.Do(req)
+}
+
+// TestCalendarHandler_List_SurfacesConnectionNeedsReconnect covers #291: a
+// Linked Calendar whose Connection has moved off Live shows up in the list
+// with the same ErrorClass/ErrorMessage shape the sidebar already renders
+// for a broken Subscription or a failed Refresh, so a User sees the reason
+// before ever attempting the edit the Connection would now refuse.
+func TestCalendarHandler_List_SurfacesConnectionNeedsReconnect(t *testing.T) {
+	cfg := apptest.Config(t)
+	cfg.InitialName, cfg.InitialEmail, cfg.InitialPassword = "alice", "alice@example.com", "hunter2"
+	g := newTestGraphWithConfig(t, cfg, service.WithSubscribeHTTPClient(&http.Client{}))
+	ctx := context.Background()
+
+	bootstrapUser, _, err := g.Auth.Bootstrap(ctx)
+	if err != nil {
+		t.Fatalf("bootstrap: %v", err)
+	}
+	userWorkspaces, err := g.Workspaces.ListForUser(ctx, bootstrapUser.ID)
+	if err != nil {
+		t.Fatalf("list workspaces: %v", err)
+	}
+	loginResult, err := g.Auth.Login(ctx, "alice@example.com", "hunter2")
+	if err != nil {
+		t.Fatalf("login: %v", err)
+	}
+
+	conn, err := g.ConnectionRepo.Upsert(ctx, bootstrapUser.ID, repository.ProviderGoogle, "someone@gmail.com", repository.ConnectionFields{
+		RefreshToken: "encrypted-refresh", Status: repository.ConnectionStatusLive,
+	})
+	if err != nil {
+		t.Fatalf("upsert connection: %v", err)
+	}
+	cal, err := g.CalendarRepo.Create(ctx, bootstrapUser.ID, userWorkspaces[0].ID, "cal-linked", repository.CalendarFields{Name: "Work", Color: "peacock"})
+	if err != nil {
+		t.Fatalf("create calendar: %v", err)
+	}
+	externalCalendarID := "primary"
+	if _, err := g.SourceRepo.Create(ctx, cal.ID, repository.SourceFields{
+		Kind: repository.SourceKindConnection, Mode: repository.SourceModeWritable, ConnectionID: &conn.ID, ExternalCalendarID: &externalCalendarID,
+	}); err != nil {
+		t.Fatalf("create source: %v", err)
+	}
+	if err := g.ConnectionRepo.UpdateStatus(ctx, bootstrapUser.ID, conn.ID, repository.ConnectionStatusExpired); err != nil {
+		t.Fatalf("update connection status: %v", err)
+	}
+
+	calendarHandler := NewCalendarHandler(g.Calendars, g.Events, g.Imports, g.Subscriptions, g.Connections, g.AttachmentStore)
+	r := chi.NewRouter()
+	r.Route("/api/calendars", func(r chi.Router) {
+		r.Use(httpauth.RequireAuth(g.Auth))
+		r.With(httpauth.RequireWorkspace(g.Workspaces)).Get("/", calendarHandler.List)
+	})
+	srv := httptest.NewServer(r)
+	t.Cleanup(srv.Close)
+
+	listResp, err := authenticatedGetWithWorkspace(srv.URL+"/api/calendars/", loginResult.AccessToken, strconv.FormatInt(userWorkspaces[0].ID, 10))
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	defer listResp.Body.Close()
+
+	var calendars []calendarResponse
+	if err := json.NewDecoder(listResp.Body).Decode(&calendars); err != nil {
+		t.Fatalf("decode list: %v", err)
+	}
+	var got *calendarResponse
+	for i := range calendars {
+		if calendars[i].ID == cal.ID {
+			got = &calendars[i]
+		}
+	}
+	if got == nil {
+		t.Fatalf("expected the linked calendar in the list, got %+v", calendars)
+	}
+	if got.ErrorClass == nil || *got.ErrorClass != service.ErrorClassNeedsAttention {
+		t.Fatalf("expected ErrorClass needs_attention, got %v", got.ErrorClass)
+	}
+	if got.ErrorMessage == nil || *got.ErrorMessage != service.ErrConnectionNeedsReconnect.Error() {
+		t.Fatalf("expected the reconnect reason, got %v", got.ErrorMessage)
+	}
 }

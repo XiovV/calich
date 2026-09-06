@@ -183,6 +183,15 @@ func (h *CalendarHandler) List(w http.ResponseWriter, r *http.Request) {
 		httpresponse.Error(w, http.StatusInternalServerError, "internal_error", "failed to list calendars")
 		return
 	}
+	// Surfaces "this Linked Calendar's Connection needs reconnecting" (#291,
+	// ADR-0075) through the exact same ErrorClass/ErrorMessage badge the
+	// sidebar already renders for a failed Refresh (CalendarList.tsx) — no
+	// frontend change needed for the reason to show up next to the Calendar
+	// a broken Connection is about to start refusing edits on.
+	if err := h.attachConnectionHealth(r.Context(), calendars, response); err != nil {
+		httpresponse.Error(w, http.StatusInternalServerError, "internal_error", "failed to list calendars")
+		return
+	}
 
 	httpresponse.JSON(w, http.StatusOK, response)
 }
@@ -217,6 +226,52 @@ func (h *CalendarHandler) attachConnectionEmails(ctx context.Context, calendars 
 		}
 		if email, ok := emails[*c.Source.ConnectionID]; ok {
 			responses[i].ConnectionAccountEmail = &email
+		}
+	}
+	return nil
+}
+
+// attachConnectionHealth raises ErrorClass/ErrorMessage on every response
+// row whose Calendar's Connection has moved off Live (#291, ADR-0075),
+// batched into one query for every distinct Connection referenced —
+// mirroring attachConnectionEmails' own shape. Never overwrites a row that
+// already carries a genuine Refresh failure (ErrorClass already set): that
+// reason is more specific than "the grant is gone" and must not be masked
+// by it, even though a dead grant would also explain why the next Refresh
+// keeps failing.
+func (h *CalendarHandler) attachConnectionHealth(ctx context.Context, calendars []service.CalendarWithAccess, responses []calendarResponse) error {
+	ids := make([]int64, 0)
+	seen := make(map[int64]bool)
+	for _, c := range calendars {
+		if c.Source != nil && c.Source.Kind == repository.SourceKindConnection && c.Source.ConnectionID != nil {
+			id := *c.Source.ConnectionID
+			if !seen[id] {
+				seen[id] = true
+				ids = append(ids, id)
+			}
+		}
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+
+	statuses, err := h.connections.StatusesByIDs(ctx, ids)
+	if err != nil {
+		return fmt.Errorf("resolve connection statuses: %w", err)
+	}
+	for i, c := range calendars {
+		if c.Source == nil || c.Source.ConnectionID == nil || responses[i].ErrorClass != nil {
+			continue
+		}
+		if status, ok := statuses[*c.Source.ConnectionID]; ok && status != repository.ConnectionStatusLive {
+			// The exact wording EventService.ErrConnectionNeedsReconnect
+			// gives a refused edit, so a User sees the same sentence
+			// whether they read it here, ahead of time, or in the error an
+			// attempted edit comes back with.
+			class := service.ErrorClassNeedsAttention
+			message := service.ErrConnectionNeedsReconnect.Error()
+			responses[i].ErrorClass = &class
+			responses[i].ErrorMessage = &message
 		}
 	}
 	return nil

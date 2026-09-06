@@ -442,6 +442,26 @@ func (r *SourceRepository) RecordConnectionRefreshFailure(ctx context.Context, u
 	return requireAffected(res)
 }
 
+// RecordWriteBackFailure raises calendarID's Source's error_class/
+// error_message from a permanently failed Write-back push (#291, ADR-0075)
+// — deliberately narrower than RecordConnectionRefreshFailure: failure_count
+// and next_refresh_at are untouched, since a write's failure says nothing
+// about whether the next scheduled Refresh (a read) will succeed, and must
+// not perturb its own backoff schedule. A later successful Refresh clears
+// this the same way it clears any other error (RecordConnectionRefreshSuccess)
+// — the durable signal for a failed write is the per-Event marker on Events
+// itself (EventRepository.MarkWriteBackFailed), not this one (ADR-0076).
+func (r *SourceRepository) RecordWriteBackFailure(ctx context.Context, userID int64, calendarID, errorClass, message string) error {
+	res, err := r.db.ExecContext(ctx,
+		`UPDATE calendar_sources SET error_class = ?, error_message = ? WHERE `+ownedSourceWhere,
+		errorClass, message, calendarID, userID,
+	)
+	if err != nil {
+		return fmt.Errorf("record write-back failure: %w", err)
+	}
+	return requireAffected(res)
+}
+
 func scanSourceRow(row rowScanner) (Source, error) {
 	var s Source
 	err := row.Scan(&s.CalendarID, &s.Kind, &s.Mode, &s.ConnectionID, &s.ExternalCalendarID, &s.SourceURL, &s.LastSyncedAt, &s.ETag, &s.LastModified, &s.ContentHash,

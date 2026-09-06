@@ -104,4 +104,10 @@ export interface Event {
   // (#287, ADR-0052) — conferring nothing, never Attendee rows. Undefined/0
   // both mean no guests.
   guestCount?: number;
+  // The per-Event permanent-failure marker (#291, ADR-0075, ADR-0076) —
+  // undefined while healthy, a human-readable reason once a queued
+  // Write-back push has exhausted its retries and will never reach the
+  // Provider on its own. The grid's own indicator that an edit here never
+  // made it to Google.
+  writeBackError?: string;
 }

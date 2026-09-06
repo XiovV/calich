@@ -849,9 +849,12 @@ func buildGooglePatch(title string, start, end time.Time, allDay bool, tzid *str
 // ifMatchEtag, when non-nil, is sent as the If-Match precondition header
 // against the Provider's own per-instance validator; a stale one answers
 // 412, returned as a *googleHTTPError for the caller to classify like any
-// other failure (bounded conflict retry is #291's own ticket, not this
-// one's). Returns the updated event Google's own response describes, for the
-// caller to apply as though it were a Refresh result (ADR-0075, ADR-0076) —
+// other failure — isGoogleWriteBackConflict names that one status, and
+// SendWriteBack's own bounded retry loop (#291, ADR-0075) is what acts on
+// it: refetch, reconcile, and re-issue with the fresh etag, up to three
+// attempts before the Event goes needs-attention. Returns the updated event
+// Google's own response describes, for the caller to apply as though it
+// were a Refresh result (ADR-0075, ADR-0076) —
 // principally its fresh etag, so this app's own push doesn't come back as a
 // change on the next Delta Refresh.
 func (c *googleClient) patchEvent(ctx context.Context, accessToken, calendarID, eventID string, ifMatchEtag *string, patch googleEventPatchBody) (googleEventJSON, error) {
@@ -888,4 +891,35 @@ func (c *googleClient) patchEvent(ctx context.Context, accessToken, calendarID, 
 		return googleEventJSON{}, fmt.Errorf("%w: %v", ErrGoogleWriteBackFailed, err)
 	}
 	return updated, nil
+}
+
+// getEvent fetches eventID's own current representation from calendarID
+// (#291, ADR-0075) — events.get, never events.list: SendWriteBack's own
+// conflict loop is the only caller, reached after a 412 tells it the stored
+// etag is stale but not what the fresh one now is, and the only way to learn
+// that is to ask directly. An ordinary Refresh never calls this — it already
+// gets every event's etag for free from events.list's own response.
+func (c *googleClient) getEvent(ctx context.Context, accessToken, calendarID, eventID string) (googleEventJSON, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.eventsURLFor(calendarID)+"/"+url.PathEscape(eventID), nil)
+	if err != nil {
+		return googleEventJSON{}, fmt.Errorf("build event get request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return googleEventJSON{}, fmt.Errorf("%w: %v", ErrGoogleWriteBackFailed, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		io.Copy(io.Discard, resp.Body) //nolint:errcheck // draining for keep-alive reuse; the response carries nothing we need on failure
+		return googleEventJSON{}, &googleHTTPError{sentinel: ErrGoogleWriteBackFailed, statusCode: resp.StatusCode}
+	}
+
+	var event googleEventJSON
+	if err := json.NewDecoder(resp.Body).Decode(&event); err != nil {
+		return googleEventJSON{}, fmt.Errorf("%w: %v", ErrGoogleWriteBackFailed, err)
+	}
+	return event, nil
 }

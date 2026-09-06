@@ -22,10 +22,13 @@ type Provider string
 const ProviderGoogle Provider = "google"
 
 // ConnectionStatus is whether a Connection's grant is currently usable.
-// Live is the only status this app itself ever sets (#285); Expired and
-// Revoked are later tickets' (a refresh failure, a token Google reports as
-// no longer valid) — drawn now so the column and its CHECK constraint don't
-// need revisiting when those land.
+// Callback sets Live on every successful (re-)authorization (#285);
+// mintAccessToken sets Expired the moment a stored refresh_token no longer
+// mints a fresh access token (#291, ADR-0075's "including ADR-0051's
+// seven-day Testing-status trap") — Google's own OAuth error doesn't
+// distinguish a token it expired from one a User explicitly revoked, so this
+// app never sets Revoked itself; the value exists for that distinction if a
+// future signal can ever name it specifically.
 type ConnectionStatus string
 
 const (
@@ -174,6 +177,26 @@ func (r *ConnectionRepository) UpdateAccessToken(ctx context.Context, userID, id
 	)
 	if err != nil {
 		return fmt.Errorf("update access token: %w", err)
+	}
+	return requireAffected(res)
+}
+
+// UpdateStatus replaces id's stored status alone (#291, ADR-0075) — the
+// counterpart to UpdateAccessToken for the column a dead refresh_token
+// actually needs to move: a Full/Delta Refresh or a Write-back push that
+// discovers the grant no longer authenticates (mintAccessToken's own
+// refreshAccessToken failing) records that here, so an expired or revoked
+// Connection stops accepting new edits (EventService.requireLiveConnection)
+// until a User reconnects. access_token, refresh_token and scopes are
+// untouched — Upsert's own ON CONFLICT is what actually replaces those, on
+// reconnect.
+func (r *ConnectionRepository) UpdateStatus(ctx context.Context, userID, id int64, status ConnectionStatus) error {
+	res, err := r.db.ExecContext(ctx,
+		`UPDATE connections SET status = ? WHERE id = ? AND user_id = ?`,
+		status, id, userID,
+	)
+	if err != nil {
+		return fmt.Errorf("update connection status: %w", err)
 	}
 	return requireAffected(res)
 }

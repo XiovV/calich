@@ -444,6 +444,18 @@ func TestConnectionService_FullRefresh_RevokedRefreshTokenIsNeedsAttention(t *te
 	if got.Source.ErrorClass == nil || *got.Source.ErrorClass != ErrorClassNeedsAttention {
 		t.Fatalf("expected a revoked refresh_token (400) to be classified needs-attention, got %+v", got.Source)
 	}
+
+	// #291: the same dead grant also moves the Connection itself into
+	// Expired — EventService.requireLiveConnection is what a Linked
+	// Calendar's next edit attempt consults, and it has nothing to do with
+	// this Source's own error_class/error_message.
+	conn, err := svc.connections.GetByID(context.Background(), userID, *got.Source.ConnectionID)
+	if err != nil {
+		t.Fatalf("get connection: %v", err)
+	}
+	if conn.Status != repository.ConnectionStatusExpired {
+		t.Fatalf("expected the connection recorded expired, got %q", conn.Status)
+	}
 }
 
 func TestConnectionService_FullRefresh_NotFoundForNonLinkedCalendar(t *testing.T) {

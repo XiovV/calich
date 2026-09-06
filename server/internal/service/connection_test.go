@@ -78,6 +78,25 @@ type fakeGoogleServer struct {
 	// success, defaulting to "patched-etag-1" — what a write-back test
 	// asserts got echoed back onto the local row (ADR-0075, ADR-0076).
 	patchResponseETag string
+	// patchConflictFirstNCalls forces the first N calls to PATCH
+	// .../events/{id} to answer 412 (a stale If-Match), then serve the
+	// ordinary success path (#291) — SendWriteBack's own bounded
+	// conflict-retry loop is what a test forcing this exercises. Counted
+	// independently of patchStatus, which forces every call the same way.
+	patchConflictFirstNCalls, patchCallCount int
+	// getEventResponse, when non-nil, is what a GET .../events/{eventId}
+	// request answers with (#291) — SendWriteBack's own conflict-retry loop
+	// refetches through this endpoint after a 412. getEventRequests records
+	// every such request received, in arrival order.
+	getEventResponse map[string]any
+	getEventRequests []capturedGoogleGet
+}
+
+// capturedGoogleGet is one events.get request fakeGoogleServer received
+// (#291) — a conflict-retry test's own assertion that SendWriteBack actually
+// refetched the Provider's current copy before retrying.
+type capturedGoogleGet struct {
+	CalendarID, EventID string
 }
 
 // capturedGooglePatch is one events.patch request fakeGoogleServer received
@@ -234,6 +253,11 @@ func newFakeGoogleServer(t *testing.T) *fakeGoogleServer {
 			Body:       body,
 		})
 
+		f.patchCallCount++
+		if f.patchConflictFirstNCalls > 0 && f.patchCallCount <= f.patchConflictFirstNCalls {
+			w.WriteHeader(http.StatusPreconditionFailed)
+			return
+		}
 		if f.patchStatus != 0 && f.patchStatus != http.StatusOK {
 			w.WriteHeader(f.patchStatus)
 			return
@@ -246,6 +270,21 @@ func newFakeGoogleServer(t *testing.T) *fakeGoogleServer {
 		body["etag"] = `"` + etag + `"`
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(body)
+	})
+	mux.HandleFunc("GET /{calendarId}/events/{eventId}", func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer fake-access-token" {
+			t.Fatalf("expected events.get request to carry the exchanged access token, got %q", r.Header.Get("Authorization"))
+		}
+		f.getEventRequests = append(f.getEventRequests, capturedGoogleGet{
+			CalendarID: r.PathValue("calendarId"),
+			EventID:    r.PathValue("eventId"),
+		})
+		if f.getEventResponse == nil {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(f.getEventResponse)
 	})
 
 	f.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

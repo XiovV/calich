@@ -1,4 +1,5 @@
 import { AttachmentIndicator } from "./AttachmentIndicator";
+import { WriteBackErrorIndicator } from "./WriteBackErrorIndicator";
 import { canWriteCalendarEvents, getCalendarById } from "../lib/calendar";
 import { getOccurrenceBlockStyle } from "../lib/calendarColors";
 import { useCalendarsStore } from "../lib/calendarsStore";
@@ -90,6 +91,7 @@ export function AllDayLane({
                   className={`flex w-full cursor-pointer items-center gap-1 rounded-shell-sm px-1 text-left text-label-sm ${isDragging ? "invisible" : ""}`}
                 >
                   <span className="truncate">{occurrence.event.title}</span>
+                  <WriteBackErrorIndicator reason={occurrence.event.writeBackError} />
                   <AttachmentIndicator
                     hasAttachments={Boolean(occurrence.event.attachments?.length)}
                   />

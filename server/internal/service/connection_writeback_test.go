@@ -2,6 +2,8 @@ package service
 
 import (
 	"context"
+	"errors"
+	"net/http"
 	"testing"
 	"time"
 
@@ -188,6 +190,300 @@ func TestConnectionService_SendWriteBack_NoOpWhenNeverReachedTheProvider(t *test
 	}
 	if len(google.patchRequests) != 0 {
 		t.Fatalf("expected no PATCH sent for an event with no ExternalUID, got %d", len(google.patchRequests))
+	}
+}
+
+// TestConnectionService_SendWriteBack_RetriesConflictWithFreshEtag covers
+// #291's own core case: a 412 (Google's stale If-Match) triggers a refetch
+// of the Provider's current copy, and the retried PATCH carries the fresh
+// etag that refetch learned rather than the stale one that started the
+// whole attempt.
+func TestConnectionService_SendWriteBack_RetriesConflictWithFreshEtag(t *testing.T) {
+	ctx := context.Background()
+	google := newFakeGoogleServer(t)
+	google.calendarListItems = []map[string]any{googleCalendarItem("primary", "someone@gmail.com", "#0b8043", "owner", true)}
+	google.eventsByCalendar = map[string][]map[string]any{"primary": {googleEventItem("google-evt-1", "Standup", "2026-01-01T09:00:00Z", "2026-01-01T09:30:00Z", "UTC")}}
+	google.patchConflictFirstNCalls = 1
+	google.getEventResponse = googleEventItem("google-evt-1", "Standup (changed at google)", "2026-01-01T09:00:00Z", "2026-01-01T09:30:00Z", "UTC")
+	google.getEventResponse["etag"] = `"etag-after-conflict"`
+	google.patchResponseETag = "etag-after-retry"
+
+	svc, g, auth, userID, workspaceID := newTestConnectionServiceForWriteBack(t, google)
+	calendar := importOneCalendar(t, svc, auth, userID, workspaceID, "primary")
+	master := soleMasterOf(t, g, calendar.ID)
+
+	if _, err := g.Events.Update(ctx, userID, master.ID, EventWrite{
+		CalendarID: calendar.ID, Title: "Standup (renamed here)", Start: master.Start, End: master.End,
+	}); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+
+	pending := pendingWriteBacks(t, g, master.ID)
+	if len(pending) != 1 {
+		t.Fatalf("expected exactly one pending write-back, got %d", len(pending))
+	}
+	if err := svc.SendWriteBack(ctx, pending[0]); err != nil {
+		t.Fatalf("send write-back: %v", err)
+	}
+
+	if len(google.getEventRequests) != 1 {
+		t.Fatalf("expected exactly one refetch after the conflict, got %d", len(google.getEventRequests))
+	}
+	if len(google.patchRequests) != 2 {
+		t.Fatalf("expected exactly two PATCH attempts (the conflict plus the retry), got %d", len(google.patchRequests))
+	}
+	if google.patchRequests[0].IfMatch != `"etag-google-evt-1"` {
+		t.Fatalf("expected the first attempt to carry the stored etag, got %q", google.patchRequests[0].IfMatch)
+	}
+	if google.patchRequests[1].IfMatch != `"etag-after-conflict"` {
+		t.Fatalf("expected the retry to carry the fresh etag learned from the refetch, got %q", google.patchRequests[1].IfMatch)
+	}
+	// Our own field wins on retry (ADR-0075) — the local edit is what's
+	// re-sent, not the Provider's concurrent title.
+	if google.patchRequests[1].Body["summary"] != "Standup (renamed here)" {
+		t.Fatalf("expected the retry to still carry our own edit, got %v", google.patchRequests[1].Body["summary"])
+	}
+
+	got, err := g.EventRepo.GetByID(ctx, master.ID)
+	if err != nil {
+		t.Fatalf("get event: %v", err)
+	}
+	if got.ProviderEtag == nil || *got.ProviderEtag != "etag-after-retry" {
+		t.Fatalf("expected the retry's own response etag applied, got %v", got.ProviderEtag)
+	}
+	if got.WriteBackError != nil {
+		t.Fatalf("expected no permanent-failure marker after a resolved conflict, got %v", *got.WriteBackError)
+	}
+}
+
+// TestConnectionService_SendWriteBack_ConflictKeepsBothSidesChangesToDifferentFields
+// covers #291's own acceptance criterion directly: "an Event changed here
+// and at the Provider in different fields keeps both changes". The local
+// edit touches the title (a field this app owns and pushes); the Provider's
+// concurrent change is to attendees (a field this app never pushes at all,
+// ADR-0075) — after the conflict resolves, the retried PATCH still carries
+// our title, and the Provider's guest count/RSVP survive locally, folded
+// forward by the very refetch the conflict already required.
+func TestConnectionService_SendWriteBack_ConflictKeepsBothSidesChangesToDifferentFields(t *testing.T) {
+	ctx := context.Background()
+	google := newFakeGoogleServer(t)
+	google.calendarListItems = []map[string]any{googleCalendarItem("primary", "someone@gmail.com", "#0b8043", "owner", true)}
+	google.eventsByCalendar = map[string][]map[string]any{"primary": {googleEventItem("google-evt-1", "Standup", "2026-01-01T09:00:00Z", "2026-01-01T09:30:00Z", "UTC")}}
+	google.patchConflictFirstNCalls = 1
+
+	// The Provider's own concurrent change: a guest was added while this
+	// app's edit was in flight. Not a field buildGooglePatch ever sends.
+	google.getEventResponse = googleEventItem("google-evt-1", "Standup", "2026-01-01T09:00:00Z", "2026-01-01T09:30:00Z", "UTC")
+	google.getEventResponse["etag"] = `"etag-after-conflict"`
+	google.getEventResponse["attendees"] = []map[string]any{
+		{"self": true, "responseStatus": "accepted"},
+		{"responseStatus": "needsAction"},
+	}
+
+	svc, g, auth, userID, workspaceID := newTestConnectionServiceForWriteBack(t, google)
+	calendar := importOneCalendar(t, svc, auth, userID, workspaceID, "primary")
+	master := soleMasterOf(t, g, calendar.ID)
+
+	// Our own concurrent change: the title, a field this app does push.
+	if _, err := g.Events.Update(ctx, userID, master.ID, EventWrite{
+		CalendarID: calendar.ID, Title: "Standup (renamed here)", Start: master.Start, End: master.End,
+	}); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	pending := pendingWriteBacks(t, g, master.ID)
+	if len(pending) != 1 {
+		t.Fatalf("expected exactly one pending write-back, got %d", len(pending))
+	}
+	if err := svc.SendWriteBack(ctx, pending[0]); err != nil {
+		t.Fatalf("send write-back: %v", err)
+	}
+
+	if len(google.patchRequests) != 2 {
+		t.Fatalf("expected the conflict plus one retry, got %d PATCH attempts", len(google.patchRequests))
+	}
+	// Our change survives: the retried push still carries the local title.
+	if google.patchRequests[1].Body["summary"] != "Standup (renamed here)" {
+		t.Fatalf("expected our own title change to survive the conflict, got %v", google.patchRequests[1].Body["summary"])
+	}
+	// The Provider's change survives too: buildGooglePatch has no field for
+	// attendees at all, so Google's own field-scoped PATCH semantics never
+	// touch them regardless of what this app pushes.
+	if _, hasAttendees := google.patchRequests[1].Body["attendees"]; hasAttendees {
+		t.Fatalf("expected the push to carry no attendees field at all, got %v", google.patchRequests[1].Body["attendees"])
+	}
+
+	got, err := g.EventRepo.GetByID(ctx, master.ID)
+	if err != nil {
+		t.Fatalf("get event: %v", err)
+	}
+	if got.Title != "Standup (renamed here)" {
+		t.Fatalf("expected our own title change stored, got %q", got.Title)
+	}
+	if got.GuestCount != 1 {
+		t.Fatalf("expected the Provider's concurrent guest folded forward by the conflict's own refetch, got %d", got.GuestCount)
+	}
+	if got.RSVPStatus == nil || *got.RSVPStatus != "accepted" {
+		t.Fatalf("expected the Provider's own RSVP folded forward, got %v", got.RSVPStatus)
+	}
+}
+
+// TestConnectionService_SendWriteBack_MarksPermanentlyFailedAfterThreeConflicts
+// covers #291's bound: a conflict that survives three attempts in a row
+// marks the Event and raises the Calendar's Source into needs-attention,
+// rather than retrying forever.
+func TestConnectionService_SendWriteBack_MarksPermanentlyFailedAfterThreeConflicts(t *testing.T) {
+	ctx := context.Background()
+	google := newFakeGoogleServer(t)
+	google.calendarListItems = []map[string]any{googleCalendarItem("primary", "someone@gmail.com", "#0b8043", "owner", true)}
+	google.eventsByCalendar = map[string][]map[string]any{"primary": {googleEventItem("google-evt-1", "Standup", "2026-01-01T09:00:00Z", "2026-01-01T09:30:00Z", "UTC")}}
+	google.patchConflictFirstNCalls = 10 // every attempt conflicts
+	google.getEventResponse = googleEventItem("google-evt-1", "Standup", "2026-01-01T09:00:00Z", "2026-01-01T09:30:00Z", "UTC")
+	google.getEventResponse["etag"] = `"etag-after-conflict"`
+
+	svc, g, auth, userID, workspaceID := newTestConnectionServiceForWriteBack(t, google)
+	calendar := importOneCalendar(t, svc, auth, userID, workspaceID, "primary")
+	master := soleMasterOf(t, g, calendar.ID)
+
+	if _, err := g.Events.Update(ctx, userID, master.ID, EventWrite{
+		CalendarID: calendar.ID, Title: "Standup (renamed here)", Start: master.Start, End: master.End,
+	}); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	pending := pendingWriteBacks(t, g, master.ID)
+	if len(pending) != 1 {
+		t.Fatalf("expected exactly one pending write-back, got %d", len(pending))
+	}
+
+	if err := svc.SendWriteBack(ctx, pending[0]); err != nil {
+		t.Fatalf("expected an exhausted conflict to be handled rather than returned as an error, got %v", err)
+	}
+	if len(google.patchRequests) != maxWriteBackAttempts {
+		t.Fatalf("expected exactly %d PATCH attempts, got %d", maxWriteBackAttempts, len(google.patchRequests))
+	}
+
+	got, err := g.EventRepo.GetByID(ctx, master.ID)
+	if err != nil {
+		t.Fatalf("get event: %v", err)
+	}
+	if got.WriteBackError == nil {
+		t.Fatalf("expected a permanent-failure marker on the Event after three conflicts")
+	}
+
+	source, err := g.SourceRepo.GetByCalendarID(ctx, calendar.ID)
+	if err != nil {
+		t.Fatalf("get source: %v", err)
+	}
+	if source.ErrorClass == nil || *source.ErrorClass != ErrorClassNeedsAttention {
+		t.Fatalf("expected the Source raised into needs-attention, got %v", source.ErrorClass)
+	}
+}
+
+// TestConnectionService_SendWriteBack_ExpiresConnectionAndMarksFailedOnDeadRefreshToken
+// covers #291's Connection-death case: the access token has died (401) and
+// the stored refresh_token no longer works either (Google's invalid_grant),
+// discovered mid-push. The Connection is recorded Expired, and the push is
+// marked permanently failed immediately rather than retried by the outbox's
+// ordinary backoff against a grant that's gone.
+func TestConnectionService_SendWriteBack_ExpiresConnectionAndMarksFailedOnDeadRefreshToken(t *testing.T) {
+	ctx := context.Background()
+	google := newFakeGoogleServer(t)
+	google.calendarListItems = []map[string]any{googleCalendarItem("primary", "someone@gmail.com", "#0b8043", "owner", true)}
+	google.eventsByCalendar = map[string][]map[string]any{"primary": {googleEventItem("google-evt-1", "Standup", "2026-01-01T09:00:00Z", "2026-01-01T09:30:00Z", "UTC")}}
+
+	svc, g, auth, userID, workspaceID := newTestConnectionServiceForWriteBack(t, google)
+	calendar := importOneCalendar(t, svc, auth, userID, workspaceID, "primary")
+	master := soleMasterOf(t, g, calendar.ID)
+
+	if _, err := g.Events.Update(ctx, userID, master.ID, EventWrite{
+		CalendarID: calendar.ID, Title: "Standup (renamed here)", Start: master.Start, End: master.End,
+	}); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	pending := pendingWriteBacks(t, g, master.ID)
+	if len(pending) != 1 {
+		t.Fatalf("expected exactly one pending write-back, got %d", len(pending))
+	}
+
+	// The cached access token has died, and Google now rejects the stored
+	// refresh_token outright (RFC 6749 invalid_grant, a revoked or expired
+	// grant) — importOneCalendar's own initial exchange already happened, so
+	// flipping tokenStatus now only affects mintAccessToken's later refresh
+	// call.
+	google.patchStatus = http.StatusUnauthorized
+	google.tokenStatus = http.StatusBadRequest
+
+	if err := svc.SendWriteBack(ctx, pending[0]); err != nil {
+		t.Fatalf("expected a dead connection to be handled rather than returned as an error, got %v", err)
+	}
+
+	linkedSource, err := g.SourceRepo.GetByCalendarID(ctx, calendar.ID)
+	if err != nil {
+		t.Fatalf("get source: %v", err)
+	}
+	conn, err := g.ConnectionRepo.GetByID(ctx, userID, *linkedSource.ConnectionID)
+	if err != nil {
+		t.Fatalf("get connection: %v", err)
+	}
+	if conn.Status != repository.ConnectionStatusExpired {
+		t.Fatalf("expected the connection recorded expired, got %q", conn.Status)
+	}
+
+	got, err := g.EventRepo.GetByID(ctx, master.ID)
+	if err != nil {
+		t.Fatalf("get event: %v", err)
+	}
+	if got.WriteBackError == nil {
+		t.Fatalf("expected a permanent-failure marker on the Event after a dead connection")
+	}
+}
+
+// TestOutboxDispatcher_HandleTerminalFailure_MarksPermanentlyFailedWriteBack
+// covers #291's other permanent-failure path: an ordinary (non-conflict)
+// failure — a 403 the calendar keeps answering — that the outbox's own
+// backoff schedule eventually exhausts. Discovered by the Worker rather than
+// inside one SendWriteBack call, so this exercises OutboxDispatcher's
+// TerminalFailureHandler directly, the same hook the Worker calls.
+func TestOutboxDispatcher_HandleTerminalFailure_MarksPermanentlyFailedWriteBack(t *testing.T) {
+	ctx := context.Background()
+	google := newFakeGoogleServer(t)
+	google.calendarListItems = []map[string]any{googleCalendarItem("primary", "someone@gmail.com", "#0b8043", "owner", true)}
+	google.eventsByCalendar = map[string][]map[string]any{"primary": {googleEventItem("google-evt-1", "Standup", "2026-01-01T09:00:00Z", "2026-01-01T09:30:00Z", "UTC")}}
+
+	svc, g, auth, userID, workspaceID := newTestConnectionServiceForWriteBack(t, google)
+	calendar := importOneCalendar(t, svc, auth, userID, workspaceID, "primary")
+	master := soleMasterOf(t, g, calendar.ID)
+
+	msg, err := g.OutboxRepo.EnqueueWriteBack(ctx, master.ID)
+	if err != nil {
+		t.Fatalf("enqueue write-back: %v", err)
+	}
+
+	dispatcher := &OutboxDispatcher{Mail: NewInvitationSender(g.Events, nil, "calich@example.com"), WriteBack: svc}
+	sendErr := errors.New("google says no")
+	if err := dispatcher.HandleTerminalFailure(ctx, msg, sendErr); err != nil {
+		t.Fatalf("handle terminal failure: %v", err)
+	}
+
+	got, err := g.EventRepo.GetByID(ctx, master.ID)
+	if err != nil {
+		t.Fatalf("get event: %v", err)
+	}
+	if got.WriteBackError == nil {
+		t.Fatalf("expected a permanent-failure marker on the Event")
+	}
+
+	src, err := g.SourceRepo.GetByCalendarID(ctx, calendar.ID)
+	if err != nil {
+		t.Fatalf("get source: %v", err)
+	}
+	if src.ErrorClass == nil || *src.ErrorClass != ErrorClassNeedsAttention {
+		t.Fatalf("expected the Source raised into needs-attention, got %v", src.ErrorClass)
+	}
+
+	// A mail message must never reach the write-back marking path.
+	mailMsg := repository.OutboxMessage{Kind: repository.OutboxKindMail, EventID: master.ID}
+	if err := dispatcher.HandleTerminalFailure(ctx, mailMsg, sendErr); err != nil {
+		t.Fatalf("handle terminal failure for mail: %v", err)
 	}
 }
 

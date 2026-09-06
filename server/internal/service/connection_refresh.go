@@ -98,14 +98,25 @@ func isGoogleAccessTokenExpired(err error) bool {
 
 // mintAccessToken mints a fresh access token from conn's stored
 // refresh_token and caches it back onto the Connection row (#287) — the
-// fallback doRefresh reaches for only once conn's cached access_token
-// has actually failed against Google, never unconditionally. Caching what
-// this mints is what makes repository.Connection.UpdateAccessToken's own
-// stated purpose real: "a Refresh moments later within the same access
-// token's lifetime doesn't have to mint another". A failure to cache it is
-// logged rather than propagated — it costs an extra mint on the next call,
-// never correctness — but is worth knowing about, since every future
-// Refresh would otherwise silently pay that cost forever.
+// fallback doRefresh (and SendWriteBack) reaches for only once conn's cached
+// access_token has actually failed against Google, never unconditionally.
+// Caching what this mints is what makes repository.Connection.
+// UpdateAccessToken's own stated purpose real: "a Refresh moments later
+// within the same access token's lifetime doesn't have to mint another". A
+// failure to cache it is logged rather than propagated — it costs an extra
+// mint on the next call, never correctness — but is worth knowing about,
+// since every future Refresh would otherwise silently pay that cost forever.
+//
+// A refresh_token Google no longer honours — expired, or a User revoking
+// access at their Google account directly — fails here with the exact same
+// classifyGoogleError-needs-attention shape a bad grant always has (#291,
+// ADR-0075's "including ADR-0051's seven-day Testing-status trap"). That is
+// recorded onto the Connection itself as Expired, so
+// EventService.requireLiveConnection can refuse new edits on its Linked
+// Calendars before ever queuing another push against a grant that's gone —
+// logged rather than propagated on its own failure to write, mirroring the
+// access-token cache above: the caller's own error is what matters, not
+// whether this side-effect landed.
 func (s *ConnectionService) mintAccessToken(ctx context.Context, userID int64, conn repository.Connection) (string, error) {
 	refreshToken, err := decryptRefreshToken(s.encryptionKey, conn.RefreshToken)
 	if err != nil {
@@ -114,6 +125,11 @@ func (s *ConnectionService) mintAccessToken(ctx context.Context, userID int64, c
 
 	tokens, err := s.google.refreshAccessToken(ctx, refreshToken)
 	if err != nil {
+		if class, _ := classifyGoogleError(err); class == ErrorClassNeedsAttention {
+			if statusErr := s.connections.UpdateStatus(ctx, userID, conn.ID, repository.ConnectionStatusExpired); statusErr != nil {
+				log.Printf("record connection expired (connection=%d): %v", conn.ID, statusErr)
+			}
+		}
 		return "", err
 	}
 

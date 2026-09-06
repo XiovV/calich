@@ -406,3 +406,70 @@ func TestEventService_AddAttendee_RefusesConnectionCalendarRegardlessOfMode(t *t
 		t.Fatalf("expected ErrLinkedCalendarWriteUnsupported, got %v", err)
 	}
 }
+
+// TestEventService_Update_RefusesEditOnAConnectionThatNeedsReconnect covers
+// #291's own acceptance criterion: a Connection whose Status has moved off
+// Live refuses a new edit on its Linked Calendars outright, rather than
+// committing it locally and queuing a push that can never reach a grant
+// that's dead. Neither the local write nor a write-back enqueue should
+// happen.
+func TestEventService_Update_RefusesEditOnAConnectionThatNeedsReconnect(t *testing.T) {
+	g := newTestGraph(t)
+	userID, calendarID := newTestLinkedCalendar(t, g, repository.SourceModeWritable)
+	event := seedLinkedMaster(t, g, userID, calendarID, "evt-linked-expired")
+
+	source, err := g.SourceRepo.GetByCalendarID(context.Background(), calendarID)
+	if err != nil {
+		t.Fatalf("get source: %v", err)
+	}
+	if err := g.ConnectionRepo.UpdateStatus(context.Background(), userID, *source.ConnectionID, repository.ConnectionStatusExpired); err != nil {
+		t.Fatalf("update connection status: %v", err)
+	}
+
+	_, err = g.Events.Update(context.Background(), userID, event.ID, EventWrite{
+		CalendarID: calendarID, Title: "Should not apply", Start: event.Start, End: event.End,
+	})
+	if err != ErrConnectionNeedsReconnect {
+		t.Fatalf("expected ErrConnectionNeedsReconnect, got %v", err)
+	}
+
+	got, err := g.EventRepo.GetByID(context.Background(), event.ID)
+	if err != nil {
+		t.Fatalf("get event: %v", err)
+	}
+	if got.Title != "Standup" {
+		t.Fatalf("expected the local write to be refused, got title %q", got.Title)
+	}
+	if pending := pendingWriteBacks(t, g, event.ID); len(pending) != 0 {
+		t.Fatalf("expected no write-back queued against a dead connection, got %+v", pending)
+	}
+}
+
+// TestEventService_Update_ClearsStaleWriteBackErrorOnFreshEdit covers #291's
+// "a fresh edit deserves a fresh chance" rule: an Event carrying a leftover
+// permanent-failure marker from a previous push has it cleared the moment a
+// new edit re-enqueues another one, rather than leaving a stale "needs
+// attention" mark on the grid while the new push is still in flight.
+func TestEventService_Update_ClearsStaleWriteBackErrorOnFreshEdit(t *testing.T) {
+	g := newTestGraph(t)
+	userID, calendarID := newTestLinkedCalendar(t, g, repository.SourceModeWritable)
+	event := seedLinkedMaster(t, g, userID, calendarID, "evt-linked-stale-error")
+
+	if err := g.EventRepo.MarkWriteBackFailed(context.Background(), event.ID, "a conflicting edit at google could not be resolved after several attempts"); err != nil {
+		t.Fatalf("mark write-back failed: %v", err)
+	}
+
+	if _, err := g.Events.Update(context.Background(), userID, event.ID, EventWrite{
+		CalendarID: calendarID, Title: "Standup (edited again)", Start: event.Start, End: event.End,
+	}); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+
+	got, err := g.EventRepo.GetByID(context.Background(), event.ID)
+	if err != nil {
+		t.Fatalf("get event: %v", err)
+	}
+	if got.WriteBackError != nil {
+		t.Fatalf("expected the stale write-back error to be cleared by a fresh edit, got %v", *got.WriteBackError)
+	}
+}

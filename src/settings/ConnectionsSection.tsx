@@ -132,13 +132,25 @@ export function ConnectionsSection() {
                     : "Revoked — reconnect to keep it syncing"}
               </p>
             </div>
-            <IconButton
-              onClick={() => handleDisconnect(connection.id, connection.accountEmail)}
-              disabled={disconnectingId === connection.id}
-              aria-label={`Disconnect ${connection.accountEmail}`}
-            >
-              <Trash2 className="size-4" />
-            </IconButton>
+            <div className="flex items-center gap-2">
+              {/* Expired and revoked get the identical action (#291,
+                  ADR-0075): either way the fix is the same OAuth round trip,
+                  which Upsert's own ON CONFLICT reuses onto this same
+                  Connection row — there's no separate flow for "reconnect a
+                  revoked grant" vs. "reconnect an expired one". */}
+              {connection.status !== "live" && (
+                <Button onClick={handleConnect} loading={isSubmitting}>
+                  Reconnect
+                </Button>
+              )}
+              <IconButton
+                onClick={() => handleDisconnect(connection.id, connection.accountEmail)}
+                disabled={disconnectingId === connection.id}
+                aria-label={`Disconnect ${connection.accountEmail}`}
+              >
+                <Trash2 className="size-4" />
+              </IconButton>
+            </div>
           </li>
         ))}
         {connections.length === 0 && (

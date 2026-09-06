@@ -320,3 +320,52 @@ func TestConnectionRepository_Delete_ScopedToOwner(t *testing.T) {
 		t.Fatalf("expected user A's connection to survive the other user's delete attempt, got %d remaining", len(list))
 	}
 }
+
+// TestConnectionRepository_UpdateStatus covers #291's own write path:
+// mintAccessToken records a dead refresh_token as Expired here, without
+// touching access_token/refresh_token/scopes.
+func TestConnectionRepository_UpdateStatus(t *testing.T) {
+	connections, users := newTestConnectionRepository(t)
+	ctx := context.Background()
+
+	user, err := users.Create(ctx, "admin", "admin@example.com", "hash", true)
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	created, err := connections.Upsert(ctx, user.ID, ProviderGoogle, "someone@gmail.com", ConnectionFields{
+		AccessToken: accessToken("access-1"), RefreshToken: "encrypted-refresh-1", Scopes: "calendar.events", Status: ConnectionStatusLive,
+	})
+	if err != nil {
+		t.Fatalf("upsert connection: %v", err)
+	}
+
+	if err := connections.UpdateStatus(ctx, user.ID, created.ID, ConnectionStatusExpired); err != nil {
+		t.Fatalf("update status: %v", err)
+	}
+
+	got, err := connections.GetByID(ctx, user.ID, created.ID)
+	if err != nil {
+		t.Fatalf("get by id: %v", err)
+	}
+	if got.Status != ConnectionStatusExpired {
+		t.Fatalf("expected status %q, got %q", ConnectionStatusExpired, got.Status)
+	}
+	if got.RefreshToken != "encrypted-refresh-1" {
+		t.Fatalf("expected refresh_token untouched, got %q", got.RefreshToken)
+	}
+	if got.AccessToken == nil || *got.AccessToken != "access-1" {
+		t.Fatalf("expected access_token untouched, got %v", got.AccessToken)
+	}
+}
+
+func TestConnectionRepository_UpdateStatus_NotFound(t *testing.T) {
+	connections, users := newTestConnectionRepository(t)
+	ctx := context.Background()
+	user, err := users.Create(ctx, "admin", "admin@example.com", "hash", true)
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	if err := connections.UpdateStatus(ctx, user.ID, 999, ConnectionStatusExpired); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected ErrNotFound, got %v", err)
+	}
+}

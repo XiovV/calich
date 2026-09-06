@@ -102,6 +102,15 @@ var (
 	// #292's own ticket; this sentinel is what keeps those paths refused
 	// rather than silently unsafe until it ships.
 	ErrLinkedCalendarWriteUnsupported = errors.New("this kind of write is not yet supported on a linked calendar")
+	// ErrConnectionNeedsReconnect is returned by Update when write.CalendarID
+	// carries a Connection-kind Source whose Connection has moved off
+	// ConnectionStatusLive (#291, ADR-0075): a Connection that no longer
+	// authenticates can't be trusted to ever push a queued edit, so new
+	// edits are refused outright rather than queued to fail silently for as
+	// long as the grant stays broken. Reconnecting reuses the very same
+	// Connection row (ConnectionRepository.Upsert's own ON CONFLICT), so
+	// nothing here is lost — only paused until then.
+	ErrConnectionNeedsReconnect = errors.New("this connection needs to be reconnected before it can accept new edits")
 )
 
 // isConnectionSource reports whether calendar carries a Connection-kind
@@ -112,6 +121,23 @@ var (
 // push for.
 func isConnectionSource(calendar repository.Calendar) bool {
 	return calendar.Source != nil && calendar.Source.Kind == repository.SourceKindConnection
+}
+
+// requireLiveConnection returns ErrConnectionNeedsReconnect when calendar's
+// Source is a Connection whose grant has moved off Live (#291, ADR-0075) —
+// Update's own guard against queuing a new edit against a Connection that
+// mintAccessToken has already discovered can no longer authenticate. A nil
+// return for any Calendar without a Connection-kind Source at all; callers
+// check isConnectionSource (or equivalent) first.
+func (s *EventService) requireLiveConnection(ctx context.Context, calendar repository.Calendar) error {
+	conn, err := s.connections.GetByID(ctx, calendar.UserID, *calendar.Source.ConnectionID)
+	if err != nil {
+		return fmt.Errorf("get connection: %w", err)
+	}
+	if conn.Status != repository.ConnectionStatusLive {
+		return ErrConnectionNeedsReconnect
+	}
+	return nil
 }
 
 // isValidReminderChannel reports whether channel is one of the Channels
@@ -247,6 +273,11 @@ type EventService struct {
 	// repository unconditionally), only with whether the Event being edited
 	// belongs to one, which Update itself checks.
 	writebackOutbox *repository.OutboxRepository
+	// connections resolves a Connection-kind Source's own Connection row
+	// (#291, ADR-0075) — requireLiveConnection's only use for it, to refuse
+	// a new edit against a grant mintAccessToken has already discovered is
+	// dead, rather than queuing a push that can never succeed.
+	connections *repository.ConnectionRepository
 	// inviteRateLimitPerHour is the per-User hourly ceiling on brand-new
 	// Invitations chargeInviteRateLimit enforces (#204, ADR-0058) —
 	// INVITE_RATE_LIMIT_PER_HOUR, or its default, resolved once at startup
@@ -254,8 +285,8 @@ type EventService struct {
 	inviteRateLimitPerHour int
 }
 
-func NewEventService(db *sql.DB, events *repository.EventRepository, exceptions *repository.EventExceptionRepository, reminders *repository.EventReminderRepository, calendarDefaults *repository.CalendarDefaultReminderRepository, explicitReminders *repository.EventReminderExplicitRepository, sync *repository.SyncRepository, calendars *CalendarService, users *repository.UserRepository, attachments *repository.AttachmentRepository, attendees *repository.AttendeeRepository, workspaces *repository.WorkspaceRepository, groups *repository.GroupRepository, notifications *repository.NotificationRepository, outbox *repository.OutboxRepository, writebackOutbox *repository.OutboxRepository, inviteRateLimitPerHour int) *EventService {
-	return &EventService{db: db, events: events, exceptions: exceptions, reminders: reminders, calendarDefaults: calendarDefaults, explicitReminders: explicitReminders, reminderResolution: &reminderResolver{reminders: reminders, explicit: explicitReminders, calendarDefaults: calendarDefaults}, sync: sync, calendars: calendars, users: users, attachments: attachments, attendees: attendees, workspaces: workspaces, groups: groups, notifications: notifications, outbox: outbox, writebackOutbox: writebackOutbox, inviteRateLimitPerHour: inviteRateLimitPerHour}
+func NewEventService(db *sql.DB, events *repository.EventRepository, exceptions *repository.EventExceptionRepository, reminders *repository.EventReminderRepository, calendarDefaults *repository.CalendarDefaultReminderRepository, explicitReminders *repository.EventReminderExplicitRepository, sync *repository.SyncRepository, calendars *CalendarService, users *repository.UserRepository, attachments *repository.AttachmentRepository, attendees *repository.AttendeeRepository, workspaces *repository.WorkspaceRepository, groups *repository.GroupRepository, notifications *repository.NotificationRepository, outbox *repository.OutboxRepository, writebackOutbox *repository.OutboxRepository, connections *repository.ConnectionRepository, inviteRateLimitPerHour int) *EventService {
+	return &EventService{db: db, events: events, exceptions: exceptions, reminders: reminders, calendarDefaults: calendarDefaults, explicitReminders: explicitReminders, reminderResolution: &reminderResolver{reminders: reminders, explicit: explicitReminders, calendarDefaults: calendarDefaults}, sync: sync, calendars: calendars, users: users, attachments: attachments, attendees: attendees, workspaces: workspaces, groups: groups, notifications: notifications, outbox: outbox, writebackOutbox: writebackOutbox, connections: connections, inviteRateLimitPerHour: inviteRateLimitPerHour}
 }
 
 // calendarByID resolves calendarID via s.calendars.Get, translating
@@ -783,6 +814,17 @@ func (s *EventService) Update(ctx context.Context, userID int64, id string, writ
 	if err != nil {
 		return repository.Event{}, err
 	}
+	// A Connection whose grant is no longer Live refuses new edits on its
+	// Linked Calendars outright (#291, ADR-0075) — queuing one anyway would
+	// either sit forever behind a Reconnect nobody has done yet, or replay a
+	// week's worth of edits all at once the moment they do. Checked before
+	// touching existing or writing anything, so a doomed edit is refused
+	// cleanly rather than committed locally and left to fail later.
+	if isConnectionSource(calendar) {
+		if err := s.requireLiveConnection(ctx, calendar); err != nil {
+			return repository.Event{}, err
+		}
+	}
 
 	existing, err := s.getOwnedEvent(ctx, userID, id)
 	if err != nil {
@@ -862,6 +904,13 @@ func (s *EventService) Update(ctx context.Context, userID int64, id string, writ
 		if enqueueWriteBack {
 			if _, err := repos.writeback.EnqueueWriteBack(ctx, id); err != nil {
 				return fmt.Errorf("enqueue write-back: %w", err)
+			}
+			// A fresh edit deserves a fresh chance (#291, ADR-0075): clear
+			// any permanent-failure marker a previous push left behind
+			// rather than leaving it to look stale until this new push
+			// either lands or fails on its own.
+			if err := repos.events.ClearWriteBackError(ctx, id); err != nil {
+				return fmt.Errorf("clear write-back error: %w", err)
 			}
 		}
 

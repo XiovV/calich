@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { format } from "date-fns";
 import { AttachmentIndicator } from "./AttachmentIndicator";
+import { WriteBackErrorIndicator } from "./WriteBackErrorIndicator";
 import { occurrenceKey, type Occurrence } from "../lib/occurrence";
 import type { DraftBlock } from "../lib/gridTime";
 import { canWriteCalendarEvents, getCalendarById } from "../lib/calendar";
@@ -139,6 +140,7 @@ export function MonthDayCell({
                   ? occurrence.event.title
                   : `${format(occurrence.start, timePattern)} ${occurrence.event.title}`}
               </span>
+              <WriteBackErrorIndicator reason={occurrence.event.writeBackError} />
               <AttachmentIndicator
                 hasAttachments={Boolean(occurrence.event.attachments?.length)}
               />

@@ -115,6 +115,7 @@ export function EventBlock({
         blockStyle={blockStyle}
         isPast={isPast}
         hasAttachments={Boolean(event.attachments?.length)}
+        writeBackError={event.writeBackError}
       />
       {!isReadOnly && showResizeEnd && (
         <div

@@ -148,6 +148,14 @@ type Event struct {
 	// app itself owns and for a Provider event with no colorId. Never sent
 	// back to the Provider.
 	ProviderColor *string
+	// WriteBackError is the per-Event permanent-failure marker (#291,
+	// ADR-0075, ADR-0076): nil while healthy, set to a human-readable reason
+	// once a queued Write-back push has exhausted its retries (a conflict
+	// that survived three refetch-and-retry attempts, or an outbox message
+	// that ran out its own backoff schedule) and will never reach the
+	// Provider on its own. Surfaced in the grid rather than buried in
+	// Settings — see MarkWriteBackFailed and ClearWriteBackError.
+	WriteBackError *string
 }
 
 type EventRepository struct {
@@ -220,7 +228,7 @@ func (r *EventRepository) Create(ctx context.Context, id string, createdBy *int6
 	return r.GetByID(ctx, id)
 }
 
-const eventColumns = `id, calendar_id, title, "start", "end", all_day, rrule, parent_id, recurrence_id, tzid, description, location, url, color, external_uid, created_by, created_at, change_seq, sequence, provider_etag, rsvp_status, conference_url, guest_count, provider_color`
+const eventColumns = `id, calendar_id, title, "start", "end", all_day, rrule, parent_id, recurrence_id, tzid, description, location, url, color, external_uid, created_by, created_at, change_seq, sequence, provider_etag, rsvp_status, conference_url, guest_count, provider_color, write_back_error`
 
 func (r *EventRepository) GetByID(ctx context.Context, id string) (Event, error) {
 	return scanEvent(r.db.QueryRowContext(ctx,
@@ -406,6 +414,51 @@ func (r *EventRepository) UpdateProviderEtag(ctx context.Context, id string, eta
 	return requireAffected(res)
 }
 
+// ApplyProviderOwnedFields moves rsvpStatus/conferenceURL/guestCount
+// forward on id's row alone (#291, ADR-0075) — SendWriteBack's own
+// conflict-retry loop, reached after a 412 forces a refetch of the
+// Provider's current copy anyway. Deliberately narrower than Update: no
+// other column moves, and change_seq never bumps — these three are the
+// Provider's own read-only state, not a second edit to the Event.
+func (r *EventRepository) ApplyProviderOwnedFields(ctx context.Context, id string, rsvpStatus, conferenceURL *string, guestCount int) error {
+	res, err := r.db.ExecContext(ctx,
+		`UPDATE events SET rsvp_status = ?, conference_url = ?, guest_count = ? WHERE id = ?`,
+		rsvpStatus, conferenceURL, guestCount, id,
+	)
+	if err != nil {
+		return fmt.Errorf("apply provider-owned fields: %w", err)
+	}
+	return requireAffected(res)
+}
+
+// MarkWriteBackFailed stamps id's row with reason, the per-Event
+// permanent-failure marker (#291, ADR-0075, ADR-0076) — set once a queued
+// Write-back push has exhausted its retries and will never reach the
+// Provider on its own. Deliberately narrow, like UpdateProviderEtag: it
+// touches no other column and never bumps change_seq, since a push failing
+// is not itself a second edit to the Event.
+func (r *EventRepository) MarkWriteBackFailed(ctx context.Context, id, reason string) error {
+	res, err := r.db.ExecContext(ctx, `UPDATE events SET write_back_error = ? WHERE id = ?`, reason, id)
+	if err != nil {
+		return fmt.Errorf("mark write-back failed: %w", err)
+	}
+	return requireAffected(res)
+}
+
+// ClearWriteBackError removes id's stale permanent-failure marker (#291,
+// ADR-0075). Called from two places: EventService.Update, the moment a
+// fresh edit re-enqueues a Write-back push (a User acting again deserves a
+// fresh chance rather than a marker left over from the push their new edit
+// is about to replace), and EventService.RecordWriteBackEtag, the moment a
+// push actually lands.
+func (r *EventRepository) ClearWriteBackError(ctx context.Context, id string) error {
+	res, err := r.db.ExecContext(ctx, `UPDATE events SET write_back_error = NULL WHERE id = ?`, id)
+	if err != nil {
+		return fmt.Errorf("clear write-back error: %w", err)
+	}
+	return requireAffected(res)
+}
+
 // SetChangeSeq stamps id's row with changeSeq directly, without touching any
 // other column. Used when a write to a *different* row (an Override's
 // create/update/delete, an Exception, a reparent) still changes id's series
@@ -553,7 +606,8 @@ func scanEventRow(row rowScanner, e *Event) error {
 	var rsvpStatus sql.NullString
 	var conferenceURL sql.NullString
 	var providerColor sql.NullString
-	if err := row.Scan(&e.ID, &e.CalendarID, &e.Title, &e.Start, &e.End, &e.AllDay, &e.Rrule, &parentID, &recurrenceID, &tzid, &description, &location, &url, &color, &externalUID, &createdBy, &e.CreatedAt, &e.ChangeSeq, &e.Sequence, &providerEtag, &rsvpStatus, &conferenceURL, &e.GuestCount, &providerColor); err != nil {
+	var writeBackError sql.NullString
+	if err := row.Scan(&e.ID, &e.CalendarID, &e.Title, &e.Start, &e.End, &e.AllDay, &e.Rrule, &parentID, &recurrenceID, &tzid, &description, &location, &url, &color, &externalUID, &createdBy, &e.CreatedAt, &e.ChangeSeq, &e.Sequence, &providerEtag, &rsvpStatus, &conferenceURL, &e.GuestCount, &providerColor, &writeBackError); err != nil {
 		return err
 	}
 	if externalUID.Valid {
@@ -585,6 +639,9 @@ func scanEventRow(row rowScanner, e *Event) error {
 	}
 	if providerColor.Valid {
 		e.ProviderColor = &providerColor.String
+	}
+	if writeBackError.Valid {
+		e.WriteBackError = &writeBackError.String
 	}
 	e.Description = description.String
 	e.Location = location.String

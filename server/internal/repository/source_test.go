@@ -558,3 +558,84 @@ func TestSourceRepository_ScheduleNextRefresh_NotFound(t *testing.T) {
 		t.Fatalf("expected ErrNotFound, got %v", err)
 	}
 }
+
+// TestSourceRepository_RecordWriteBackFailure covers #291's own write path:
+// a permanently failed Write-back push raises error_class/error_message on
+// the affected Linked Calendar's Source, without touching failure_count or
+// next_refresh_at — those govern the Refresh poller's own backoff, which a
+// write's failure has nothing to do with.
+func TestSourceRepository_RecordWriteBackFailure(t *testing.T) {
+	sqlDB, err := db.OpenInMemory()
+	if err != nil {
+		t.Fatalf("open in-memory db: %v", err)
+	}
+	t.Cleanup(func() { sqlDB.Close() })
+	ctx := context.Background()
+
+	users := NewUserRepository(sqlDB)
+	user, err := users.Create(ctx, "user-a", "user-a@example.com", "hash", false)
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	workspaces := NewWorkspaceRepository(sqlDB)
+	workspace, err := workspaces.Create(ctx, "workspace-a", user.ID)
+	if err != nil {
+		t.Fatalf("create workspace: %v", err)
+	}
+	if err := workspaces.AddMember(ctx, workspace.ID, user.ID, WorkspaceRoleOwner); err != nil {
+		t.Fatalf("add workspace member: %v", err)
+	}
+	connections := NewConnectionRepository(sqlDB)
+	conn, err := connections.Upsert(ctx, user.ID, ProviderGoogle, "someone@gmail.com", ConnectionFields{
+		RefreshToken: "encrypted-refresh", Status: ConnectionStatusLive,
+	})
+	if err != nil {
+		t.Fatalf("upsert connection: %v", err)
+	}
+	calendars := NewCalendarRepository(sqlDB)
+	calendar, err := calendars.Create(ctx, user.ID, workspace.ID, "cal-linked", CalendarFields{Name: "Work", Color: "peacock"})
+	if err != nil {
+		t.Fatalf("create calendar: %v", err)
+	}
+	sources := NewSourceRepository(sqlDB)
+	externalCalendarID := "primary"
+	if _, err := sources.Create(ctx, calendar.ID, SourceFields{
+		Kind: SourceKindConnection, Mode: SourceModeWritable, ConnectionID: &conn.ID, ExternalCalendarID: &externalCalendarID,
+	}); err != nil {
+		t.Fatalf("create connection source: %v", err)
+	}
+
+	next := time.Now().UTC().Add(15 * time.Minute).Truncate(time.Second)
+	if err := sources.ScheduleNextRefresh(ctx, user.ID, calendar.ID, next); err != nil {
+		t.Fatalf("schedule next refresh: %v", err)
+	}
+
+	if err := sources.RecordWriteBackFailure(ctx, user.ID, calendar.ID, "needs_attention", "a conflicting edit at google could not be resolved"); err != nil {
+		t.Fatalf("record write-back failure: %v", err)
+	}
+
+	got, err := sources.GetByCalendarID(ctx, calendar.ID)
+	if err != nil {
+		t.Fatalf("get by calendar id: %v", err)
+	}
+	if got.ErrorClass == nil || *got.ErrorClass != "needs_attention" {
+		t.Fatalf("expected ErrorClass needs_attention, got %v", got.ErrorClass)
+	}
+	if got.ErrorMessage == nil || *got.ErrorMessage != "a conflicting edit at google could not be resolved" {
+		t.Fatalf("expected ErrorMessage stored, got %v", got.ErrorMessage)
+	}
+	if got.FailureCount != 0 {
+		t.Fatalf("expected FailureCount untouched (0), got %d", got.FailureCount)
+	}
+	if got.NextRefreshAt == nil || !got.NextRefreshAt.Equal(next) {
+		t.Fatalf("expected NextRefreshAt untouched at %v, got %v", next, got.NextRefreshAt)
+	}
+}
+
+func TestSourceRepository_RecordWriteBackFailure_NotFound(t *testing.T) {
+	sources, _, userID, _, _ := newTestSourceRepository(t)
+	err := sources.RecordWriteBackFailure(context.Background(), userID, "nope", "needs_attention", "x")
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected ErrNotFound, got %v", err)
+	}
+}

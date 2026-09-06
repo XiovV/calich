@@ -279,6 +279,22 @@ func (s *ConnectionService) AccountEmailsByIDs(ctx context.Context, connectionID
 	return emails, nil
 }
 
+// StatusesByIDs resolves connectionIDs' current Status, keyed by id (#291)
+// — CalendarHandler's own batched join for surfacing "this Linked
+// Calendar's Connection needs reconnecting" on every affected row without a
+// query per Calendar, mirroring AccountEmailsByIDs' own shape and batching.
+func (s *ConnectionService) StatusesByIDs(ctx context.Context, connectionIDs []int64) (map[int64]repository.ConnectionStatus, error) {
+	connections, err := s.connections.ListByIDs(ctx, connectionIDs)
+	if err != nil {
+		return nil, fmt.Errorf("list connections: %w", err)
+	}
+	statuses := make(map[int64]repository.ConnectionStatus, len(connections))
+	for id, c := range connections {
+		statuses[id] = c.Status
+	}
+	return statuses, nil
+}
+
 // Disconnect removes userID's Connection with the given id. No Linked
 // Calendar exists yet to have a disposition for (#285) — that question is
 // the Calendar picker's, once it exists.
