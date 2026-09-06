@@ -206,7 +206,7 @@ func TestWorker_Tick_FailureBelowMaxAttemptsSchedulesRetryWithBackoff(t *testing
 func TestWorker_Tick_ExhaustingBackoffReachesTerminalFailedState(t *testing.T) {
 	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	store := &fakeStore{messages: []repository.OutboxMessage{
-		{ID: 1, EventID: "evt-1", RecipientUserID: userID(10), Status: repository.OutboxStatusPending, Attempts: maxAttempts - 1},
+		{ID: 1, EventID: "evt-1", RecipientUserID: userID(10), Status: repository.OutboxStatusPending, Attempts: maxAttemptsFor("") - 1},
 	}}
 	sender := &fakeSender{fail: map[int64]error{1: errors.New("smtp: giving up")}}
 	w := NewWorker(store, sender, func() time.Time { return now })
@@ -219,8 +219,8 @@ func TestWorker_Tick_ExhaustingBackoffReachesTerminalFailedState(t *testing.T) {
 	if got.Status != repository.OutboxStatusFailed {
 		t.Fatalf("expected a terminal failed state after exhausting every retry, got %+v", got)
 	}
-	if got.Attempts != maxAttempts {
-		t.Fatalf("expected %d attempts recorded, got %d", maxAttempts, got.Attempts)
+	if got.Attempts != maxAttemptsFor("") {
+		t.Fatalf("expected %d attempts recorded, got %d", maxAttemptsFor(""), got.Attempts)
 	}
 }
 

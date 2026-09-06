@@ -57,6 +57,51 @@ type ReconcileResult struct {
 	NoOpCount int
 }
 
+// protectPendingWriteBacks removes every incoming series whose stored
+// counterpart has a Pending Write-back push from incoming, and folds its
+// ExternalUID into a copy of unparseableUIDs — the Full-mode half of #290's
+// ADR-0076 protection: ReconcileSeries only ever consults unparseableUIDs
+// for a UID absent from incoming (see its own doc comment), so a pending
+// series must be removed from incoming *and* marked unparseable, or it
+// would either be silently overwritten by the fetch's stale copy (if left
+// in incoming) or wrongly tombstoned (if removed but left unmarked).
+// pendingMasterIDs is empty for every Subscription (Write-back doesn't
+// exist there), so this is a no-op read-then-pass-through in that case, not
+// a Connection-only branch.
+func protectPendingWriteBacks(existing []ExistingSeries, incoming []IncomingSeries, unparseableUIDs map[string]bool, pendingMasterIDs map[string]bool) ([]IncomingSeries, map[string]bool) {
+	if len(pendingMasterIDs) == 0 {
+		return incoming, unparseableUIDs
+	}
+
+	protectedUIDs := make(map[string]bool, len(pendingMasterIDs))
+	for _, e := range existing {
+		if pendingMasterIDs[e.MasterID] {
+			protectedUIDs[e.ExternalUID] = true
+		}
+	}
+	if len(protectedUIDs) == 0 {
+		return incoming, unparseableUIDs
+	}
+
+	filtered := make([]IncomingSeries, 0, len(incoming))
+	for _, in := range incoming {
+		if protectedUIDs[in.ExternalUID] {
+			continue
+		}
+		filtered = append(filtered, in)
+	}
+
+	merged := make(map[string]bool, len(unparseableUIDs)+len(protectedUIDs))
+	for uid := range unparseableUIDs {
+		merged[uid] = true
+	}
+	for uid := range protectedUIDs {
+		merged[uid] = true
+	}
+
+	return filtered, merged
+}
+
 // ReconcileSeries diffs existing against incoming by ExternalUID:
 //
 //   - A UID in both: upsert if its content differs from what's stored,

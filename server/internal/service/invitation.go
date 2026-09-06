@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/XiovV/calich/server/internal/icalendar"
@@ -29,9 +30,27 @@ func NewInvitationSender(events *EventService, mailer InvitationMailer, from str
 	return &InvitationSender{events: events, mailer: mailer, from: from}
 }
 
+// ErrNoMailTransportConfigured is InvitationSender.Send's own answer for a
+// mail-kind message drained when this deployment has no SMTP transport
+// configured (#290) — reachable only when SMTP was configured at the moment
+// a Request/Cancel was queued and has since been unset: mailOutbox being nil
+// already stops a new one being queued in the first place (graph.go), but
+// the outbox Worker now runs unconditionally regardless of SMTP (#290,
+// ADR-0075's write-back needs it to), so a stale pending row must fail
+// through the ordinary backoff-then-give-up path here rather than reaching
+// s.mailer — a nil *mailer.SMTPMailer, dereferenced, would panic the whole
+// process instead of just failing this one message.
+var ErrNoMailTransportConfigured = errors.New("no SMTP transport configured on this instance")
+
 // Send dispatches msg to sendInvitation or sendCancellation by its Method
-// (ADR-0059, #201).
+// (ADR-0059, #201). s.mailer is nil exactly when this instance has no SMTP
+// transport configured — never a *mailer.SMTPMailer holding a nil pointer,
+// which app.go's own construction guarantees by passing a bare nil
+// InvitationMailer rather than a nil-valued concrete one.
 func (s *InvitationSender) Send(ctx context.Context, msg repository.OutboxMessage) error {
+	if s.mailer == nil {
+		return ErrNoMailTransportConfigured
+	}
 	if msg.Method == repository.OutboxMethodCancel {
 		return s.sendCancellation(msg)
 	}

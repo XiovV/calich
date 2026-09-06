@@ -67,14 +67,19 @@ type Graph struct {
 	NotificationRepo     *repository.NotificationRepository
 	AppPasswordRepo      *repository.AppPasswordRepository
 	FiredReminderRepo    *repository.FiredReminderRepository
-	// OutboxRepo is nil on a deployment with no SMTP transport configured
-	// (ADR-0059, ADR-0060): with nothing able to send an Invitation there is
-	// nothing to queue one into, and EventService takes the nil as "queue
-	// no Invitation at all".
+	// OutboxRepo is built unconditionally (#290, ADR-0075): a Write-back push
+	// needs somewhere to queue into regardless of whether this deployment has
+	// SMTP configured, since it has nothing to do with mail. What varies by
+	// SMTPConfigured is the *mail* handle NewEventService's own outbox
+	// parameter is given below — nil with no SMTP, so inviteUser and
+	// expandGroupMembers keep queuing no Invitation at all, exactly as
+	// before #290. Events.writebackOutbox always gets this repository
+	// directly.
 	OutboxRepo *repository.OutboxRepository
 	// RateLimitRepo backs RateLimiter (#240, ADR-0070) — built
-	// unconditionally, unlike OutboxRepo, since throttling Login/Register/
-	// CalDAV needs no self-hoster configuration to be worth having.
+	// unconditionally for the same reason OutboxRepo now is: throttling
+	// Login/Register/CalDAV needs no self-hoster configuration to be worth
+	// having.
 	RateLimitRepo *repository.RateLimitAttemptRepository
 
 	Auth          *AuthService
@@ -213,9 +218,7 @@ func NewGraph(sqlDB *sql.DB, cfg config.Config, opts ...GraphOption) (*Graph, er
 		AppPasswordRepo:      repository.NewAppPasswordRepository(sqlDB),
 		FiredReminderRepo:    repository.NewFiredReminderRepository(sqlDB),
 	}
-	if cfg.SMTPConfigured() {
-		g.OutboxRepo = repository.NewOutboxRepository(sqlDB)
-	}
+	g.OutboxRepo = repository.NewOutboxRepository(sqlDB)
 	g.RateLimitRepo = repository.NewRateLimitAttemptRepository(sqlDB)
 
 	g.RateLimiter = NewAuthRateLimiter(g.RateLimitRepo, cfg.AuthRateLimitPerEmail, cfg.AuthRateLimitPerIP, cfg.RegisterRateLimitPerIP)
@@ -223,7 +226,17 @@ func NewGraph(sqlDB *sql.DB, cfg config.Config, opts ...GraphOption) (*Graph, er
 	g.Groups = NewGroupService(g.GroupRepo, g.WorkspaceRepo)
 	g.Calendars = NewCalendarService(sqlDB, g.CalendarRepo, g.SourceRepo, g.ShareRepo, g.UserRepo, g.EventReminderRepo, g.DefaultReminderRepo, g.ExplicitReminderRepo, g.ColorOverrideRepo, g.WorkspaceRepo, g.GroupShareRepo, g.GroupRepo)
 	g.Auth = NewAuthService(sqlDB, g.UserRepo, g.SessionRepo, g.Workspaces, g.WorkspaceInviteRepo, g.Calendars, g.AttendeeRepo, g.JWTSecret, cfg.InitialName, cfg.InitialEmail, cfg.InitialPassword, cfg.EnableSignups)
-	g.Events = NewEventService(sqlDB, g.EventRepo, g.EventExceptionRepo, g.EventReminderRepo, g.DefaultReminderRepo, g.ExplicitReminderRepo, g.SyncRepo, g.Calendars, g.UserRepo, g.AttachmentRepo, g.AttendeeRepo, g.WorkspaceRepo, g.GroupRepo, g.NotificationRepo, g.OutboxRepo, cfg.InviteRateLimitPerHour)
+	// mailOutbox is nil on a deployment with no SMTP transport configured
+	// (ADR-0059, ADR-0060): with nothing able to send an Invitation there is
+	// nothing to queue one into, and EventService's mail-enqueue call sites
+	// (inviteUser, expandGroupMembers, ...) take the nil as "queue no
+	// Invitation at all" — unchanged by #290, which only ever reads
+	// g.OutboxRepo itself, always non-nil, for write-back.
+	var mailOutbox *repository.OutboxRepository
+	if cfg.SMTPConfigured() {
+		mailOutbox = g.OutboxRepo
+	}
+	g.Events = NewEventService(sqlDB, g.EventRepo, g.EventExceptionRepo, g.EventReminderRepo, g.DefaultReminderRepo, g.ExplicitReminderRepo, g.SyncRepo, g.Calendars, g.UserRepo, g.AttachmentRepo, g.AttendeeRepo, g.WorkspaceRepo, g.GroupRepo, g.NotificationRepo, mailOutbox, g.OutboxRepo, cfg.InviteRateLimitPerHour)
 	g.Attachments = NewAttachmentService(g.AttachmentRepo, g.EventRepo, g.Calendars, g.Events, g.AttachmentStore, cfg.MaxAttachmentsPerEvent)
 	g.Accounts = NewAccountService(sqlDB, g.UserRepo, g.SessionRepo, g.CalendarRepo, g.ShareRepo, g.WorkspaceRepo, g.Workspaces)
 	g.AppPasswords = NewAppPasswordService(g.AppPasswordRepo, g.UserRepo)

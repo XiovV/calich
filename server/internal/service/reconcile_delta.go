@@ -16,6 +16,42 @@ package service
 
 import "time"
 
+// protectPendingWriteBacksDelta drops every change whose ExternalUID
+// corresponds to a stored series with a Pending Write-back push (#290,
+// ADR-0076) — Delta mode's own half of the same protection
+// protectPendingWriteBacks gives Full mode. Simpler here than Full mode's:
+// ReconcileDelta's tombstone path is never reached by a change's absence
+// (only by the explicit deletions list, ADR-0053), so dropping a change from
+// the batch cannot itself cause a wrongful tombstone the way removing an
+// entry from Full mode's incoming would — there is no unparseable-style
+// bucket to also populate. pendingMasterIDs is empty for every Subscription
+// (Delta Refresh and Write-back are both Connection-only), so this is a
+// no-op pass-through in that case.
+func protectPendingWriteBacksDelta(existing []ExistingSeries, changes []DeltaSeriesChange, pendingMasterIDs map[string]bool) []DeltaSeriesChange {
+	if len(pendingMasterIDs) == 0 {
+		return changes
+	}
+
+	protectedUIDs := make(map[string]bool, len(pendingMasterIDs))
+	for _, e := range existing {
+		if pendingMasterIDs[e.MasterID] {
+			protectedUIDs[e.ExternalUID] = true
+		}
+	}
+	if len(protectedUIDs) == 0 {
+		return changes
+	}
+
+	filtered := make([]DeltaSeriesChange, 0, len(changes))
+	for _, c := range changes {
+		if protectedUIDs[c.ExternalUID] {
+			continue
+		}
+		filtered = append(filtered, c)
+	}
+	return filtered
+}
+
 // ReconcileDelta diffs a Linked Calendar's stored series against one Delta
 // Refresh batch (#288, ADR-0053):
 //

@@ -66,9 +66,14 @@ type App struct {
 	ReminderScheduler *reminder.Scheduler
 	SourcePoller      *service.Poller
 	AttachmentSweeper *service.AttachmentSweeper
-	// OutboxWorker is nil when no SMTP transport is configured: there is
-	// nothing queued to drain and nothing to send it with (ADR-0059,
-	// ADR-0060).
+	// OutboxWorker runs unconditionally (#290, ADR-0075): a Write-back push
+	// needs draining regardless of whether SMTP is configured, since it has
+	// nothing to do with mail. Its Sender (service.OutboxDispatcher) routes a
+	// mail-kind message to an InvitationSender and a write-back-kind one to
+	// Connections — with no SMTP configured, mail-kind rows are simply never
+	// enqueued in the first place (see service.NewGraph's mailOutbox), so the
+	// InvitationSender side of the dispatcher never gets called, configured
+	// Mailer or not.
 	OutboxWorker *outbox.Worker
 	// ReplyWorker is nil when no IMAP transport is configured. Its absence
 	// never stops an Invitation going out — those Attendees simply stay
@@ -132,9 +137,20 @@ func newFromGraph(graph *service.Graph, cfg config.Config) *App {
 	a.SourcePoller = service.NewPoller(a.Calendars, a.Subscriptions, a.Connections, time.Now)
 	a.AttachmentSweeper = service.NewAttachmentSweeper(a.AttachmentRepo, a.AttachmentStore)
 
-	if a.OutboxRepo != nil {
-		a.OutboxWorker = outbox.NewWorker(a.OutboxRepo, service.NewInvitationSender(a.Events, a.Mailer, cfg.SMTPFrom), time.Now)
+	// mailTransport is deliberately a bare nil InvitationMailer, not a nil
+	// *mailer.SMTPMailer, when SMTP isn't configured — passing a.Mailer
+	// directly would give InvitationSender a non-nil interface holding a nil
+	// pointer, which its own `s.mailer == nil` guard can't detect, and a
+	// stale pending mail row drained after SMTP was unconfigured would then
+	// panic the whole process instead of just failing that one message.
+	var mailTransport service.InvitationMailer
+	if a.Mailer != nil {
+		mailTransport = a.Mailer
 	}
+	a.OutboxWorker = outbox.NewWorker(a.OutboxRepo, &service.OutboxDispatcher{
+		Mail:      service.NewInvitationSender(a.Events, mailTransport, cfg.SMTPFrom),
+		WriteBack: a.Connections,
+	}, time.Now)
 	if cfg.ImapConfigured() {
 		a.ReplyWorker = reply.NewWorker(reply.NewIMAPClient(cfg.IMAPHost, cfg.IMAPPort, cfg.IMAPUser, cfg.IMAPPass), a.Events)
 	}

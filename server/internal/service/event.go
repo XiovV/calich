@@ -86,7 +86,33 @@ var (
 	// sites that only need to recognize the failure by identity rather than
 	// name the configured ceiling (#204, ADR-0058).
 	ErrInviteRateLimitExceeded = errors.New("invitation rate limit exceeded")
+	// ErrLinkedCalendarWriteUnsupported is returned by Create, Delete,
+	// AddException, and ReparentFrom for a Calendar carrying a
+	// Connection-kind Source, and by Update when it would move an Event
+	// across a Connection Calendar's boundary — even once that Source's Mode
+	// is writable (#290, ADR-0075). Update's own Master-field-scoped push is
+	// the only write path built to survive contact with a writable
+	// Connection Source so far: Create would mint a row with no ExternalUID
+	// to address at the Provider, which the very next Full Refresh's
+	// absence-means-deletion rule (ADR-0053) tombstones — ADR-0076's own
+	// named failure mode, reachable the moment a Connection Source's Mode
+	// can be writable at all. Delete/AddException/ReparentFrom would
+	// silently diverge this app's state from the Provider's, which the next
+	// Refresh then either undoes or duplicates. Create/delete write-back is
+	// #292's own ticket; this sentinel is what keeps those paths refused
+	// rather than silently unsafe until it ships.
+	ErrLinkedCalendarWriteUnsupported = errors.New("this kind of write is not yet supported on a linked calendar")
 )
+
+// isConnectionSource reports whether calendar carries a Connection-kind
+// Source (#290, ADR-0075) — the guard requireWritableCalendar's Access clamp
+// alone no longer expresses now that such a Source's Mode can be writable:
+// Access says the caller may write Events on this Calendar in general,
+// never which specific operations this app has actually built a Provider
+// push for.
+func isConnectionSource(calendar repository.Calendar) bool {
+	return calendar.Source != nil && calendar.Source.Kind == repository.SourceKindConnection
+}
 
 // isValidReminderChannel reports whether channel is one of the Channels
 // ADR-0020 defines. AUDIO and other iCalendar VALARM actions are out of
@@ -214,6 +240,13 @@ type EventService struct {
 	// governs who can be invited at all; this is the same posture applied to
 	// the write path).
 	outbox *repository.OutboxRepository
+	// writebackOutbox queues a Write-back push alongside a Master's Update on
+	// a writable Linked Calendar (#290, ADR-0075) — unlike outbox above, this
+	// is always non-nil: Write-back has nothing to do with whether this
+	// deployment has SMTP configured (graph.go constructs the underlying
+	// repository unconditionally), only with whether the Event being edited
+	// belongs to one, which Update itself checks.
+	writebackOutbox *repository.OutboxRepository
 	// inviteRateLimitPerHour is the per-User hourly ceiling on brand-new
 	// Invitations chargeInviteRateLimit enforces (#204, ADR-0058) —
 	// INVITE_RATE_LIMIT_PER_HOUR, or its default, resolved once at startup
@@ -221,8 +254,8 @@ type EventService struct {
 	inviteRateLimitPerHour int
 }
 
-func NewEventService(db *sql.DB, events *repository.EventRepository, exceptions *repository.EventExceptionRepository, reminders *repository.EventReminderRepository, calendarDefaults *repository.CalendarDefaultReminderRepository, explicitReminders *repository.EventReminderExplicitRepository, sync *repository.SyncRepository, calendars *CalendarService, users *repository.UserRepository, attachments *repository.AttachmentRepository, attendees *repository.AttendeeRepository, workspaces *repository.WorkspaceRepository, groups *repository.GroupRepository, notifications *repository.NotificationRepository, outbox *repository.OutboxRepository, inviteRateLimitPerHour int) *EventService {
-	return &EventService{db: db, events: events, exceptions: exceptions, reminders: reminders, calendarDefaults: calendarDefaults, explicitReminders: explicitReminders, reminderResolution: &reminderResolver{reminders: reminders, explicit: explicitReminders, calendarDefaults: calendarDefaults}, sync: sync, calendars: calendars, users: users, attachments: attachments, attendees: attendees, workspaces: workspaces, groups: groups, notifications: notifications, outbox: outbox, inviteRateLimitPerHour: inviteRateLimitPerHour}
+func NewEventService(db *sql.DB, events *repository.EventRepository, exceptions *repository.EventExceptionRepository, reminders *repository.EventReminderRepository, calendarDefaults *repository.CalendarDefaultReminderRepository, explicitReminders *repository.EventReminderExplicitRepository, sync *repository.SyncRepository, calendars *CalendarService, users *repository.UserRepository, attachments *repository.AttachmentRepository, attendees *repository.AttendeeRepository, workspaces *repository.WorkspaceRepository, groups *repository.GroupRepository, notifications *repository.NotificationRepository, outbox *repository.OutboxRepository, writebackOutbox *repository.OutboxRepository, inviteRateLimitPerHour int) *EventService {
+	return &EventService{db: db, events: events, exceptions: exceptions, reminders: reminders, calendarDefaults: calendarDefaults, explicitReminders: explicitReminders, reminderResolution: &reminderResolver{reminders: reminders, explicit: explicitReminders, calendarDefaults: calendarDefaults}, sync: sync, calendars: calendars, users: users, attachments: attachments, attendees: attendees, workspaces: workspaces, groups: groups, notifications: notifications, outbox: outbox, writebackOutbox: writebackOutbox, inviteRateLimitPerHour: inviteRateLimitPerHour}
 }
 
 // calendarByID resolves calendarID via s.calendars.Get, translating
@@ -377,6 +410,12 @@ type txRepos struct {
 	// inviteUser and expandGroupMembers check for that rather than calling
 	// through a nil repository.
 	outbox *repository.OutboxRepository
+	// writeback is EventService.writebackOutbox's tx-bound clone (#290,
+	// ADR-0075) — always non-nil, unlike outbox above: Write-back has
+	// nothing to do with whether this deployment has SMTP configured, and a
+	// Google Connection's edits must queue regardless. Update's own write is
+	// the only caller today.
+	writeback *repository.OutboxRepository
 }
 
 // withTx runs fn inside a transaction, passing it transaction-bound clones
@@ -399,6 +438,7 @@ func (s *EventService) withTx(ctx context.Context, fn func(repos txRepos) error)
 			users:             s.users.WithTx(tx),
 			workspaces:        s.workspaces.WithTx(tx),
 			notifications:     s.notifications.WithTx(tx),
+			writeback:         s.writebackOutbox.WithTx(tx),
 		}
 		if s.outbox != nil {
 			repos.outbox = s.outbox.WithTx(tx)
@@ -510,6 +550,9 @@ func (s *EventService) Create(ctx context.Context, userID int64, id string, writ
 	calendar, err := s.requireWritableCalendar(ctx, userID, write.CalendarID)
 	if err != nil {
 		return repository.Event{}, err
+	}
+	if isConnectionSource(calendar) {
+		return repository.Event{}, ErrLinkedCalendarWriteUnsupported
 	}
 
 	// Taken off the Calendar the guard above already resolved (#187 paid three
@@ -716,7 +759,10 @@ func (s *EventService) Get(ctx context.Context, userID int64, id string) (reposi
 // rrule, or all_day (ADR-0059, #201). A rule-pattern change forces
 // "All events" and discards id's existing Overrides/Exceptions (ADR-0016);
 // each discarded Override's own Attendees get a METHOD:CANCEL first, same
-// as Delete, since discarding an Override is deleting an Event.
+// as Delete, since discarding an Override is deleting an Event. Queues a
+// Write-back push when id is a Master on a writable Linked Calendar (#290,
+// ADR-0075) — see the withTx body's own comment for exactly which condition
+// gates that.
 func (s *EventService) Update(ctx context.Context, userID int64, id string, write EventWrite) (repository.Event, error) {
 	write.Title = strings.TrimSpace(write.Title)
 	if write.Title == "" {
@@ -733,7 +779,8 @@ func (s *EventService) Update(ctx context.Context, userID int64, id string, writ
 		return repository.Event{}, err
 	}
 	write.Color = normalizedColor
-	if _, err := s.requireWritableCalendar(ctx, userID, write.CalendarID); err != nil {
+	calendar, err := s.requireWritableCalendar(ctx, userID, write.CalendarID)
+	if err != nil {
 		return repository.Event{}, err
 	}
 
@@ -744,10 +791,19 @@ func (s *EventService) Update(ctx context.Context, userID int64, id string, writ
 	// A moving Update targets write.CalendarID but still touches existing's
 	// current row, so its source Calendar (if different) is guarded too —
 	// otherwise editing an Event out of a Subscribed Calendar would be a
-	// legitimate write, exactly the case ADR-0032 exists to prevent.
+	// legitimate write, exactly the case ADR-0032 exists to prevent. Moving
+	// into or out of a Connection-kind Source is refused outright even when
+	// both sides are writable (#290, ADR-0075): the moved row would need a
+	// Create-shaped or Delete-shaped push this app doesn't build yet
+	// (#292), and ADR-0076's tombstone hazard applies here exactly as it
+	// would to a plain Create.
 	if existing.CalendarID != write.CalendarID {
-		if _, err := s.requireWritableCalendar(ctx, userID, existing.CalendarID); err != nil {
+		sourceCalendar, err := s.requireWritableCalendar(ctx, userID, existing.CalendarID)
+		if err != nil {
 			return repository.Event{}, err
+		}
+		if isConnectionSource(sourceCalendar) || isConnectionSource(calendar) {
+			return repository.Event{}, ErrLinkedCalendarWriteUnsupported
 		}
 	}
 
@@ -759,17 +815,55 @@ func (s *EventService) Update(ctx context.Context, userID int64, id string, writ
 	// when it fires.
 	effects := classifyUpdate(existing, write)
 
+	// ProviderEtag/RSVPStatus/ConferenceURL/GuestCount/ProviderColor are a
+	// Linked Calendar's own Refresh-owned columns (#287, #289, ADR-0052,
+	// ADR-0075) — write.fields() carries none of them (every ordinary write
+	// path leaves them at zero value), and EventRepository.Update writes
+	// whatever EventFields it's given unconditionally, with no merge against
+	// the stored row. Without this, editing so much as the title of an Event
+	// on a Linked Calendar would silently null out its Provider RSVP,
+	// conference link, guest count and colour shadow. Carrying existing's
+	// values forward is a no-op for every Event this app itself owns, where
+	// both sides are already zero.
+	fields := write.fields()
+	fields.ProviderEtag = existing.ProviderEtag
+	fields.RSVPStatus = existing.RSVPStatus
+	fields.ConferenceURL = existing.ConferenceURL
+	fields.GuestCount = existing.GuestCount
+	fields.ProviderColor = existing.ProviderColor
+
+	// Write-back (#290, ADR-0075): a Master belonging to a writable Linked
+	// Calendar, that already exists at the Provider (ExternalUID set — a
+	// locally-created Event with none yet is Create's own concern, #292),
+	// gets its push queued in the very same transaction as the local write it
+	// accompanies (ADR-0018) — a rolled-back edit must never queue a push
+	// for a change that didn't happen. Scoped to a Master alone for now: an
+	// Override addresses a specific recurring instance at the Provider by an
+	// id this app doesn't yet store (ADR-0075's own "detaching an instance
+	// for the first time needs an instance id not yet in our store" —
+	// resolving that via events.instances is future work).
+	enqueueWriteBack := calendar.Source != nil &&
+		calendar.Source.Kind == repository.SourceKindConnection &&
+		existing.ParentID == nil &&
+		existing.ExternalUID != nil
+
 	var updated repository.Event
 	err = s.withTx(ctx, func(repos txRepos) error {
 		seq, err := repos.sync.NextChangeSeq(ctx)
 		if err != nil {
 			return err
 		}
-		u, err := repos.events.Update(ctx, id, write.fields(), seq, effects.newSequence)
+		u, err := repos.events.Update(ctx, id, fields, seq, effects.newSequence)
 		if err != nil {
 			return err
 		}
 		updated = u
+
+		if enqueueWriteBack {
+			if _, err := repos.writeback.EnqueueWriteBack(ctx, id); err != nil {
+				return fmt.Errorf("enqueue write-back: %w", err)
+			}
+		}
 
 		if effects.discardChildren {
 			// A discarded Override is a deleted Event exactly as much as one
@@ -834,8 +928,12 @@ func (s *EventService) Delete(ctx context.Context, userID int64, id string) erro
 	if err != nil {
 		return err
 	}
-	if _, err := s.requireWritableCalendar(ctx, userID, existing.CalendarID); err != nil {
+	calendar, err := s.requireWritableCalendar(ctx, userID, existing.CalendarID)
+	if err != nil {
 		return err
+	}
+	if isConnectionSource(calendar) {
+		return ErrLinkedCalendarWriteUnsupported
 	}
 
 	return s.withTx(ctx, func(repos txRepos) error {
@@ -889,8 +987,12 @@ func (s *EventService) AddException(ctx context.Context, userID int64, parentID 
 	if parent.Rrule == "" {
 		return ErrParentNotRecurring
 	}
-	if _, err := s.requireWritableCalendar(ctx, userID, parent.CalendarID); err != nil {
+	calendar, err := s.requireWritableCalendar(ctx, userID, parent.CalendarID)
+	if err != nil {
 		return err
+	}
+	if isConnectionSource(calendar) {
+		return ErrLinkedCalendarWriteUnsupported
 	}
 
 	return s.withTx(ctx, func(repos txRepos) error {
@@ -930,12 +1032,27 @@ func (s *EventService) ReparentFrom(ctx context.Context, userID int64, oldParent
 		return err
 	}
 
-	if _, err := s.requireWritableCalendar(ctx, userID, oldParent.CalendarID); err != nil {
+	oldCalendar, err := s.requireWritableCalendar(ctx, userID, oldParent.CalendarID)
+	if err != nil {
 		return err
 	}
+	// A split whose either side is a Connection-kind Source is refused
+	// outright (#290, ADR-0075): re-anchoring at Google needs the new
+	// Provider event id ADR-0075's own "this and following" section
+	// describes minting by hand (UNTIL the old series, create a second
+	// recurring event, adopt its id) — this app doesn't build that push yet
+	// (#291/#292), so letting the local split proceed would silently
+	// diverge this app's state from the Provider's.
+	if isConnectionSource(oldCalendar) {
+		return ErrLinkedCalendarWriteUnsupported
+	}
 	if newParent.CalendarID != oldParent.CalendarID {
-		if _, err := s.requireWritableCalendar(ctx, userID, newParent.CalendarID); err != nil {
+		newCalendar, err := s.requireWritableCalendar(ctx, userID, newParent.CalendarID)
+		if err != nil {
 			return err
+		}
+		if isConnectionSource(newCalendar) {
+			return ErrLinkedCalendarWriteUnsupported
 		}
 	}
 

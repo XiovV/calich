@@ -491,7 +491,7 @@ func TestSourceRepository_ConnectionRefreshStateRoundTrips(t *testing.T) {
 	token := "sync-token-xyz"
 	feedName := "Work Calendar"
 	if err := sources.RecordConnectionRefreshSuccess(ctx, user.ID, calendar.ID, ConnectionRefreshSuccess{
-		SyncedAt: now, Cursor: &token, NextRefreshAt: now.Add(15 * time.Minute), FeedName: &feedName,
+		SyncedAt: now, Cursor: &token, NextRefreshAt: now.Add(15 * time.Minute), FeedName: &feedName, Mode: SourceModeWritable,
 	}); err != nil {
 		t.Fatalf("record connection refresh success: %v", err)
 	}
@@ -515,6 +515,12 @@ func TestSourceRepository_ConnectionRefreshStateRoundTrips(t *testing.T) {
 	// what also moves the Calendar's displayed Name, atomically.
 	if got.FeedName == nil || *got.FeedName != feedName {
 		t.Fatalf("expected feed_name %q stored, got %v", feedName, got.FeedName)
+	}
+	// #290: mode is re-derived from the Provider's own accessRole on every
+	// Refresh, not fixed at import time — a successful Refresh always writes
+	// whatever the caller resolved this cycle.
+	if got.Mode != SourceModeWritable {
+		t.Fatalf("expected mode %q stored, got %q", SourceModeWritable, got.Mode)
 	}
 
 	due, err := sources.ListDueForRefresh(ctx, now.Add(20*time.Minute))

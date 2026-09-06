@@ -1,6 +1,12 @@
-// Package outbox drains queued Invitation emails (ADR-0059, ADR-0060): a
-// background ticker, the same shape as the reminder Scheduler, that sends,
-// retries with backoff, and records the outcome.
+// Package outbox drains the outbox: a background ticker, the same shape as
+// the reminder Scheduler, that sends, retries with backoff, and records the
+// outcome for every queued message regardless of Kind — queued Invitation
+// emails (ADR-0059, ADR-0060) and, since #290 (ADR-0075), queued Write-back
+// pushes to a Provider. The Worker's own shape doesn't know Kind exists at
+// all: it lists, blocks per key, sends through whatever Sender it was given,
+// and backs off by whatever schedule that message's Kind names — dispatching
+// by Kind, and to which sender, is service.OutboxDispatcher's job, one layer
+// up.
 package outbox
 
 import (
@@ -33,28 +39,62 @@ type Sender interface {
 // queue fully drains within a single Tick.
 const batchSize = 200
 
-// backoffSchedule is how long Tick waits before retrying a failed send,
-// indexed by attempt number (the 1st failure retries after
-// backoffSchedule[0], etc.) — widening geometrically, generous enough that
-// a transient SMTP blip clears well inside it.
-var backoffSchedule = []time.Duration{
+// mailBackoffSchedule is how long Tick waits before retrying a failed
+// OutboxKindMail send, indexed by attempt number (the 1st failure retries
+// after mailBackoffSchedule[0], etc.) — widening geometrically, generous
+// enough that a transient SMTP blip clears well inside it.
+var mailBackoffSchedule = []time.Duration{
 	time.Minute,
 	5 * time.Minute,
 	15 * time.Minute,
 	30 * time.Minute,
 }
 
-// maxAttempts is one more than len(backoffSchedule): a message that fails
-// after exhausting every backoff entry is marked failed rather than
-// scheduled for yet another retry — backoff cannot retry forever (ADR-0060).
-var maxAttempts = len(backoffSchedule) + 1
+// writeBackBackoffSchedule is mailBackoffSchedule's OutboxKindWriteBack
+// counterpart (#290, ADR-0075): "a pending push needs no UI; it lands in
+// seconds" is only true if a transient failure retries quickly rather than
+// waiting a full minute before the first attempt — tighter throughout, but
+// still bounded, since backoff cannot retry forever any more than mail's
+// does (ADR-0060).
+var writeBackBackoffSchedule = []time.Duration{
+	10 * time.Second,
+	30 * time.Second,
+	2 * time.Minute,
+	10 * time.Minute,
+}
 
-// recipientKey identifies msg's recipient for Tick's per-recipient blocking
-// (#200, ADR-0058): a User-backed message keys on its RecipientUserID, an
-// email-shaped one — no RecipientUserID to key on — folds RecipientEmail to
-// lowercase first, mirroring the case-insensitive matching every other
-// email comparison in this app already does.
+// backoffScheduleFor is the per-Kind backoff Tick consults (#290, ADR-0075's
+// "the sender dispatches by kind, with per-kind backoff") — an unrecognized
+// Kind falls back to mail's schedule, mirroring OutboxDispatcher's own
+// default.
+func backoffScheduleFor(kind string) []time.Duration {
+	if kind == repository.OutboxKindWriteBack {
+		return writeBackBackoffSchedule
+	}
+	return mailBackoffSchedule
+}
+
+// maxAttemptsFor is one more than len(backoffScheduleFor(kind)): a message
+// that fails after exhausting every backoff entry is marked failed rather
+// than scheduled for yet another retry — backoff cannot retry forever
+// (ADR-0060).
+func maxAttemptsFor(kind string) int {
+	return len(backoffScheduleFor(kind)) + 1
+}
+
+// recipientKey identifies what Tick's per-key blocking should serialize msg
+// behind (#200, ADR-0058; #290). A mail message keys on its recipient: a
+// User-backed one on its RecipientUserID, an email-shaped one — no
+// RecipientUserID to key on — on RecipientEmail folded to lowercase, mirroring
+// the case-insensitive matching every other email comparison in this app
+// already does. A write-back message carries no recipient at all — it keys
+// on its own EventID instead, so two pushes queued for the same Event never
+// race each other, while unrelated Events' pushes, and every mail message,
+// proceed independently.
 func recipientKey(msg repository.OutboxMessage) string {
+	if msg.Kind == repository.OutboxKindWriteBack {
+		return "w:" + msg.EventID
+	}
 	if msg.RecipientUserID != nil {
 		return fmt.Sprintf("u:%d", *msg.RecipientUserID)
 	}
@@ -100,13 +140,13 @@ func (w *Worker) Tick(ctx context.Context) error {
 
 		if err := w.sender.Send(ctx, msg); err != nil {
 			attempts := msg.Attempts + 1
-			if attempts >= maxAttempts {
+			if attempts >= maxAttemptsFor(msg.Kind) {
 				if merr := w.store.MarkFailed(ctx, msg.ID, attempts, err.Error()); merr != nil {
 					log.Printf("outbox: mark failed (id=%d): %v", msg.ID, merr)
 				}
 				continue
 			}
-			next := now.Add(backoffSchedule[attempts-1])
+			next := now.Add(backoffScheduleFor(msg.Kind)[attempts-1])
 			if merr := w.store.MarkRetry(ctx, msg.ID, attempts, next, err.Error()); merr != nil {
 				log.Printf("outbox: mark retry (id=%d): %v", msg.ID, merr)
 			}

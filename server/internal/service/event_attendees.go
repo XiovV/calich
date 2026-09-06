@@ -136,6 +136,15 @@ func (s *EventService) attendeeManagementCalendar(ctx context.Context, actorUser
 		}
 		return repository.Event{}, repository.Calendar{}, err
 	}
+	// A Linked Calendar's Event carries no Attendees this app ever mirrors
+	// to the Provider (ADR-0052: "the Attendee widening... does not return
+	// here", ADR-0075) — even once its Source is writable, inviting or
+	// removing someone here would create local-only Attendee rows and
+	// Invitation mail that write-back has no way to reconcile against
+	// Google's own guest list (#290).
+	if isConnectionSource(calendar) {
+		return repository.Event{}, repository.Calendar{}, ErrLinkedCalendarWriteUnsupported
+	}
 	return event, calendar, nil
 }
 

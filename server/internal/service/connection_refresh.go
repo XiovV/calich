@@ -171,7 +171,7 @@ func (s *ConnectionService) RefreshLinked(ctx context.Context, userID int64, cal
 	next := nextRefreshTime(now, calendar.ID, s.connectionRefreshInterval, s.connectionRefreshInterval)
 	if err := s.calendars.RecordConnectionRefreshSuccess(ctx, userID, calendarID, repository.ConnectionRefreshSuccess{
 		SyncedAt: now, Cursor: outcome.cursor, NextRefreshAt: next,
-		Name: outcome.name, FeedName: outcome.feedName,
+		Name: outcome.name, FeedName: outcome.feedName, Mode: outcome.mode,
 	}); err != nil {
 		// The fetch and reconcile already committed; only the cursor and the
 		// poll schedule failed to persist. That is a correctness non-event —
@@ -211,6 +211,13 @@ type connectionSyncOutcome struct {
 	cursor   *string
 	name     string
 	feedName *string
+	// mode is this cycle's freshly re-read Write-back writability (#290,
+	// ADR-0075) — Google's own current AccessRole on the calendar, not
+	// whatever the Source's Mode happened to be before this attempt. Always
+	// set on a successful doRefresh, mirroring how cursor/name/feedName are
+	// always resolved to *something* rather than left for the caller to
+	// default.
+	mode repository.SourceMode
 }
 
 // doRefresh performs one fetch-and-reconcile attempt against calendarID's
@@ -319,6 +326,24 @@ func (s *ConnectionService) doRefresh(ctx context.Context, userID int64, calenda
 	// (#289, ADR-0032).
 	newName, newFeedName := resolveFollowedField(calendar.Name, source.FeedName, changes.Summary)
 
+	// Writability is per-Calendar, derived from Google's own accessRole and
+	// re-read on every Refresh (#290, ADR-0075) — never fixed at import time,
+	// since a calendar merely shared into the connected account, or one whose
+	// Owner revokes write access later, is exactly the kind of thing an ACL
+	// change silently flips. A failure to re-read it here doesn't fail the
+	// whole Refresh, which already fetched and reconciled real Events
+	// successfully: it's logged and the Source's existing Mode carries
+	// forward unchanged, mirroring this function's own cursor-storage
+	// leniency below.
+	writeMode := source.Mode
+	if entry, err := s.google.getCalendarListEntry(ctx, accessToken, *source.ExternalCalendarID); err != nil {
+		log.Printf("linked calendar refresh (calendar=%s): could not re-read access role, keeping mode %q: %v", calendar.ID, source.Mode, err)
+	} else if entry.writable() {
+		writeMode = repository.SourceModeWritable
+	} else {
+		writeMode = repository.SourceModeReadOnly
+	}
+
 	return RefreshResult{
 			Created:                summary.Created,
 			Updated:                summary.Updated,
@@ -327,7 +352,7 @@ func (s *ConnectionService) doRefresh(ctx context.Context, userID int64, calenda
 			NoOp:                   result.NoOpCount,
 			DroppedRecurrenceLines: droppedCount,
 		}, connectionSyncOutcome{
-			cursor: cursorToStore, name: newName, feedName: newFeedName,
+			cursor: cursorToStore, name: newName, feedName: newFeedName, mode: writeMode,
 		}, nil
 }
 

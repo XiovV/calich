@@ -229,6 +229,7 @@ var eventWriteErrors = []errorCase{
 	{service.ErrInvalidEventColor, badRequest("color must be a valid hex color (#RGB, #RRGGBB, or #RRGGBBAA)")},
 	{service.ErrCalendarNotFound, badRequest("calendar not found")},
 	{service.ErrCalendarReadOnly, forbidden("calendar is read-only")},
+	{service.ErrLinkedCalendarWriteUnsupported, forbidden("this kind of write is not yet supported on a linked calendar")},
 }
 
 // On create, a missing parent is named as such — parentId is a body field the
@@ -281,16 +282,19 @@ var addExceptionErrors = []errorCase{
 	{service.ErrParentIsOverride, badRequest("parent event must be a master, not an override")},
 	{service.ErrParentNotRecurring, badRequest("parent event does not recur")},
 	{service.ErrCalendarReadOnly, forbidden("calendar is read-only")},
+	{service.ErrLinkedCalendarWriteUnsupported, forbidden("this kind of write is not yet supported on a linked calendar")},
 }
 
 var reparentErrors = []errorCase{
 	{service.ErrParentNotFound, notFound("event not found")},
 	{service.ErrCalendarReadOnly, forbidden("calendar is read-only")},
+	{service.ErrLinkedCalendarWriteUnsupported, forbidden("this kind of write is not yet supported on a linked calendar")},
 }
 
 var eventNotFoundErrors = []errorCase{
 	{repository.ErrNotFound, notFound("event not found")},
 	{service.ErrCalendarReadOnly, forbidden("calendar is read-only")},
+	{service.ErrLinkedCalendarWriteUnsupported, forbidden("this kind of write is not yet supported on a linked calendar")},
 }
 
 func (h *EventHandler) List(w http.ResponseWriter, r *http.Request) {

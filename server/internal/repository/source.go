@@ -388,6 +388,14 @@ type ConnectionRefreshSuccess struct {
 	NextRefreshAt time.Time
 	Name          string
 	FeedName      *string
+	// Mode is this Source's Write-back writability, re-derived on every
+	// Refresh from the Provider's own current accessRole rather than only at
+	// import time (#290, ADR-0075): a calendar merely shared to the connected
+	// account, or one whose Owner revoked write access, must stop accepting
+	// edits the moment that ACL changes, without waiting for the User to
+	// re-import it. Written unconditionally, mirroring how every other column
+	// here always moves forward on a successful Refresh.
+	Mode SourceMode
 }
 
 // RecordConnectionRefreshSuccess records a completed Refresh on a
@@ -406,9 +414,9 @@ type ConnectionRefreshSuccess struct {
 func (r *SourceRepository) RecordConnectionRefreshSuccess(ctx context.Context, userID int64, calendarID string, s ConnectionRefreshSuccess) error {
 	res, err := r.db.ExecContext(ctx,
 		`UPDATE calendar_sources SET last_synced_at = ?, cursor = ?, next_refresh_at = ?,
-			failure_count = 0, error_class = NULL, error_message = NULL, feed_name = ?
+			failure_count = 0, error_class = NULL, error_message = NULL, feed_name = ?, mode = ?
 		 WHERE `+ownedSourceWhere,
-		s.SyncedAt, s.Cursor, s.NextRefreshAt, s.FeedName, calendarID, userID,
+		s.SyncedAt, s.Cursor, s.NextRefreshAt, s.FeedName, s.Mode, calendarID, userID,
 	)
 	if err != nil {
 		return fmt.Errorf("record connection refresh success: %w", err)

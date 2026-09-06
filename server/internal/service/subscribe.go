@@ -568,6 +568,16 @@ func reconcileAgainstStored(ctx context.Context, events *EventService, userID in
 		return ReconcileResult{}, ReconcileSummary{}, err
 	}
 
+	// #290, ADR-0076: a series with a Pending Write-back push is subtracted
+	// from what this Refresh will compare or tombstone, before either
+	// happens — see protectPendingWriteBacks' own doc comment for why it
+	// must touch both incoming and unparseable together.
+	pendingWriteBack, err := events.MasterIDsWithPendingWriteBack(ctx)
+	if err != nil {
+		return ReconcileResult{}, ReconcileSummary{}, fmt.Errorf("list pending write-backs: %w", err)
+	}
+	incoming, unparseable = protectPendingWriteBacks(existing, incoming, unparseable, pendingWriteBack)
+
 	if followEventColor {
 		incoming = followEventColorAcrossSeries(existing, incoming)
 	}
@@ -591,6 +601,15 @@ func reconcileDeltaAgainstStored(ctx context.Context, events *EventService, user
 	if err != nil {
 		return ReconcileResult{}, ReconcileSummary{}, err
 	}
+
+	// #290, ADR-0076: same protection as reconcileAgainstStored's Full-mode
+	// half, applied to a Delta batch — see protectPendingWriteBacksDelta's
+	// own doc comment for why Delta mode needs no unparseable-style bucket.
+	pendingWriteBack, err := events.MasterIDsWithPendingWriteBack(ctx)
+	if err != nil {
+		return ReconcileResult{}, ReconcileSummary{}, fmt.Errorf("list pending write-backs: %w", err)
+	}
+	changes = protectPendingWriteBacksDelta(existing, changes, pendingWriteBack)
 
 	result := ReconcileDelta(existing, changes, deletions)
 

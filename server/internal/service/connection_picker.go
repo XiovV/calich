@@ -41,10 +41,10 @@ type PickerCalendar struct {
 	// Provider's own selection flag drives which rows are pre-checked").
 	Selected bool
 	// Writable reports whether Google's own ACL lets this account write to
-	// the calendar there. Rendered as the picker's read-only badge when
-	// false — never what decides a Linked Calendar's own Access here: every
-	// Source ImportCalendars creates is read-only regardless (see
-	// ImportCalendars), since write-back doesn't exist yet.
+	// the calendar there. Rendered as the picker's read-only badge, and what
+	// ImportCalendars derives the created Source's Mode from (#290,
+	// ADR-0075) — re-read from Google again on every later Refresh rather
+	// than fixed from this one snapshot.
 	Writable bool
 }
 
@@ -128,12 +128,13 @@ func (s *ConnectionService) ListCalendars(ctx context.Context, userID, connectio
 // response, so a User's confirmed selection can only ever import calendars
 // the account can currently see, never ones a client happened to send.
 //
-// Every Source created here is read-only (ADR-0052, ADR-0075): Google's own
-// AccessRole is surfaced to the picker as a badge, but write-back — the
-// queue, the field-scoped patch compiler, echo suppression — doesn't exist
-// yet, and Access's read-only clamp is the only thing standing between a
-// User and an edit this app cannot push anywhere. Mode gets re-derived once
-// write-back reads it for real.
+// Each Source's Mode is derived from Google's own AccessRole at import time
+// (#290, ADR-0075): writable when the connected account can write to the
+// calendar there, read-only when it's merely shared in, or one of the
+// Provider's own generated Holidays/Birthdays calendars. Re-derived on every
+// Refresh (connection_refresh.go), never fixed here for the Calendar's
+// lifetime — an ACL change at the Provider is exactly the kind of thing a
+// Refresh cycle is what notices.
 //
 // A failure partway through leaves whichever calendars already succeeded in
 // place, mirroring calling Subscribe once per selected calendar: each one is
@@ -178,12 +179,16 @@ func (s *ConnectionService) ImportCalendars(ctx context.Context, userID, workspa
 		picker := toPickerCalendar(e, i)
 		externalCalendarID := picker.ExternalID
 
+		mode := repository.SourceModeReadOnly
+		if picker.Writable {
+			mode = repository.SourceModeWritable
+		}
 		calendar, err := s.calendars.CreateSubscribed(ctx, userID, workspaceID, uuid.NewString(), CalendarWrite{
 			Name:  picker.Name,
 			Color: picker.Color,
 		}, repository.SourceFields{
 			Kind:               repository.SourceKindConnection,
-			Mode:               repository.SourceModeReadOnly,
+			Mode:               mode,
 			ConnectionID:       &conn.ID,
 			ExternalCalendarID: &externalCalendarID,
 		})

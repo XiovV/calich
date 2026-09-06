@@ -71,11 +71,11 @@ func TestResolveAccess(t *testing.T) {
 			wantAccess: AccessViewer,
 		},
 		{
-			name:       "editor share on a calendar with a writable source stays Editor",
+			name:       "editor share on a calendar with a writable source clamps to Viewer (#290, ADR-0075: only the connecting Owner's writes reach the Provider)",
 			userID:     shared,
 			source:     writableSource,
 			shareRole:  strPtr(repository.RoleEditor),
-			wantAccess: AccessEditor,
+			wantAccess: AccessViewer,
 		},
 		{
 			name:       "the owner's own share row, if any, never overrides ownership",

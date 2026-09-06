@@ -32,8 +32,17 @@ func (s *EventService) ImportSeries(ctx context.Context, userID int64, calendarI
 		return 0, err
 	}
 
-	if _, err := s.requireWritableCalendar(ctx, userID, calendarID); err != nil {
+	calendar, err := s.requireWritableCalendar(ctx, userID, calendarID)
+	if err != nil {
 		return 0, err
+	}
+	// An import always mints a brand-new row with no ExternalUID (see this
+	// method's own doc comment: "never updates an existing row"), which the
+	// very next Full Refresh's absence-means-deletion rule tombstones —
+	// ADR-0076's own named hazard, reachable the moment a Connection
+	// Source's Mode can be writable at all (#290).
+	if isConnectionSource(calendar) {
+		return 0, ErrLinkedCalendarWriteUnsupported
 	}
 
 	// An ICS import writes the importing User's Reminders (ADR-0064) — unlike
@@ -667,8 +676,20 @@ func (s *EventService) PutSeries(ctx context.Context, userID int64, calendarID, 
 		return repository.Event{}, nil, err
 	}
 
-	if _, err := s.requireWritableCalendar(ctx, userID, calendarID); err != nil {
+	calendar, err := s.requireWritableCalendar(ctx, userID, calendarID)
+	if err != nil {
 		return repository.Event{}, nil, err
+	}
+	// ADR-0074 hides every Linked Calendar from CalDAV discovery
+	// unconditionally — caldavserver.GetCalendar 404s one directly, so no
+	// real client ever learns a path into one. This is the same refusal for
+	// a client that already holds (cached, or guessed) a path from before —
+	// repository.ErrNotFound, not ErrLinkedCalendarWriteUnsupported, so a
+	// stale PUT looks exactly like one aimed at a Calendar that never
+	// existed, matching GetCalendar's own posture rather than confirming
+	// the Calendar is there but refusing the write on it (#290).
+	if isConnectionSource(calendar) {
+		return repository.Event{}, nil, repository.ErrNotFound
 	}
 
 	existingMaster, err := s.getOwnedEvent(ctx, userID, masterID)

@@ -2,16 +2,18 @@
 // #287, #288): OAuth token exchange (including a stored refresh_token minting
 // a fresh access token, since one is never relied on across requests), the
 // connected account's own Email, the calendarList the Calendar picker
-// offers, and a Linked Calendar's events.list — a complete listing for a
-// Full Refresh, or only what changed since a syncToken for a Delta Refresh.
-// Patch, insert and instances are later tickets', added to googleClient
-// rather than beside it, so every Google call keeps going through the one
-// overridable httpClient (#285's testing decisions) — a test points this at
-// an httptest.Server serving canned JSON in place of Google, never a mocked
-// fetcher.
+// offers, a Linked Calendar's events.list — a complete listing for a Full
+// Refresh, or only what changed since a syncToken for a Delta Refresh — and
+// events.patch, the one Write-back call this app ever makes (#290,
+// ADR-0075). Insert and instances are later tickets' (#292, #291), added to
+// googleClient rather than beside it, so every Google call keeps going
+// through the one overridable httpClient (#285's testing decisions) — a test
+// points this at an httptest.Server serving canned JSON in place of Google,
+// never a mocked fetcher.
 package service
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -21,6 +23,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 )
 
 const (
@@ -371,6 +374,52 @@ func (c *googleClient) listCalendarList(ctx context.Context, accessToken string)
 	return entries, nil
 }
 
+// getCalendarListEntry fetches one calendar's own calendarList.get entry
+// (#290, ADR-0075) — cheaper than paginating listCalendarList's whole
+// listing when all a caller needs is one calendar's current AccessRole,
+// which is what a Linked Calendar's Refresh re-reads on every cycle to
+// derive its Source's Mode: writability is Google's ACL to revoke at any
+// time, not a fact fixed at import.
+func (c *googleClient) getCalendarListEntry(ctx context.Context, accessToken, calendarID string) (googleCalendarListEntry, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.calendarListURL+"/"+url.PathEscape(calendarID), nil)
+	if err != nil {
+		return googleCalendarListEntry{}, fmt.Errorf("build calendar list entry request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return googleCalendarListEntry{}, fmt.Errorf("%w: %v", ErrGoogleCalendarListFailed, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		io.Copy(io.Discard, resp.Body) //nolint:errcheck // draining for keep-alive reuse; the response carries nothing we need on failure
+		return googleCalendarListEntry{}, &googleHTTPError{sentinel: ErrGoogleCalendarListFailed, statusCode: resp.StatusCode}
+	}
+
+	var item struct {
+		ID              string `json:"id"`
+		Summary         string `json:"summary"`
+		SummaryOverride string `json:"summaryOverride"`
+		BackgroundColor string `json:"backgroundColor"`
+		AccessRole      string `json:"accessRole"`
+		Selected        bool   `json:"selected"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&item); err != nil {
+		return googleCalendarListEntry{}, fmt.Errorf("%w: %v", ErrGoogleCalendarListFailed, err)
+	}
+
+	return googleCalendarListEntry{
+		ID:              item.ID,
+		Summary:         item.Summary,
+		SummaryOverride: item.SummaryOverride,
+		BackgroundColor: item.BackgroundColor,
+		AccessRole:      item.AccessRole,
+		Selected:        item.Selected,
+	}, nil
+}
+
 // googleRefreshedTokens is what refreshAccessToken returns — just the new
 // access token, since Google only mints a new refresh_token on this grant
 // type when the old one was revoked for security reasons (rare enough that
@@ -630,4 +679,213 @@ func (c *googleClient) listEventChanges(ctx context.Context, accessToken, calend
 	}
 
 	return result, nil
+}
+
+// ErrGoogleWriteBackFailed covers everything that can go wrong pushing a
+// Write-back PATCH (#290, ADR-0075): an expired or revoked access token, the
+// calendar or event having vanished at Google, a stale etag (412), or an
+// unreachable endpoint.
+var ErrGoogleWriteBackFailed = errors.New("could not push this event's changes to google")
+
+// googleEventPatchSourceJSON carries Event URL (ADR-0063) onto Google's own
+// `source` field — the closest fit Google's Event resource has to "a link to
+// more information about this event": a title plus a URL, rendered in
+// Google's own UI as "via <title>". Set only when the URL is present and
+// parses as http/https, mirroring CONTEXT.md's "offered as a click-through
+// only when it is http or https" rule for the same field — a non-web scheme
+// (message://, a bare feed vendor scheme) is never sent, since Google's own
+// field has no use for a link nothing there can open either.
+type googleEventPatchSourceJSON struct {
+	Title string `json:"title"`
+	URL   string `json:"url"`
+}
+
+// googleEventPatchBody is the wire shape of a Write-back PATCH request body
+// (#290, ADR-0075) — and the load-bearing type this ticket exists to build:
+// it has a field for exactly title, description, location, start, end,
+// recurrence and Event URL, and no field for attendees, conferenceData,
+// visibility, or anything else this app doesn't model. There is no
+// constructor that takes a whole repository.Event and no method that lets a
+// caller set a field this struct doesn't declare — buildGooglePatch is the
+// only function that produces one, and it reads a fixed, named set of
+// arguments, never an Event value it could forward wholesale. That is what
+// makes "a whole-Event replace is impossible to express at the Provider
+// seam" true by construction rather than by convention: there is no
+// events.update call in this file, and this type could not serialize one if
+// there were.
+type googleEventPatchBody struct {
+	Summary     string                  `json:"summary"`
+	Description string                  `json:"description"`
+	Location    string                  `json:"location"`
+	Start       googleEventDateTimeJSON `json:"start"`
+	End         googleEventDateTimeJSON `json:"end"`
+	Recurrence  []string                `json:"recurrence,omitempty"`
+	// Source is deliberately not ",omitempty": a nil pointer must marshal to
+	// an explicit "source":null, the PATCH request that clears Event URL at
+	// Google, rather than an absent key, which Google reads as "leave
+	// whatever's there alone" — the same reason Summary/Description/Location
+	// above carry no omitempty of their own.
+	Source *googleEventPatchSourceJSON `json:"source"`
+}
+
+// encodeGoogleEventDateTime is decodeGoogleTime's inverse (#290, ADR-0075):
+// an all-day boundary becomes a bare Date, a timed one becomes DateTime plus
+// TimeZone. tzid nil (a Floating Event) has no Google equivalent to round-trip
+// through — encoded as an absolute UTC instant (a "Z"-suffixed DateTime, no
+// TimeZone), the closest Google concept there is, rather than refusing the
+// push outright; this app's own Floating Event predates the timezone model
+// (ADR-0019) and a Linked Calendar's own Events always carry a concrete Anchor
+// zone from the Provider in practice.
+func encodeGoogleEventDateTime(t time.Time, allDay bool, tzid *string) googleEventDateTimeJSON {
+	if allDay {
+		return googleEventDateTimeJSON{Date: t.UTC().Format("2006-01-02")}
+	}
+	if tzid == nil {
+		return googleEventDateTimeJSON{DateTime: t.UTC().Format("2006-01-02T15:04:05Z")}
+	}
+	loc, err := time.LoadLocation(*tzid)
+	if err != nil {
+		// An unrecognized zone name can't be round-tripped by name; falling
+		// back to the UTC instant is lossy on the wall-clock but never wrong
+		// about the moment in time, and TimeZone is deliberately left empty
+		// rather than sent as a string Google itself cannot resolve either.
+		return googleEventDateTimeJSON{DateTime: t.UTC().Format("2006-01-02T15:04:05Z")}
+	}
+	return googleEventDateTimeJSON{DateTime: t.In(loc).Format("2006-01-02T15:04:05-07:00"), TimeZone: *tzid}
+}
+
+// encodeGoogleRecurrence is parseGoogleRecurrence's (plus
+// parseGoogleExdateValue's) inverse for exactly the two lines this app ever
+// writes back: one RRULE line carrying rrule verbatim (ADR-0016 stores it as
+// opaque text already in Google's own RFC 5545 shape, so it never needs
+// translating), and one EXDATE line per stored Exception, so a Master edit's
+// recurrence array — which Google replaces wholesale, never merges — doesn't
+// silently drop cancellations this app already reconciled in from a previous
+// Refresh. tzid anchors the EXDATE values exactly as the Master's own
+// boundaries are anchored (encodeGoogleEventDateTime's own rule); an all-day
+// series' exdates are encoded as bare VALUE=DATE tokens instead. Returns nil
+// for a non-recurring write (rrule empty and no exdates), which
+// buildGooglePatch reads as "omit recurrence from the patch entirely" — never
+// as "clear whatever Google has": the empty-non-recurring case only reaches
+// here for an Event this app never modeled as recurring to begin with, and
+// this ticket doesn't turn a recurring Master back into a plain Event over
+// Write-back.
+func encodeGoogleRecurrence(rrule string, exdates []time.Time, allDay bool, tzid *string) []string {
+	if rrule == "" && len(exdates) == 0 {
+		return nil
+	}
+
+	lines := make([]string, 0, 1+len(exdates))
+	if rrule != "" {
+		lines = append(lines, "RRULE:"+rrule)
+	}
+	for _, exdate := range exdates {
+		lines = append(lines, encodeGoogleExdateLine(exdate, allDay, tzid))
+	}
+	return lines
+}
+
+// encodeGoogleExdateLine renders one EXDATE content line in the same shape
+// parseGoogleExdateValue accepts back: VALUE=DATE for an all-day series, a
+// bare "Z"-suffixed instant for an absolute one (tzid nil or "Etc/UTC"), and
+// a TZID-parameterized local wall-clock value otherwise.
+func encodeGoogleExdateLine(t time.Time, allDay bool, tzid *string) string {
+	if allDay {
+		return "EXDATE;VALUE=DATE:" + t.UTC().Format("20060102")
+	}
+	if tzid == nil || *tzid == "Etc/UTC" {
+		return "EXDATE:" + t.UTC().Format("20060102T150405Z")
+	}
+	loc, err := time.LoadLocation(*tzid)
+	if err != nil {
+		return "EXDATE:" + t.UTC().Format("20060102T150405Z")
+	}
+	return "EXDATE;TZID=" + *tzid + ":" + t.In(loc).Format("20060102T150405")
+}
+
+// googlePatchSource builds Event URL's Source mapping (#290, ADR-0075),
+// nil when eventURL is empty or isn't http/https — see
+// googleEventPatchSourceJSON's own doc comment for why.
+func googlePatchSource(eventTitle, eventURL string) *googleEventPatchSourceJSON {
+	if eventURL == "" {
+		return nil
+	}
+	if !strings.HasPrefix(eventURL, "http://") && !strings.HasPrefix(eventURL, "https://") {
+		return nil
+	}
+	title := eventTitle
+	if title == "" {
+		title = eventURL
+	}
+	return &googleEventPatchSourceJSON{Title: title, URL: eventURL}
+}
+
+// buildGooglePatch is the one function that produces a googleEventPatchBody
+// (#290, ADR-0075) — the field-scoped patch compiler ADR-0075 requires be
+// enforced at the Provider seam, not by convention at each call site. Its
+// argument list is exactly ADR-0075's allow-list (title, start, end,
+// all-day, Anchor zone, recurrence rule plus its Exdates, description,
+// location, Event URL) and nothing a caller could use to smuggle an
+// Attendee, conferenceData, or a visibility change through: those fields
+// don't exist on this function's signature, so there is nothing to pass even
+// by mistake.
+func buildGooglePatch(title string, start, end time.Time, allDay bool, tzid *string, rrule string, exdates []time.Time, description, location, eventURL string) googleEventPatchBody {
+	return googleEventPatchBody{
+		Summary:     title,
+		Description: description,
+		Location:    location,
+		Start:       encodeGoogleEventDateTime(start, allDay, tzid),
+		End:         encodeGoogleEventDateTime(end, allDay, tzid),
+		Recurrence:  encodeGoogleRecurrence(rrule, exdates, allDay, tzid),
+		Source:      googlePatchSource(title, eventURL),
+	}
+}
+
+// patchEvent pushes patch to eventID on calendarID via events.patch (#290,
+// ADR-0075) — never events.update, which this file has no method for at
+// all. Always sends sendUpdates=none (ADR-0075's "guests this app cannot
+// see": this app doesn't model Attendees on a Linked Calendar's Event, so it
+// must never trigger Google's own guest-notification email on their behalf).
+// ifMatchEtag, when non-nil, is sent as the If-Match precondition header
+// against the Provider's own per-instance validator; a stale one answers
+// 412, returned as a *googleHTTPError for the caller to classify like any
+// other failure (bounded conflict retry is #291's own ticket, not this
+// one's). Returns the updated event Google's own response describes, for the
+// caller to apply as though it were a Refresh result (ADR-0075, ADR-0076) —
+// principally its fresh etag, so this app's own push doesn't come back as a
+// change on the next Delta Refresh.
+func (c *googleClient) patchEvent(ctx context.Context, accessToken, calendarID, eventID string, ifMatchEtag *string, patch googleEventPatchBody) (googleEventJSON, error) {
+	body, err := json.Marshal(patch)
+	if err != nil {
+		return googleEventJSON{}, fmt.Errorf("marshal event patch: %w", err)
+	}
+
+	q := url.Values{}
+	q.Set("sendUpdates", "none")
+	req, err := http.NewRequestWithContext(ctx, http.MethodPatch, c.eventsURLFor(calendarID)+"/"+url.PathEscape(eventID)+"?"+q.Encode(), bytes.NewReader(body))
+	if err != nil {
+		return googleEventJSON{}, fmt.Errorf("build event patch request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	if ifMatchEtag != nil {
+		req.Header.Set("If-Match", `"`+*ifMatchEtag+`"`)
+	}
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return googleEventJSON{}, fmt.Errorf("%w: %v", ErrGoogleWriteBackFailed, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		io.Copy(io.Discard, resp.Body) //nolint:errcheck // draining for keep-alive reuse; the response carries nothing we need on failure
+		return googleEventJSON{}, &googleHTTPError{sentinel: ErrGoogleWriteBackFailed, statusCode: resp.StatusCode}
+	}
+
+	var updated googleEventJSON
+	if err := json.NewDecoder(resp.Body).Decode(&updated); err != nil {
+		return googleEventJSON{}, fmt.Errorf("%w: %v", ErrGoogleWriteBackFailed, err)
+	}
+	return updated, nil
 }

@@ -67,6 +67,25 @@ type fakeGoogleServer struct {
 	// absent from this map gets no "summary" field at all, mirroring a
 	// response that omitted it.
 	eventsSummaryByCalendar map[string]string
+	// patchRequests records every events.patch request this server received
+	// (#290), in arrival order — a Write-back test's own assertion that the
+	// push actually reached the Provider, and carrying exactly what it sent.
+	patchRequests []capturedGooglePatch
+	// patchStatus forces events.patch to answer a non-200 (a stale etag, a
+	// revoked token) — 0 means the ordinary 200 response below.
+	patchStatus int
+	// patchResponseETag is the fresh validator events.patch answers with on
+	// success, defaulting to "patched-etag-1" — what a write-back test
+	// asserts got echoed back onto the local row (ADR-0075, ADR-0076).
+	patchResponseETag string
+}
+
+// capturedGooglePatch is one events.patch request fakeGoogleServer received
+// (#290) — enough for a test to assert both which event was addressed and
+// exactly what field-scoped body reached the wire.
+type capturedGooglePatch struct {
+	CalendarID, EventID, IfMatch string
+	Body                         map[string]any
 }
 
 func newFakeGoogleServer(t *testing.T) *fakeGoogleServer {
@@ -177,8 +196,65 @@ func newFakeGoogleServer(t *testing.T) *fakeGoogleServer {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(body)
 	})
+	// calendarListEntry (getCalendarListEntry's own endpoint, GET
+	// /calendarList/{calendarId}) is deliberately not a mux.HandleFunc
+	// pattern: its shape statically conflicts with /{calendarId}/events
+	// above (ServeMux can't prove "/calendarList/events" can't match both),
+	// even though no real request ever lands on that literal path. Handled
+	// by hand, ahead of the mux, in the http.HandlerFunc wrapping it below.
+	calendarListEntry := func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer fake-access-token" {
+			t.Fatalf("expected calendarList entry request to carry the exchanged access token, got %q", r.Header.Get("Authorization"))
+		}
+		calendarID := strings.TrimPrefix(r.URL.Path, "/calendarList/")
+		for _, item := range f.calendarListItems {
+			if item["id"] == calendarID {
+				w.Header().Set("Content-Type", "application/json")
+				_ = json.NewEncoder(w).Encode(item)
+				return
+			}
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}
+	mux.HandleFunc("PATCH /{calendarId}/events/{eventId}", func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer fake-access-token" {
+			t.Fatalf("expected write-back request to carry the exchanged access token, got %q", r.Header.Get("Authorization"))
+		}
+		if got := r.URL.Query().Get("sendUpdates"); got != "none" {
+			t.Fatalf("expected sendUpdates=none on every write-back push (ADR-0075), got %q", got)
+		}
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode write-back patch body: %v", err)
+		}
+		f.patchRequests = append(f.patchRequests, capturedGooglePatch{
+			CalendarID: r.PathValue("calendarId"),
+			EventID:    r.PathValue("eventId"),
+			IfMatch:    r.Header.Get("If-Match"),
+			Body:       body,
+		})
 
-	f.Server = httptest.NewServer(mux)
+		if f.patchStatus != 0 && f.patchStatus != http.StatusOK {
+			w.WriteHeader(f.patchStatus)
+			return
+		}
+		etag := f.patchResponseETag
+		if etag == "" {
+			etag = "patched-etag-1"
+		}
+		body["id"] = r.PathValue("eventId")
+		body["etag"] = `"` + etag + `"`
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(body)
+	})
+
+	f.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/calendarList/") {
+			calendarListEntry(w, r)
+			return
+		}
+		mux.ServeHTTP(w, r)
+	}))
 	t.Cleanup(f.Close)
 	return f
 }

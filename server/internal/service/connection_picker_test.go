@@ -153,11 +153,10 @@ func TestConnectionService_ImportCalendars_CreatesLinkedCalendars(t *testing.T) 
 	if calendar.Source.Kind != repository.SourceKindConnection {
 		t.Fatalf("expected source kind %q, got %q", repository.SourceKindConnection, calendar.Source.Kind)
 	}
-	// Every Source ImportCalendars creates is read-only regardless of
-	// Google's own accessRole (ADR-0052, ADR-0075): write-back doesn't exist
-	// yet, so an "owner"-role calendar must not become writable here.
-	if calendar.Source.Mode != repository.SourceModeReadOnly {
-		t.Fatalf("expected mode %q, got %q", repository.SourceModeReadOnly, calendar.Source.Mode)
+	// Mode is derived from Google's own accessRole (#290, ADR-0075): "primary"
+	// came back "owner", so the Source it seeds is writable.
+	if calendar.Source.Mode != repository.SourceModeWritable {
+		t.Fatalf("expected mode %q, got %q", repository.SourceModeWritable, calendar.Source.Mode)
 	}
 	if calendar.Source.ConnectionID == nil || *calendar.Source.ConnectionID != connectionID {
 		t.Fatalf("expected connection id %d, got %v", connectionID, calendar.Source.ConnectionID)

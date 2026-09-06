@@ -616,6 +616,21 @@ func (s *CalendarService) AttendeeCalendarMetaByIDs(ctx context.Context, ids []s
 	return result, nil
 }
 
+// GetByIDUnchecked resolves id access-unchecked, with its Source attached —
+// ConnectionService.SendWriteBack's own seam (#290, ADR-0075): the outbox
+// Worker drains a queued Write-back push in the background, with no browser
+// session's userID to resolve Access against, so it needs the Calendar's
+// current Source (Kind, Mode, ExternalCalendarID) exactly as stored rather
+// than a caller's own resolved view of it. Every other caller belongs
+// through Get/Access instead.
+func (s *CalendarService) GetByIDUnchecked(ctx context.Context, id string) (repository.Calendar, error) {
+	calendar, err := s.calendars.GetByIDAny(ctx, id)
+	if err != nil {
+		return repository.Calendar{}, err
+	}
+	return s.attachSource(ctx, calendar)
+}
+
 // OwnerID resolves calendarID's Owner id, access-unchecked like
 // AttendeeCalendarMetaByIDs — a Source's own Reminders (a Subscription's
 // kept alarms, a Linked Calendar) still scope to the Calendar's Owner

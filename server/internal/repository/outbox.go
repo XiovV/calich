@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 )
@@ -20,9 +21,25 @@ const (
 // OutboxMethodRequest is a METHOD:REQUEST Invitation — a fresh invite or a
 // re-issued one (ADR-0059). OutboxMethodCancel is a METHOD:CANCEL
 // withdrawal, queued on Attendee removal or Event deletion (#201).
+// OutboxMethodPatch is a queued Provider PATCH (#290, ADR-0075) — the only
+// method OutboxKindWriteBack rows ever carry.
 const (
 	OutboxMethodRequest = "REQUEST"
 	OutboxMethodCancel  = "CANCEL"
+	OutboxMethodPatch   = "PATCH"
+)
+
+// OutboxKindMail is every row this table carried before #290: a queued
+// Invitation or Cancellation email (ADR-0059, ADR-0060), drained by an
+// InvitationSender. OutboxKindWriteBack is a queued Provider PATCH (#290,
+// ADR-0075), drained by ConnectionService.SendWriteBack. The discriminator
+// the outbox Worker's Sender dispatches on, and the CHECK constraint
+// (migration 00002) keys its per-kind shape off — never whether a Mailer or
+// a Google Connection happens to be configured, so kind stays a fact about
+// the row rather than a proxy for this deployment's transport config.
+const (
+	OutboxKindMail      = "mail"
+	OutboxKindWriteBack = "writeback"
 )
 
 // OutboxCancelSnapshot is a CANCEL OutboxMessage's self-contained payload
@@ -78,7 +95,12 @@ type OutboxMessage struct {
 	// set only by EnqueueWithActor/EnqueueEmailWithActor, the two brand-new-
 	// invite entry points; nil on every re-send and every CANCEL, which
 	// never charge anyone's hourly ceiling.
-	ActorUserID   *int64
+	ActorUserID *int64
+	// Kind is OutboxKindMail or OutboxKindWriteBack (#290, ADR-0075) — what
+	// the Worker's Sender dispatches this row to. Always OutboxKindMail for
+	// every row Enqueue*/EnqueueCancel* below writes; only EnqueueWriteBack
+	// writes the other.
+	Kind          string
 	Method        string
 	Snapshot      *OutboxCancelSnapshot
 	Status        string
@@ -249,10 +271,55 @@ func (r *OutboxRepository) enqueueCancel(ctx context.Context, eventID string, re
 	return r.Get(ctx, id)
 }
 
+// EnqueueWriteBack writes a pending PATCH OutboxMessage of kind
+// OutboxKindWriteBack for eventID (#290, ADR-0075, ADR-0076): the local write
+// and this call happen in the same transaction (EventService.Update's own
+// withTx), so a rolled-back edit queues nothing and a crash between the two
+// is the only hole (ADR-0018). Carries no recipient and no snapshot —
+// ConnectionService.SendWriteBack rebuilds the push from eventID's own live
+// state at send time, mirroring sendInvitation's "never a snapshot" contract
+// rather than CANCEL's.
+//
+// Idempotent against an already-Pending row for the same eventID rather than
+// always inserting a new one: since SendWriteBack always rebuilds from live
+// state, several edits queued in quick succession before the Worker's next
+// Tick would otherwise mean several separate PATCH requests reaching the
+// Provider for one logical edit — wasted rows and wasted Provider API quota,
+// since only the last one has any effect. Returns the existing row when one
+// is found, never erroring on the collision.
+func (r *OutboxRepository) EnqueueWriteBack(ctx context.Context, eventID string) (OutboxMessage, error) {
+	var existingID int64
+	err := r.db.QueryRowContext(ctx,
+		`SELECT id FROM outbox WHERE event_id = ? AND kind = ? AND status = ? LIMIT 1`,
+		eventID, OutboxKindWriteBack, OutboxStatusPending,
+	).Scan(&existingID)
+	if err == nil {
+		return r.Get(ctx, existingID)
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return OutboxMessage{}, fmt.Errorf("check pending write-back: %w", err)
+	}
+
+	res, err := r.db.ExecContext(ctx,
+		`INSERT INTO outbox (event_id, kind, method) VALUES (?, ?, ?)`,
+		eventID, OutboxKindWriteBack, OutboxMethodPatch,
+	)
+	if err != nil {
+		return OutboxMessage{}, fmt.Errorf("insert outbox message: %w", err)
+	}
+
+	id, err := res.LastInsertId()
+	if err != nil {
+		return OutboxMessage{}, fmt.Errorf("get last insert id: %w", err)
+	}
+
+	return r.Get(ctx, id)
+}
+
 // Get returns one OutboxMessage by id, or ErrNotFound.
 func (r *OutboxRepository) Get(ctx context.Context, id int64) (OutboxMessage, error) {
 	row := r.db.QueryRowContext(ctx,
-		`SELECT id, event_id, recipient_user_id, recipient_email, actor_user_id, method, snapshot, status, attempts, next_attempt_at, last_error, created_at, sent_at
+		`SELECT id, event_id, recipient_user_id, recipient_email, actor_user_id, kind, method, snapshot, status, attempts, next_attempt_at, last_error, created_at, sent_at
 		 FROM outbox WHERE id = ?`,
 		id,
 	)
@@ -276,7 +343,7 @@ func scanOutboxMessage(row rowScanner) (OutboxMessage, error) {
 	var snapshot sql.NullString
 	var lastError sql.NullString
 	var sentAt sql.NullTime
-	if err := row.Scan(&m.ID, &m.EventID, &recipientUserID, &recipientEmail, &actorUserID, &m.Method, &snapshot, &m.Status, &m.Attempts, &m.NextAttemptAt, &lastError, &m.CreatedAt, &sentAt); err != nil {
+	if err := row.Scan(&m.ID, &m.EventID, &recipientUserID, &recipientEmail, &actorUserID, &m.Kind, &m.Method, &snapshot, &m.Status, &m.Attempts, &m.NextAttemptAt, &lastError, &m.CreatedAt, &sentAt); err != nil {
 		return OutboxMessage{}, err
 	}
 	if recipientUserID.Valid {
@@ -312,7 +379,7 @@ func scanOutboxMessage(row rowScanner) (OutboxMessage, error) {
 // past them to a later message for someone else.
 func (r *OutboxRepository) ListPending(ctx context.Context, limit int) ([]OutboxMessage, error) {
 	rows, err := r.db.QueryContext(ctx,
-		`SELECT id, event_id, recipient_user_id, recipient_email, actor_user_id, method, snapshot, status, attempts, next_attempt_at, last_error, created_at, sent_at
+		`SELECT id, event_id, recipient_user_id, recipient_email, actor_user_id, kind, method, snapshot, status, attempts, next_attempt_at, last_error, created_at, sent_at
 		 FROM outbox WHERE status = ? ORDER BY id ASC LIMIT ?`,
 		OutboxStatusPending, limit,
 	)
@@ -320,6 +387,37 @@ func (r *OutboxRepository) ListPending(ctx context.Context, limit int) ([]Outbox
 		return nil, fmt.Errorf("list pending outbox messages: %w", err)
 	}
 	return collectRows(rows, scanOutboxMessage)
+}
+
+// ListPendingEventIDsByKind returns the set of distinct EventIDs carrying at
+// least one Pending message of kind — the pending set a reconciler must
+// subtract from what it's willing to overwrite (#290, ADR-0076): "queued,
+// retrying, or mid-backoff all count" is exactly OutboxStatusPending, and a
+// permanently Failed row (ADR-0060's terminal give-up) correctly falls out
+// of this set — "a push that permanently fails stops protecting its row"
+// (ADR-0076) — since it can never reach the Provider and never will.
+func (r *OutboxRepository) ListPendingEventIDsByKind(ctx context.Context, kind string) (map[string]bool, error) {
+	rows, err := r.db.QueryContext(ctx,
+		`SELECT DISTINCT event_id FROM outbox WHERE kind = ? AND status = ?`,
+		kind, OutboxStatusPending,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list pending event ids by kind: %w", err)
+	}
+	defer rows.Close()
+
+	ids := make(map[string]bool)
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("scan pending event id: %w", err)
+		}
+		ids[id] = true
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list pending event ids by kind: %w", err)
+	}
+	return ids, nil
 }
 
 // MarkSent records a successful delivery.

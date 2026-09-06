@@ -389,6 +389,23 @@ func (r *EventRepository) Update(ctx context.Context, id string, f EventFields, 
 	return r.GetByID(ctx, id)
 }
 
+// UpdateProviderEtag stamps id's row with the fresh validator a successful
+// Write-back PATCH response carried back (#290, ADR-0075, ADR-0076) —
+// applying that response "as though it were a Refresh result" so the next
+// Delta Refresh's own seriesContentEqual comparison finds this row already
+// matches what the Provider now holds, rather than reporting the echo of our
+// own push as a remote change. Deliberately narrower than Update: it touches
+// no other column and never bumps change_seq — a Write-back's echo is not a
+// second edit, and re-stamping CalDAV's own change marker for it would be
+// exactly the needless re-download ADR-0075 warns against.
+func (r *EventRepository) UpdateProviderEtag(ctx context.Context, id string, etag *string) error {
+	res, err := r.db.ExecContext(ctx, `UPDATE events SET provider_etag = ? WHERE id = ?`, etag, id)
+	if err != nil {
+		return fmt.Errorf("update provider etag: %w", err)
+	}
+	return requireAffected(res)
+}
+
 // SetChangeSeq stamps id's row with changeSeq directly, without touching any
 // other column. Used when a write to a *different* row (an Override's
 // create/update/delete, an Exception, a reparent) still changes id's series
