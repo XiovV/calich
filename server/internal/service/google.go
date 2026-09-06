@@ -4,12 +4,14 @@
 // connected account's own Email, the calendarList the Calendar picker
 // offers, a Linked Calendar's events.list — a complete listing for a Full
 // Refresh, or only what changed since a syncToken for a Delta Refresh — and
-// events.patch, the one Write-back call this app ever makes (#290,
-// ADR-0075). Insert and instances are later tickets' (#292, #291), added to
-// googleClient rather than beside it, so every Google call keeps going
-// through the one overridable httpClient (#285's testing decisions) — a test
-// points this at an httptest.Server serving canned JSON in place of Google,
-// never a mocked fetcher.
+// the three Write-back calls: events.patch for an edit (#290, ADR-0075),
+// events.insert for a create and events.delete for a delete (#292,
+// ADR-0077). All three carry the same field-scoped googleEventPatchBody, so
+// none can express a whole-Event replace. events.instances (an Override's
+// first detach) is still a later ticket's. Every call goes through the one
+// overridable httpClient (#285's testing decisions) — a test points this at
+// an httptest.Server serving canned JSON in place of Google, never a mocked
+// fetcher.
 package service
 
 import (
@@ -714,6 +716,15 @@ type googleEventPatchSourceJSON struct {
 // events.update call in this file, and this type could not serialize one if
 // there were.
 type googleEventPatchBody struct {
+	// ID is set only on an events.insert (#292, ADR-0077) — a client-supplied
+	// id derived from the local Event's id, so a retry after Google has
+	// already committed the insert answers 409 (handled as "already created")
+	// instead of minting a duplicate event. Never set on a PATCH: omitempty
+	// keeps every edit body byte-identical to before, and Google rejects an
+	// id change on patch anyway. Not a content field — it addresses the
+	// event, it does not describe it, so it does not widen what a caller can
+	// smuggle through the field-scoped body.
+	ID          string                  `json:"id,omitempty"`
 	Summary     string                  `json:"summary"`
 	Description string                  `json:"description"`
 	Location    string                  `json:"location"`
@@ -922,4 +933,85 @@ func (c *googleClient) getEvent(ctx context.Context, accessToken, calendarID, ev
 		return googleEventJSON{}, fmt.Errorf("%w: %v", ErrGoogleWriteBackFailed, err)
 	}
 	return event, nil
+}
+
+// insertEvent creates a new event on calendarID via events.insert (#292,
+// ADR-0077) — the create counterpart to patchEvent, and deliberately POSTing
+// the very same googleEventPatchBody: it has a field for exactly the
+// ADR-0075 allow-list and nothing else, so an insert can no more smuggle an
+// Attendee or a visibility change through than an edit can. Always
+// sendUpdates=none, same reason as patchEvent.
+//
+// body.ID is expected to be set — a client-supplied id (SendWriteBack
+// derives it from the local Event's id). A 409 then means "a previous
+// attempt already created this event": insertEvent fetches that event and
+// returns it, so a retry after Google committed the insert but lost the
+// response is a no-op rather than a duplicate.
+func (c *googleClient) insertEvent(ctx context.Context, accessToken, calendarID string, body googleEventPatchBody) (googleEventJSON, error) {
+	encoded, err := json.Marshal(body)
+	if err != nil {
+		return googleEventJSON{}, fmt.Errorf("marshal event insert: %w", err)
+	}
+
+	q := url.Values{}
+	q.Set("sendUpdates", "none")
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.eventsURLFor(calendarID)+"?"+q.Encode(), bytes.NewReader(encoded))
+	if err != nil {
+		return googleEventJSON{}, fmt.Errorf("build event insert request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return googleEventJSON{}, fmt.Errorf("%w: %v", ErrGoogleWriteBackFailed, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusConflict && body.ID != "" {
+		io.Copy(io.Discard, resp.Body) //nolint:errcheck // draining for keep-alive reuse
+		resp.Body.Close()
+		return c.getEvent(ctx, accessToken, calendarID, body.ID)
+	}
+	if resp.StatusCode != http.StatusOK {
+		io.Copy(io.Discard, resp.Body) //nolint:errcheck // draining for keep-alive reuse; the response carries nothing we need on failure
+		return googleEventJSON{}, &googleHTTPError{sentinel: ErrGoogleWriteBackFailed, statusCode: resp.StatusCode}
+	}
+
+	var inserted googleEventJSON
+	if err := json.NewDecoder(resp.Body).Decode(&inserted); err != nil {
+		return googleEventJSON{}, fmt.Errorf("%w: %v", ErrGoogleWriteBackFailed, err)
+	}
+	return inserted, nil
+}
+
+// deleteEvent removes eventID from calendarID via events.delete (#292,
+// ADR-0077) — a whole Master deleted here. sendUpdates=none, same reason as
+// patchEvent. Sent unconditionally, with no If-Match: a delete is a strong
+// intent and there are no fields left to preserve from a concurrent Provider
+// edit the way patchEvent's own If-Match guards (ADR-0075). A 404/410 — the
+// event already gone at Google — is treated as success: the end state this
+// push wanted is the end state that exists.
+func (c *googleClient) deleteEvent(ctx context.Context, accessToken, calendarID, eventID string) error {
+	q := url.Values{}
+	q.Set("sendUpdates", "none")
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, c.eventsURLFor(calendarID)+"/"+url.PathEscape(eventID)+"?"+q.Encode(), nil)
+	if err != nil {
+		return fmt.Errorf("build event delete request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrGoogleWriteBackFailed, err)
+	}
+	defer resp.Body.Close()
+	io.Copy(io.Discard, resp.Body) //nolint:errcheck // draining for keep-alive reuse; events.delete carries no body
+
+	switch resp.StatusCode {
+	case http.StatusOK, http.StatusNoContent, http.StatusNotFound, http.StatusGone:
+		return nil
+	default:
+		return &googleHTTPError{sentinel: ErrGoogleWriteBackFailed, statusCode: resp.StatusCode}
+	}
 }

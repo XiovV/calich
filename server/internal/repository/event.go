@@ -414,6 +414,26 @@ func (r *EventRepository) UpdateProviderEtag(ctx context.Context, id string, eta
 	return requireAffected(res)
 }
 
+// AdoptProviderIdentity stamps id's row with the Provider event id and etag
+// a successful events.insert returned (#292, ADR-0077) — the create
+// counterpart to UpdateProviderEtag, applied as though it were a Refresh
+// result so the next Refresh reconciles the Event by that id rather than
+// tombstoning it as absent (ADR-0076). Also clears any stale
+// permanent-failure marker, exactly as RecordWriteBackEtag does: the push
+// landing is the outcome that marker flags the absence of. Deliberately
+// narrow like UpdateProviderEtag — no other column moves, change_seq never
+// bumps.
+func (r *EventRepository) AdoptProviderIdentity(ctx context.Context, id, externalUID string, etag *string) error {
+	res, err := r.db.ExecContext(ctx,
+		`UPDATE events SET external_uid = ?, provider_etag = ?, write_back_error = NULL WHERE id = ?`,
+		externalUID, etag, id,
+	)
+	if err != nil {
+		return fmt.Errorf("adopt provider identity: %w", err)
+	}
+	return requireAffected(res)
+}
+
 // ApplyProviderOwnedFields moves rsvpStatus/conferenceURL/guestCount
 // forward on id's row alone (#291, ADR-0075) — SendWriteBack's own
 // conflict-retry loop, reached after a 412 forces a refetch of the

@@ -16,19 +16,24 @@ package service
 
 import "time"
 
-// protectPendingWriteBacksDelta drops every change whose ExternalUID
-// corresponds to a stored series with a Pending Write-back push (#290,
-// ADR-0076) — Delta mode's own half of the same protection
-// protectPendingWriteBacks gives Full mode. Simpler here than Full mode's:
-// ReconcileDelta's tombstone path is never reached by a change's absence
-// (only by the explicit deletions list, ADR-0053), so dropping a change from
-// the batch cannot itself cause a wrongful tombstone the way removing an
-// entry from Full mode's incoming would — there is no unparseable-style
-// bucket to also populate. pendingMasterIDs is empty for every Subscription
-// (Delta Refresh and Write-back are both Connection-only), so this is a
-// no-op pass-through in that case.
-func protectPendingWriteBacksDelta(existing []ExistingSeries, changes []DeltaSeriesChange, pendingMasterIDs map[string]bool) []DeltaSeriesChange {
-	if len(pendingMasterIDs) == 0 {
+// protectPendingWriteBacksDelta drops every batch change a Pending Write-back
+// protects (#290, #292, ADR-0076, ADR-0077) — Delta mode's half of the same
+// protection protectPendingWriteBacks gives Full mode, and simpler: a
+// dropped change cannot cause a wrongful tombstone (ReconcileDelta reaches
+// that only via the explicit deletions list, ADR-0053), so there is no
+// unparseable-style bucket to also populate. Two pending sets:
+//
+//   - pendingMasterIDs: a stored series with a queued edit — its stale
+//     batch copy would overwrite the not-yet-pushed local edit.
+//   - pendingDeleteUIDs: a Master deleted here whose events.delete hasn't
+//     drained. Its local row is gone, so a batch update for it would land in
+//     ReconcileDelta's "no stored counterpart → new series" branch and
+//     resurrect the Event the User deleted (ADR-0077).
+//
+// Both are empty for every Subscription (Delta and Write-back are both
+// Connection-only), so this is a no-op pass-through there.
+func protectPendingWriteBacksDelta(existing []ExistingSeries, changes []DeltaSeriesChange, pendingMasterIDs, pendingDeleteUIDs map[string]bool) []DeltaSeriesChange {
+	if len(pendingMasterIDs) == 0 && len(pendingDeleteUIDs) == 0 {
 		return changes
 	}
 
@@ -38,13 +43,13 @@ func protectPendingWriteBacksDelta(existing []ExistingSeries, changes []DeltaSer
 			protectedUIDs[e.ExternalUID] = true
 		}
 	}
-	if len(protectedUIDs) == 0 {
+	if len(protectedUIDs) == 0 && len(pendingDeleteUIDs) == 0 {
 		return changes
 	}
 
 	filtered := make([]DeltaSeriesChange, 0, len(changes))
 	for _, c := range changes {
-		if protectedUIDs[c.ExternalUID] {
+		if protectedUIDs[c.ExternalUID] || pendingDeleteUIDs[c.ExternalUID] {
 			continue
 		}
 		filtered = append(filtered, c)

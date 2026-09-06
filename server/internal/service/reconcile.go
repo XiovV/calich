@@ -57,19 +57,30 @@ type ReconcileResult struct {
 	NoOpCount int
 }
 
-// protectPendingWriteBacks removes every incoming series whose stored
-// counterpart has a Pending Write-back push from incoming, and folds its
-// ExternalUID into a copy of unparseableUIDs — the Full-mode half of #290's
-// ADR-0076 protection: ReconcileSeries only ever consults unparseableUIDs
-// for a UID absent from incoming (see its own doc comment), so a pending
-// series must be removed from incoming *and* marked unparseable, or it
-// would either be silently overwritten by the fetch's stale copy (if left
-// in incoming) or wrongly tombstoned (if removed but left unmarked).
-// pendingMasterIDs is empty for every Subscription (Write-back doesn't
-// exist there), so this is a no-op read-then-pass-through in that case, not
-// a Connection-only branch.
-func protectPendingWriteBacks(existing []ExistingSeries, incoming []IncomingSeries, unparseableUIDs map[string]bool, pendingMasterIDs map[string]bool) ([]IncomingSeries, map[string]bool) {
-	if len(pendingMasterIDs) == 0 {
+// protectPendingWriteBacks removes every incoming series a Pending Write-back
+// protects from incoming, and folds its ExternalUID into a copy of
+// unparseableUIDs — the Full-mode half of #290/#292's ADR-0076/ADR-0077
+// protection. Two pending sets feed it:
+//
+//   - pendingMasterIDs: a stored series with a queued edit (or a queued
+//     create — its local id is here too, though it has no ExternalUID yet so
+//     it never appears in existing). Its ExternalUID must be removed from
+//     incoming *and* marked unparseable, since ReconcileSeries only consults
+//     unparseableUIDs for a UID absent from incoming (see its own doc
+//     comment): left in incoming it would be overwritten by the fetch's
+//     stale copy; removed but unmarked it would be wrongly tombstoned.
+//   - pendingDeleteUIDs: a Master deleted here whose events.delete push
+//     hasn't drained yet. Its local row is already gone, so it never appears
+//     in existing and can't be tombstoned — but a Full Refresh still listing
+//     it would re-create it (ADR-0077), so its ExternalUID is dropped from
+//     incoming. It is deliberately *not* added to unparseableUIDs: there is
+//     no stored series for that to protect, and marking it would only
+//     suppress a genuine same-UID series in some other calendar.
+//
+// Both sets are empty for every Subscription (Write-back is Connection-only),
+// so this is a no-op read-then-pass-through there, not a Connection branch.
+func protectPendingWriteBacks(existing []ExistingSeries, incoming []IncomingSeries, unparseableUIDs, pendingMasterIDs, pendingDeleteUIDs map[string]bool) ([]IncomingSeries, map[string]bool) {
+	if len(pendingMasterIDs) == 0 && len(pendingDeleteUIDs) == 0 {
 		return incoming, unparseableUIDs
 	}
 
@@ -79,16 +90,21 @@ func protectPendingWriteBacks(existing []ExistingSeries, incoming []IncomingSeri
 			protectedUIDs[e.ExternalUID] = true
 		}
 	}
-	if len(protectedUIDs) == 0 {
-		return incoming, unparseableUIDs
+
+	dropFromIncoming := func(uid string) bool {
+		return protectedUIDs[uid] || pendingDeleteUIDs[uid]
 	}
 
 	filtered := make([]IncomingSeries, 0, len(incoming))
 	for _, in := range incoming {
-		if protectedUIDs[in.ExternalUID] {
+		if dropFromIncoming(in.ExternalUID) {
 			continue
 		}
 		filtered = append(filtered, in)
+	}
+
+	if len(protectedUIDs) == 0 {
+		return filtered, unparseableUIDs
 	}
 
 	merged := make(map[string]bool, len(unparseableUIDs)+len(protectedUIDs))

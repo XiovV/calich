@@ -86,21 +86,17 @@ var (
 	// sites that only need to recognize the failure by identity rather than
 	// name the configured ceiling (#204, ADR-0058).
 	ErrInviteRateLimitExceeded = errors.New("invitation rate limit exceeded")
-	// ErrLinkedCalendarWriteUnsupported is returned by Create, Delete,
-	// AddException, and ReparentFrom for a Calendar carrying a
-	// Connection-kind Source, and by Update when it would move an Event
-	// across a Connection Calendar's boundary — even once that Source's Mode
-	// is writable (#290, ADR-0075). Update's own Master-field-scoped push is
-	// the only write path built to survive contact with a writable
-	// Connection Source so far: Create would mint a row with no ExternalUID
-	// to address at the Provider, which the very next Full Refresh's
-	// absence-means-deletion rule (ADR-0053) tombstones — ADR-0076's own
-	// named failure mode, reachable the moment a Connection Source's Mode
-	// can be writable at all. Delete/AddException/ReparentFrom would
-	// silently diverge this app's state from the Provider's, which the next
-	// Refresh then either undoes or duplicates. Create/delete write-back is
-	// #292's own ticket; this sentinel is what keeps those paths refused
-	// rather than silently unsafe until it ships.
+	// ErrLinkedCalendarWriteUnsupported is returned for the writes to a
+	// Connection-kind Source this app has no Provider push for yet, even once
+	// the Source's Mode is writable (#290, #292, ADR-0075, ADR-0077): an
+	// Override or an Attendee via Create, an Override/Exception delete via
+	// Delete or AddException, a "this and following" split via ReparentFrom,
+	// a CalDAV-shaped write via ImportSeries, and Update moving an Event
+	// across a Connection Calendar's boundary. Each needs either a Provider
+	// instance id this app doesn't resolve yet or a mirror of state
+	// (Attendees) ADR-0052 declined to model. A plain Master's create, edit
+	// and delete are supported and queue an events.insert / events.patch /
+	// events.delete respectively.
 	ErrLinkedCalendarWriteUnsupported = errors.New("this kind of write is not yet supported on a linked calendar")
 	// ErrConnectionNeedsReconnect is returned by Update when write.CalendarID
 	// carries a Connection-kind Source whose Connection has moved off
@@ -582,8 +578,21 @@ func (s *EventService) Create(ctx context.Context, userID int64, id string, writ
 	if err != nil {
 		return repository.Event{}, err
 	}
+	// Creating an Event on a writable Linked Calendar is allowed (#292,
+	// ADR-0077) — a plain Master only: an Override needs a Provider instance
+	// id this app doesn't resolve yet, and a Linked Calendar's Events carry
+	// no Attendees this app mirrors to the Provider (ADR-0052). A read-only
+	// Connection Source is already refused above (requireWritableCalendar's
+	// Access clamp), same as a Subscription's.
+	enqueueCreateWriteBack := false
 	if isConnectionSource(calendar) {
-		return repository.Event{}, ErrLinkedCalendarWriteUnsupported
+		if write.ParentID != nil || len(write.AttendeeUserIDs) > 0 || len(write.AttendeeGroupIDs) > 0 || len(write.AttendeeEmails) > 0 {
+			return repository.Event{}, ErrLinkedCalendarWriteUnsupported
+		}
+		if err := s.requireLiveConnection(ctx, calendar); err != nil {
+			return repository.Event{}, err
+		}
+		enqueueCreateWriteBack = true
 	}
 
 	// Taken off the Calendar the guard above already resolved (#187 paid three
@@ -601,6 +610,15 @@ func (s *EventService) Create(ctx context.Context, userID int64, id string, writ
 		e, err := repos.events.Create(ctx, id, &userID, write.fields(), seq)
 		if err != nil {
 			return err
+		}
+		// Write-back (#292, ADR-0077): the events.insert push is queued in the
+		// same transaction as the local create (ADR-0018), so a rolled-back
+		// create queues nothing. The row has no ExternalUID yet; SendWriteBack
+		// adopts the id Google returns.
+		if enqueueCreateWriteBack {
+			if _, err := repos.writeback.EnqueueWriteBackCreate(ctx, e.ID); err != nil {
+				return fmt.Errorf("enqueue write-back create: %w", err)
+			}
 		}
 		// An Override copies its Master's whole Reminder set (AC6); a "This
 		// and following" split's new Master copies the old Master's, named
@@ -875,19 +893,23 @@ func (s *EventService) Update(ctx context.Context, userID int64, id string, writ
 	fields.ProviderColor = existing.ProviderColor
 
 	// Write-back (#290, ADR-0075): a Master belonging to a writable Linked
-	// Calendar, that already exists at the Provider (ExternalUID set — a
-	// locally-created Event with none yet is Create's own concern, #292),
-	// gets its push queued in the very same transaction as the local write it
-	// accompanies (ADR-0018) — a rolled-back edit must never queue a push
-	// for a change that didn't happen. Scoped to a Master alone for now: an
-	// Override addresses a specific recurring instance at the Provider by an
-	// id this app doesn't yet store (ADR-0075's own "detaching an instance
-	// for the first time needs an instance id not yet in our store" —
-	// resolving that via events.instances is future work).
-	enqueueWriteBack := calendar.Source != nil &&
+	// Calendar gets its push queued in the very same transaction as the local
+	// write it accompanies (ADR-0018) — a rolled-back edit must never queue a
+	// push for a change that didn't happen. Scoped to a Master alone for now:
+	// an Override addresses a specific recurring instance at the Provider by
+	// an id this app doesn't yet store (ADR-0075's own "detaching an instance
+	// for the first time needs an instance id not yet in our store").
+	//
+	// A Master with an ExternalUID already exists at the Provider — edit it
+	// (PATCH). One with none is a local create whose events.insert hasn't
+	// drained yet (#292): editing it re-enqueues the POST, which rebuilds
+	// from live state and so carries the edit — and, if a previous create
+	// push permanently failed, is the User's way to retry it.
+	linkedMaster := calendar.Source != nil &&
 		calendar.Source.Kind == repository.SourceKindConnection &&
-		existing.ParentID == nil &&
-		existing.ExternalUID != nil
+		existing.ParentID == nil
+	enqueueWriteBack := linkedMaster && existing.ExternalUID != nil
+	enqueueCreateWriteBack := linkedMaster && existing.ExternalUID == nil
 
 	var updated repository.Event
 	err = s.withTx(ctx, func(repos txRepos) error {
@@ -901,8 +923,12 @@ func (s *EventService) Update(ctx context.Context, userID int64, id string, writ
 		}
 		updated = u
 
-		if enqueueWriteBack {
-			if _, err := repos.writeback.EnqueueWriteBack(ctx, id); err != nil {
+		if enqueueWriteBack || enqueueCreateWriteBack {
+			enqueue := repos.writeback.EnqueueWriteBack
+			if enqueueCreateWriteBack {
+				enqueue = repos.writeback.EnqueueWriteBackCreate
+			}
+			if _, err := enqueue(ctx, id); err != nil {
 				return fmt.Errorf("enqueue write-back: %w", err)
 			}
 			// A fresh edit deserves a fresh chance (#291, ADR-0075): clear
@@ -981,8 +1007,32 @@ func (s *EventService) Delete(ctx context.Context, userID int64, id string) erro
 	if err != nil {
 		return err
 	}
+	// Deleting a Master on a writable Linked Calendar is allowed (#292,
+	// ADR-0077) and pushes an events.delete. Deleting one Occurrence of a
+	// recurring series (an Override, or an Exception via AddException) is
+	// still refused — that is a PATCH status:cancelled against a Provider
+	// instance id this app doesn't resolve yet (ADR-0075).
+	enqueueDeleteWriteBack := false
+	var deleteSnapshot repository.OutboxWriteBackDeleteSnapshot
 	if isConnectionSource(calendar) {
-		return ErrLinkedCalendarWriteUnsupported
+		if existing.ParentID != nil {
+			return ErrLinkedCalendarWriteUnsupported
+		}
+		if err := s.requireLiveConnection(ctx, calendar); err != nil {
+			return err
+		}
+		enqueueDeleteWriteBack = true
+		deleteSnapshot = repository.OutboxWriteBackDeleteSnapshot{CalendarID: existing.CalendarID}
+		if existing.ExternalUID != nil {
+			deleteSnapshot.ExternalUID = *existing.ExternalUID
+		} else {
+			// The create push may still be in flight, or already landed, or
+			// never have been sent — but its Provider id is deterministic
+			// (googleClientEventID), so an events.delete against that id
+			// cleans up an orphan and no-ops (Google 404) on a never-sent
+			// one. This is what closes ADR-0077's create/delete race.
+			deleteSnapshot.ExternalUID = googleClientEventID(existing.ID)
+		}
 	}
 
 	return s.withTx(ctx, func(repos txRepos) error {
@@ -1002,6 +1052,14 @@ func (s *EventService) Delete(ctx context.Context, userID int64, id string) erro
 
 		if err := repos.events.Delete(ctx, id); err != nil {
 			return err
+		}
+
+		if enqueueDeleteWriteBack {
+			// EnqueueWriteBackDelete also drops any still-pending PATCH/POST
+			// for this Event — moot once it's deleted (ADR-0077).
+			if _, err := repos.writeback.EnqueueWriteBackDelete(ctx, id, deleteSnapshot); err != nil {
+				return fmt.Errorf("enqueue write-back delete: %w", err)
+			}
 		}
 
 		seq, err := repos.sync.NextChangeSeq(ctx)

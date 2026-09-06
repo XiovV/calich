@@ -51,6 +51,31 @@ func (s *EventService) MasterIDsWithPendingWriteBack(ctx context.Context) (map[s
 	return s.writebackOutbox.ListPendingEventIDsByKind(ctx, repository.OutboxKindWriteBack)
 }
 
+// ExternalUIDsWithPendingWriteBackDelete returns the ExternalUID of every
+// Master on calendarID with a queued events.delete push (#292, ADR-0077) —
+// the delete counterpart to MasterIDsWithPendingWriteBack, and, like it,
+// that calendar's Refresh reconciler's own pending set: subtracted from the
+// incoming series before absence is ever computed, so a Refresh landing in
+// the window between "the local delete committed" and "the delete actually
+// reached the Provider" can't re-create the Event the User just removed.
+// Keyed by ExternalUID (from the DELETE outbox rows' own snapshots, not a
+// query over events, since the local row is already gone) and scoped to
+// calendarID, since one Provider event id can name a live series in another
+// Linked Calendar.
+func (s *EventService) ExternalUIDsWithPendingWriteBackDelete(ctx context.Context, calendarID string) (map[string]bool, error) {
+	return s.writebackOutbox.ListPendingWriteBackDeleteExternalUIDs(ctx, calendarID)
+}
+
+// AdoptWriteBackIdentity applies a successful events.insert's response as
+// though it were a Refresh result (#292, ADR-0077): storing the Provider id
+// Google minted and the fresh etag, so the next Refresh reconciles id by
+// that id instead of tombstoning it as absent (ADR-0076), and clearing any
+// stale permanent-failure marker a previous attempt left. ConnectionService's
+// own create push (SendWriteBack) is the only caller.
+func (s *EventService) AdoptWriteBackIdentity(ctx context.Context, id, externalUID string, etag *string) error {
+	return s.events.AdoptProviderIdentity(ctx, id, externalUID, etag)
+}
+
 // RecordWriteBackEtag applies a successful Write-back push's response as
 // though it were a Refresh result (#290, ADR-0075, ADR-0076): storing the
 // fresh validator Google's PATCH response carried back, so the next Delta

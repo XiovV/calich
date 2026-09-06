@@ -576,7 +576,11 @@ func reconcileAgainstStored(ctx context.Context, events *EventService, userID in
 	if err != nil {
 		return ReconcileResult{}, ReconcileSummary{}, fmt.Errorf("list pending write-backs: %w", err)
 	}
-	incoming, unparseable = protectPendingWriteBacks(existing, incoming, unparseable, pendingWriteBack)
+	pendingDeleteUIDs, err := events.ExternalUIDsWithPendingWriteBackDelete(ctx, calendarID)
+	if err != nil {
+		return ReconcileResult{}, ReconcileSummary{}, fmt.Errorf("list pending write-back deletes: %w", err)
+	}
+	incoming, unparseable = protectPendingWriteBacks(existing, incoming, unparseable, pendingWriteBack, pendingDeleteUIDs)
 
 	if followEventColor {
 		incoming = followEventColorAcrossSeries(existing, incoming)
@@ -609,7 +613,11 @@ func reconcileDeltaAgainstStored(ctx context.Context, events *EventService, user
 	if err != nil {
 		return ReconcileResult{}, ReconcileSummary{}, fmt.Errorf("list pending write-backs: %w", err)
 	}
-	changes = protectPendingWriteBacksDelta(existing, changes, pendingWriteBack)
+	pendingDeleteUIDs, err := events.ExternalUIDsWithPendingWriteBackDelete(ctx, calendarID)
+	if err != nil {
+		return ReconcileResult{}, ReconcileSummary{}, fmt.Errorf("list pending write-back deletes: %w", err)
+	}
+	changes = protectPendingWriteBacksDelta(existing, changes, pendingWriteBack, pendingDeleteUIDs)
 
 	result := ReconcileDelta(existing, changes, deletions)
 

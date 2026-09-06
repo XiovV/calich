@@ -305,6 +305,13 @@ var eventNotFoundErrors = []errorCase{
 	{service.ErrLinkedCalendarWriteUnsupported, forbidden("this kind of write is not yet supported on a linked calendar")},
 }
 
+// deleteEventErrors adds the Connection-needs-reconnect case: Delete refuses
+// a Master on a writable Linked Calendar whose Connection has moved off Live
+// (#292), exactly as Create and Update already do.
+var deleteEventErrors = alsoHandling(eventNotFoundErrors,
+	errorCase{service.ErrConnectionNeedsReconnect, conflict("connection_needs_reconnect", "this connection needs to be reconnected before it can accept new edits")},
+)
+
 func (h *EventHandler) List(w http.ResponseWriter, r *http.Request) {
 	userID := httpauth.MustUserID(r.Context())
 
@@ -524,7 +531,7 @@ func (h *EventHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 
 	err := h.events.Delete(r.Context(), userID, id)
-	if respondError(w, err, eventNotFoundErrors, "failed to delete event") {
+	if respondError(w, err, deleteEventErrors, "failed to delete event") {
 		return
 	}
 

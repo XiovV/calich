@@ -29,7 +29,7 @@ func TestProtectPendingWriteBacks_FullMode_StaleFetchNeverOverwritesOrTombstones
 	}
 	pendingMasterIDs := map[string]bool{"master-pending": true}
 
-	filteredIncoming, unparseable := protectPendingWriteBacks(existing, incoming, nil, pendingMasterIDs)
+	filteredIncoming, unparseable := protectPendingWriteBacks(existing, incoming, nil, pendingMasterIDs, nil)
 
 	result := ReconcileSeries(existing, filteredIncoming, unparseable)
 
@@ -63,7 +63,7 @@ func TestProtectPendingWriteBacks_FullMode_NoPendingWriteBacksIsANoOp(t *testing
 	existing := []ExistingSeries{{MasterID: "master-1", ExternalUID: "uid-1", Content: basicWrite(t, "Standup")}}
 	incoming := []IncomingSeries{{ExternalUID: "uid-1", Write: basicWrite(t, "Standup (renamed)")}}
 
-	filteredIncoming, unparseable := protectPendingWriteBacks(existing, incoming, nil, nil)
+	filteredIncoming, unparseable := protectPendingWriteBacks(existing, incoming, nil, nil, nil)
 
 	if len(filteredIncoming) != 1 {
 		t.Fatalf("expected incoming untouched, got %+v", filteredIncoming)
@@ -92,7 +92,7 @@ func TestProtectPendingWriteBacksDelta_StaleBatchNeverOverwritesThePendingSeries
 	}
 	pendingMasterIDs := map[string]bool{"master-pending": true}
 
-	filtered := protectPendingWriteBacksDelta(existing, changes, pendingMasterIDs)
+	filtered := protectPendingWriteBacksDelta(existing, changes, pendingMasterIDs, nil)
 
 	result := ReconcileDelta(existing, filtered, nil)
 
@@ -112,9 +112,64 @@ func TestProtectPendingWriteBacksDelta_NoPendingWriteBacksIsANoOp(t *testing.T) 
 	write := basicWrite(t, "Standup (renamed)")
 	changes := []DeltaSeriesChange{{ExternalUID: "uid-1", Master: &write}}
 
-	filtered := protectPendingWriteBacksDelta(nil, changes, nil)
+	filtered := protectPendingWriteBacksDelta(nil, changes, nil, nil)
 
 	if len(filtered) != 1 {
 		t.Fatalf("expected changes untouched, got %+v", filtered)
+	}
+}
+
+// TestProtectPendingWriteBacks_FullMode_QueuedDeleteIsDroppedFromIncoming
+// is #292's own ADR-0077 table test for Full mode: a Master deleted here
+// whose events.delete hasn't drained has no stored row left, so a Full
+// Refresh still listing it would re-create it. Its ExternalUID must be
+// dropped from incoming — but never marked unparseable, since there is no
+// stored series to protect and marking it would suppress a genuine same-UID
+// series elsewhere.
+func TestProtectPendingWriteBacks_FullMode_QueuedDeleteIsDroppedFromIncoming(t *testing.T) {
+	existing := []ExistingSeries{
+		{MasterID: "master-ordinary", ExternalUID: "uid-ordinary", Content: basicWrite(t, "Retro")},
+	}
+	incoming := []IncomingSeries{
+		{ExternalUID: "uid-deleted", Write: basicWrite(t, "Standup (still at the provider)")},
+		{ExternalUID: "uid-ordinary", Write: basicWrite(t, "Retro (renamed at the provider)")},
+	}
+	pendingDeleteUIDs := map[string]bool{"uid-deleted": true}
+
+	filteredIncoming, unparseable := protectPendingWriteBacks(existing, incoming, nil, nil, pendingDeleteUIDs)
+
+	result := ReconcileSeries(existing, filteredIncoming, unparseable)
+
+	for _, u := range result.Upserts {
+		if u.Write.Title == "Standup (still at the provider)" {
+			t.Fatalf("expected the queued-delete series never re-created, got %+v", result.Upserts)
+		}
+	}
+	if len(unparseable) != 0 {
+		t.Fatalf("expected the queued-delete UID not marked unparseable, got %+v", unparseable)
+	}
+	if len(result.Upserts) != 1 || result.Upserts[0].MasterID != "master-ordinary" {
+		t.Fatalf("expected the unrelated series to reconcile normally, got %+v", result.Upserts)
+	}
+}
+
+// TestProtectPendingWriteBacksDelta_QueuedDeleteChangeIsDropped is the
+// Delta-mode sibling: a batch update for a series whose events.delete is
+// queued must be dropped, so ReconcileDelta's "no stored counterpart → new
+// series" branch never resurrects it.
+func TestProtectPendingWriteBacksDelta_QueuedDeleteChangeIsDropped(t *testing.T) {
+	updated := basicWrite(t, "Standup (edited at the provider)")
+	renamed := basicWrite(t, "Retro (renamed)")
+	changes := []DeltaSeriesChange{
+		{ExternalUID: "uid-deleted", Master: &updated},
+		{ExternalUID: "uid-ordinary", Master: &renamed},
+	}
+	pendingDeleteUIDs := map[string]bool{"uid-deleted": true}
+
+	filtered := protectPendingWriteBacksDelta(nil, changes, nil, pendingDeleteUIDs)
+
+	result := ReconcileDelta(nil, filtered, nil)
+	if len(result.Upserts) != 1 || result.Upserts[0].Write.Title != "Retro (renamed)" {
+		t.Fatalf("expected only the unrelated change to survive, got %+v", result.Upserts)
 	}
 }

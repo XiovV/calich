@@ -90,6 +90,42 @@ type fakeGoogleServer struct {
 	// every such request received, in arrival order.
 	getEventResponse map[string]any
 	getEventRequests []capturedGoogleGet
+	// insertRequests records every events.insert (POST .../events) this
+	// server received (#292), in arrival order. insertResponseID/ETag are the
+	// id and validator Google mints on success (defaulting to
+	// "google-inserted-1" / "inserted-etag-1"); insertStatus forces a
+	// non-200.
+	insertRequests     []capturedGoogleInsert
+	insertResponseID   string
+	insertResponseETag string
+	insertStatus       int
+	// deleteRequests records every events.delete (DELETE .../events/{id})
+	// this server received (#292). deleteStatus forces a non-2xx.
+	deleteRequests []capturedGoogleDelete
+	deleteStatus   int
+	// insertedEvents tracks events this server has created via events.insert,
+	// keyed by id, so a second insert of the same client-supplied id answers
+	// 409 (the idempotency mechanism) and events.get can serve it back.
+	insertedEvents map[string]map[string]any
+	// insertCommitThenFailStatus, when non-zero, makes events.insert record
+	// the event (as if Google committed it) and *then* answer that status —
+	// the "the write landed but the response was lost" case a retry must not
+	// turn into a duplicate.
+	insertCommitThenFailStatus int
+}
+
+// capturedGoogleInsert is one events.insert request fakeGoogleServer received
+// (#292) — enough to assert which calendar was addressed and the
+// field-scoped body that reached the wire.
+type capturedGoogleInsert struct {
+	CalendarID string
+	Body       map[string]any
+}
+
+// capturedGoogleDelete is one events.delete request fakeGoogleServer
+// received (#292).
+type capturedGoogleDelete struct {
+	CalendarID, EventID string
 }
 
 // capturedGoogleGet is one events.get request fakeGoogleServer received
@@ -279,12 +315,84 @@ func newFakeGoogleServer(t *testing.T) *fakeGoogleServer {
 			CalendarID: r.PathValue("calendarId"),
 			EventID:    r.PathValue("eventId"),
 		})
-		if f.getEventResponse == nil {
-			w.WriteHeader(http.StatusNotFound)
+		if f.getEventResponse != nil {
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(f.getEventResponse)
+			return
+		}
+		if ev, ok := f.insertedEvents[r.PathValue("eventId")]; ok {
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(ev)
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	})
+	mux.HandleFunc("POST /{calendarId}/events", func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer fake-access-token" {
+			t.Fatalf("expected events.insert request to carry the exchanged access token, got %q", r.Header.Get("Authorization"))
+		}
+		if got := r.URL.Query().Get("sendUpdates"); got != "none" {
+			t.Fatalf("expected sendUpdates=none on every write-back push (ADR-0075), got %q", got)
+		}
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode events.insert body: %v", err)
+		}
+		f.insertRequests = append(f.insertRequests, capturedGoogleInsert{CalendarID: r.PathValue("calendarId"), Body: body})
+
+		if f.insertStatus != 0 && f.insertStatus != http.StatusOK {
+			w.WriteHeader(f.insertStatus)
+			return
+		}
+		// Honor a client-supplied id (the idempotency mechanism, #292): a
+		// second insert with an id already created answers 409, exactly as
+		// Google does, so a retry after a lost response is a no-op.
+		id, _ := body["id"].(string)
+		if id == "" {
+			id = f.insertResponseID
+		}
+		if id == "" {
+			id = "google-inserted-1"
+		}
+		etag := f.insertResponseETag
+		if etag == "" {
+			etag = "inserted-etag-1"
+		}
+		body["id"] = id
+		body["etag"] = `"` + etag + `"`
+
+		if f.insertedEvents == nil {
+			f.insertedEvents = map[string]map[string]any{}
+		}
+		if _, dup := f.insertedEvents[id]; dup {
+			w.WriteHeader(http.StatusConflict)
+			return
+		}
+		f.insertedEvents[id] = body
+
+		if f.insertCommitThenFailStatus != 0 {
+			w.WriteHeader(f.insertCommitThenFailStatus)
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(f.getEventResponse)
+		_ = json.NewEncoder(w).Encode(body)
+	})
+	mux.HandleFunc("DELETE /{calendarId}/events/{eventId}", func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer fake-access-token" {
+			t.Fatalf("expected events.delete request to carry the exchanged access token, got %q", r.Header.Get("Authorization"))
+		}
+		if got := r.URL.Query().Get("sendUpdates"); got != "none" {
+			t.Fatalf("expected sendUpdates=none on every write-back push (ADR-0075), got %q", got)
+		}
+		f.deleteRequests = append(f.deleteRequests, capturedGoogleDelete{
+			CalendarID: r.PathValue("calendarId"),
+			EventID:    r.PathValue("eventId"),
+		})
+		if f.deleteStatus != 0 && f.deleteStatus != http.StatusOK && f.deleteStatus != http.StatusNoContent {
+			w.WriteHeader(f.deleteStatus)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
 	})
 
 	f.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

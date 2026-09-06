@@ -118,11 +118,28 @@ func (b *Backend) currentObjectETag(ctx context.Context, userID int64, calendarI
 		return false, "", nil
 	}
 
-	cal, _, err := icalendar.SeriesToICal(master, overrides, icalendar.CalDAVTarget(attachmentsURIPrefix(ctx)))
+	// A Linked Calendar is not exposed over CalDAV (ADR-0074) — GetCalendar
+	// 404s the collection on discovery, so this is the same refusal for a
+	// client holding a cached or guessed object path: not-exists, so both the
+	// PUT precondition and DeleteCalendarObject treat it as a 404 rather than
+	// letting EventService.Delete's own writable-Linked-Calendar path run
+	// from a CalDAV request (#292). PutSeries takes the same posture directly.
+	cal, err := b.calendars.Get(ctx, userID, calendarID)
+	if err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			return false, "", nil
+		}
+		return false, "", fmt.Errorf("get calendar: %w", err)
+	}
+	if cal.Source != nil && cal.Source.Kind == repository.SourceKindConnection {
+		return false, "", nil
+	}
+
+	ics, _, err := icalendar.SeriesToICal(master, overrides, icalendar.CalDAVTarget(attachmentsURIPrefix(ctx)))
 	if err != nil {
 		return false, "", err
 	}
-	etag, err = icalendar.CalendarETag(cal)
+	etag, err = icalendar.CalendarETag(ics)
 	if err != nil {
 		return false, "", err
 	}

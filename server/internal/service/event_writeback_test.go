@@ -201,24 +201,15 @@ func TestEventService_Update_RefusesEditOnAReadOnlyLinkedCalendar(t *testing.T) 
 	}
 }
 
-// TestEventService_Create_RefusesOnConnectionCalendarRegardlessOfMode,
-// TestEventService_Delete_RefusesOnConnectionCalendarRegardlessOfMode,
-// TestEventService_AddException_RefusesOnConnectionCalendarRegardlessOfMode,
-// and TestEventService_ReparentFrom_RefusesWhenEitherSideIsAConnectionCalendar
-// cover the hole a writable Connection Source opens for the first time
-// (#290): before this ticket every such Source was read-only, so Access
-// alone refused every mutating method. Now that Mode can be writable, these
-// four must refuse on their own — Create would mint a row with no
-// ExternalUID that the next Full Refresh tombstones (ADR-0053, ADR-0076);
-// Delete/AddException/ReparentFrom would silently diverge this app's state
-// from the Provider's. None of them enqueue a Write-back push yet
-// (#291/#292), so ErrLinkedCalendarWriteUnsupported, not success, is the
-// only safe answer — proven here against a Mode: SourceModeWritable Source
-// specifically, so the assertion can't be satisfied by the older read-only
-// clamp alone.
-func TestEventService_Create_RefusesOnConnectionCalendarRegardlessOfMode(t *testing.T) {
+// TestEventService_Create_RefusesOnReadOnlyLinkedCalendar and
+// TestEventService_Delete_RefusesOnReadOnlyLinkedCalendar: a Linked Calendar
+// the Provider reports read-only refuses both, via the same Access clamp
+// (access.go) a Subscription's read-only Source enforces. Create/delete of a
+// plain Master on a *writable* one is now supported (#292) — see
+// event_create_delete_writeback_test.go.
+func TestEventService_Create_RefusesOnReadOnlyLinkedCalendar(t *testing.T) {
 	g := newTestGraph(t)
-	userID, calendarID := newTestLinkedCalendar(t, g, repository.SourceModeWritable)
+	userID, calendarID := newTestLinkedCalendar(t, g, repository.SourceModeReadOnly)
 
 	_, err := g.Events.Create(context.Background(), userID, "evt-new-on-linked", EventWrite{
 		CalendarID: calendarID,
@@ -226,17 +217,42 @@ func TestEventService_Create_RefusesOnConnectionCalendarRegardlessOfMode(t *test
 		Start:      time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC),
 		End:        time.Date(2026, 1, 1, 9, 30, 0, 0, time.UTC),
 	})
-	if err != ErrLinkedCalendarWriteUnsupported {
-		t.Fatalf("expected ErrLinkedCalendarWriteUnsupported, got %v", err)
+	if err != ErrCalendarReadOnly {
+		t.Fatalf("expected ErrCalendarReadOnly, got %v", err)
 	}
 }
 
-func TestEventService_Delete_RefusesOnConnectionCalendarRegardlessOfMode(t *testing.T) {
+func TestEventService_Delete_RefusesOnReadOnlyLinkedCalendar(t *testing.T) {
 	g := newTestGraph(t)
-	userID, calendarID := newTestLinkedCalendar(t, g, repository.SourceModeWritable)
+	userID, calendarID := newTestLinkedCalendar(t, g, repository.SourceModeReadOnly)
 	event := seedLinkedMaster(t, g, userID, calendarID, "evt-linked-delete")
 
-	if err := g.Events.Delete(context.Background(), userID, event.ID); err != ErrLinkedCalendarWriteUnsupported {
+	if err := g.Events.Delete(context.Background(), userID, event.ID); err != ErrCalendarReadOnly {
+		t.Fatalf("expected ErrCalendarReadOnly, got %v", err)
+	}
+}
+
+// TestEventService_Create_RefusesAttendeesOnWritableLinkedCalendar keeps the
+// one part of Create still refused on a writable Linked Calendar (#292,
+// ADR-0052): a Linked Calendar's Events carry no Attendees this app mirrors
+// to the Provider, so inviting one here would mint a local-only row
+// write-back has no way to reconcile against Google's guest list.
+func TestEventService_Create_RefusesAttendeesOnWritableLinkedCalendar(t *testing.T) {
+	g := newTestGraph(t)
+	userID, calendarID := newTestLinkedCalendar(t, g, repository.SourceModeWritable)
+	target, err := g.UserRepo.Create(context.Background(), "target-user", "target@example.com", "hash", false)
+	if err != nil {
+		t.Fatalf("create target user: %v", err)
+	}
+
+	_, err = g.Events.Create(context.Background(), userID, "evt-new-with-attendee", EventWrite{
+		CalendarID:      calendarID,
+		Title:           "Should not be created",
+		Start:           time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC),
+		End:             time.Date(2026, 1, 1, 9, 30, 0, 0, time.UTC),
+		AttendeeUserIDs: []int64{target.ID},
+	})
+	if err != ErrLinkedCalendarWriteUnsupported {
 		t.Fatalf("expected ErrLinkedCalendarWriteUnsupported, got %v", err)
 	}
 }

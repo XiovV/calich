@@ -21,12 +21,21 @@ const (
 // OutboxMethodRequest is a METHOD:REQUEST Invitation — a fresh invite or a
 // re-issued one (ADR-0059). OutboxMethodCancel is a METHOD:CANCEL
 // withdrawal, queued on Attendee removal or Event deletion (#201).
-// OutboxMethodPatch is a queued Provider PATCH (#290, ADR-0075) — the only
-// method OutboxKindWriteBack rows ever carry.
+//
+// OutboxMethodPatch/Post/Delete are the three shapes an OutboxKindWriteBack
+// row carries (#290, #292, ADR-0075): PATCH is an edit to a Master that
+// already exists at the Provider, POST is events.insert for a locally created
+// Event that does not exist there yet (SendWriteBack adopts the id Google
+// returns), and DELETE is events.delete for a Master removed here. PATCH and
+// POST rebuild the push from the Event's own live state at send time; DELETE
+// cannot — the local row is gone by then — so a DELETE row carries an
+// OutboxWriteBackDeleteSnapshot instead, exactly as a mail CANCEL does.
 const (
 	OutboxMethodRequest = "REQUEST"
 	OutboxMethodCancel  = "CANCEL"
 	OutboxMethodPatch   = "PATCH"
+	OutboxMethodPost    = "POST"
+	OutboxMethodDelete  = "DELETE"
 )
 
 // OutboxKindMail is every row this table carried before #290: a queued
@@ -77,6 +86,20 @@ type OutboxCancelSnapshot struct {
 	RecipientName  string `json:"recipientName"`
 }
 
+// OutboxWriteBackDeleteSnapshot is a DELETE OutboxKindWriteBack row's
+// self-contained payload (#292, ADR-0077): the Calendar's id and the deleted
+// Master's ExternalUID, captured by EventService.Delete while the Event row
+// still exists. Unlike a PATCH or POST — which SendWriteBack rebuilds from
+// the Event's own live state — a DELETE's whole purpose is to outlive the
+// row it removes, so it cannot re-read anything at send time, mirroring
+// OutboxCancelSnapshot's own contract. The Calendar itself survives the
+// Event's deletion, so its Source and Connection are still re-resolved from
+// CalendarID at send time rather than snapshotted here.
+type OutboxWriteBackDeleteSnapshot struct {
+	CalendarID  string `json:"calendarId"`
+	ExternalUID string `json:"externalUid"`
+}
+
 // OutboxMessage is a queued Invitation or Cancellation email (ADR-0059,
 // ADR-0060, #201): written in the same transaction as the Attendee row it
 // accompanies (or, for a CANCEL, the row/Attendee-row it withdraws), so a
@@ -100,15 +123,19 @@ type OutboxMessage struct {
 	// the Worker's Sender dispatches this row to. Always OutboxKindMail for
 	// every row Enqueue*/EnqueueCancel* below writes; only EnqueueWriteBack
 	// writes the other.
-	Kind          string
-	Method        string
-	Snapshot      *OutboxCancelSnapshot
-	Status        string
-	Attempts      int
-	NextAttemptAt time.Time
-	LastError     string
-	CreatedAt     time.Time
-	SentAt        *time.Time
+	Kind   string
+	Method string
+	// Snapshot is non-nil only for a mail CANCEL; WriteBackDelete is non-nil
+	// only for an OutboxKindWriteBack DELETE (#292). The two share the
+	// underlying `snapshot` column but never both a row.
+	Snapshot        *OutboxCancelSnapshot
+	WriteBackDelete *OutboxWriteBackDeleteSnapshot
+	Status          string
+	Attempts        int
+	NextAttemptAt   time.Time
+	LastError       string
+	CreatedAt       time.Time
+	SentAt          *time.Time
 }
 
 // OutboxRepository stores queued Invitation emails, drained by the
@@ -288,10 +315,31 @@ func (r *OutboxRepository) enqueueCancel(ctx context.Context, eventID string, re
 // since only the last one has any effect. Returns the existing row when one
 // is found, never erroring on the collision.
 func (r *OutboxRepository) EnqueueWriteBack(ctx context.Context, eventID string) (OutboxMessage, error) {
+	return r.enqueueRebuiltWriteBack(ctx, eventID, OutboxMethodPatch)
+}
+
+// EnqueueWriteBackCreate is EnqueueWriteBack's events.insert counterpart
+// (#292, ADR-0077): a locally created Event on a writable Linked Calendar
+// that does not exist at the Provider yet. SendWriteBack issues the POST and
+// adopts the id Google returns onto the row. Like the PATCH, it rebuilds
+// from live state at send time and is idempotent against an already-pending
+// write-back row for the same Event.
+func (r *OutboxRepository) EnqueueWriteBackCreate(ctx context.Context, eventID string) (OutboxMessage, error) {
+	return r.enqueueRebuiltWriteBack(ctx, eventID, OutboxMethodPost)
+}
+
+// enqueueRebuiltWriteBack inserts a pending OutboxKindWriteBack row of
+// methodValue (PATCH or POST — the two that rebuild from live state), unless
+// one is already pending for eventID, in which case that row is returned
+// unchanged. Several edits queued between Worker ticks would otherwise mean
+// several PATCH requests for one logical change; and an edit made while a
+// create push is still queued rides the same POST row, which rebuilds from
+// live state and so already carries the edit.
+func (r *OutboxRepository) enqueueRebuiltWriteBack(ctx context.Context, eventID, methodValue string) (OutboxMessage, error) {
 	var existingID int64
 	err := r.db.QueryRowContext(ctx,
-		`SELECT id FROM outbox WHERE event_id = ? AND kind = ? AND status = ? LIMIT 1`,
-		eventID, OutboxKindWriteBack, OutboxStatusPending,
+		`SELECT id FROM outbox WHERE event_id = ? AND kind = ? AND status = ? AND method IN (?, ?) LIMIT 1`,
+		eventID, OutboxKindWriteBack, OutboxStatusPending, OutboxMethodPatch, OutboxMethodPost,
 	).Scan(&existingID)
 	if err == nil {
 		return r.Get(ctx, existingID)
@@ -302,7 +350,7 @@ func (r *OutboxRepository) EnqueueWriteBack(ctx context.Context, eventID string)
 
 	res, err := r.db.ExecContext(ctx,
 		`INSERT INTO outbox (event_id, kind, method) VALUES (?, ?, ?)`,
-		eventID, OutboxKindWriteBack, OutboxMethodPatch,
+		eventID, OutboxKindWriteBack, methodValue,
 	)
 	if err != nil {
 		return OutboxMessage{}, fmt.Errorf("insert outbox message: %w", err)
@@ -314,6 +362,106 @@ func (r *OutboxRepository) EnqueueWriteBack(ctx context.Context, eventID string)
 	}
 
 	return r.Get(ctx, id)
+}
+
+// EnqueueWriteBackDelete queues an events.delete push for a Master removed
+// here (#292, ADR-0077). Unlike the rebuilt PATCH/POST, this carries a
+// snapshot — the local row is gone by the time the Worker drains it. Any
+// still-pending PATCH/POST for the same Event is dropped first: an edit or a
+// not-yet-sent create is moot once the Event is deleted, and leaving the row
+// would push a change for an Event this DELETE is about to remove.
+func (r *OutboxRepository) EnqueueWriteBackDelete(ctx context.Context, eventID string, snapshot OutboxWriteBackDeleteSnapshot) (OutboxMessage, error) {
+	if err := r.dropPendingRebuiltWriteBacks(ctx, eventID); err != nil {
+		return OutboxMessage{}, err
+	}
+
+	var existingID int64
+	err := r.db.QueryRowContext(ctx,
+		`SELECT id FROM outbox WHERE event_id = ? AND kind = ? AND status = ? AND method = ? LIMIT 1`,
+		eventID, OutboxKindWriteBack, OutboxStatusPending, OutboxMethodDelete,
+	).Scan(&existingID)
+	if err == nil {
+		return r.Get(ctx, existingID)
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return OutboxMessage{}, fmt.Errorf("check pending write-back delete: %w", err)
+	}
+
+	encoded, err := json.Marshal(snapshot)
+	if err != nil {
+		return OutboxMessage{}, fmt.Errorf("marshal write-back delete snapshot: %w", err)
+	}
+	res, err := r.db.ExecContext(ctx,
+		`INSERT INTO outbox (event_id, kind, method, snapshot) VALUES (?, ?, ?, ?)`,
+		eventID, OutboxKindWriteBack, OutboxMethodDelete, string(encoded),
+	)
+	if err != nil {
+		return OutboxMessage{}, fmt.Errorf("insert outbox message: %w", err)
+	}
+
+	id, err := res.LastInsertId()
+	if err != nil {
+		return OutboxMessage{}, fmt.Errorf("get last insert id: %w", err)
+	}
+
+	return r.Get(ctx, id)
+}
+
+// dropPendingRebuiltWriteBacks removes every still-pending rebuilt
+// (PATCH/POST) write-back row for eventID (#292, ADR-0077): an edit or a
+// not-yet-sent create is moot once the Event is deleted here. Leaves any
+// DELETE row and every mail row alone. Called by EnqueueWriteBackDelete
+// before it inserts.
+func (r *OutboxRepository) dropPendingRebuiltWriteBacks(ctx context.Context, eventID string) error {
+	if _, err := r.db.ExecContext(ctx,
+		`DELETE FROM outbox WHERE event_id = ? AND kind = ? AND status = ? AND method IN (?, ?)`,
+		eventID, OutboxKindWriteBack, OutboxStatusPending, OutboxMethodPatch, OutboxMethodPost,
+	); err != nil {
+		return fmt.Errorf("drop superseded write-backs: %w", err)
+	}
+	return nil
+}
+
+// ListPendingWriteBackDeleteExternalUIDs returns the ExternalUID of every
+// Master on calendarID with a pending events.delete push (#292, ADR-0077),
+// read from the DELETE rows' own snapshots. A reconciler subtracts these from
+// its incoming set before computing absence, exactly as it does the
+// pending-edit set (ADR-0076): the local row is already gone, so without this
+// a Delta Refresh carrying an ordinary update for the series — or a Full
+// Refresh still listing it — would re-create the Event the User just deleted.
+//
+// Scoped to calendarID because a Provider assigns one event id to every
+// attendee's copy of an invited event: an unscoped set would drop — and, in
+// Full mode, tombstone — a *live* series sharing that id in some other
+// Linked Calendar (a different User's, even).
+func (r *OutboxRepository) ListPendingWriteBackDeleteExternalUIDs(ctx context.Context, calendarID string) (map[string]bool, error) {
+	rows, err := r.db.QueryContext(ctx,
+		`SELECT snapshot FROM outbox WHERE kind = ? AND method = ? AND status = ? AND snapshot IS NOT NULL`,
+		OutboxKindWriteBack, OutboxMethodDelete, OutboxStatusPending,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list pending write-back deletes: %w", err)
+	}
+	defer rows.Close()
+
+	uids := make(map[string]bool)
+	for rows.Next() {
+		var raw string
+		if err := rows.Scan(&raw); err != nil {
+			return nil, fmt.Errorf("scan write-back delete snapshot: %w", err)
+		}
+		var s OutboxWriteBackDeleteSnapshot
+		if err := json.Unmarshal([]byte(raw), &s); err != nil {
+			return nil, fmt.Errorf("unmarshal write-back delete snapshot: %w", err)
+		}
+		if s.CalendarID == calendarID && s.ExternalUID != "" {
+			uids[s.ExternalUID] = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list pending write-back deletes: %w", err)
+	}
+	return uids, nil
 }
 
 // Get returns one OutboxMessage by id, or ErrNotFound.
@@ -359,11 +507,19 @@ func scanOutboxMessage(row rowScanner) (OutboxMessage, error) {
 		m.ActorUserID = &id
 	}
 	if snapshot.Valid {
-		var s OutboxCancelSnapshot
-		if err := json.Unmarshal([]byte(snapshot.String), &s); err != nil {
-			return OutboxMessage{}, fmt.Errorf("unmarshal cancel snapshot: %w", err)
+		if m.Kind == OutboxKindWriteBack && m.Method == OutboxMethodDelete {
+			var s OutboxWriteBackDeleteSnapshot
+			if err := json.Unmarshal([]byte(snapshot.String), &s); err != nil {
+				return OutboxMessage{}, fmt.Errorf("unmarshal write-back delete snapshot: %w", err)
+			}
+			m.WriteBackDelete = &s
+		} else {
+			var s OutboxCancelSnapshot
+			if err := json.Unmarshal([]byte(snapshot.String), &s); err != nil {
+				return OutboxMessage{}, fmt.Errorf("unmarshal cancel snapshot: %w", err)
+			}
+			m.Snapshot = &s
 		}
-		m.Snapshot = &s
 	}
 	m.LastError = lastError.String
 	if sentAt.Valid {
