@@ -15,6 +15,7 @@ vi.mock("../lib/connectionsApi", async () => {
       list: vi.fn(),
       connectGoogle: vi.fn(),
       disconnect: vi.fn(),
+      disconnectImpact: vi.fn(),
       listPickerCalendars: vi.fn(),
       importCalendars: vi.fn(),
     },
@@ -66,6 +67,7 @@ beforeEach(() => {
   useWorkspacesStore.setState({ activeWorkspaceId: 7 });
   vi.mocked(connectionsApi.list).mockResolvedValue([]);
   vi.mocked(connectionsApi.listPickerCalendars).mockResolvedValue([]);
+  vi.mocked(connectionsApi.disconnectImpact).mockResolvedValue({ linkedCalendars: [] });
   Object.defineProperty(window, "location", {
     value: { ...window.location, href: "" },
     writable: true,
@@ -191,27 +193,73 @@ describe("ConnectionsSection — reconnecting a broken connection (#291)", () =>
   });
 });
 
-describe("ConnectionsSection — disconnecting", () => {
-  it("removes the connection after confirming", async () => {
+describe("ConnectionsSection — disconnecting (#295)", () => {
+  it("keeps the calendars by default when the disconnect is confirmed", async () => {
     vi.mocked(connectionsApi.list).mockResolvedValue([connectionA]);
+    vi.mocked(connectionsApi.disconnectImpact).mockResolvedValue({
+      linkedCalendars: [{ id: "cal-1", name: "Work", shareCount: 0 }],
+    });
     vi.mocked(connectionsApi.disconnect).mockResolvedValue(undefined);
-    vi.spyOn(window, "confirm").mockReturnValue(true);
     renderAt("/settings/connections");
 
     await userEvent.click(await screen.findByRole("button", { name: "Disconnect work@gmail.com" }));
 
-    expect(connectionsApi.disconnect).toHaveBeenCalledWith("token-123", connectionA.id);
+    // The impact dialog names the affected calendar.
+    expect(await screen.findByText("Disconnect work@gmail.com?")).toBeInTheDocument();
+    await screen.findByText("Work");
+
+    await userEvent.click(screen.getByRole("button", { name: "Disconnect" }));
+
+    await waitFor(() =>
+      expect(connectionsApi.disconnect).toHaveBeenCalledWith("token-123", connectionA.id, "keep"),
+    );
     await waitFor(() => expect(screen.getByText("No accounts connected yet.")).toBeInTheDocument());
   });
 
-  it("does nothing when the confirmation is declined", async () => {
+  it("passes the delete disposition when the User chooses it", async () => {
     vi.mocked(connectionsApi.list).mockResolvedValue([connectionA]);
-    vi.spyOn(window, "confirm").mockReturnValue(false);
+    vi.mocked(connectionsApi.disconnectImpact).mockResolvedValue({
+      linkedCalendars: [{ id: "cal-1", name: "Work", shareCount: 2 }],
+    });
+    vi.mocked(connectionsApi.disconnect).mockResolvedValue(undefined);
     renderAt("/settings/connections");
 
     await userEvent.click(await screen.findByRole("button", { name: "Disconnect work@gmail.com" }));
+    await screen.findByText("Work");
+
+    // The share warning is present because a calendar carries Shares.
+    expect(screen.getByText("shared with 2")).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("radio", { name: /Delete the calendars/ }));
+    await userEvent.click(screen.getByRole("button", { name: "Disconnect and delete" }));
+
+    await waitFor(() =>
+      expect(connectionsApi.disconnect).toHaveBeenCalledWith("token-123", connectionA.id, "delete"),
+    );
+  });
+
+  it("does nothing when the disconnect dialog is cancelled", async () => {
+    vi.mocked(connectionsApi.list).mockResolvedValue([connectionA]);
+    renderAt("/settings/connections");
+
+    await userEvent.click(await screen.findByRole("button", { name: "Disconnect work@gmail.com" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Cancel" }));
 
     expect(connectionsApi.disconnect).not.toHaveBeenCalled();
     expect(screen.getByText("work@gmail.com")).toBeInTheDocument();
+  });
+});
+
+describe("ConnectionsSection — re-opening the picker (#295)", () => {
+  it("opens the same Calendar picker from the connection's row", async () => {
+    vi.mocked(connectionsApi.list).mockResolvedValue([connectionA]);
+    renderAt("/settings/connections");
+
+    await userEvent.click(await screen.findByRole("button", { name: "Choose calendars" }));
+
+    expect(await screen.findByText("Choose calendars to bring in")).toBeInTheDocument();
+    await waitFor(() =>
+      expect(connectionsApi.listPickerCalendars).toHaveBeenCalledWith("token-123", connectionA.id),
+    );
   });
 });

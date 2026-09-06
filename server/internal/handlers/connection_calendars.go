@@ -28,15 +28,26 @@ type pickerCalendarResponse struct {
 	Color    string `json:"color"`
 	Selected bool   `json:"selected"`
 	Writable bool   `json:"writable"`
+	// ImportedHere / ImportedElsewhere / LocalCalendarID / ShareCount are the
+	// re-run's per-row state against the caller's active Workspace (#295) —
+	// see service.PickerCalendar.
+	ImportedHere      bool   `json:"importedHere"`
+	ImportedElsewhere bool   `json:"importedElsewhere"`
+	LocalCalendarID   string `json:"localCalendarId,omitempty"`
+	ShareCount        int    `json:"shareCount"`
 }
 
 func toPickerCalendarResponse(c service.PickerCalendar) pickerCalendarResponse {
 	return pickerCalendarResponse{
-		ID:       c.ExternalID,
-		Name:     c.Name,
-		Color:    c.Color,
-		Selected: c.Selected,
-		Writable: c.Writable,
+		ID:                c.ExternalID,
+		Name:              c.Name,
+		Color:             c.Color,
+		Selected:          c.Selected,
+		Writable:          c.Writable,
+		ImportedHere:      c.ImportedHere,
+		ImportedElsewhere: c.ImportedElsewhere,
+		LocalCalendarID:   c.LocalCalendarID,
+		ShareCount:        c.ShareCount,
 	}
 }
 
@@ -46,13 +57,14 @@ func toPickerCalendarResponse(c service.PickerCalendar) pickerCalendarResponse {
 // render before import.
 func (h *CalendarHandler) ListConnectionCalendars(w http.ResponseWriter, r *http.Request) {
 	userID := httpauth.MustUserID(r.Context())
+	workspaceID := httpauth.MustWorkspaceID(r.Context())
 
 	id, ok := parseInt64Param(w, r, "id")
 	if !ok {
 		return
 	}
 
-	calendars, err := h.connections.ListCalendars(r.Context(), userID, id)
+	calendars, err := h.connections.ListCalendars(r.Context(), userID, workspaceID, id)
 	if respondError(w, err, connectionCalendarsErrors, "failed to list this connection's calendars") {
 		return
 	}

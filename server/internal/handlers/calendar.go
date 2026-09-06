@@ -71,6 +71,11 @@ type calendarResponse struct {
 	// toCalendarResponse itself — a Calendar's own Source carries only the
 	// Connection's id, so this is filled in by a batched join afterward.
 	ConnectionAccountEmail *string `json:"connectionAccountEmail,omitempty"`
+	// ConnectionID is the Connection a Linked Calendar's Source points at
+	// (#295) — what the sidebar's per-Connection heading re-opens the
+	// Calendar picker with, so a User can add a calendar they skipped from
+	// where they actually think of it.
+	ConnectionID *int64 `json:"connectionId,omitempty"`
 	// Access is the caller's resolved Access to this Calendar (ADR-0034):
 	// "owner", "editor", or "viewer" — never "none", since a Calendar the
 	// caller has no Access to is never listed at all. Drives what the web
@@ -105,6 +110,9 @@ func toCalendarResponse(c repository.Calendar, isOwner bool, ownerName string, s
 		response.KeepAlarms = c.Source.KeepAlarms
 		kind := string(c.Source.Kind)
 		response.SourceKind = &kind
+		if c.Source.Kind == repository.SourceKindConnection {
+			response.ConnectionID = c.Source.ConnectionID
+		}
 		if c.Source.SourceURL != nil {
 			masked := service.MaskURL(*c.Source.SourceURL)
 			response.SourceURL = &masked

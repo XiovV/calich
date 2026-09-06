@@ -13,9 +13,17 @@ import (
 // Workspace to place Linked Calendars into, which none of #285's existing
 // Connect/Callback/Disconnect tests require.
 func newTestConnectionServiceWithWorkspace(t *testing.T, google *fakeGoogleServer, opts ...ConnectionOption) (svc *ConnectionService, auth *AuthService, userID, workspaceID int64) {
+	svc, auth, userID, workspaceID, _ = newTestConnectionServiceWithGraph(t, google, opts...)
+	return svc, auth, userID, workspaceID
+}
+
+// newTestConnectionServiceWithGraph is newTestConnectionServiceWithWorkspace
+// plus the Graph itself, for #295's tests, which assert on the Calendars and
+// Events a disposition leaves behind and so need repository access.
+func newTestConnectionServiceWithGraph(t *testing.T, google *fakeGoogleServer, opts ...ConnectionOption) (svc *ConnectionService, auth *AuthService, userID, workspaceID int64, g *Graph) {
 	t.Helper()
 
-	g := newTestGraph(t)
+	g = newTestGraph(t)
 
 	user, err := g.UserRepo.Create(context.Background(), "user-a", "user-a@example.com", "hash", false)
 	if err != nil {
@@ -37,7 +45,7 @@ func newTestConnectionServiceWithWorkspace(t *testing.T, google *fakeGoogleServe
 	}, opts...)
 	svc = NewConnectionService(connections, g.Auth, g.Calendars, g.Events, "test-client-id", "test-client-secret", "test-encryption-key", true, allOpts...)
 
-	return svc, g.Auth, user.ID, workspace.ID
+	return svc, g.Auth, user.ID, workspace.ID, g
 }
 
 // connectUser drives svc's own Connect/Callback round trip for userID and
@@ -74,10 +82,10 @@ func TestConnectionService_ListCalendars_ReturnsEveryCalendarTheAccountCanSee(t 
 		googleCalendarItem("primary", "someone@gmail.com", "#0b8043", "owner", true),
 		googleCalendarItem("shared-in@group.calendar.google.com", "Team calendar", "#7627bb", "reader", false),
 	}
-	svc, auth, userID, _ := newTestConnectionServiceWithWorkspace(t, google)
+	svc, auth, userID, workspaceID := newTestConnectionServiceWithWorkspace(t, google)
 	connectionID := connectUser(t, svc, auth, userID)
 
-	calendars, err := svc.ListCalendars(context.Background(), userID, connectionID)
+	calendars, err := svc.ListCalendars(context.Background(), userID, workspaceID, connectionID)
 	if err != nil {
 		t.Fatalf("list calendars: %v", err)
 	}
@@ -107,21 +115,21 @@ func TestConnectionService_ListCalendars_ReturnsEveryCalendarTheAccountCanSee(t 
 
 func TestConnectionService_ListCalendars_NotFoundForSomeoneElsesConnection(t *testing.T) {
 	google := newFakeGoogleServer(t)
-	svc, auth, userID, _ := newTestConnectionServiceWithWorkspace(t, google)
+	svc, auth, userID, workspaceID := newTestConnectionServiceWithWorkspace(t, google)
 	connectionID := connectUser(t, svc, auth, userID)
 
-	if _, err := svc.ListCalendars(context.Background(), userID+1, connectionID); !errors.Is(err, ErrConnectionNotFound) {
+	if _, err := svc.ListCalendars(context.Background(), userID+1, workspaceID, connectionID); !errors.Is(err, ErrConnectionNotFound) {
 		t.Fatalf("expected ErrConnectionNotFound, got %v", err)
 	}
 }
 
 func TestConnectionService_ListCalendars_SurfacesGoogleFailure(t *testing.T) {
 	google := newFakeGoogleServer(t)
-	svc, auth, userID, _ := newTestConnectionServiceWithWorkspace(t, google)
+	svc, auth, userID, workspaceID := newTestConnectionServiceWithWorkspace(t, google)
 	connectionID := connectUser(t, svc, auth, userID)
 
 	google.calendarListStatus = 401
-	if _, err := svc.ListCalendars(context.Background(), userID, connectionID); !errors.Is(err, ErrGoogleCalendarListFailed) {
+	if _, err := svc.ListCalendars(context.Background(), userID, workspaceID, connectionID); !errors.Is(err, ErrGoogleCalendarListFailed) {
 		t.Fatalf("expected ErrGoogleCalendarListFailed, got %v", err)
 	}
 }

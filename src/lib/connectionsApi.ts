@@ -49,6 +49,40 @@ export interface PickerCalendar {
   // claim about what this app itself will let a User do: every Linked
   // Calendar is read-only here until write-back ships.
   writable: boolean;
+  // importedHere is true when a Linked Calendar for this Provider calendar
+  // already exists in the Workspace the picker was opened in (#295) — the
+  // re-run's default-checked state, and the row whose uncheck deletes.
+  importedHere: boolean;
+  // importedElsewhere is true when one exists in a *different* Workspace of
+  // this User — the picker shows this Workspace's state, so the row stays
+  // unchecked here, with a quiet note explaining why (#295).
+  importedElsewhere: boolean;
+  // localCalendarId is this app's own Calendar id, set only when
+  // importedHere — what an uncheck deletes.
+  localCalendarId?: string;
+  // shareCount is how many Shares that Linked Calendar carries, set only
+  // when importedHere — so the delete confirmation can say so explicitly
+  // when other people would lose the Calendar (#295).
+  shareCount: number;
+}
+
+// DisconnectDisposition is what should happen to a Connection's Linked
+// Calendars when it is disconnected (#295): keep them as ordinary owned
+// Calendars, or delete them and their Events. No default — deletion is
+// unrecoverable.
+export type DisconnectDisposition = "keep" | "delete";
+
+// DisconnectImpactCalendar is one Linked Calendar a disconnect would touch —
+// enough for the confirmation to name what "delete" costs and warn when
+// others hold a Share.
+export interface DisconnectImpactCalendar {
+  id: string;
+  name: string;
+  shareCount: number;
+}
+
+export interface DisconnectImpact {
+  linkedCalendars: DisconnectImpactCalendar[];
 }
 
 export const connectionsApi = {
@@ -76,11 +110,34 @@ export const connectionsApi = {
     return body.url;
   },
 
-  async disconnect(accessToken: string, id: number): Promise<void> {
-    const response = await authedFetch(accessToken, `/api/connections/${id}`, {
-      method: "DELETE",
+  // disconnectImpact is what disconnecting would affect (#295): every Linked
+  // Calendar the Connection produced and how many Shares each carries, so
+  // the confirmation can name the cost before the User picks a disposition.
+  async disconnectImpact(accessToken: string, id: number): Promise<DisconnectImpact> {
+    const response = await authedFetch(accessToken, `/api/connections/${id}/impact`, {
       credentials: "include",
     });
+    if (!response.ok) throw await errorFromResponse(response);
+
+    return (await response.json()) as DisconnectImpact;
+  },
+
+  // disconnect removes the Connection, applying disposition to its Linked
+  // Calendars first (#295). The disposition is required — the server refuses
+  // a disconnect that doesn't name one, since deletion is unrecoverable.
+  async disconnect(
+    accessToken: string,
+    id: number,
+    disposition: DisconnectDisposition,
+  ): Promise<void> {
+    const response = await authedFetch(
+      accessToken,
+      `/api/connections/${id}?disposition=${disposition}`,
+      {
+        method: "DELETE",
+        credentials: "include",
+      },
+    );
     if (!response.ok) throw await errorFromResponse(response);
   },
 

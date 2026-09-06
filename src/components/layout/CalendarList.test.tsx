@@ -6,6 +6,13 @@ import type { Calendar } from "../../lib/calendar";
 // Same convention as the other component tests: the *Api modules are mocked,
 // the stores are real.
 vi.mock("../../lib/calendarsApi", () => ({ calendarsApi: { list: vi.fn() } }));
+vi.mock("../../lib/connectionsApi", async () => {
+  const actual = await vi.importActual<typeof import("../../lib/connectionsApi")>("../../lib/connectionsApi");
+  return {
+    ...actual,
+    connectionsApi: { listPickerCalendars: vi.fn(), importCalendars: vi.fn() },
+  };
+});
 vi.mock("../../lib/icsApi", () => ({
   icsApi: { downloadCalendar: vi.fn(), calendarOversizedAttachments: vi.fn() },
 }));
@@ -15,6 +22,8 @@ const { useAuthStore } = await import("../../lib/authStore");
 const { useCalendarsStore } = await import("../../lib/calendarsStore");
 const { useEventsStore } = await import("../../lib/eventsStore");
 const { useShellStore } = await import("../../lib/shellStore");
+const { useWorkspacesStore } = await import("../../lib/workspacesStore");
+const { connectionsApi } = await import("../../lib/connectionsApi");
 const { CalendarList } = await import("./CalendarList");
 
 const owned: Calendar = {
@@ -109,6 +118,22 @@ describe("Linked Calendar grouping", () => {
     expect(screen.getByText("My calendars")).toBeInTheDocument();
     // "Work" only ever renders under its Connection's own heading.
     expect(screen.getAllByText("Work")).toHaveLength(1);
+  });
+
+  // #295: the Connection's sidebar heading re-opens the Calendar picker, so a
+  // User can add a calendar they skipped from where they actually are.
+  it("re-opens the Calendar picker from the Connection heading", async () => {
+    useWorkspacesStore.setState({ activeWorkspaceId: 7 });
+    vi.mocked(connectionsApi.listPickerCalendars).mockResolvedValue([]);
+    useCalendarsStore.setState({ calendars: [{ ...workLinked, connectionId: 42 }] });
+    render(<CalendarList />);
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "Choose calendars from work@gmail.com" }),
+    );
+
+    expect(await screen.findByText("Choose calendars to bring in")).toBeInTheDocument();
+    useWorkspacesStore.setState({ activeWorkspaceId: null });
   });
 
   // #294: a Linked Calendar Shared to the viewer appears under "Shared with

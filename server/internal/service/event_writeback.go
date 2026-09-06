@@ -104,3 +104,13 @@ func (s *EventService) MarkWriteBackFailed(ctx context.Context, id, reason strin
 func (s *EventService) ApplyProviderOwnedFields(ctx context.Context, id string, rsvpStatus, conferenceURL *string, guestCount int) error {
 	return s.events.ApplyProviderOwnedFields(ctx, id, rsvpStatus, conferenceURL, guestCount)
 }
+
+// ClearProviderIdentity strips the Provider from every Event of calendarID
+// (#295) — the "keep the calendars" disconnect disposition's per-Calendar
+// step, turning a Linked Calendar's mirrored Events into ordinary owned
+// ones once its Connection is gone. Not Access-checked: its only caller,
+// ConnectionService.Disconnect, has already confirmed the Connection — and
+// so every Linked Calendar of it — belongs to the caller.
+func (s *EventService) ClearProviderIdentity(ctx context.Context, calendarID string) error {
+	return s.events.ClearProviderIdentityByCalendar(ctx, calendarID)
+}

@@ -478,6 +478,30 @@ func (s *CalendarService) OwnershipMeta(ctx context.Context, userID int64, calen
 	return calendar.UserID == userID, owner.Name, directCount + groupCount, nil
 }
 
+// ShareCount is OwnershipMeta's Share tally alone (#295) — direct and Group
+// Shares summed (ADR-0045) — for the Calendar picker's per-row "and it's
+// shared with N people" note, where the Owner and Owner Name OwnershipMeta
+// also resolves are already known.
+func (s *CalendarService) ShareCount(ctx context.Context, calendarID string) (int, error) {
+	directCount, err := s.shares.CountByCalendar(ctx, calendarID)
+	if err != nil {
+		return 0, fmt.Errorf("count calendar shares: %w", err)
+	}
+	groupCount, err := s.groupShares.CountByCalendar(ctx, calendarID)
+	if err != nil {
+		return 0, fmt.Errorf("count calendar group shares: %w", err)
+	}
+	return directCount + groupCount, nil
+}
+
+// ListConnectionLinks returns every Linked Calendar mirrored from
+// connectionID, across every Workspace (#295) — the Calendar picker's
+// "already imported" join and Disconnect's "which Calendars does the
+// disposition touch" list. A plain pass-through to the Source repository.
+func (s *CalendarService) ListConnectionLinks(ctx context.Context, connectionID int64) ([]repository.ConnectionLink, error) {
+	return s.sources.ListConnectionLinks(ctx, connectionID)
+}
+
 // requireRead resolves calendarID and refuses it unless userID has at least
 // Viewer Access — the CanRead counterpart to requireOwner, for operations
 // like a colour override that are open to any Access level rather than

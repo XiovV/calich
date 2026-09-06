@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 // Same convention as the other component tests: the *Api modules are
@@ -14,7 +14,7 @@ vi.mock("../lib/connectionsApi", async () => {
     },
   };
 });
-vi.mock("../lib/calendarsApi", () => ({ calendarsApi: { list: vi.fn() } }));
+vi.mock("../lib/calendarsApi", () => ({ calendarsApi: { list: vi.fn(), remove: vi.fn() } }));
 
 const { connectionsApi } = await import("../lib/connectionsApi");
 const { calendarsApi } = await import("../lib/calendarsApi");
@@ -29,6 +29,9 @@ const primary = {
   color: "#0B8043FF",
   selected: true,
   writable: true,
+  importedHere: false,
+  importedElsewhere: false,
+  shareCount: 0,
 };
 const sharedIn = {
   id: "shared-in@group.calendar.google.com",
@@ -36,6 +39,9 @@ const sharedIn = {
   color: "#7627BBFF",
   selected: false,
   writable: false,
+  importedHere: false,
+  importedElsewhere: false,
+  shareCount: 0,
 };
 
 beforeEach(() => {
@@ -130,5 +136,72 @@ describe("CalendarPickerModal", () => {
     render(<CalendarPickerModal connectionId={1} onClose={vi.fn()} />);
 
     expect(await screen.findByText("This account has no calendars to bring in.")).toBeInTheDocument();
+  });
+
+  // #295: the re-run shows this Workspace's state — a row imported here is
+  // checked, a row imported into another Workspace is noted and unchecked.
+  it("checks rows imported here and notes rows imported into another workspace", async () => {
+    vi.mocked(connectionsApi.listPickerCalendars).mockResolvedValue([
+      { ...primary, selected: false, importedHere: true, localCalendarId: "cal-1" },
+      { ...sharedIn, importedElsewhere: true },
+    ]);
+    render(<CalendarPickerModal connectionId={1} onClose={vi.fn()} />);
+
+    expect(await screen.findByLabelText("someone@gmail.com")).toBeChecked();
+    expect(screen.getByLabelText("Team calendar")).not.toBeChecked();
+    expect(screen.getByText("Already in another workspace")).toBeInTheDocument();
+    // Nothing new to import, so Confirm just closes.
+    expect(screen.getByRole("button", { name: "Done" })).toBeInTheDocument();
+  });
+
+  // #295: unchecking a previously-imported row deletes the Linked Calendar,
+  // behind a confirmation that names the Shares it carries.
+  it("deletes an imported calendar when it is unchecked and the delete is confirmed", async () => {
+    const { calendarsApi } = await import("../lib/calendarsApi");
+    vi.mocked(calendarsApi.remove).mockResolvedValue(undefined);
+    vi.mocked(connectionsApi.listPickerCalendars).mockResolvedValue([
+      { ...primary, selected: false, importedHere: true, localCalendarId: "cal-1", shareCount: 2 },
+    ]);
+    render(<CalendarPickerModal connectionId={1} onClose={vi.fn()} />);
+
+    await userEvent.click(await screen.findByLabelText("someone@gmail.com"));
+
+    expect(await screen.findByText('Remove “someone@gmail.com”?')).toBeInTheDocument();
+    expect(screen.getByText(/shared with 2 people/)).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Remove" }));
+
+    await waitFor(() => expect(calendarsApi.remove).toHaveBeenCalledWith("token-123", "cal-1"));
+    await waitFor(() => expect(screen.getByLabelText("someone@gmail.com")).not.toBeChecked());
+  });
+
+  it("keeps the row imported and surfaces an error when the delete fails", async () => {
+    const { calendarsApi } = await import("../lib/calendarsApi");
+    vi.mocked(calendarsApi.remove).mockRejectedValue(new Error("boom"));
+    vi.mocked(connectionsApi.listPickerCalendars).mockResolvedValue([
+      { ...primary, selected: false, importedHere: true, localCalendarId: "cal-1" },
+    ]);
+    render(<CalendarPickerModal connectionId={1} onClose={vi.fn()} />);
+
+    await userEvent.click(await screen.findByLabelText("someone@gmail.com"));
+    await userEvent.click(await screen.findByRole("button", { name: "Remove" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(/Couldn't remove/);
+    expect(screen.getByLabelText("someone@gmail.com")).toBeChecked();
+  });
+
+  it("keeps an imported calendar when the delete confirmation is cancelled", async () => {
+    const { calendarsApi } = await import("../lib/calendarsApi");
+    vi.mocked(connectionsApi.listPickerCalendars).mockResolvedValue([
+      { ...primary, selected: false, importedHere: true, localCalendarId: "cal-1" },
+    ]);
+    render(<CalendarPickerModal connectionId={1} onClose={vi.fn()} />);
+
+    await userEvent.click(await screen.findByLabelText("someone@gmail.com"));
+    const dialog = await screen.findByRole("alertdialog");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+
+    expect(calendarsApi.remove).not.toHaveBeenCalled();
+    expect(screen.getByLabelText("someone@gmail.com")).toBeChecked();
   });
 });

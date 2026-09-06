@@ -175,6 +175,19 @@ type DueRefresh struct {
 	HasCursor  bool
 }
 
+// ConnectionLink is one Linked Calendar a Connection produced (#295): the
+// local Calendar id and name, the Workspace it lives in, and the Provider's
+// own id for the calendar it mirrors. The Calendar picker's re-run reads
+// these to tell "already imported here" from "imported into another
+// Workspace", and Disconnect reads them to name the Calendars its
+// disposition applies to.
+type ConnectionLink struct {
+	CalendarID         string
+	CalendarName       string
+	WorkspaceID        int64
+	ExternalCalendarID string
+}
+
 type SourceRepository struct {
 	db DBTX
 }
@@ -217,6 +230,29 @@ func (r *SourceRepository) GetByCalendarID(ctx context.Context, calendarID strin
 		return Source{}, fmt.Errorf("scan calendar source: %w", err)
 	}
 	return source, nil
+}
+
+// ListConnectionLinks returns every Linked Calendar mirrored from
+// connectionID, across every Workspace the connecting User placed one in —
+// a Connection serves all of them (ADR-0052), so this is deliberately not
+// Workspace-scoped. Ordered by calendar id for a stable result.
+func (r *SourceRepository) ListConnectionLinks(ctx context.Context, connectionID int64) ([]ConnectionLink, error) {
+	rows, err := r.db.QueryContext(ctx,
+		`SELECT cs.calendar_id, c.name, c.workspace_id, cs.external_calendar_id
+		 FROM calendar_sources cs
+		 JOIN calendars c ON c.id = cs.calendar_id
+		 WHERE cs.kind = 'connection' AND cs.connection_id = ?
+		 ORDER BY cs.calendar_id`,
+		connectionID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list connection links: %w", err)
+	}
+	return collectRows(rows, func(row rowScanner) (ConnectionLink, error) {
+		var l ConnectionLink
+		err := row.Scan(&l.CalendarID, &l.CalendarName, &l.WorkspaceID, &l.ExternalCalendarID)
+		return l, err
+	})
 }
 
 // ListByCalendarIDs returns every one of ids' Sources, keyed by CalendarID —

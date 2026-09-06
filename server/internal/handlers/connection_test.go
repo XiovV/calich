@@ -84,6 +84,7 @@ func newConnectionTestServer(t *testing.T) (*httptest.Server, string, *fakeGoogl
 			r.Use(httpauth.RequireAuth(auth))
 			r.Get("/", h.List)
 			r.Get("/google/connect", h.Connect)
+			r.Get("/{id}/impact", h.DisconnectImpact)
 			r.Delete("/{id}", h.Disconnect)
 		})
 	})
@@ -309,7 +310,7 @@ func TestConnectionHandler_Disconnect_RemovesConnection(t *testing.T) {
 		t.Fatalf("expected exactly one connection before disconnect, got %d", len(connections))
 	}
 
-	deleteReq, _ := http.NewRequest(http.MethodDelete, srv.URL+"/api/connections/"+strconv.FormatInt(connections[0].ID, 10), nil)
+	deleteReq, _ := http.NewRequest(http.MethodDelete, srv.URL+"/api/connections/"+strconv.FormatInt(connections[0].ID, 10)+"?disposition=keep", nil)
 	deleteReq.Header.Set("Authorization", "Bearer "+accessToken)
 	deleteResp, err := http.DefaultClient.Do(deleteReq)
 	if err != nil {
@@ -360,10 +361,112 @@ func TestMe_GoogleProviderAvailable_TrueWithGoogleConfigured(t *testing.T) {
 	}
 }
 
+func TestConnectionHandler_Disconnect_MissingDispositionIsRejected(t *testing.T) {
+	srv, accessToken, _ := newConnectionTestServer(t)
+
+	connectionID := connectAndCallback(t, srv, accessToken)
+
+	req, _ := http.NewRequest(http.MethodDelete, srv.URL+"/api/connections/"+strconv.FormatInt(connectionID, 10), nil)
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("DELETE without disposition: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected status 400 with no disposition, got %d", resp.StatusCode)
+	}
+
+	// And the Connection is untouched.
+	listReq, _ := http.NewRequest(http.MethodGet, srv.URL+"/api/connections/", nil)
+	listReq.Header.Set("Authorization", "Bearer "+accessToken)
+	listResp, err := http.DefaultClient.Do(listReq)
+	if err != nil {
+		t.Fatalf("GET /api/connections/: %v", err)
+	}
+	defer listResp.Body.Close()
+	var connections []connectionResponse
+	if err := json.NewDecoder(listResp.Body).Decode(&connections); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(connections) != 1 {
+		t.Fatalf("expected the Connection to survive a rejected disconnect, got %d", len(connections))
+	}
+}
+
+func TestConnectionHandler_DisconnectImpact_ListsLinkedCalendars(t *testing.T) {
+	srv, accessToken, _ := newConnectionTestServer(t)
+
+	connectionID := connectAndCallback(t, srv, accessToken)
+
+	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/api/connections/"+strconv.FormatInt(connectionID, 10)+"/impact", nil)
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET impact: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", resp.StatusCode)
+	}
+	var impact disconnectImpactResponse
+	if err := json.NewDecoder(resp.Body).Decode(&impact); err != nil {
+		t.Fatalf("decode impact: %v", err)
+	}
+	// The fake calendarList is empty, so no Linked Calendars — but the field
+	// is present and an empty array rather than null.
+	if impact.LinkedCalendars == nil {
+		t.Fatalf("expected linkedCalendars to be an array, got null")
+	}
+}
+
+// connectAndCallback drives the connect + callback round trip and returns
+// the resulting Connection's id.
+func connectAndCallback(t *testing.T, srv *httptest.Server, accessToken string) int64 {
+	t.Helper()
+	client := &http.Client{CheckRedirect: func(req *http.Request, via []*http.Request) error { return http.ErrUseLastResponse }}
+
+	connectReq, _ := http.NewRequest(http.MethodGet, srv.URL+"/api/connections/google/connect", nil)
+	connectReq.Header.Set("Authorization", "Bearer "+accessToken)
+	connectResp, err := http.DefaultClient.Do(connectReq)
+	if err != nil {
+		t.Fatalf("GET /api/connections/google/connect: %v", err)
+	}
+	defer connectResp.Body.Close()
+	var connected connectResponse
+	if err := json.NewDecoder(connectResp.Body).Decode(&connected); err != nil {
+		t.Fatalf("decode connect response: %v", err)
+	}
+	parsed, _ := url.Parse(connected.URL)
+	state := parsed.Query().Get("state")
+
+	callbackResp, err := client.Get(srv.URL + "/api/connections/google/callback?code=fake-auth-code&state=" + url.QueryEscape(state))
+	if err != nil {
+		t.Fatalf("GET callback: %v", err)
+	}
+	callbackResp.Body.Close()
+
+	listReq, _ := http.NewRequest(http.MethodGet, srv.URL+"/api/connections/", nil)
+	listReq.Header.Set("Authorization", "Bearer "+accessToken)
+	listResp, err := http.DefaultClient.Do(listReq)
+	if err != nil {
+		t.Fatalf("GET /api/connections/: %v", err)
+	}
+	defer listResp.Body.Close()
+	var connections []connectionResponse
+	if err := json.NewDecoder(listResp.Body).Decode(&connections); err != nil {
+		t.Fatalf("decode list: %v", err)
+	}
+	if len(connections) != 1 {
+		t.Fatalf("expected one connection, got %d", len(connections))
+	}
+	return connections[0].ID
+}
+
 func TestConnectionHandler_Disconnect_NotFound(t *testing.T) {
 	srv, accessToken, _ := newConnectionTestServer(t)
 
-	req, _ := http.NewRequest(http.MethodDelete, srv.URL+"/api/connections/999", nil)
+	req, _ := http.NewRequest(http.MethodDelete, srv.URL+"/api/connections/999?disposition=keep", nil)
 	req.Header.Set("Authorization", "Bearer "+accessToken)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {

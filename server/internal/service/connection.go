@@ -28,6 +28,13 @@ var (
 	// doesn't parse as one Connect issued — expired, tampered, or replayed
 	// past its ten-minute window.
 	ErrConnectCallbackInvalidState = errors.New("invalid or expired connect callback")
+	// ErrInvalidDisconnectDisposition is returned by Disconnect when the
+	// disposition names neither DisconnectKeep nor DisconnectDelete — there
+	// is no default (#295, mirroring ADR-0037's account-deletion rule):
+	// guessing "delete" silently destroys Calendars that may hold local
+	// colours, Default reminders, Shares and Events created here, and may be
+	// the User's last copy if they are leaving the Provider.
+	ErrInvalidDisconnectDisposition = errors.New(`disposition must be "keep" or "delete"`)
 	// ErrConnectAccountNotActive is returned by Callback when the User named
 	// by state has since become Disabled, or still must change their
 	// password, between Connect and Google's redirect back — the same two
@@ -295,10 +302,107 @@ func (s *ConnectionService) StatusesByIDs(ctx context.Context, connectionIDs []i
 	return statuses, nil
 }
 
-// Disconnect removes userID's Connection with the given id. No Linked
-// Calendar exists yet to have a disposition for (#285) — that question is
-// the Calendar picker's, once it exists.
-func (s *ConnectionService) Disconnect(ctx context.Context, userID, id int64) error {
+// Disposition choices Disconnect accepts (#295). There is no default:
+// deletion is unrecoverable and the mirror may be the User's last copy, so
+// the choice is always explicit.
+const (
+	// DisconnectKeep leaves every Linked Calendar in place as an ordinary
+	// owned Calendar — the Source dropped (a cascade of removing the
+	// Connection row) and the Provider ids cleared from its Events.
+	DisconnectKeep = "keep"
+	// DisconnectDelete removes every Linked Calendar this Connection
+	// produced, and with each one its Events.
+	DisconnectDelete = "delete"
+)
+
+// DisconnectCalendarImpact is one Linked Calendar a Disconnect would touch
+// (#295): enough for the confirmation to name what a "delete" disposition
+// costs, and to say so explicitly when other people hold a Share.
+type DisconnectCalendarImpact struct {
+	ID         string
+	Name       string
+	ShareCount int
+}
+
+// DisconnectImpact is every Linked Calendar a Connection produced, across
+// every Workspace (#295) — what the disconnect confirmation renders before
+// the User picks a disposition.
+type DisconnectImpact struct {
+	LinkedCalendars []DisconnectCalendarImpact
+}
+
+// DisconnectImpact reports what disconnecting userID's Connection id would
+// affect (#295): every Linked Calendar it produced and how many Shares each
+// carries. ErrConnectionNotFound if the id doesn't name one of theirs.
+func (s *ConnectionService) DisconnectImpact(ctx context.Context, userID, id int64) (DisconnectImpact, error) {
+	if _, err := s.connections.GetByID(ctx, userID, id); err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			return DisconnectImpact{}, ErrConnectionNotFound
+		}
+		return DisconnectImpact{}, fmt.Errorf("get connection: %w", err)
+	}
+
+	links, err := s.calendars.ListConnectionLinks(ctx, id)
+	if err != nil {
+		return DisconnectImpact{}, fmt.Errorf("list linked calendars: %w", err)
+	}
+
+	impact := DisconnectImpact{LinkedCalendars: make([]DisconnectCalendarImpact, 0, len(links))}
+	for _, link := range links {
+		shareCount, err := s.calendars.ShareCount(ctx, link.CalendarID)
+		if err != nil {
+			return DisconnectImpact{}, err
+		}
+		impact.LinkedCalendars = append(impact.LinkedCalendars, DisconnectCalendarImpact{
+			ID: link.CalendarID, Name: link.CalendarName, ShareCount: shareCount,
+		})
+	}
+	return impact, nil
+}
+
+// Disconnect removes userID's Connection with the given id, applying
+// disposition to every Linked Calendar it produced first (#295):
+//
+//   - DisconnectKeep clears the Provider ids from each Calendar's Events,
+//     leaving ordinary owned Calendars behind. The Source itself is dropped
+//     by the ON DELETE CASCADE on removing the Connection row — so "keep"'s
+//     only explicit work is the Event cleanup.
+//   - DisconnectDelete removes each Linked Calendar outright, cascading to
+//     its Events.
+//
+// The per-Calendar steps run before the Connection row is removed (once it's
+// gone, ListConnectionLinks can no longer find them) and are each
+// idempotent, so a failure partway through is safely re-runnable rather than
+// leaving a half-applied disposition that corrupts anything.
+func (s *ConnectionService) Disconnect(ctx context.Context, userID, id int64, disposition string) error {
+	if disposition != DisconnectKeep && disposition != DisconnectDelete {
+		return ErrInvalidDisconnectDisposition
+	}
+
+	if _, err := s.connections.GetByID(ctx, userID, id); err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			return ErrConnectionNotFound
+		}
+		return fmt.Errorf("get connection: %w", err)
+	}
+
+	links, err := s.calendars.ListConnectionLinks(ctx, id)
+	if err != nil {
+		return fmt.Errorf("list linked calendars: %w", err)
+	}
+	for _, link := range links {
+		switch disposition {
+		case DisconnectKeep:
+			if err := s.events.ClearProviderIdentity(ctx, link.CalendarID); err != nil {
+				return fmt.Errorf("clear provider identity for calendar %s: %w", link.CalendarID, err)
+			}
+		case DisconnectDelete:
+			if err := s.calendars.Delete(ctx, userID, link.CalendarID); err != nil {
+				return fmt.Errorf("delete linked calendar %s: %w", link.CalendarID, err)
+			}
+		}
+	}
+
 	if err := s.connections.Delete(ctx, userID, id); err != nil {
 		if errors.Is(err, repository.ErrNotFound) {
 			return ErrConnectionNotFound

@@ -2,6 +2,7 @@ import { useState } from "react";
 import { formatDistanceToNow } from "date-fns";
 import { Menu } from "@base-ui/react/menu";
 import { MoreVertical, Plus, TriangleAlert, Users } from "lucide-react";
+import { CalendarPickerModal } from "../../settings/CalendarPickerModal";
 import { IconButton } from "../ui/IconButton";
 import { iconButtonClasses } from "../ui/iconButtonClasses";
 import { canManageCalendar, isLinkedCalendar, shareCountTooltip, type Calendar } from "../../lib/calendar";
@@ -54,6 +55,10 @@ export function CalendarList() {
   const refreshCalendar = useCalendarsStore((state) => state.refreshCalendar);
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [isSubscribeOpen, setIsSubscribeOpen] = useState(false);
+  // The Calendar picker, re-opened from a Connection's sidebar heading to
+  // add a calendar skipped on the first pass (#295) — the same dialog
+  // Settings' Connections Section opens.
+  const [pickerConnectionId, setPickerConnectionId] = useState<number | null>(null);
   const [editModalTarget, setEditModalTarget] = useState<Calendar | null>(null);
   // Held as an id rather than a captured Calendar, matching deletingCalendarId
   // and leavingCalendarId: the Share modal's own grants call fetchCalendars(),
@@ -90,12 +95,16 @@ export function CalendarList() {
   // Linked Calendars group under one heading per Connection rather than
   // beside every other owned Calendar (#286) — the sidebar's only way to
   // show "these came from that Google account".
-  const linkedCalendarsByConnection = new Map<string, Calendar[]>();
+  const linkedCalendarsByConnection = new Map<
+    string,
+    { connectionId?: number; calendars: Calendar[] }
+  >();
   for (const calendar of calendars) {
     if (!canManageCalendar(calendar) || !isLinkedCalendar(calendar)) continue;
     const email = calendar.connectionAccountEmail ?? "Unknown account";
-    const group = linkedCalendarsByConnection.get(email) ?? [];
-    group.push(calendar);
+    const group = linkedCalendarsByConnection.get(email) ?? { calendars: [] };
+    group.calendars.push(calendar);
+    group.connectionId ??= calendar.connectionId;
     linkedCalendarsByConnection.set(email, group);
   }
   const sharedCalendars = calendars.filter(
@@ -379,12 +388,22 @@ export function CalendarList() {
       {/* One heading per Connection, labelled with the connected account's
           Email (#286) — two connected accounts produce two separate
           headings, since each is its own Map entry. */}
-      {Array.from(linkedCalendarsByConnection.entries()).map(([accountEmail, connectionCalendars]) => (
+      {Array.from(linkedCalendarsByConnection.entries()).map(([accountEmail, group]) => (
         <div key={accountEmail}>
           <div className="flex items-center justify-between py-2 ps-5 pe-2">
             <p className="text-label-sm font-medium text-ink-muted">{accountEmail}</p>
+            {group.connectionId !== undefined && (
+              <IconButton
+                size="tiny"
+                onClick={() => setPickerConnectionId(group.connectionId ?? null)}
+                aria-label={`Choose calendars from ${accountEmail}`}
+                title={`Choose calendars from ${accountEmail}`}
+              >
+                <Plus className="size-4" />
+              </IconButton>
+            )}
           </div>
-          <ul>{connectionCalendars.map(renderCalendarItem)}</ul>
+          <ul>{group.calendars.map(renderCalendarItem)}</ul>
         </div>
       ))}
 
@@ -404,6 +423,12 @@ export function CalendarList() {
       )}
       {isSubscribeOpen && (
         <SubscribeCalendarModal onClose={() => setIsSubscribeOpen(false)} />
+      )}
+      {pickerConnectionId !== null && (
+        <CalendarPickerModal
+          connectionId={pickerConnectionId}
+          onClose={() => setPickerConnectionId(null)}
+        />
       )}
       {editModalTarget && (
         <CalendarModal

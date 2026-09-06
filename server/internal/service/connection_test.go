@@ -724,7 +724,7 @@ func TestConnectionService_Disconnect_RemovesConnection(t *testing.T) {
 		t.Fatalf("callback: %v", err)
 	}
 
-	if err := svc.Disconnect(ctx, userID, connection.ID); err != nil {
+	if err := svc.Disconnect(ctx, userID, connection.ID, DisconnectKeep); err != nil {
 		t.Fatalf("disconnect: %v", err)
 	}
 
@@ -741,7 +741,7 @@ func TestConnectionService_Disconnect_NotFound(t *testing.T) {
 	google := newFakeGoogleServer(t)
 	svc, _, userID := newTestConnectionService(t, google)
 
-	if err := svc.Disconnect(context.Background(), userID, 999); err != ErrConnectionNotFound {
+	if err := svc.Disconnect(context.Background(), userID, 999, DisconnectKeep); err != ErrConnectionNotFound {
 		t.Fatalf("expected ErrConnectionNotFound, got %v", err)
 	}
 }

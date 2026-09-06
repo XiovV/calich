@@ -514,6 +514,28 @@ func (r *EventRepository) BumpChangeSeqForCalendar(ctx context.Context, calendar
 	return nil
 }
 
+// ClearProviderIdentityByCalendar strips every trace of the Provider from
+// calendarID's Events (#295): the external id and etag a Refresh matched a
+// series on, the connecting User's Provider RSVP, the conference URL, the
+// guest count, the Provider colour shadow, and any stale Write-back failure
+// marker. The "keep the calendars" disconnect disposition runs this so a
+// Linked Calendar becomes an ordinary owned Calendar with nothing left
+// pointing at an account that is no longer connected. Affects zero rows on
+// an empty Calendar, so it deliberately does not go through requireAffected.
+// change_seq never bumps — a Linked Calendar reaches no CalDAV client
+// (ADR-0074), so there is no sync stream for this to perturb.
+func (r *EventRepository) ClearProviderIdentityByCalendar(ctx context.Context, calendarID string) error {
+	if _, err := r.db.ExecContext(ctx,
+		`UPDATE events SET external_uid = NULL, provider_etag = NULL, rsvp_status = NULL,
+			conference_url = NULL, guest_count = 0, provider_color = NULL, write_back_error = NULL
+		 WHERE calendar_id = ?`,
+		calendarID,
+	); err != nil {
+		return fmt.Errorf("clear provider identity for calendar: %w", err)
+	}
+	return nil
+}
+
 func (r *EventRepository) Delete(ctx context.Context, id string) error {
 	res, err := r.db.ExecContext(ctx, `DELETE FROM events WHERE id = ?`, id)
 	if err != nil {

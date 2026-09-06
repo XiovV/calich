@@ -1,6 +1,12 @@
 import { create } from "zustand";
 import { type Calendar } from "./calendar";
-import { type Connection, type PickerCalendar, connectionsApi } from "./connectionsApi";
+import {
+  type Connection,
+  type DisconnectDisposition,
+  type DisconnectImpact,
+  type PickerCalendar,
+  connectionsApi,
+} from "./connectionsApi";
 import { useAuthStore } from "./authStore";
 
 interface ConnectionsState {
@@ -10,7 +16,8 @@ interface ConnectionsState {
   // there itself (ConnectionsSection), since this store has no way to
   // complete a full-page OAuth round trip on its own.
   connectGoogle: () => Promise<string>;
-  disconnect: (id: number) => Promise<void>;
+  disconnectImpact: (id: number) => Promise<DisconnectImpact>;
+  disconnect: (id: number, disposition: DisconnectDisposition) => Promise<void>;
   // The Calendar picker (#286): listPickerCalendars is the read side, not
   // cached here (CalendarPickerModal owns its own fetched list, since it's
   // shown once per Connect and never needs to be re-derived from other
@@ -39,8 +46,12 @@ export const useConnectionsStore = create<ConnectionsState>((set, get) => ({
     return connectionsApi.connectGoogle(requireAccessToken());
   },
 
-  disconnect: async (id) => {
-    await connectionsApi.disconnect(requireAccessToken(), id);
+  disconnectImpact: async (id) => {
+    return connectionsApi.disconnectImpact(requireAccessToken(), id);
+  },
+
+  disconnect: async (id, disposition) => {
+    await connectionsApi.disconnect(requireAccessToken(), id, disposition);
     set({ connections: get().connections.filter((c) => c.id !== id) });
   },
 

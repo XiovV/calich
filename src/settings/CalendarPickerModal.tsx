@@ -1,26 +1,33 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Dialog } from "@base-ui/react/dialog";
 import { useCalendarsStore } from "../lib/calendarsStore";
 import { useConnectionsStore } from "../lib/connectionsStore";
 import { type PickerCalendar } from "../lib/connectionsApi";
 import { useWorkspacesStore } from "../lib/workspacesStore";
+import { deleteCalendarCascade } from "../lib/deleteCalendarCascade";
 import { errorMessage } from "../lib/errorMessage";
 import { Button } from "../components/ui/Button";
 import { buttonClasses } from "../components/ui/buttonClasses";
 import { Checkbox } from "../components/ui/Checkbox";
+import { DeleteLinkedCalendarConfirmation } from "./DeleteLinkedCalendarConfirmation";
 
 interface CalendarPickerModalProps {
   connectionId: number;
   onClose: () => void;
 }
 
-// The Calendar picker (#286): opens right after authorizing a Google
-// account (ConnectionsSection) so a User chooses which of the account's
-// calendars come in, and is reachable nowhere else yet — re-opening it
-// later to add a calendar is a later ticket's. Lists everything the account
-// can see, Google's own selected flag pre-checking the default working set,
-// with a read-only badge for a row Google reports the account can't write
-// to there.
+// The Calendar picker (#286, #295): a re-runnable dialog for choosing which
+// of a Connection's calendars come in. Opens right after authorizing a
+// Google account (ConnectionsSection), and again later from the Connection's
+// row in Settings or its heading in the sidebar — every entry point renders
+// this same component.
+//
+// It shows the state of the Workspace the User is in: a row already
+// imported here is checked, and unchecking it deletes the Linked Calendar
+// (behind a confirmation naming what is lost). A row imported into a
+// different Workspace stays unchecked with a quiet note, so an unticked box
+// is never a mystery. Newly-ticked rows are imported into the active
+// Workspace on Confirm.
 export function CalendarPickerModal({ connectionId, onClose }: CalendarPickerModalProps) {
   const listPickerCalendars = useConnectionsStore((state) => state.listPickerCalendars);
   const importCalendars = useConnectionsStore((state) => state.importCalendars);
@@ -38,6 +45,8 @@ export function CalendarPickerModal({ connectionId, onClose }: CalendarPickerMod
   const [isLoading, setIsLoading] = useState(true);
   const [isImporting, setIsImporting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [deletingCalendar, setDeletingCalendar] = useState<PickerCalendar | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
 
   useEffect(() => {
     if (activeWorkspaceId === null) return;
@@ -47,10 +56,17 @@ export function CalendarPickerModal({ connectionId, onClose }: CalendarPickerMod
       .then((result) => {
         if (cancelled) return;
         setCalendars(result);
-        // Google's own selection flag drives the default checked state
-        // (#286's acceptance criteria) — the default matches the working
-        // set the User already keeps at Google.
-        setCheckedIds(new Set(result.filter((c) => c.selected).map((c) => c.id)));
+        // A row already imported into this Workspace starts checked (#295);
+        // for one imported nowhere, Google's own selection flag drives the
+        // default. A row imported into another Workspace stays unchecked —
+        // checking it would import a second copy here.
+        setCheckedIds(
+          new Set(
+            result
+              .filter((c) => c.importedHere || (!c.importedElsewhere && c.selected))
+              .map((c) => c.id),
+          ),
+        );
       })
       .catch((err) => {
         if (!cancelled) setError(errorMessage(err));
@@ -64,20 +80,81 @@ export function CalendarPickerModal({ connectionId, onClose }: CalendarPickerMod
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [connectionId, activeWorkspaceId]);
 
-  function toggle(id: string) {
-    setCheckedIds((ids) => {
-      const next = new Set(ids);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
+  const byId = useMemo(() => {
+    const map = new Map<string, PickerCalendar>();
+    for (const c of calendars ?? []) map.set(c.id, c);
+    return map;
+  }, [calendars]);
+
+  // Only rows that would be freshly created — a checked row not already
+  // imported here. An already-imported row is removed by unchecking it, not
+  // re-sent on Confirm.
+  const toImport = useMemo(
+    () => Array.from(checkedIds).filter((id) => !byId.get(id)?.importedHere),
+    [checkedIds, byId],
+  );
+
+  function toggle(calendar: PickerCalendar) {
+    if (checkedIds.has(calendar.id)) {
+      // Unchecking a row that's already a Linked Calendar here is a delete
+      // gesture — hold the confirmation before touching the checkbox.
+      if (calendar.importedHere) {
+        setDeletingCalendar(calendar);
+        return;
+      }
+      setCheckedIds((ids) => {
+        const next = new Set(ids);
+        next.delete(calendar.id);
+        return next;
+      });
+      return;
+    }
+    setCheckedIds((ids) => new Set(ids).add(calendar.id));
+  }
+
+  async function handleConfirmDelete() {
+    if (!deletingCalendar?.localCalendarId) return;
+    setIsDeleting(true);
+    setError(null);
+    // deleteCalendarCascade reports failure by return value, not by
+    // throwing (it reverts the store and toasts on its own) — so a false
+    // here means the calendar still exists and the picker's row must not be
+    // flipped to "not imported".
+    const deleted = await deleteCalendarCascade(deletingCalendar.localCalendarId);
+    if (deleted) {
+      // Reflect the deletion in the picker's own list so the row flips to
+      // "not imported" and drops out of the checked set.
+      setCalendars((prev) =>
+        (prev ?? []).map((c) =>
+          c.id === deletingCalendar.id
+            ? { ...c, importedHere: false, localCalendarId: undefined, shareCount: 0 }
+            : c,
+        ),
+      );
+      setCheckedIds((ids) => {
+        const next = new Set(ids);
+        next.delete(deletingCalendar.id);
+        return next;
+      });
+    } else {
+      // deleteCalendarCascade has already reverted the store and toasted;
+      // close the confirmation and leave the row checked, since the Linked
+      // Calendar still exists.
+      setError(`Couldn't remove "${deletingCalendar.name}". Try again.`);
+    }
+    setDeletingCalendar(null);
+    setIsDeleting(false);
   }
 
   async function handleConfirm() {
+    if (toImport.length === 0) {
+      onClose();
+      return;
+    }
     setIsImporting(true);
     setError(null);
     try {
-      await importCalendars(connectionId, Array.from(checkedIds));
+      await importCalendars(connectionId, toImport);
       // The picker's whole point is calendars appearing on the grid
       // immediately (#286) — a full re-fetch, not a local append, since the
       // server resolves each new Calendar's Access/isOwner/ownerName/
@@ -96,7 +173,7 @@ export function CalendarPickerModal({ connectionId, onClose }: CalendarPickerMod
     <Dialog.Root
       open
       onOpenChange={(open) => {
-        if (!open) onClose();
+        if (!open && !deletingCalendar) onClose();
       }}
     >
       <Dialog.Portal>
@@ -128,7 +205,7 @@ export function CalendarPickerModal({ connectionId, onClose }: CalendarPickerMod
                 <li key={calendar.id} className="flex items-center gap-2 py-1">
                   <Checkbox
                     checked={checkedIds.has(calendar.id)}
-                    onCheckedChange={() => toggle(calendar.id)}
+                    onCheckedChange={() => toggle(calendar)}
                     aria-label={calendar.name}
                   />
                   <span
@@ -136,8 +213,13 @@ export function CalendarPickerModal({ connectionId, onClose }: CalendarPickerMod
                     style={{ backgroundColor: calendar.color }}
                     aria-hidden
                   />
-                  <span className="min-w-0 flex-1 truncate text-body text-ink">
-                    {calendar.name}
+                  <span className="flex min-w-0 flex-1 flex-col">
+                    <span className="min-w-0 truncate text-body text-ink">{calendar.name}</span>
+                    {calendar.importedElsewhere && !calendar.importedHere && (
+                      <span className="truncate text-label-sm text-ink-muted">
+                        Already in another workspace
+                      </span>
+                    )}
                   </span>
                   {!calendar.writable && (
                     <span className="shrink-0 text-label-sm text-ink-muted">Read-only</span>
@@ -159,12 +241,23 @@ export function CalendarPickerModal({ connectionId, onClose }: CalendarPickerMod
               disabled={isLoading || !calendars || calendars.length === 0}
               loading={isImporting}
             >
-              Add {checkedIds.size > 0 ? checkedIds.size : ""} calendar
-              {checkedIds.size === 1 ? "" : "s"}
+              {toImport.length === 0
+                ? "Done"
+                : `Add ${toImport.length} calendar${toImport.length === 1 ? "" : "s"}`}
             </Button>
           </div>
         </Dialog.Popup>
       </Dialog.Portal>
+
+      {deletingCalendar && (
+        <DeleteLinkedCalendarConfirmation
+          name={deletingCalendar.name}
+          shareCount={deletingCalendar.shareCount}
+          isDeleting={isDeleting}
+          onConfirm={handleConfirmDelete}
+          onClose={() => setDeletingCalendar(null)}
+        />
+      )}
     </Dialog.Root>
   );
 }

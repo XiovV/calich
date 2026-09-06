@@ -1,13 +1,12 @@
 import { useEffect, useState } from "react";
 import { useSearchParams } from "react-router";
-import { Trash2 } from "lucide-react";
 import { Button } from "../components/ui/Button";
-import { IconButton } from "../components/ui/IconButton";
 import { useAuthStore } from "../lib/authStore";
 import { useConnectionsStore } from "../lib/connectionsStore";
 import { useAsyncAction } from "../hooks/useAsyncAction";
 import { errorMessage } from "../lib/errorMessage";
 import { CalendarPickerModal } from "./CalendarPickerModal";
+import { DisconnectConnectionModal } from "./DisconnectConnectionModal";
 
 // The Google callback redirect (handlers.ConnectionHandler.Callback, #285)
 // lands back here with one of these query params — read once on mount, then
@@ -28,11 +27,12 @@ export function ConnectionsSection() {
   const connections = useConnectionsStore((state) => state.connections);
   const fetchConnections = useConnectionsStore((state) => state.fetchConnections);
   const connectGoogle = useConnectionsStore((state) => state.connectGoogle);
-  const disconnect = useConnectionsStore((state) => state.disconnect);
 
   const [searchParams, setSearchParams] = useSearchParams();
   const [disconnectingId, setDisconnectingId] = useState<number | null>(null);
   const { isSubmitting, error, setError, run } = useAsyncAction();
+
+  const disconnectingConnection = connections.find((c) => c.id === disconnectingId);
 
   // Captured once, from a lazy initializer rather than an effect, so the URL
   // clear below can't race the read: by the time any effect runs, this has
@@ -52,11 +52,12 @@ export function ConnectionsSection() {
     return null;
   });
 
-  // The Calendar picker opens immediately after authorizing (#286): the
-  // Callback redirect carries the new Connection's own id precisely so this
-  // Section can open it without a separate lookup. Read once at mount, the
-  // same way banner is — the id is a one-time instruction from the redirect
-  // that just landed, not state to keep reacting to afterward.
+  // Which Connection the Calendar picker is open for, or null. Seeded once
+  // at mount from the Callback redirect's connection_id (#286) — the picker
+  // opens immediately after authorizing — and set again later when a User
+  // clicks "Choose calendars" on a Connection's row to re-run it (#295).
+  // One piece of state, one render, so the two entry points can never stack
+  // two identical dialogs.
   const [pickerConnectionId, setPickerConnectionId] = useState<number | null>(() => {
     const raw = searchParams.get("connection_id");
     if (!raw) return null;
@@ -86,19 +87,6 @@ export function ConnectionsSection() {
     });
   }
 
-  async function handleDisconnect(id: number, accountEmail: string) {
-    if (!window.confirm(`Disconnect ${accountEmail}?`)) return;
-
-    setDisconnectingId(id);
-    setError(null);
-    try {
-      await disconnect(id);
-    } catch (err) {
-      setError(errorMessage(err));
-    } finally {
-      setDisconnectingId(null);
-    }
-  }
 
   return (
     <section>
@@ -143,13 +131,26 @@ export function ConnectionsSection() {
                   Reconnect
                 </Button>
               )}
-              <IconButton
-                onClick={() => handleDisconnect(connection.id, connection.accountEmail)}
-                disabled={disconnectingId === connection.id}
+              {/* The Calendar picker is re-runnable (#295): opens here for
+                  adding a calendar skipped on the first pass, and — the same
+                  dialog — from the Connection's heading in the sidebar. */}
+              <Button
+                variant="outline"
+                color="secondary"
+                size="small"
+                onClick={() => setPickerConnectionId(connection.id)}
+              >
+                Choose calendars
+              </Button>
+              <Button
+                variant="outline"
+                color="secondary"
+                size="small"
+                onClick={() => setDisconnectingId(connection.id)}
                 aria-label={`Disconnect ${connection.accountEmail}`}
               >
-                <Trash2 className="size-4" />
-              </IconButton>
+                Disconnect
+              </Button>
             </div>
           </li>
         ))}
@@ -182,6 +183,13 @@ export function ConnectionsSection() {
         <CalendarPickerModal
           connectionId={pickerConnectionId}
           onClose={() => setPickerConnectionId(null)}
+        />
+      )}
+      {disconnectingConnection && (
+        <DisconnectConnectionModal
+          connectionId={disconnectingConnection.id}
+          accountEmail={disconnectingConnection.accountEmail}
+          onClose={() => setDisconnectingId(null)}
         />
       )}
     </section>

@@ -72,9 +72,9 @@ describe("disconnect", () => {
     useConnectionsStore.setState({ connections: [connectionA, connectionB] });
     vi.mocked(connectionsApi.disconnect).mockResolvedValue(undefined);
 
-    await useConnectionsStore.getState().disconnect(connectionA.id);
+    await useConnectionsStore.getState().disconnect(connectionA.id, "keep");
 
     expect(useConnectionsStore.getState().connections).toEqual([connectionB]);
-    expect(connectionsApi.disconnect).toHaveBeenCalledWith("token-123", connectionA.id);
+    expect(connectionsApi.disconnect).toHaveBeenCalledWith("token-123", connectionA.id, "keep");
   });
 });

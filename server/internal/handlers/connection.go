@@ -56,6 +56,17 @@ var connectErrors = []errorCase{
 
 var disconnectErrors = []errorCase{
 	{service.ErrConnectionNotFound, notFound("connection not found")},
+	{service.ErrInvalidDisconnectDisposition, badRequest(`disposition must be "keep" or "delete"`)},
+}
+
+type disconnectCalendarImpactResponse struct {
+	ID         string `json:"id"`
+	Name       string `json:"name"`
+	ShareCount int    `json:"shareCount"`
+}
+
+type disconnectImpactResponse struct {
+	LinkedCalendars []disconnectCalendarImpactResponse `json:"linkedCalendars"`
 }
 
 // Connect returns the URL to send the browser to, to authorize a Connection
@@ -123,6 +134,33 @@ func (h *ConnectionHandler) List(w http.ResponseWriter, r *http.Request) {
 	httpresponse.JSON(w, http.StatusOK, responses)
 }
 
+// DisconnectImpact serves GET /api/connections/{id}/impact (#295): every
+// Linked Calendar disconnecting would touch and how many Shares each
+// carries, so the confirmation can name what a "delete" disposition costs
+// and warn when other people hold a Share.
+func (h *ConnectionHandler) DisconnectImpact(w http.ResponseWriter, r *http.Request) {
+	userID := httpauth.MustUserID(r.Context())
+
+	id, ok := parseInt64Param(w, r, "id")
+	if !ok {
+		return
+	}
+
+	impact, err := h.connections.DisconnectImpact(r.Context(), userID, id)
+	if respondError(w, err, disconnectErrors, "failed to load disconnect impact") {
+		return
+	}
+
+	calendars := make([]disconnectCalendarImpactResponse, len(impact.LinkedCalendars))
+	for i, c := range impact.LinkedCalendars {
+		calendars[i] = disconnectCalendarImpactResponse{ID: c.ID, Name: c.Name, ShareCount: c.ShareCount}
+	}
+	httpresponse.JSON(w, http.StatusOK, disconnectImpactResponse{LinkedCalendars: calendars})
+}
+
+// Disconnect serves DELETE /api/connections/{id}?disposition=keep|delete
+// (#295). The disposition is a required query parameter with no default:
+// deletion is unrecoverable, so the choice is never inferred.
 func (h *ConnectionHandler) Disconnect(w http.ResponseWriter, r *http.Request) {
 	userID := httpauth.MustUserID(r.Context())
 
@@ -131,7 +169,7 @@ func (h *ConnectionHandler) Disconnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	err := h.connections.Disconnect(r.Context(), userID, id)
+	err := h.connections.Disconnect(r.Context(), userID, id, r.URL.Query().Get("disposition"))
 	if respondError(w, err, disconnectErrors, "failed to disconnect") {
 		return
 	}

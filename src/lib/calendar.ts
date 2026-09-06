@@ -41,6 +41,10 @@ export interface Calendar {
   // connected account's Email, which the sidebar groups Linked Calendars
   // under, one heading per Connection.
   connectionAccountEmail?: string;
+  // connectionId is set only on a Linked Calendar (#295): the Connection its
+  // Source points at, which the sidebar's per-Connection heading re-opens
+  // the Calendar picker with.
+  connectionId?: number;
 }
 
 // isBrokenSubscription reports whether calendar's last Refresh failed —

@@ -251,6 +251,7 @@ func New(logger *slog.Logger, authHandler *handlers.AuthHandler, calendarHandler
 
 				r.Get("/", connectionHandler.List)
 				r.Get("/google/connect", connectionHandler.Connect)
+				r.Get("/{id}/impact", connectionHandler.DisconnectImpact)
 				r.Delete("/{id}", connectionHandler.Disconnect)
 
 				// The Calendar picker (#286): List/Import both create or read

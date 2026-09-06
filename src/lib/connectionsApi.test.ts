@@ -107,10 +107,10 @@ describe("connectionsApi.disconnect", () => {
     const fetchMock = vi.fn().mockResolvedValue(emptyResponse(204));
     vi.stubGlobal("fetch", fetchMock);
 
-    await connectionsApi.disconnect("token-123", 1);
+    await connectionsApi.disconnect("token-123", 1, "keep");
 
     expect(fetchMock).toHaveBeenCalledWith(
-      "/api/connections/1",
+      "/api/connections/1?disposition=keep",
       expect.objectContaining({
         method: "DELETE",
         credentials: "include",
@@ -125,9 +125,26 @@ describe("connectionsApi.disconnect", () => {
     );
     vi.stubGlobal("fetch", fetchMock);
 
-    await expect(connectionsApi.disconnect("token-123", 999)).rejects.toMatchObject({
+    await expect(connectionsApi.disconnect("token-123", 999, "keep")).rejects.toMatchObject({
       code: "not_found",
     });
+  });
+});
+
+describe("connectionsApi.disconnectImpact", () => {
+  it("GETs the impact and returns the linked calendars", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(200, { linkedCalendars: [{ id: "cal-1", name: "Work", shareCount: 2 }] }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const impact = await connectionsApi.disconnectImpact("token-123", 5);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/connections/5/impact",
+      expect.objectContaining({ credentials: "include" }),
+    );
+    expect(impact.linkedCalendars).toEqual([{ id: "cal-1", name: "Work", shareCount: 2 }]);
   });
 });
 

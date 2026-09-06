@@ -46,6 +46,22 @@ type PickerCalendar struct {
 	// ADR-0075) — re-read from Google again on every later Refresh rather
 	// than fixed from this one snapshot.
 	Writable bool
+	// ImportedHere is true when a Linked Calendar for this Provider calendar
+	// already exists in the Workspace the picker was opened in (#295) — the
+	// re-run's default checked state, and the row whose uncheck is a delete.
+	ImportedHere bool
+	// ImportedElsewhere is true when one exists in a *different* Workspace of
+	// the connecting User (#295) — the picker shows the current Workspace's
+	// state, so this row stays unchecked here, with a quiet note explaining
+	// why the box an account-wide view might expect to be ticked is not.
+	ImportedElsewhere bool
+	// LocalCalendarID is this app's own Calendar id for the Linked Calendar,
+	// set only when ImportedHere — what an uncheck deletes.
+	LocalCalendarID string
+	// ShareCount is how many Shares that Linked Calendar carries, set only
+	// when ImportedHere — so the delete confirmation can say so explicitly
+	// when other people would lose the Calendar (#295).
+	ShareCount int
 }
 
 func toPickerCalendars(entries []googleCalendarListEntry) []PickerCalendar {
@@ -100,10 +116,13 @@ func (s *ConnectionService) accessTokenFor(ctx context.Context, userID, connecti
 	return conn, *conn.AccessToken, nil
 }
 
-// ListCalendars returns every calendar connectionID's account can see (#286)
-// — the picker's read side, called right after Connect/Callback while the
-// access token Callback just minted is still fresh.
-func (s *ConnectionService) ListCalendars(ctx context.Context, userID, connectionID int64) ([]PickerCalendar, error) {
+// ListCalendars returns every calendar connectionID's account can see (#286,
+// #295) — the picker's read side, whether it's the first run right after
+// Connect/Callback or a re-run from Settings or the sidebar heading. Each
+// row is annotated against workspaceID's own state: already imported here
+// (and its local id and Share count), imported into another Workspace, or
+// not yet imported anywhere.
+func (s *ConnectionService) ListCalendars(ctx context.Context, userID, workspaceID, connectionID int64) ([]PickerCalendar, error) {
 	if !s.configured {
 		return nil, ErrGoogleNotConfigured
 	}
@@ -118,7 +137,35 @@ func (s *ConnectionService) ListCalendars(ctx context.Context, userID, connectio
 		return nil, err
 	}
 
-	return toPickerCalendars(entries), nil
+	links, err := s.calendars.ListConnectionLinks(ctx, connectionID)
+	if err != nil {
+		return nil, fmt.Errorf("list existing linked calendars: %w", err)
+	}
+	here := make(map[string]repository.ConnectionLink, len(links))
+	elsewhere := make(map[string]bool, len(links))
+	for _, link := range links {
+		if link.WorkspaceID == workspaceID {
+			here[link.ExternalCalendarID] = link
+		} else {
+			elsewhere[link.ExternalCalendarID] = true
+		}
+	}
+
+	calendars := toPickerCalendars(entries)
+	for i := range calendars {
+		if link, ok := here[calendars[i].ExternalID]; ok {
+			calendars[i].ImportedHere = true
+			calendars[i].LocalCalendarID = link.CalendarID
+			shareCount, err := s.calendars.ShareCount(ctx, link.CalendarID)
+			if err != nil {
+				return nil, err
+			}
+			calendars[i].ShareCount = shareCount
+		} else if elsewhere[calendars[i].ExternalID] {
+			calendars[i].ImportedElsewhere = true
+		}
+	}
+	return calendars, nil
 }
 
 // ImportCalendars creates a Linked Calendar in workspaceID for every one of
@@ -169,6 +216,20 @@ func (s *ConnectionService) ImportCalendars(ctx context.Context, userID, workspa
 	wanted := make(map[string]bool, len(externalIDs))
 	for _, id := range externalIDs {
 		wanted[id] = true
+	}
+
+	// A re-run of the picker sends the whole checked set, not just the
+	// newly-ticked rows (#295) — skip any calendar already imported into
+	// this Workspace so confirming twice can't create a second Calendar row
+	// mirroring the same Provider calendar.
+	links, err := s.calendars.ListConnectionLinks(ctx, connectionID)
+	if err != nil {
+		return nil, fmt.Errorf("list existing linked calendars: %w", err)
+	}
+	for _, link := range links {
+		if link.WorkspaceID == workspaceID {
+			delete(wanted, link.ExternalCalendarID)
+		}
 	}
 
 	var created []repository.Calendar
