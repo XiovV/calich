@@ -1,6 +1,6 @@
 # Write-back is a queued, field-scoped PATCH
 
-Status: accepted — amends ADR-0050 (scopes) and ADR-0052 (read-only)
+Status: accepted — amends ADR-0050 (scopes) and ADR-0052 (read-only); the three edit scopes are built out in ADR-0078
 
 A Linked Calendar is **writable**. Events created, edited and deleted in this app are dispatched to the Provider as **Write-back**: the outbound counterpart to Refresh, queued through the `outbox` rather than performed inside the request, and expressed as `events.patch` — never `events.update`.
 

@@ -30,12 +30,24 @@ const (
 // POST rebuild the push from the Event's own live state at send time; DELETE
 // cannot — the local row is gone by then — so a DELETE row carries an
 // OutboxWriteBackDeleteSnapshot instead, exactly as a mail CANCEL does.
+//
+// OutboxMethodInstance / OutboxMethodCancelInstance are the two shapes a
+// scoped edit of a recurring Linked Calendar series adds (#293, ADR-0078):
+// INSTANCE is events.patch against one recurring instance ("This event"
+// editing an Occurrence — a new or existing Override), CANCEL_INSTANCE is
+// events.patch { status: "cancelled" } against one ("Delete this event" — an
+// AddException, or deleting an existing Override; never an EXDATE line,
+// ADR-0075). Both carry an OutboxWriteBackInstanceSnapshot and hold the
+// *Master's* local id in event_id, so the reconciler's pending-set protection
+// (keyed on MasterID, ADR-0076) covers the whole series unchanged.
 const (
-	OutboxMethodRequest = "REQUEST"
-	OutboxMethodCancel  = "CANCEL"
-	OutboxMethodPatch   = "PATCH"
-	OutboxMethodPost    = "POST"
-	OutboxMethodDelete  = "DELETE"
+	OutboxMethodRequest        = "REQUEST"
+	OutboxMethodCancel         = "CANCEL"
+	OutboxMethodPatch          = "PATCH"
+	OutboxMethodPost           = "POST"
+	OutboxMethodDelete         = "DELETE"
+	OutboxMethodInstance       = "INSTANCE"
+	OutboxMethodCancelInstance = "CANCEL_INSTANCE"
 )
 
 // OutboxKindMail is every row this table carried before #290: a queued
@@ -100,6 +112,24 @@ type OutboxWriteBackDeleteSnapshot struct {
 	ExternalUID string `json:"externalUid"`
 }
 
+// OutboxWriteBackInstanceSnapshot is an INSTANCE or CANCEL_INSTANCE
+// OutboxKindWriteBack row's payload (#293, ADR-0078): everything SendWriteBack
+// needs to address one recurring instance at the Provider that the row's
+// event_id (the Master's local id) alone does not name. RecurrenceID is the
+// Occurrence's original start (its iCalendar RECURRENCE-ID), from which
+// SendWriteBack formats the events.instances `originalStart` filter that
+// resolves the instance's Provider id. OverrideEventID is the local Override
+// row an INSTANCE push rebuilds its field-scoped body from — empty for a
+// CANCEL_INSTANCE raised by AddException, which has no Override row, only the
+// Exdate. The Calendar, its Source and its Connection are re-resolved from
+// CalendarID at send time, exactly as OutboxWriteBackDeleteSnapshot does.
+type OutboxWriteBackInstanceSnapshot struct {
+	CalendarID      string    `json:"calendarId"`
+	MasterEventID   string    `json:"masterEventId"`
+	RecurrenceID    time.Time `json:"recurrenceId"`
+	OverrideEventID string    `json:"overrideEventId,omitempty"`
+}
+
 // OutboxMessage is a queued Invitation or Cancellation email (ADR-0059,
 // ADR-0060, #201): written in the same transaction as the Attendee row it
 // accompanies (or, for a CANCEL, the row/Attendee-row it withdraws), so a
@@ -126,16 +156,19 @@ type OutboxMessage struct {
 	Kind   string
 	Method string
 	// Snapshot is non-nil only for a mail CANCEL; WriteBackDelete is non-nil
-	// only for an OutboxKindWriteBack DELETE (#292). The two share the
-	// underlying `snapshot` column but never both a row.
-	Snapshot        *OutboxCancelSnapshot
-	WriteBackDelete *OutboxWriteBackDeleteSnapshot
-	Status          string
-	Attempts        int
-	NextAttemptAt   time.Time
-	LastError       string
-	CreatedAt       time.Time
-	SentAt          *time.Time
+	// only for an OutboxKindWriteBack DELETE (#292); WriteBackInstance is
+	// non-nil only for an OutboxKindWriteBack INSTANCE or CANCEL_INSTANCE
+	// (#293). All three share the underlying `snapshot` column but never more
+	// than one a row.
+	Snapshot          *OutboxCancelSnapshot
+	WriteBackDelete   *OutboxWriteBackDeleteSnapshot
+	WriteBackInstance *OutboxWriteBackInstanceSnapshot
+	Status            string
+	Attempts          int
+	NextAttemptAt     time.Time
+	LastError         string
+	CreatedAt         time.Time
+	SentAt            *time.Time
 }
 
 // OutboxRepository stores queued Invitation emails, drained by the
@@ -408,18 +441,61 @@ func (r *OutboxRepository) EnqueueWriteBackDelete(ctx context.Context, eventID s
 }
 
 // dropPendingRebuiltWriteBacks removes every still-pending rebuilt
-// (PATCH/POST) write-back row for eventID (#292, ADR-0077): an edit or a
-// not-yet-sent create is moot once the Event is deleted here. Leaves any
-// DELETE row and every mail row alone. Called by EnqueueWriteBackDelete
-// before it inserts.
+// (PATCH/POST) write-back row for eventID (#292, ADR-0077), plus every pending
+// INSTANCE/CANCEL_INSTANCE row whose event_id is this same Master (#293,
+// ADR-0078): an edit, a not-yet-sent create, or a queued scoped edit of one
+// Occurrence is all moot once the whole series is deleted here. Leaves any
+// DELETE row and every mail row alone. Called by EnqueueWriteBackDelete before
+// it inserts.
 func (r *OutboxRepository) dropPendingRebuiltWriteBacks(ctx context.Context, eventID string) error {
 	if _, err := r.db.ExecContext(ctx,
-		`DELETE FROM outbox WHERE event_id = ? AND kind = ? AND status = ? AND method IN (?, ?)`,
-		eventID, OutboxKindWriteBack, OutboxStatusPending, OutboxMethodPatch, OutboxMethodPost,
+		`DELETE FROM outbox WHERE event_id = ? AND kind = ? AND status = ? AND method IN (?, ?, ?, ?)`,
+		eventID, OutboxKindWriteBack, OutboxStatusPending, OutboxMethodPatch, OutboxMethodPost, OutboxMethodInstance, OutboxMethodCancelInstance,
 	); err != nil {
 		return fmt.Errorf("drop superseded write-backs: %w", err)
 	}
 	return nil
+}
+
+// EnqueueWriteBackInstance queues an events.patch against one recurring
+// instance — "This event" editing an Occurrence of a series on a writable
+// Linked Calendar (#293, ADR-0078). masterEventID (the row's event_id) is the
+// Master's *local* id, so the reconciler's pending-set protection covers the
+// whole series while this push is in flight (ADR-0076); snap carries what the
+// send path needs to resolve and rebuild the instance push. Not deduped
+// against an already-pending row: unlike a Master PATCH, two edits to the same
+// Occurrence are rare and a redundant instance PATCH is cheap.
+func (r *OutboxRepository) EnqueueWriteBackInstance(ctx context.Context, masterEventID string, snap OutboxWriteBackInstanceSnapshot) (OutboxMessage, error) {
+	return r.enqueueWriteBackInstance(ctx, masterEventID, OutboxMethodInstance, snap)
+}
+
+// EnqueueWriteBackInstanceCancel queues an events.patch { status: "cancelled" }
+// against one recurring instance — "Delete this event" (an AddException, or
+// deleting an existing Override) on a writable Linked Calendar (#293,
+// ADR-0078). Google's native cancellation, deliberately never an EXDATE line
+// in the recurrence array (ADR-0075). Same event_id / snapshot contract as
+// EnqueueWriteBackInstance.
+func (r *OutboxRepository) EnqueueWriteBackInstanceCancel(ctx context.Context, masterEventID string, snap OutboxWriteBackInstanceSnapshot) (OutboxMessage, error) {
+	return r.enqueueWriteBackInstance(ctx, masterEventID, OutboxMethodCancelInstance, snap)
+}
+
+func (r *OutboxRepository) enqueueWriteBackInstance(ctx context.Context, masterEventID, methodValue string, snap OutboxWriteBackInstanceSnapshot) (OutboxMessage, error) {
+	encoded, err := json.Marshal(snap)
+	if err != nil {
+		return OutboxMessage{}, fmt.Errorf("marshal write-back instance snapshot: %w", err)
+	}
+	res, err := r.db.ExecContext(ctx,
+		`INSERT INTO outbox (event_id, kind, method, snapshot) VALUES (?, ?, ?, ?)`,
+		masterEventID, OutboxKindWriteBack, methodValue, string(encoded),
+	)
+	if err != nil {
+		return OutboxMessage{}, fmt.Errorf("insert outbox message: %w", err)
+	}
+	id, err := res.LastInsertId()
+	if err != nil {
+		return OutboxMessage{}, fmt.Errorf("get last insert id: %w", err)
+	}
+	return r.Get(ctx, id)
 }
 
 // ListPendingWriteBackDeleteExternalUIDs returns the ExternalUID of every
@@ -507,13 +583,20 @@ func scanOutboxMessage(row rowScanner) (OutboxMessage, error) {
 		m.ActorUserID = &id
 	}
 	if snapshot.Valid {
-		if m.Kind == OutboxKindWriteBack && m.Method == OutboxMethodDelete {
+		switch {
+		case m.Kind == OutboxKindWriteBack && m.Method == OutboxMethodDelete:
 			var s OutboxWriteBackDeleteSnapshot
 			if err := json.Unmarshal([]byte(snapshot.String), &s); err != nil {
 				return OutboxMessage{}, fmt.Errorf("unmarshal write-back delete snapshot: %w", err)
 			}
 			m.WriteBackDelete = &s
-		} else {
+		case m.Kind == OutboxKindWriteBack && (m.Method == OutboxMethodInstance || m.Method == OutboxMethodCancelInstance):
+			var s OutboxWriteBackInstanceSnapshot
+			if err := json.Unmarshal([]byte(snapshot.String), &s); err != nil {
+				return OutboxMessage{}, fmt.Errorf("unmarshal write-back instance snapshot: %w", err)
+			}
+			m.WriteBackInstance = &s
+		default:
 			var s OutboxCancelSnapshot
 			if err := json.Unmarshal([]byte(snapshot.String), &s); err != nil {
 				return OutboxMessage{}, fmt.Errorf("unmarshal cancel snapshot: %w", err)

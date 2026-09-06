@@ -7,8 +7,11 @@
 // the three Write-back calls: events.patch for an edit (#290, ADR-0075),
 // events.insert for a create and events.delete for a delete (#292,
 // ADR-0077). All three carry the same field-scoped googleEventPatchBody, so
-// none can express a whole-Event replace. events.instances (an Override's
-// first detach) is still a later ticket's. Every call goes through the one
+// none can express a whole-Event replace. A scoped recurring edit (#293,
+// ADR-0078) adds two more: events.instances resolves one instance's Provider
+// id from its original start (never the constructed composite form), and
+// events.patch { status: cancelled } against that instance is Google's native
+// "delete this Occurrence". Every call goes through the one
 // overridable httpClient (#285's testing decisions) — a test points this at
 // an httptest.Server serving canned JSON in place of Google, never a mocked
 // fetcher.
@@ -765,53 +768,24 @@ func encodeGoogleEventDateTime(t time.Time, allDay bool, tzid *string) googleEve
 	return googleEventDateTimeJSON{DateTime: t.In(loc).Format("2006-01-02T15:04:05-07:00"), TimeZone: *tzid}
 }
 
-// encodeGoogleRecurrence is parseGoogleRecurrence's (plus
-// parseGoogleExdateValue's) inverse for exactly the two lines this app ever
-// writes back: one RRULE line carrying rrule verbatim (ADR-0016 stores it as
-// opaque text already in Google's own RFC 5545 shape, so it never needs
-// translating), and one EXDATE line per stored Exception, so a Master edit's
-// recurrence array — which Google replaces wholesale, never merges — doesn't
-// silently drop cancellations this app already reconciled in from a previous
-// Refresh. tzid anchors the EXDATE values exactly as the Master's own
-// boundaries are anchored (encodeGoogleEventDateTime's own rule); an all-day
-// series' exdates are encoded as bare VALUE=DATE tokens instead. Returns nil
-// for a non-recurring write (rrule empty and no exdates), which
+// encodeGoogleRecurrence is parseGoogleRecurrence's inverse for the one line
+// this app ever writes back: a single RRULE line carrying rrule verbatim
+// (ADR-0016 stores it as opaque text already in Google's own RFC 5545 shape,
+// so it never needs translating). It deliberately emits **no EXDATE line**
+// (#293, ADR-0075, ADR-0078): a cancelled Occurrence is represented at Google
+// as a `status: cancelled` instance — Google's own native cancellation, pushed
+// by CANCEL_INSTANCE — never as an exclusion-date entry in the recurrence
+// array. Both representations exist at Google and mixing them drifts, so one
+// is chosen once. Returns nil for a non-recurring write (rrule empty), which
 // buildGooglePatch reads as "omit recurrence from the patch entirely" — never
-// as "clear whatever Google has": the empty-non-recurring case only reaches
-// here for an Event this app never modeled as recurring to begin with, and
-// this ticket doesn't turn a recurring Master back into a plain Event over
-// Write-back.
-func encodeGoogleRecurrence(rrule string, exdates []time.Time, allDay bool, tzid *string) []string {
-	if rrule == "" && len(exdates) == 0 {
+// as "clear whatever Google has": that case only reaches here for an Event
+// this app never modeled as recurring, and Write-back never turns a recurring
+// Master back into a plain Event.
+func encodeGoogleRecurrence(rrule string) []string {
+	if rrule == "" {
 		return nil
 	}
-
-	lines := make([]string, 0, 1+len(exdates))
-	if rrule != "" {
-		lines = append(lines, "RRULE:"+rrule)
-	}
-	for _, exdate := range exdates {
-		lines = append(lines, encodeGoogleExdateLine(exdate, allDay, tzid))
-	}
-	return lines
-}
-
-// encodeGoogleExdateLine renders one EXDATE content line in the same shape
-// parseGoogleExdateValue accepts back: VALUE=DATE for an all-day series, a
-// bare "Z"-suffixed instant for an absolute one (tzid nil or "Etc/UTC"), and
-// a TZID-parameterized local wall-clock value otherwise.
-func encodeGoogleExdateLine(t time.Time, allDay bool, tzid *string) string {
-	if allDay {
-		return "EXDATE;VALUE=DATE:" + t.UTC().Format("20060102")
-	}
-	if tzid == nil || *tzid == "Etc/UTC" {
-		return "EXDATE:" + t.UTC().Format("20060102T150405Z")
-	}
-	loc, err := time.LoadLocation(*tzid)
-	if err != nil {
-		return "EXDATE:" + t.UTC().Format("20060102T150405Z")
-	}
-	return "EXDATE;TZID=" + *tzid + ":" + t.In(loc).Format("20060102T150405")
+	return []string{"RRULE:" + rrule}
 }
 
 // googlePatchSource builds Event URL's Source mapping (#290, ADR-0075),
@@ -835,19 +809,22 @@ func googlePatchSource(eventTitle, eventURL string) *googleEventPatchSourceJSON 
 // (#290, ADR-0075) — the field-scoped patch compiler ADR-0075 requires be
 // enforced at the Provider seam, not by convention at each call site. Its
 // argument list is exactly ADR-0075's allow-list (title, start, end,
-// all-day, Anchor zone, recurrence rule plus its Exdates, description,
-// location, Event URL) and nothing a caller could use to smuggle an
-// Attendee, conferenceData, or a visibility change through: those fields
-// don't exist on this function's signature, so there is nothing to pass even
-// by mistake.
-func buildGooglePatch(title string, start, end time.Time, allDay bool, tzid *string, rrule string, exdates []time.Time, description, location, eventURL string) googleEventPatchBody {
+// all-day, Anchor zone, recurrence rule, description, location, Event URL) and
+// nothing a caller could use to smuggle an Attendee, conferenceData, or a
+// visibility change through: those fields don't exist on this function's
+// signature, so there is nothing to pass even by mistake. An empty rrule (a
+// plain Master, or a recurring instance's own PATCH, which never carries a
+// rule of its own) omits the recurrence key entirely. Cancelled Occurrences
+// are never in scope here — they are `status: cancelled` instances, pushed by
+// CANCEL_INSTANCE (#293, ADR-0078).
+func buildGooglePatch(title string, start, end time.Time, allDay bool, tzid *string, rrule string, description, location, eventURL string) googleEventPatchBody {
 	return googleEventPatchBody{
 		Summary:     title,
 		Description: description,
 		Location:    location,
 		Start:       encodeGoogleEventDateTime(start, allDay, tzid),
 		End:         encodeGoogleEventDateTime(end, allDay, tzid),
-		Recurrence:  encodeGoogleRecurrence(rrule, exdates, allDay, tzid),
+		Recurrence:  encodeGoogleRecurrence(rrule),
 		Source:      googlePatchSource(title, eventURL),
 	}
 }
@@ -1014,4 +991,132 @@ func (c *googleClient) deleteEvent(ctx context.Context, accessToken, calendarID,
 	default:
 		return &googleHTTPError{sentinel: ErrGoogleWriteBackFailed, statusCode: resp.StatusCode}
 	}
+}
+
+// errGoogleInstanceNotFound is listInstances finding no instance of a
+// recurring series at the requested originalStart (#293, ADR-0078) — an
+// empty items array. SendWriteBack treats it as a "nothing left to push"
+// no-op: the Occurrence the User scoped their edit to is not one the series
+// still generates (the rule moved under it, or the series was truncated),
+// so there is nothing at the Provider to patch.
+var errGoogleInstanceNotFound = errors.New("google has no instance of this series at that original start")
+
+// formatGoogleOriginalStart renders recurrenceID (an Occurrence's iCalendar
+// RECURRENCE-ID) as the `originalStart` query value events.instances filters
+// on (#293, ADR-0078) — a bare date for an all-day series, an offset-bearing
+// RFC3339 wall-clock for a timed one, a "Z" instant for a Floating one. It
+// reuses encodeGoogleEventDateTime verbatim so the value byte-matches how the
+// same instant would be encoded anywhere else in this file — the shortcut of
+// constructing `{eventId}_{timestamp}` by hand is exactly what ADR-0075 warns
+// breaks on an all-day or DST edge, so the id is fetched instead.
+func formatGoogleOriginalStart(recurrenceID time.Time, allDay bool, tzid *string) string {
+	dt := encodeGoogleEventDateTime(recurrenceID, allDay, tzid)
+	if dt.Date != "" {
+		return dt.Date
+	}
+	return dt.DateTime
+}
+
+// listInstances resolves one recurring instance's own Provider representation
+// (#293, ADR-0078): events.instances on recurringEventID, filtered to the
+// single Occurrence whose original start is originalStart. Returns that
+// instance's own googleEventJSON — its `id` (the composite Provider id a
+// scoped edit patches) and `etag` (the If-Match validator that edit carries).
+// An empty listing is errGoogleInstanceNotFound; every other non-200 is a
+// *googleHTTPError for the caller to classify like any other Write-back
+// failure. showDeleted=true so an Occurrence already cancelled at Google still
+// resolves — a "Delete this event" push that races an identical Provider
+// cancellation must still find the instance to no-op against.
+func (c *googleClient) listInstances(ctx context.Context, accessToken, calendarID, recurringEventID, originalStart string) (googleEventJSON, error) {
+	q := url.Values{}
+	q.Set("originalStart", originalStart)
+	q.Set("showDeleted", "true")
+	q.Set("maxResults", "2")
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.eventsURLFor(calendarID)+"/"+url.PathEscape(recurringEventID)+"/instances?"+q.Encode(), nil)
+	if err != nil {
+		return googleEventJSON{}, fmt.Errorf("build events.instances request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return googleEventJSON{}, fmt.Errorf("%w: %v", ErrGoogleWriteBackFailed, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		io.Copy(io.Discard, resp.Body) //nolint:errcheck // draining for keep-alive reuse; the response carries nothing we need on failure
+		return googleEventJSON{}, &googleHTTPError{sentinel: ErrGoogleWriteBackFailed, statusCode: resp.StatusCode}
+	}
+
+	var body struct {
+		Items []googleEventJSON `json:"items"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		return googleEventJSON{}, fmt.Errorf("%w: %v", ErrGoogleWriteBackFailed, err)
+	}
+	if len(body.Items) == 0 {
+		return googleEventJSON{}, errGoogleInstanceNotFound
+	}
+	return body.Items[0], nil
+}
+
+// googleInstanceCancelBody is cancelInstance's whole request body (#293,
+// ADR-0078): a single field, so a "Delete this event" push can express
+// nothing but the cancellation — it can no more touch a title or a guest list
+// than buildGooglePatch's body can smuggle an attendee.
+type googleInstanceCancelBody struct {
+	Status string `json:"status"`
+}
+
+// cancelInstance PATCHes instanceID on calendarID to `status: cancelled`
+// (#293, ADR-0075, ADR-0078) — Google's native cancellation of one Occurrence,
+// deliberately not an EXDATE line in the parent series' recurrence array.
+// sendUpdates=none, same reason as patchEvent. ifMatchEtag, when non-nil, is
+// the If-Match precondition against the instance's own validator; a stale one
+// answers 412, returned as a *googleHTTPError the caller's bounded retry loop
+// acts on. A 404/410 — the instance already gone or already cancelled at
+// Google — is success, the end state the User asked for, exactly as
+// deleteEvent treats the same statuses. Returns the cancelled instance
+// Google's response describes (empty on the 404/410 path), for the caller to
+// read its fresh etag from.
+func (c *googleClient) cancelInstance(ctx context.Context, accessToken, calendarID, instanceID string, ifMatchEtag *string) (googleEventJSON, error) {
+	body, err := json.Marshal(googleInstanceCancelBody{Status: googleStatusCancelled})
+	if err != nil {
+		return googleEventJSON{}, fmt.Errorf("marshal instance cancel: %w", err)
+	}
+
+	q := url.Values{}
+	q.Set("sendUpdates", "none")
+	req, err := http.NewRequestWithContext(ctx, http.MethodPatch, c.eventsURLFor(calendarID)+"/"+url.PathEscape(instanceID)+"?"+q.Encode(), bytes.NewReader(body))
+	if err != nil {
+		return googleEventJSON{}, fmt.Errorf("build instance cancel request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	if ifMatchEtag != nil {
+		req.Header.Set("If-Match", `"`+*ifMatchEtag+`"`)
+	}
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return googleEventJSON{}, fmt.Errorf("%w: %v", ErrGoogleWriteBackFailed, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusGone {
+		io.Copy(io.Discard, resp.Body) //nolint:errcheck // draining for keep-alive reuse
+		return googleEventJSON{}, nil
+	}
+	if resp.StatusCode != http.StatusOK {
+		io.Copy(io.Discard, resp.Body) //nolint:errcheck // draining for keep-alive reuse; the response carries nothing we need on failure
+		return googleEventJSON{}, &googleHTTPError{sentinel: ErrGoogleWriteBackFailed, statusCode: resp.StatusCode}
+	}
+
+	var updated googleEventJSON
+	if err := json.NewDecoder(resp.Body).Decode(&updated); err != nil {
+		return googleEventJSON{}, fmt.Errorf("%w: %v", ErrGoogleWriteBackFailed, err)
+	}
+	return updated, nil
 }

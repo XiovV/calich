@@ -1,6 +1,6 @@
 # Create and delete Write-back, and the queued-delete snapshot
 
-Status: accepted — extends ADR-0075 (Write-back) and ADR-0076 (a pending Write-back is invisible to the reconciler)
+Status: accepted — extends ADR-0075 (Write-back) and ADR-0076 (a pending Write-back is invisible to the reconciler); scoped recurring edits extend it further in ADR-0078
 
 Creating and deleting an Event on a writable Linked Calendar now pushes to the
 Provider, alongside the edit push ADR-0075 shipped. A create queues
@@ -61,8 +61,8 @@ PATCH/POST that can't be delivered (a genuine no-op), a silently dropped
 delete is *undone* by the next Refresh, which still lists the event.
 
 Deleting one Occurrence of a recurring series (an Override, or an Exception
-via `AddException`) stays refused: that is a `PATCH status: cancelled` against
-an instance id this app does not resolve yet (ADR-0075).
+via `AddException`) was parked here — `PATCH status: cancelled` against an
+instance id this app did not resolve yet — and is built out in ADR-0078.
 
 ## The pending set, precisely
 

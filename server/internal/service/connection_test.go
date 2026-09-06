@@ -90,6 +90,16 @@ type fakeGoogleServer struct {
 	// every such request received, in arrival order.
 	getEventResponse map[string]any
 	getEventRequests []capturedGoogleGet
+	// instancesByOriginalStart keys the events.instances response (#293,
+	// ADR-0078) by the `originalStart` query value a scoped recurring edit
+	// sends — SendWriteBack resolves one instance's own Provider id and etag
+	// through this endpoint rather than constructing the composite id. A key
+	// absent from the map answers with an empty items array (Google's "no
+	// instance at that original start"). instancesRequests records every such
+	// request; instancesStatus forces a non-200.
+	instancesByOriginalStart map[string]map[string]any
+	instancesRequests        []capturedGoogleInstances
+	instancesStatus          int
 	// insertRequests records every events.insert (POST .../events) this
 	// server received (#292), in arrival order. insertResponseID/ETag are the
 	// id and validator Google mints on success (defaulting to
@@ -133,6 +143,14 @@ type capturedGoogleDelete struct {
 // refetched the Provider's current copy before retrying.
 type capturedGoogleGet struct {
 	CalendarID, EventID string
+}
+
+// capturedGoogleInstances is one events.instances request fakeGoogleServer
+// received (#293) — enough to assert which recurring series was addressed and
+// the originalStart filter that resolved one instance (a bare date for an
+// all-day series, an offset-bearing wall-clock for a timed one).
+type capturedGoogleInstances struct {
+	CalendarID, EventID, OriginalStart string
 }
 
 // capturedGooglePatch is one events.patch request fakeGoogleServer received
@@ -326,6 +344,27 @@ func newFakeGoogleServer(t *testing.T) *fakeGoogleServer {
 			return
 		}
 		w.WriteHeader(http.StatusNotFound)
+	})
+	mux.HandleFunc("GET /{calendarId}/events/{eventId}/instances", func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer fake-access-token" {
+			t.Fatalf("expected events.instances request to carry the exchanged access token, got %q", r.Header.Get("Authorization"))
+		}
+		originalStart := r.URL.Query().Get("originalStart")
+		f.instancesRequests = append(f.instancesRequests, capturedGoogleInstances{
+			CalendarID:    r.PathValue("calendarId"),
+			EventID:       r.PathValue("eventId"),
+			OriginalStart: originalStart,
+		})
+		if f.instancesStatus != 0 && f.instancesStatus != http.StatusOK {
+			w.WriteHeader(f.instancesStatus)
+			return
+		}
+		var items []map[string]any
+		if item, ok := f.instancesByOriginalStart[originalStart]; ok {
+			items = []map[string]any{item}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"items": items})
 	})
 	mux.HandleFunc("POST /{calendarId}/events", func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer fake-access-token" {

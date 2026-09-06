@@ -25,17 +25,14 @@ func (s *EventService) GetByIDUnchecked(ctx context.Context, id string) (reposit
 	return s.events.GetByID(ctx, id)
 }
 
-// ExdatesFor returns masterID's own Exceptions (ADR-0016) — empty, not an
-// error, for a Master with none. SendWriteBack folds these into the
-// recurrence array it pushes (encodeGoogleRecurrence), since Google replaces
-// that array wholesale and a push that omitted them would silently
-// resurrect every occurrence this app already cancelled.
-func (s *EventService) ExdatesFor(ctx context.Context, masterID string) ([]time.Time, error) {
-	byParent, err := s.exceptions.ListByParentIDs(ctx, []string{masterID})
-	if err != nil {
-		return nil, fmt.Errorf("list exceptions: %w", err)
-	}
-	return byParent[masterID], nil
+// GetOverrideForWriteBack returns masterID's Override for the Occurrence at
+// recurrenceID, or repository.ErrNotFound (#293, ADR-0078) — the seam
+// SendWriteBack's instance push rebuilds its field-scoped body from, in the
+// same background context GetByIDUnchecked already serves. A nil ErrNotFound
+// is one of that push's "nothing left to push" no-ops (the Override was
+// deleted since the row was queued).
+func (s *EventService) GetOverrideForWriteBack(ctx context.Context, masterID string, recurrenceID time.Time) (repository.Event, error) {
+	return s.events.GetOverrideByRecurrenceID(ctx, masterID, recurrenceID)
 }
 
 // MasterIDsWithPendingWriteBack returns the local ids of every Master

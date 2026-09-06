@@ -257,42 +257,39 @@ func TestEventService_Create_RefusesAttendeesOnWritableLinkedCalendar(t *testing
 	}
 }
 
-func TestEventService_AddException_RefusesOnConnectionCalendarRegardlessOfMode(t *testing.T) {
+// The scoped recurring writes AddException and ReparentFrom used to refuse on
+// a Connection Source now go through (#293, ADR-0078) — see
+// event_scoped_writeback_test.go for their allow-and-enqueue coverage. What
+// stays refused is a ReparentFrom that would cross the Provider boundary.
+func TestEventService_ReparentFrom_RefusesCrossingTheProviderBoundary(t *testing.T) {
 	g := newTestGraph(t)
-	userID, calendarID := newTestLinkedCalendar(t, g, repository.SourceModeWritable)
-	event := seedLinkedMaster(t, g, userID, calendarID, "evt-linked-exception")
-	// AddException refuses a non-recurring parent before it ever reaches the
-	// Connection-Source guard (ErrParentNotRecurring) — this test is about
-	// the guard specifically, so the seeded Master needs a rrule of its own.
-	if _, err := g.EventRepo.Update(context.Background(), event.ID, repository.EventFields{
-		CalendarID: calendarID, Title: event.Title, Start: event.Start, End: event.End, Rrule: "FREQ=WEEKLY",
-	}, event.ChangeSeq, event.Sequence); err != nil {
-		t.Fatalf("give the seeded master a rrule: %v", err)
+	ctx := context.Background()
+	userID, linkedCalendarID := newTestLinkedCalendar(t, g, repository.SourceModeWritable)
+	oldParent := seedLinkedMaster(t, g, userID, linkedCalendarID, "evt-linked-old-parent")
+
+	workspace, err := g.WorkspaceRepo.Create(ctx, "Other Workspace", userID)
+	if err != nil {
+		t.Fatalf("create workspace: %v", err)
 	}
-
-	err := g.Events.AddException(context.Background(), userID, event.ID, event.Start)
-	if err != ErrLinkedCalendarWriteUnsupported {
-		t.Fatalf("expected ErrLinkedCalendarWriteUnsupported, got %v", err)
+	if err := g.WorkspaceRepo.AddMember(ctx, workspace.ID, userID, repository.WorkspaceRoleOwner); err != nil {
+		t.Fatalf("add workspace member: %v", err)
 	}
-}
-
-func TestEventService_ReparentFrom_RefusesWhenEitherSideIsAConnectionCalendar(t *testing.T) {
-	g := newTestGraph(t)
-	userID, calendarID := newTestLinkedCalendar(t, g, repository.SourceModeWritable)
-	oldParent := seedLinkedMaster(t, g, userID, calendarID, "evt-linked-old-parent")
-
-	seq, err := g.SyncRepo.NextChangeSeq(context.Background())
+	ordinaryCalendar, err := g.CalendarRepo.Create(ctx, userID, workspace.ID, "cal-ordinary", repository.CalendarFields{Name: "Ordinary", Color: "peacock"})
+	if err != nil {
+		t.Fatalf("create ordinary calendar: %v", err)
+	}
+	seq, err := g.SyncRepo.NextChangeSeq(ctx)
 	if err != nil {
 		t.Fatalf("next change seq: %v", err)
 	}
-	newParent, err := g.EventRepo.Create(context.Background(), "evt-linked-new-parent", &userID, repository.EventFields{
-		CalendarID: calendarID, Title: "New parent", Start: oldParent.Start, End: oldParent.End,
+	newParent, err := g.EventRepo.Create(ctx, "evt-ordinary-new-parent", &userID, repository.EventFields{
+		CalendarID: ordinaryCalendar.ID, Title: "New parent", Start: oldParent.Start, End: oldParent.End,
 	}, seq)
 	if err != nil {
 		t.Fatalf("seed new parent: %v", err)
 	}
 
-	err = g.Events.ReparentFrom(context.Background(), userID, oldParent.ID, newParent.ID, oldParent.Start)
+	err = g.Events.ReparentFrom(ctx, userID, oldParent.ID, newParent.ID, oldParent.Start)
 	if err != ErrLinkedCalendarWriteUnsupported {
 		t.Fatalf("expected ErrLinkedCalendarWriteUnsupported, got %v", err)
 	}

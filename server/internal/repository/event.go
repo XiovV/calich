@@ -581,6 +581,19 @@ func (r *EventRepository) ListChildrenByParentIDs(ctx context.Context, parentIDs
 	return result, nil
 }
 
+// GetOverrideByRecurrenceID returns masterID's Override for the Occurrence at
+// recurrenceID (its iCalendar RECURRENCE-ID), or ErrNotFound when the series
+// has none there yet (#293, ADR-0078). SendWriteBack's instance push is the
+// only caller: it rebuilds the field-scoped PATCH from the Override's own live
+// fields, and a nil ErrNotFound is one of its "nothing left to push" no-ops
+// (the Override was deleted since the push was queued).
+func (r *EventRepository) GetOverrideByRecurrenceID(ctx context.Context, masterID string, recurrenceID time.Time) (Event, error) {
+	return scanEvent(r.db.QueryRowContext(ctx,
+		`SELECT `+eventColumns+` FROM events WHERE parent_id = ? AND recurrence_id = ?`,
+		masterID, recurrenceID.UTC(),
+	))
+}
+
 // ListMastersByCalendar returns every Master Event (parent_id IS NULL) in
 // calendarID, ordered by id — CalDAV's per-calendar object listing
 // (ADR-0025).
