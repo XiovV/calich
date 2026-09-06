@@ -60,6 +60,13 @@ type fakeGoogleServer struct {
 	// carried, "" for a Full Refresh — a test asserts the Delta path actually
 	// sends the stored cursor.
 	lastSyncTokenSeen string
+	// eventsSummaryByCalendar keys events.list's own top-level "summary" field
+	// by calendar id (#289) — the Provider's own current name for the
+	// calendar, echoed on every response (Full and Delta alike), which a
+	// Linked Calendar's name tracks until it's renamed here. A calendar
+	// absent from this map gets no "summary" field at all, mirroring a
+	// response that omitted it.
+	eventsSummaryByCalendar map[string]string
 }
 
 func newFakeGoogleServer(t *testing.T) *fakeGoogleServer {
@@ -162,6 +169,9 @@ func newFakeGoogleServer(t *testing.T) *fakeGoogleServer {
 			body["nextPageToken"] = strconv.Itoa(start + pageSize)
 		} else if f.nextSyncToken != "" {
 			body["nextSyncToken"] = f.nextSyncToken
+		}
+		if summary, ok := f.eventsSummaryByCalendar[calendarID]; ok {
+			body["summary"] = summary
 		}
 
 		w.Header().Set("Content-Type", "application/json")

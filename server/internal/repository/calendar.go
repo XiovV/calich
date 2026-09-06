@@ -242,6 +242,27 @@ func (r *CalendarRepository) Update(ctx context.Context, userID int64, id string
 	return r.GetByID(ctx, userID, id)
 }
 
+// UpdateName rewrites id's own Name alone, leaving Color untouched (#289) —
+// a Linked Calendar's Refresh moves Name forward when a Provider rename
+// reaches an untouched Calendar, reusing ADR-0032's shadow mechanism
+// verbatim. It deliberately doesn't go through Update's own two-column
+// write: RefreshLinked reads its Calendar snapshot before doRefresh's
+// network round-trip to the Provider, so routing this through Update with
+// that snapshot's Color would race a concurrent recolour landing in between
+// and silently revert it — a real risk Update's own unconditional write
+// carries and this narrower write exists to avoid. See
+// CalendarService.RecordConnectionRefreshSuccess.
+func (r *CalendarRepository) UpdateName(ctx context.Context, userID int64, id, name string) error {
+	res, err := r.db.ExecContext(ctx,
+		`UPDATE calendars SET name = ? WHERE user_id = ? AND id = ?`,
+		name, userID, id,
+	)
+	if err != nil {
+		return fmt.Errorf("update calendar name: %w", err)
+	}
+	return requireAffected(res)
+}
+
 func (r *CalendarRepository) Delete(ctx context.Context, userID int64, id string) error {
 	res, err := r.db.ExecContext(ctx, `DELETE FROM calendars WHERE user_id = ? AND id = ?`, userID, id)
 	if err != nil {

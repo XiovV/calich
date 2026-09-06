@@ -47,12 +47,16 @@ type googleConferenceData struct {
 // Exdate) — Google returns both kinds of instance alongside the Master when
 // listed with singleEvents=false, regardless of showDeleted.
 type googleEvent struct {
-	ID                string
-	ETag              string
-	Status            string
-	Summary           string
-	Description       string
-	Location          string
+	ID          string
+	ETag        string
+	Status      string
+	Summary     string
+	Description string
+	Location    string
+	// ColorID is Google's own per-event colour id ("1".."11"), empty when the
+	// event carries no colour. Mapped to a hex inbound (#289, ADR-0075) and
+	// shadow-tracked; never sent back.
+	ColorID           string
 	Start, End        googleEventDateTime
 	RecurringEventID  string
 	OriginalStartTime *googleEventDateTime
@@ -257,6 +261,13 @@ func mapGoogleMaster(master googleEvent, instances []googleEvent) (SeriesWrite, 
 
 	rsvp, guestCount := googleGuestInfo(master.Attendees)
 
+	// Colour is seeded from the Provider's colorId into both the displayed
+	// value and the shadow (#289, ADR-0075). On a first import both persist;
+	// on a later Refresh the reconciler moves the displayed value forward
+	// only while it still equals the shadow — an untouched Event follows the
+	// Provider's recolours, one recoloured here stays put. Never pushed back.
+	providerColor := googleEventColorHex(master.ColorID)
+
 	// exdates is parseGoogleRecurrence's own fresh slice; folding the
 	// cancelled instances into it here is a local mutation, nothing else
 	// holds a reference.
@@ -275,6 +286,8 @@ func mapGoogleMaster(master googleEvent, instances []googleEvent) (SeriesWrite, 
 		Exdates:       exdates,
 		Overrides:     overrides,
 		ExternalUID:   master.ID,
+		Color:         providerColor,
+		ProviderColor: providerColor,
 		ProviderEtag:  googleEtag(master.ETag),
 		RSVPStatus:    rsvp,
 		ConferenceURL: googleConferenceURL(master.ConferenceData),
@@ -307,6 +320,7 @@ func mapGoogleInstances(instances []googleEvent, externalUID string) (overrides 
 
 		iStart, iAllDay, iTzid := decodeGoogleTime(instance.Start)
 		iRsvp, iGuestCount := googleGuestInfo(instance.Attendees)
+		iProviderColor := googleEventColorHex(instance.ColorID)
 		overrides = append(overrides, OverrideWrite{
 			RecurrenceID:  recurrenceID,
 			Title:         instance.Summary,
@@ -317,6 +331,8 @@ func mapGoogleInstances(instances []googleEvent, externalUID string) (overrides 
 			AllDay:        iAllDay,
 			Tzid:          iTzid,
 			ExternalUID:   externalUID,
+			Color:         iProviderColor,
+			ProviderColor: iProviderColor,
 			ProviderEtag:  googleEtag(instance.ETag),
 			RSVPStatus:    iRsvp,
 			ConferenceURL: googleConferenceURL(instance.ConferenceData),

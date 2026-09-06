@@ -255,6 +255,96 @@ func TestReconcileDelta_MasterChangePreservesUnmentionedOverrides(t *testing.T) 
 	}
 }
 
+// --- #289, ADR-0075: Delta Refresh applies the same until-touched colour
+// rule Full Refresh does, via mergeDeltaChange ---
+
+func TestReconcileDelta_UntouchedMasterFollowsProviderRecolour(t *testing.T) {
+	stored := basicWrite(t, "Standup")
+	stored.ExternalUID = "uid-1"
+	stored.Color = strPtr("#FBD75BFF")
+	stored.ProviderColor = strPtr("#FBD75BFF")
+	existing := []ExistingSeries{{MasterID: "master-1", ExternalUID: "uid-1", Content: stored}}
+
+	batchMaster := basicWrite(t, "Standup")
+	batchMaster.ExternalUID = "uid-1"
+	batchMaster.Color = strPtr("#DC2127FF")
+	batchMaster.ProviderColor = strPtr("#DC2127FF")
+	changes := []DeltaSeriesChange{{ExternalUID: "uid-1", Master: &batchMaster}}
+
+	result := ReconcileDelta(existing, changes, nil)
+
+	if len(result.Upserts) != 1 {
+		t.Fatalf("expected one upsert, got %+v", result.Upserts)
+	}
+	got := result.Upserts[0].Write
+	if got.Color == nil || *got.Color != "#DC2127FF" {
+		t.Fatalf("expected the untouched Master to follow the Provider's recolour, got %v", got.Color)
+	}
+}
+
+func TestReconcileDelta_MasterRecolouredHereSurvivesProviderColourUnchanged(t *testing.T) {
+	stored := basicWrite(t, "Standup")
+	stored.ExternalUID = "uid-1"
+	stored.Color = strPtr("#123456FF")
+	stored.ProviderColor = strPtr("#FBD75BFF")
+	existing := []ExistingSeries{{MasterID: "master-1", ExternalUID: "uid-1", Content: stored}}
+
+	// The Provider's own colour (#FBD75BFF) is unchanged from the shadow, but
+	// the title changed — Google still resends the whole Master, colorId
+	// included, on any Master-level edit.
+	batchMaster := basicWrite(t, "Standup (renamed)")
+	batchMaster.ExternalUID = "uid-1"
+	batchMaster.Color = strPtr("#FBD75BFF")
+	batchMaster.ProviderColor = strPtr("#FBD75BFF")
+	changes := []DeltaSeriesChange{{ExternalUID: "uid-1", Master: &batchMaster}}
+
+	result := ReconcileDelta(existing, changes, nil)
+
+	if len(result.Upserts) != 1 {
+		t.Fatalf("expected one upsert (the title alone changed), got %+v", result.Upserts)
+	}
+	got := result.Upserts[0].Write
+	if got.Color == nil || *got.Color != "#123456FF" {
+		t.Fatalf("expected the local recolour to survive an unchanged Provider colour, got %v", got.Color)
+	}
+}
+
+func TestReconcileDelta_InstanceOnlyChangeFollowsProviderRecolourAgainstStoredOverride(t *testing.T) {
+	recID := mustTime(t, "2026-01-12T09:00:00Z")
+	stored := basicWrite(t, "Standup")
+	stored.Rrule = "FREQ=WEEKLY"
+	stored.ExternalUID = "uid-1"
+	stored.Overrides = []OverrideWrite{{
+		RecurrenceID: recID, Title: "Standup (moved)",
+		Start: mustTime(t, "2026-01-12T10:00:00Z"), End: mustTime(t, "2026-01-12T10:30:00Z"),
+		Color: strPtr("#123456FF"), ProviderColor: strPtr("#FBD75BFF"),
+	}}
+	existing := []ExistingSeries{{MasterID: "master-1", ExternalUID: "uid-1", Content: stored}}
+
+	changedInstance := OverrideWrite{
+		RecurrenceID: recID, Title: "Standup (moved)",
+		Start: mustTime(t, "2026-01-12T10:00:00Z"), End: mustTime(t, "2026-01-12T10:30:00Z"),
+		ExternalUID: "uid-1", Color: strPtr("#DC2127FF"), ProviderColor: strPtr("#DC2127FF"),
+	}
+	changes := []DeltaSeriesChange{{ExternalUID: "uid-1", Overrides: []OverrideWrite{changedInstance}}}
+
+	result := ReconcileDelta(existing, changes, nil)
+
+	if len(result.Upserts) != 1 {
+		t.Fatalf("expected one upsert, got %+v", result.Upserts)
+	}
+	got := result.Upserts[0].Write
+	if len(got.Overrides) != 1 {
+		t.Fatalf("expected 1 override, got %+v", got.Overrides)
+	}
+	if got.Overrides[0].Color == nil || *got.Overrides[0].Color != "#123456FF" {
+		t.Fatalf("expected the Override's local recolour to survive the Provider's recolour, got %v", got.Overrides[0].Color)
+	}
+	if got.Overrides[0].ProviderColor == nil || *got.Overrides[0].ProviderColor != "#DC2127FF" {
+		t.Fatalf("expected the Override's shadow to still move, got %v", got.Overrides[0].ProviderColor)
+	}
+}
+
 // mergeDeltaChange must not mutate the stored ExistingSeries.Content it was
 // built from — ReconcileDelta compares the two afterward.
 func TestReconcileDelta_DoesNotMutateStoredContent(t *testing.T) {

@@ -341,6 +341,82 @@ func TestMapGoogleEvents_NoConferenceDataIsNil(t *testing.T) {
 	}
 }
 
+// --- Event colour is seeded from the Provider's colorId, into both the
+// displayed value and its shadow (#289, ADR-0075) ---
+
+func TestMapGoogleEvents_ColorIDSeedsColorAndProviderColor(t *testing.T) {
+	events := []googleEvent{
+		{
+			ID:      "evt-color",
+			Summary: "Tomato",
+			ColorID: "11",
+			Start:   googleEventDateTime{DateTime: "2026-04-01T12:00:00-04:00", TimeZone: "America/New_York"},
+			End:     googleEventDateTime{DateTime: "2026-04-01T13:00:00-04:00", TimeZone: "America/New_York"},
+		},
+	}
+
+	series, _ := mapGoogleEvents(events)
+	write := series[0].Write
+	if write.Color == nil || *write.Color != "#DC2127FF" {
+		t.Fatalf("expected Color seeded from colorId 11, got %v", write.Color)
+	}
+	if write.ProviderColor == nil || *write.ProviderColor != "#DC2127FF" {
+		t.Fatalf("expected ProviderColor seeded identically, got %v", write.ProviderColor)
+	}
+}
+
+func TestMapGoogleEvents_NoColorIDLeavesColorNil(t *testing.T) {
+	events := []googleEvent{
+		{
+			ID:      "evt-no-color",
+			Summary: "Plain",
+			Start:   googleEventDateTime{DateTime: "2026-04-01T12:00:00-04:00", TimeZone: "America/New_York"},
+			End:     googleEventDateTime{DateTime: "2026-04-01T13:00:00-04:00", TimeZone: "America/New_York"},
+		},
+	}
+
+	series, _ := mapGoogleEvents(events)
+	write := series[0].Write
+	if write.Color != nil || write.ProviderColor != nil {
+		t.Fatalf("expected no colorId to leave both nil, got Color=%v ProviderColor=%v", write.Color, write.ProviderColor)
+	}
+}
+
+func TestMapGoogleEvents_InstanceColorIDIsIndependentOfMaster(t *testing.T) {
+	events := []googleEvent{
+		{
+			ID:         "series-1",
+			Summary:    "Standup",
+			ColorID:    "5",
+			Start:      googleEventDateTime{DateTime: "2026-01-05T09:00:00-05:00", TimeZone: "America/New_York"},
+			End:        googleEventDateTime{DateTime: "2026-01-05T09:15:00-05:00", TimeZone: "America/New_York"},
+			Recurrence: []string{"RRULE:FREQ=WEEKLY;BYDAY=MO"},
+		},
+		{
+			ID:                "series-1_20260112T140000Z",
+			RecurringEventID:  "series-1",
+			OriginalStartTime: &googleEventDateTime{DateTime: "2026-01-12T09:00:00-05:00", TimeZone: "America/New_York"},
+			ColorID:           "11",
+			Summary:           "Standup (recoloured instance)",
+			Start:             googleEventDateTime{DateTime: "2026-01-12T09:00:00-05:00", TimeZone: "America/New_York"},
+			End:               googleEventDateTime{DateTime: "2026-01-12T09:15:00-05:00", TimeZone: "America/New_York"},
+			Status:            "confirmed",
+		},
+	}
+
+	series, _ := mapGoogleEvents(events)
+	write := series[0].Write
+	if write.Color == nil || *write.Color != "#FBD75BFF" {
+		t.Fatalf("expected the Master's own colorId 5, got %v", write.Color)
+	}
+	if len(write.Overrides) != 1 {
+		t.Fatalf("expected 1 override, got %d", len(write.Overrides))
+	}
+	if write.Overrides[0].Color == nil || *write.Overrides[0].Color != "#DC2127FF" {
+		t.Fatalf("expected the Override's own colorId 11, independent of the Master's, got %v", write.Overrides[0].Color)
+	}
+}
+
 func TestParseGoogleExdateValue_MultipleCommaSeparatedValues(t *testing.T) {
 	parsed, err := parseGoogleExdateValue(map[string]string{"TZID": "America/New_York"}, "20260209T090000,20260216T090000", nil)
 	if err != nil {

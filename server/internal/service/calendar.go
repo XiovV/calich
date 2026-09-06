@@ -1021,13 +1021,27 @@ func (s *CalendarService) ScheduleNextRefresh(ctx context.Context, userID int64,
 	return s.sources.ScheduleNextRefresh(ctx, userID, id, nextRefreshAt)
 }
 
-// RecordConnectionRefreshSuccess records a completed Refresh on a
-// Connection-kind Source (#287, #288) — the Connection counterpart to
-// RecordRefreshSuccess: last_synced_at moves, the Delta Refresh cursor and
-// the next poll time are stored, and any prior failure clears. Narrower than
-// a Subscription's since a Connection carries no conditional-GET validators.
-func (s *CalendarService) RecordConnectionRefreshSuccess(ctx context.Context, userID int64, id string, syncedAt time.Time, cursor *string, nextRefreshAt time.Time) error {
-	return s.sources.RecordConnectionRefreshSuccess(ctx, userID, id, syncedAt, cursor, nextRefreshAt)
+// RecordConnectionRefreshSuccess records a completed Refresh on id's Source
+// and Calendar together, atomically (ADR-0018) — the Connection counterpart
+// to RecordRefreshSuccess: last_synced_at, the Delta Refresh cursor, the next
+// poll time and the name-tracking shadow all move on calendar_sources
+// (#287, #288, #289); the displayed Name this attempt resolved moves on
+// calendars, exactly like a Subscription's own Name. Uses
+// CalendarRepository.UpdateName rather than the ordinary two-column Update:
+// RefreshLinked's Calendar snapshot is read before doRefresh's network
+// round-trip to the Provider, so writing Color back from that snapshot could
+// race a concurrent recolour landing during the round-trip and silently
+// revert it — a real risk for a column ADR-0052 says a Refresh must never
+// move at all. Narrower than a Subscription's RecordRefreshSuccess: etag,
+// last_modified, content_hash and refresh_interval_seconds are a feed's
+// conditional-GET state a Connection has no equivalent for.
+func (s *CalendarService) RecordConnectionRefreshSuccess(ctx context.Context, userID int64, id string, success repository.ConnectionRefreshSuccess) error {
+	return repository.WithTx(ctx, s.db, func(tx *sql.Tx) error {
+		if err := s.sources.WithTx(tx).RecordConnectionRefreshSuccess(ctx, userID, id, success); err != nil {
+			return err
+		}
+		return s.calendars.WithTx(tx).UpdateName(ctx, userID, id, success.Name)
+	})
 }
 
 // RecordConnectionRefreshFailure records a failed Refresh attempt on a

@@ -275,3 +275,33 @@ func TestConnectionService_DeltaRefresh_RequestedWithNoCursorIsACallerError(t *t
 		t.Fatal("expected an error: Delta mode requested with no stored cursor is a caller bug, not a silent Full")
 	}
 }
+
+// #289: a Delta Refresh's own events.list response carries the Provider's
+// calendar name too (its top-level "summary", on every page, not just a
+// Full listing's) — an untouched Linked Calendar's name follows a rename
+// there exactly as a Full Refresh's does.
+func TestConnectionService_DeltaRefresh_CalendarNameFollowsProviderRename(t *testing.T) {
+	google := newFakeGoogleServer(t)
+	google.calendarListItems = []map[string]any{googleCalendarItem("primary", "Family", "#0b8043", "owner", true)}
+	google.eventsByCalendar = map[string][]map[string]any{"primary": {}}
+	google.eventsSummaryByCalendar = map[string]string{"primary": "Family"}
+	google.nextSyncToken = "cursor-1"
+
+	svc, auth, userID, workspaceID := newTestConnectionServiceWithWorkspace(t, google)
+	calendar := importOneCalendar(t, svc, auth, userID, workspaceID, "primary")
+
+	google.eventsSummaryByCalendar["primary"] = "Family (renamed)"
+	google.nextSyncToken = "cursor-2"
+
+	if _, err := svc.RefreshLinked(context.Background(), userID, calendar.ID, RefreshModeDelta); err != nil {
+		t.Fatalf("delta refresh: %v", err)
+	}
+
+	got, err := svc.calendars.Get(context.Background(), userID, calendar.ID)
+	if err != nil {
+		t.Fatalf("get calendar: %v", err)
+	}
+	if got.Name != "Family (renamed)" {
+		t.Fatalf("expected the untouched Calendar to follow the Provider's rename via Delta Refresh too, got %q", got.Name)
+	}
+}

@@ -142,6 +142,12 @@ type Event struct {
 	// ADR-0052) — conferring nothing. Zero for every Event this app itself
 	// owns.
 	GuestCount int
+	// ProviderColor is the hex the Provider's own colorId last mapped to
+	// (#289, ADR-0075) — the shadow a Linked Calendar's Refresh compares
+	// Color against under the until-touched rule. nil for every Event this
+	// app itself owns and for a Provider event with no colorId. Never sent
+	// back to the Provider.
+	ProviderColor *string
 }
 
 type EventRepository struct {
@@ -182,29 +188,31 @@ type EventFields struct {
 	// ExternalUID is set on insert only (like ParentID/RecurrenceID) — a
 	// Refresh reconciles by it rather than ever updating it in place.
 	ExternalUID *string
-	// ProviderEtag/RSVPStatus/ConferenceURL/GuestCount mirror Event's own
-	// fields (#287, ADR-0052) — unlike ExternalUID, these are written on
-	// every Update too, since a Linked Calendar's Full Refresh must move
-	// them forward when the Provider's own copy changes. Update writes
-	// whatever this EventFields carries unconditionally, with no merge
-	// against the existing row — every caller today (SeriesWrite/
-	// OverrideWrite.fields()) either owns these fields (a Refresh) or
-	// leaves them at zero value (every other write path), and
+	// ProviderEtag/RSVPStatus/ConferenceURL/GuestCount/ProviderColor mirror
+	// Event's own fields (#287, #289, ADR-0052, ADR-0075) — unlike
+	// ExternalUID, these are written on every Update too, since a Linked
+	// Calendar's Full Refresh must move them forward when the Provider's own
+	// copy changes. Update writes whatever this EventFields carries
+	// unconditionally, with no merge against the existing row — every caller
+	// today (SeriesWrite/OverrideWrite.fields()) either owns these fields (a
+	// Refresh) or leaves them at zero value (every other write path), and
 	// requireWritableCalendar's read-only clamp keeps the latter off a
 	// Linked Calendar's Events entirely. Write-back (ADR-0075) will change
 	// that: whichever write path it adds must read the existing row's
 	// values forward into its own EventFields first, or a plain field edit
-	// will silently null these out.
+	// will silently null these out. ProviderColor in particular is never
+	// pushed back to the Provider — colour is one-way inbound (ADR-0075).
 	ProviderEtag  *string
 	RSVPStatus    *string
 	ConferenceURL *string
 	GuestCount    int
+	ProviderColor *string
 }
 
 func (r *EventRepository) Create(ctx context.Context, id string, createdBy *int64, f EventFields, changeSeq int64) (Event, error) {
 	if _, err := r.db.ExecContext(ctx,
-		`INSERT INTO events (id, calendar_id, title, "start", "end", all_day, rrule, parent_id, recurrence_id, tzid, description, location, url, color, external_uid, created_by, change_seq, provider_etag, rsvp_status, conference_url, guest_count) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		id, f.CalendarID, f.Title, f.Start.UTC(), f.End.UTC(), f.AllDay, f.Rrule, f.ParentID, utcPtr(f.RecurrenceID), f.Tzid, f.Description, f.Location, f.URL, f.Color, f.ExternalUID, createdBy, changeSeq, f.ProviderEtag, f.RSVPStatus, f.ConferenceURL, f.GuestCount,
+		`INSERT INTO events (id, calendar_id, title, "start", "end", all_day, rrule, parent_id, recurrence_id, tzid, description, location, url, color, external_uid, created_by, change_seq, provider_etag, rsvp_status, conference_url, guest_count, provider_color) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		id, f.CalendarID, f.Title, f.Start.UTC(), f.End.UTC(), f.AllDay, f.Rrule, f.ParentID, utcPtr(f.RecurrenceID), f.Tzid, f.Description, f.Location, f.URL, f.Color, f.ExternalUID, createdBy, changeSeq, f.ProviderEtag, f.RSVPStatus, f.ConferenceURL, f.GuestCount, f.ProviderColor,
 	); err != nil {
 		return Event{}, fmt.Errorf("insert event: %w", err)
 	}
@@ -212,7 +220,7 @@ func (r *EventRepository) Create(ctx context.Context, id string, createdBy *int6
 	return r.GetByID(ctx, id)
 }
 
-const eventColumns = `id, calendar_id, title, "start", "end", all_day, rrule, parent_id, recurrence_id, tzid, description, location, url, color, external_uid, created_by, created_at, change_seq, sequence, provider_etag, rsvp_status, conference_url, guest_count`
+const eventColumns = `id, calendar_id, title, "start", "end", all_day, rrule, parent_id, recurrence_id, tzid, description, location, url, color, external_uid, created_by, created_at, change_seq, sequence, provider_etag, rsvp_status, conference_url, guest_count, provider_color`
 
 func (r *EventRepository) GetByID(ctx context.Context, id string) (Event, error) {
 	return scanEvent(r.db.QueryRowContext(ctx,
@@ -367,8 +375,8 @@ func (r *EventRepository) ListAllWithAnyReminder(ctx context.Context) ([]Event, 
 // differs from the row being replaced.
 func (r *EventRepository) Update(ctx context.Context, id string, f EventFields, changeSeq, sequence int64) (Event, error) {
 	res, err := r.db.ExecContext(ctx,
-		`UPDATE events SET calendar_id = ?, title = ?, "start" = ?, "end" = ?, all_day = ?, rrule = ?, tzid = ?, description = ?, location = ?, url = ?, color = ?, change_seq = ?, sequence = ?, provider_etag = ?, rsvp_status = ?, conference_url = ?, guest_count = ? WHERE id = ?`,
-		f.CalendarID, f.Title, f.Start.UTC(), f.End.UTC(), f.AllDay, f.Rrule, f.Tzid, f.Description, f.Location, f.URL, f.Color, changeSeq, sequence, f.ProviderEtag, f.RSVPStatus, f.ConferenceURL, f.GuestCount, id,
+		`UPDATE events SET calendar_id = ?, title = ?, "start" = ?, "end" = ?, all_day = ?, rrule = ?, tzid = ?, description = ?, location = ?, url = ?, color = ?, change_seq = ?, sequence = ?, provider_etag = ?, rsvp_status = ?, conference_url = ?, guest_count = ?, provider_color = ? WHERE id = ?`,
+		f.CalendarID, f.Title, f.Start.UTC(), f.End.UTC(), f.AllDay, f.Rrule, f.Tzid, f.Description, f.Location, f.URL, f.Color, changeSeq, sequence, f.ProviderEtag, f.RSVPStatus, f.ConferenceURL, f.GuestCount, f.ProviderColor, id,
 	)
 	if err != nil {
 		return Event{}, fmt.Errorf("update event: %w", err)
@@ -527,7 +535,8 @@ func scanEventRow(row rowScanner, e *Event) error {
 	var providerEtag sql.NullString
 	var rsvpStatus sql.NullString
 	var conferenceURL sql.NullString
-	if err := row.Scan(&e.ID, &e.CalendarID, &e.Title, &e.Start, &e.End, &e.AllDay, &e.Rrule, &parentID, &recurrenceID, &tzid, &description, &location, &url, &color, &externalUID, &createdBy, &e.CreatedAt, &e.ChangeSeq, &e.Sequence, &providerEtag, &rsvpStatus, &conferenceURL, &e.GuestCount); err != nil {
+	var providerColor sql.NullString
+	if err := row.Scan(&e.ID, &e.CalendarID, &e.Title, &e.Start, &e.End, &e.AllDay, &e.Rrule, &parentID, &recurrenceID, &tzid, &description, &location, &url, &color, &externalUID, &createdBy, &e.CreatedAt, &e.ChangeSeq, &e.Sequence, &providerEtag, &rsvpStatus, &conferenceURL, &e.GuestCount, &providerColor); err != nil {
 		return err
 	}
 	if externalUID.Valid {
@@ -556,6 +565,9 @@ func scanEventRow(row rowScanner, e *Event) error {
 	}
 	if conferenceURL.Valid {
 		e.ConferenceURL = &conferenceURL.String
+	}
+	if providerColor.Valid {
+		e.ProviderColor = &providerColor.String
 	}
 	e.Description = description.String
 	e.Location = location.String

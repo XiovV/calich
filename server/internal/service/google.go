@@ -473,6 +473,7 @@ type googleEventJSON struct {
 	Summary           string                    `json:"summary"`
 	Description       string                    `json:"description"`
 	Location          string                    `json:"location"`
+	ColorID           string                    `json:"colorId"`
 	Start             googleEventDateTimeJSON   `json:"start"`
 	End               googleEventDateTimeJSON   `json:"end"`
 	RecurringEventID  string                    `json:"recurringEventId"`
@@ -515,6 +516,7 @@ func toGoogleEvent(j googleEventJSON) googleEvent {
 		Summary:          j.Summary,
 		Description:      j.Description,
 		Location:         j.Location,
+		ColorID:          j.ColorID,
 		Start:            toGoogleEventDateTime(j.Start),
 		End:              toGoogleEventDateTime(j.End),
 		RecurringEventID: j.RecurringEventID,
@@ -550,6 +552,13 @@ func toGoogleEventDateTime(j googleEventDateTimeJSON) googleEventDateTime {
 type googleEventChanges struct {
 	Events        []googleEvent
 	NextSyncToken string
+	// Summary is the Provider's own current name for the calendar, echoed at
+	// the top level of every events.list response — Full and incremental
+	// alike. A Linked Calendar's name follows it until someone renames the
+	// Calendar here (#289, ADR-0052's "presentation is local"). Empty when a
+	// response omitted it, in which case Refresh leaves the stored shadow
+	// alone.
+	Summary string
 }
 
 // listEventChanges fetches calendarID's events (#287, #288, ADR-0053):
@@ -594,6 +603,7 @@ func (c *googleClient) listEventChanges(ctx context.Context, accessToken, calend
 
 		var body struct {
 			Items         []googleEventJSON `json:"items"`
+			Summary       string            `json:"summary"`
 			NextPageToken string            `json:"nextPageToken"`
 			NextSyncToken string            `json:"nextSyncToken"`
 		}
@@ -608,6 +618,9 @@ func (c *googleClient) listEventChanges(ctx context.Context, accessToken, calend
 		}
 		if body.NextSyncToken != "" {
 			result.NextSyncToken = body.NextSyncToken
+		}
+		if body.Summary != "" {
+			result.Summary = body.Summary
 		}
 
 		if body.NextPageToken == "" {

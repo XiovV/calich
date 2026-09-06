@@ -155,7 +155,7 @@ func (s *ConnectionService) RefreshLinked(ctx context.Context, userID int64, cal
 		return RefreshResult{}, err
 	}
 
-	result, cursor, refreshErr := s.doRefresh(ctx, userID, calendar, *source, mode)
+	result, outcome, refreshErr := s.doRefresh(ctx, userID, calendar, *source, mode)
 	now := s.now().UTC()
 
 	if refreshErr != nil {
@@ -169,7 +169,10 @@ func (s *ConnectionService) RefreshLinked(ctx context.Context, userID int64, cal
 	}
 
 	next := nextRefreshTime(now, calendar.ID, s.connectionRefreshInterval, s.connectionRefreshInterval)
-	if err := s.calendars.RecordConnectionRefreshSuccess(ctx, userID, calendarID, now, cursor, next); err != nil {
+	if err := s.calendars.RecordConnectionRefreshSuccess(ctx, userID, calendarID, repository.ConnectionRefreshSuccess{
+		SyncedAt: now, Cursor: outcome.cursor, NextRefreshAt: next,
+		Name: outcome.name, FeedName: outcome.feedName,
+	}); err != nil {
 		// The fetch and reconcile already committed; only the cursor and the
 		// poll schedule failed to persist. That is a correctness non-event —
 		// with no stored cursor the next cycle is a Full Refresh, which is
@@ -196,11 +199,24 @@ func RefreshModeForCursor(hasCursor bool) RefreshMode {
 	return RefreshModeFull
 }
 
+// connectionSyncOutcome is what one doRefresh call learned about the
+// Provider calendar's own cursor and name, for RefreshLinked to persist once
+// the attempt is known to have succeeded — mirroring
+// SubscribeService.refreshSyncOutcome's own split. name/feedName are what
+// RefreshLinked should store as the Calendar's displayed Name and its
+// tracking shadow after this attempt (#289, ADR-0052's "presentation is
+// local"): resolveFollowedField applied to the Provider's own calendar
+// summary, reused verbatim from ADR-0032's mechanism.
+type connectionSyncOutcome struct {
+	cursor   *string
+	name     string
+	feedName *string
+}
+
 // doRefresh performs one fetch-and-reconcile attempt against calendarID's
 // Provider calendar in mode, without writing anything to the Source row
 // itself — RefreshLinked does that once, uniformly, mirroring
-// SubscribeService's own doRefresh split. It returns the fresh cursor to
-// store (nil when the fetch produced none).
+// SubscribeService's own doRefresh split.
 //
 // The fetch is tried first with the Connection's own cached access_token —
 // never relied on as durable, but usually still good, especially moments
@@ -211,13 +227,13 @@ func RefreshModeForCursor(hasCursor bool) RefreshMode {
 // attempt re-runs in Full mode against the stored rows, matched by
 // ExternalUID, so row ids are preserved and no CalDAV client re-downloads a
 // collection in which nothing changed (ADR-0053).
-func (s *ConnectionService) doRefresh(ctx context.Context, userID int64, calendar repository.Calendar, source repository.Source, mode RefreshMode) (RefreshResult, *string, error) {
+func (s *ConnectionService) doRefresh(ctx context.Context, userID int64, calendar repository.Calendar, source repository.Source, mode RefreshMode) (RefreshResult, connectionSyncOutcome, error) {
 	conn, err := s.connections.GetByID(ctx, userID, *source.ConnectionID)
 	if err != nil {
 		if errors.Is(err, repository.ErrNotFound) {
-			return RefreshResult{}, nil, ErrConnectionNotFound
+			return RefreshResult{}, connectionSyncOutcome{}, ErrConnectionNotFound
 		}
-		return RefreshResult{}, nil, fmt.Errorf("get connection: %w", err)
+		return RefreshResult{}, connectionSyncOutcome{}, fmt.Errorf("get connection: %w", err)
 	}
 
 	cursor := ""
@@ -227,7 +243,7 @@ func (s *ConnectionService) doRefresh(ctx context.Context, userID int64, calenda
 			// the manual-refresh handler does the same — reaching here with
 			// none is a caller bug, not a case to paper over by silently
 			// running Full (which is a different, possibly destructive, mode).
-			return RefreshResult{}, nil, fmt.Errorf("delta refresh requested for calendar %s with no stored cursor", calendar.ID)
+			return RefreshResult{}, connectionSyncOutcome{}, fmt.Errorf("delta refresh requested for calendar %s with no stored cursor", calendar.ID)
 		}
 		cursor = *source.Cursor
 	}
@@ -241,7 +257,7 @@ func (s *ConnectionService) doRefresh(ctx context.Context, userID int64, calenda
 	if isGoogleAccessTokenExpired(err) {
 		accessToken, err = s.mintAccessToken(ctx, userID, conn)
 		if err != nil {
-			return RefreshResult{}, nil, err
+			return RefreshResult{}, connectionSyncOutcome{}, err
 		}
 		changes, err = s.google.listEventChanges(ctx, accessToken, *source.ExternalCalendarID, cursor)
 	}
@@ -250,7 +266,7 @@ func (s *ConnectionService) doRefresh(ctx context.Context, userID int64, calenda
 		return s.doRefresh(ctx, userID, calendar, source, RefreshModeFull)
 	}
 	if err != nil {
-		return RefreshResult{}, nil, err
+		return RefreshResult{}, connectionSyncOutcome{}, err
 	}
 
 	var result ReconcileResult
@@ -273,15 +289,15 @@ func (s *ConnectionService) doRefresh(ctx context.Context, userID int64, calenda
 		for _, uid := range mapping.OrphanExternalUIDs {
 			unparseable[uid] = true
 		}
-		result, summary, err = reconcileAgainstStored(ctx, s.events, userID, calendar.ID, incoming, unparseable)
+		result, summary, err = reconcileAgainstStored(ctx, s.events, userID, calendar.ID, incoming, unparseable, true)
 	default:
 		// An unrecognised RefreshMode must never fall through to Full's
 		// tombstoning path by accident — that is the whole reason the mode is
 		// an explicit type rather than a bool (ADR-0053).
-		return RefreshResult{}, nil, fmt.Errorf("unknown refresh mode %d for calendar %s", mode, calendar.ID)
+		return RefreshResult{}, connectionSyncOutcome{}, fmt.Errorf("unknown refresh mode %d for calendar %s", mode, calendar.ID)
 	}
 	if err != nil {
-		return RefreshResult{}, nil, err
+		return RefreshResult{}, connectionSyncOutcome{}, err
 	}
 
 	// Persist the fresh cursor when the Provider gave one; otherwise keep
@@ -297,14 +313,22 @@ func (s *ConnectionService) doRefresh(ctx context.Context, userID int64, calenda
 		log.Printf("linked calendar refresh (calendar=%s): provider returned no cursor; next cycle will be a full refresh", calendar.ID)
 	}
 
+	// changes.Summary is "" whenever this response omitted it — treated by
+	// resolveFollowedField as "the Provider supplied nothing this round",
+	// leaving both the displayed Name and its shadow exactly as they were
+	// (#289, ADR-0032).
+	newName, newFeedName := resolveFollowedField(calendar.Name, source.FeedName, changes.Summary)
+
 	return RefreshResult{
-		Created:                summary.Created,
-		Updated:                summary.Updated,
-		Tombstoned:             summary.Tombstoned,
-		Unparseable:            result.SkippedCount,
-		NoOp:                   result.NoOpCount,
-		DroppedRecurrenceLines: droppedCount,
-	}, cursorToStore, nil
+			Created:                summary.Created,
+			Updated:                summary.Updated,
+			Tombstoned:             summary.Tombstoned,
+			Unparseable:            result.SkippedCount,
+			NoOp:                   result.NoOpCount,
+			DroppedRecurrenceLines: droppedCount,
+		}, connectionSyncOutcome{
+			cursor: cursorToStore, name: newName, feedName: newFeedName,
+		}, nil
 }
 
 // countDropped totals a mapping summary's dropped-recurrence-line groups

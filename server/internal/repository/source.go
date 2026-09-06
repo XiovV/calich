@@ -368,25 +368,47 @@ func (r *SourceRepository) RecordRefreshFailure(ctx context.Context, userID int6
 	return requireAffected(res)
 }
 
+// ConnectionRefreshSuccess is what a completed Connection-kind Refresh
+// persists (#287, #288, #289): the Delta Refresh cursor and next poll time —
+// calendar_sources columns — plus the Calendar's own displayed Name after
+// this attempt and FeedName, the shadow it's compared against on the next
+// attempt (ADR-0032's mechanism, reused verbatim for a Linked Calendar's
+// name, #289). There is deliberately no Color here: a Linked Calendar's
+// colour is seeded from the Provider once at import and is never moved by a
+// Refresh (ADR-0052's "presentation is local"), and CalendarService's own
+// write uses CalendarRepository.UpdateName rather than the two-column
+// Update precisely so this DTO never has to carry a Color snapshot just to
+// keep that write a no-op. CalendarService.RecordConnectionRefreshSuccess is
+// what actually splits this DTO across the calendar_sources and calendars
+// writes it takes to persist, in one transaction, mirroring
+// RecordRefreshSuccess's own split for a Subscription.
+type ConnectionRefreshSuccess struct {
+	SyncedAt      time.Time
+	Cursor        *string
+	NextRefreshAt time.Time
+	Name          string
+	FeedName      *string
+}
+
 // RecordConnectionRefreshSuccess records a completed Refresh on a
-// Connection-kind Source (#287, #288): last_synced_at moves, the Delta
-// Refresh cursor and the next poll time are stored, and any prior failure
-// clears, unconditionally — mirroring RecordRefreshSuccess's own "a Refresh
-// that found nothing new still counts as having synced successfully".
-//
-// cursor is the fresh Delta Refresh cursor to store (#288, ADR-0053); nil
+// Connection-kind Source's calendar_sources row (#287, #288, #289):
+// last_synced_at moves, the Delta Refresh cursor, the next poll time, and the
+// name-tracking shadow are stored, and any prior failure clears
+// unconditionally — mirroring RecordRefreshSuccess's own "a Refresh that
+// found nothing new still counts as having synced successfully". s.Cursor nil
 // writes NULL, which merely makes the next cycle a Full Refresh — safe, so a
 // storage failure here is a logged non-event, not a data risk. Still
 // narrower than a Subscription's RecordRefreshSuccess: etag, last_modified,
 // content_hash and refresh_interval_seconds are a feed's conditional-GET
-// state a Connection has no equivalent for, and a Linked Calendar's name/
-// colour follow the Provider through their own path, not this one.
-func (r *SourceRepository) RecordConnectionRefreshSuccess(ctx context.Context, userID int64, calendarID string, syncedAt time.Time, cursor *string, nextRefreshAt time.Time) error {
+// state a Connection has no equivalent for. s.Name/s.Color are the caller's
+// (CalendarService.RecordConnectionRefreshSuccess's) concern, not this
+// method's — this writes calendar_sources alone.
+func (r *SourceRepository) RecordConnectionRefreshSuccess(ctx context.Context, userID int64, calendarID string, s ConnectionRefreshSuccess) error {
 	res, err := r.db.ExecContext(ctx,
 		`UPDATE calendar_sources SET last_synced_at = ?, cursor = ?, next_refresh_at = ?,
-			failure_count = 0, error_class = NULL, error_message = NULL
+			failure_count = 0, error_class = NULL, error_message = NULL, feed_name = ?
 		 WHERE `+ownedSourceWhere,
-		syncedAt, cursor, nextRefreshAt, calendarID, userID,
+		s.SyncedAt, s.Cursor, s.NextRefreshAt, s.FeedName, calendarID, userID,
 	)
 	if err != nil {
 		return fmt.Errorf("record connection refresh success: %w", err)

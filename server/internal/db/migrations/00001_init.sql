@@ -240,7 +240,12 @@ CREATE INDEX idx_connections_user_id ON connections(user_id);
 -- opposed to the Calendar's own name/color, which are what's displayed. A
 -- Refresh updates the displayed value only while it still equals its
 -- shadow — that comparison alone is the "overridden by the User" flag, with
--- no separate column.
+-- no separate column. feed_name is reused verbatim by a 'connection' row
+-- (#289, ADR-0052's "presentation is local"): a Linked Calendar's name
+-- tracks the Provider's own renames until someone renames it here. feed_color
+-- stays subscription-only — a Linked Calendar's colour is seeded from the
+-- Provider once at import and is this instance's afterward, with no publisher
+-- value to keep tracking.
 --
 -- external_calendar_id (#286, ADR-0052) is set only on a 'connection' row:
 -- the Provider's own id for the one calendar of the Connection this Source
@@ -406,6 +411,16 @@ CREATE TABLE calendar_user_colors (
 -- series: an Override tracks its own SEQUENCE independently of its Master's,
 -- since each is its own VEVENT on the wire.
 --
+-- provider_color is a per-Event shadow column (#289, ADR-0075), tracked
+-- exactly as calendar_sources.feed_name tracks a calendar's name: the hex the
+-- Provider's own colorId last mapped to. A Refresh moves the displayed color
+-- forward only while it still equals this shadow — an untouched Event follows
+-- the Provider's recolours, one recoloured here stays put, and the comparison
+-- is the whole "overridden" flag. NULL on every Event this app itself owns,
+-- and on a Provider event that carries no colorId. Never sent back to the
+-- Provider (ADR-0075): this app's color is an arbitrary hex and the Provider
+-- offers a small fixed set, so pushing would snap a User's choice.
+--
 -- provider_etag / rsvp_status / conference_url / guest_count are a Linked
 -- Calendar's own Full Refresh state (#287, ADR-0052, ADR-0075): NULL/0 on
 -- every Event this app itself owns, populated only by the Google mapper.
@@ -443,7 +458,8 @@ CREATE TABLE events (
     provider_etag TEXT,
     rsvp_status TEXT,
     conference_url TEXT,
-    guest_count INTEGER NOT NULL DEFAULT 0
+    guest_count INTEGER NOT NULL DEFAULT 0,
+    provider_color TEXT
 );
 
 CREATE INDEX idx_events_calendar_id ON events(calendar_id);

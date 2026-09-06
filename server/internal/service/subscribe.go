@@ -497,7 +497,7 @@ func (s *SubscribeService) doRefresh(ctx context.Context, userID int64, calendar
 		}
 	}
 
-	result, summary, err := reconcileAgainstStored(ctx, s.events, userID, calendar.ID, incoming, unparseable)
+	result, summary, err := reconcileAgainstStored(ctx, s.events, userID, calendar.ID, incoming, unparseable, false)
 	if err != nil {
 		return RefreshResult{}, refreshSyncOutcome{}, err
 	}
@@ -555,10 +555,21 @@ func resolveFollowedField(currentDisplay string, currentShadow *string, feedValu
 // Calendar write guard (ADR-0032) every Refresh source shares once it has a
 // fetch's already-mapped []IncomingSeries in hand, whichever Source kind
 // produced it.
-func reconcileAgainstStored(ctx context.Context, events *EventService, userID int64, calendarID string, incoming []IncomingSeries, unparseable map[string]bool) (ReconcileResult, ReconcileSummary, error) {
+//
+// followEventColor gates #289's per-Event colour shadow rule
+// (followEventColorAcrossSeries) on, true only for a Connection-kind Source:
+// a Subscription's ExistingSeries.ProviderColor is always nil (nothing ever
+// sets it), so running the until-touched rule there would read every stored
+// Event as "unseeded" and blank whatever colour its feed's own COLOR property
+// had set.
+func reconcileAgainstStored(ctx context.Context, events *EventService, userID int64, calendarID string, incoming []IncomingSeries, unparseable map[string]bool, followEventColor bool) (ReconcileResult, ReconcileSummary, error) {
 	existing, err := listExistingSeries(ctx, events, userID, calendarID)
 	if err != nil {
 		return ReconcileResult{}, ReconcileSummary{}, err
+	}
+
+	if followEventColor {
+		incoming = followEventColorAcrossSeries(existing, incoming)
 	}
 
 	result := ReconcileSeries(existing, incoming, unparseable)
@@ -636,10 +647,12 @@ func existingSeriesFromMasters(masters []repository.Event, overridesByParent map
 			Rrule:         m.Rrule,
 			Exdates:       m.Exdates,
 			Reminders:     storedReminders[m.ID],
+			Color:         m.Color,
 			ProviderEtag:  m.ProviderEtag,
 			RSVPStatus:    m.RSVPStatus,
 			ConferenceURL: m.ConferenceURL,
 			GuestCount:    m.GuestCount,
+			ProviderColor: m.ProviderColor,
 		}
 		for _, o := range overridesByParent[m.ID] {
 			content.Overrides = append(content.Overrides, OverrideWrite{
@@ -653,10 +666,12 @@ func existingSeriesFromMasters(masters []repository.Event, overridesByParent map
 				AllDay:        o.AllDay,
 				Tzid:          o.Tzid,
 				Reminders:     storedReminders[o.ID],
+				Color:         o.Color,
 				ProviderEtag:  o.ProviderEtag,
 				RSVPStatus:    o.RSVPStatus,
 				ConferenceURL: o.ConferenceURL,
 				GuestCount:    o.GuestCount,
+				ProviderColor: o.ProviderColor,
 			})
 		}
 

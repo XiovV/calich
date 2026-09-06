@@ -489,7 +489,10 @@ func TestSourceRepository_ConnectionRefreshStateRoundTrips(t *testing.T) {
 
 	now := time.Now().UTC().Truncate(time.Second)
 	token := "sync-token-xyz"
-	if err := sources.RecordConnectionRefreshSuccess(ctx, user.ID, calendar.ID, now, &token, now.Add(15*time.Minute)); err != nil {
+	feedName := "Work Calendar"
+	if err := sources.RecordConnectionRefreshSuccess(ctx, user.ID, calendar.ID, ConnectionRefreshSuccess{
+		SyncedAt: now, Cursor: &token, NextRefreshAt: now.Add(15 * time.Minute), FeedName: &feedName,
+	}); err != nil {
 		t.Fatalf("record connection refresh success: %v", err)
 	}
 
@@ -505,6 +508,13 @@ func TestSourceRepository_ConnectionRefreshStateRoundTrips(t *testing.T) {
 	}
 	if got.NextRefreshAt == nil || !got.NextRefreshAt.Equal(now.Add(15*time.Minute)) {
 		t.Fatalf("expected next_refresh_at scheduled, got %v", got.NextRefreshAt)
+	}
+	// #289: feed_name is the name-tracking shadow, reused verbatim from a
+	// Subscription's own mechanism (ADR-0032) — RecordConnectionRefreshSuccess
+	// stores it on calendar_sources alone; CalendarService's own wrapper is
+	// what also moves the Calendar's displayed Name, atomically.
+	if got.FeedName == nil || *got.FeedName != feedName {
+		t.Fatalf("expected feed_name %q stored, got %v", feedName, got.FeedName)
 	}
 
 	due, err := sources.ListDueForRefresh(ctx, now.Add(20*time.Minute))

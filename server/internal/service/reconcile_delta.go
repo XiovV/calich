@@ -89,6 +89,12 @@ func mergeDeltaChange(base SeriesWrite, change DeltaSeriesChange) SeriesWrite {
 		merged.RSVPStatus = m.RSVPStatus
 		merged.ConferenceURL = m.ConferenceURL
 		merged.GuestCount = m.GuestCount
+		// #289, ADR-0075: resolved against base (the stored Master this
+		// batch is overlaying), not merged — merged.Color/ProviderColor at
+		// this point are still base's own, cloned verbatim by
+		// cloneSeriesWrite, so reading either as "currentDisplay" would be
+		// identical either way; base is used for clarity.
+		merged.Color, merged.ProviderColor = resolveFollowedEventColor(base.Color, base.ProviderColor, m.ProviderColor)
 		merged = applyDeltaOverrides(merged, m.Overrides)
 		merged = applyDeltaCancellations(merged, m.Exdates)
 	}
@@ -101,9 +107,20 @@ func mergeDeltaChange(base SeriesWrite, change DeltaSeriesChange) SeriesWrite {
 // applyDeltaOverrides adds or replaces each override by RECURRENCE-ID, and
 // drops any Exdate at the same instant — a re-modified occurrence is no
 // longer a cancelled one, and keeping both would leave the merged series
-// self-contradictory.
+// self-contradictory. An override that replaces one already in w has its
+// colour resolved against that stored one first (#289, ADR-0075's
+// until-touched rule) — o.Color/ProviderColor arrive equal, the Provider's
+// current colour verbatim, exactly as the mapper seeds a brand new instance;
+// a stored instance the batch never mentioned isn't touched here at all, so
+// it needs no such resolution.
 func applyDeltaOverrides(w SeriesWrite, overrides []OverrideWrite) SeriesWrite {
+	existingByRecurrenceID := overridesByRecurrenceID(w.Overrides)
+
 	for _, o := range overrides {
+		if match, ok := existingByRecurrenceID[o.RecurrenceID.UnixNano()]; ok {
+			o.Color, o.ProviderColor = resolveFollowedEventColor(match.Color, match.ProviderColor, o.ProviderColor)
+		}
+
 		kept := w.Overrides[:0:0]
 		for _, existing := range w.Overrides {
 			if !existing.RecurrenceID.Equal(o.RecurrenceID) {

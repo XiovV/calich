@@ -163,6 +163,57 @@ func TestCalendarRepository_Update_ScopedToUser(t *testing.T) {
 	}
 }
 
+// TestCalendarRepository_UpdateName_LeavesColorUntouched covers #289's
+// narrower write: a Linked Calendar's Refresh moves Name alone when the
+// Provider renames an untouched Calendar, and must never touch Color —
+// unlike Update, which always writes both.
+func TestCalendarRepository_UpdateName_LeavesColorUntouched(t *testing.T) {
+	repo, userID, _, workspaceID, _ := newTestCalendarRepository(t)
+	ctx := context.Background()
+
+	if _, err := repo.Create(ctx, userID, workspaceID, "cal-1", CalendarFields{Name: "Family", Color: "peacock"}); err != nil {
+		t.Fatalf("create calendar: %v", err)
+	}
+
+	if err := repo.UpdateName(ctx, userID, "cal-1", "Family (renamed)"); err != nil {
+		t.Fatalf("update name: %v", err)
+	}
+
+	got, err := repo.GetByID(ctx, userID, "cal-1")
+	if err != nil {
+		t.Fatalf("get calendar: %v", err)
+	}
+	if got.Name != "Family (renamed)" {
+		t.Fatalf("expected the new name, got %q", got.Name)
+	}
+	if got.Color != "peacock" {
+		t.Fatalf("expected Color left exactly as it was, got %q", got.Color)
+	}
+}
+
+func TestCalendarRepository_UpdateName_NotFound(t *testing.T) {
+	repo, userID, _, _, _ := newTestCalendarRepository(t)
+
+	err := repo.UpdateName(context.Background(), userID, "nope", "Renamed")
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected ErrNotFound, got %v", err)
+	}
+}
+
+func TestCalendarRepository_UpdateName_ScopedToUser(t *testing.T) {
+	repo, userID, otherUserID, workspaceID, _ := newTestCalendarRepository(t)
+	ctx := context.Background()
+
+	if _, err := repo.Create(ctx, userID, workspaceID, "cal-1", CalendarFields{Name: "Personal", Color: "peacock"}); err != nil {
+		t.Fatalf("create calendar: %v", err)
+	}
+
+	err := repo.UpdateName(ctx, otherUserID, "cal-1", "Renamed")
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected ErrNotFound updating another user's calendar, got %v", err)
+	}
+}
+
 func TestCalendarRepository_Delete(t *testing.T) {
 	repo, userID, _, workspaceID, _ := newTestCalendarRepository(t)
 	ctx := context.Background()

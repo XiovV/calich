@@ -312,6 +312,80 @@ func TestReconcileSeries_URLChangeAloneMakesSeriesAnUpsert(t *testing.T) {
 	}
 }
 
+// TestReconcileSeries_ColorChangeAloneMakesSeriesAnUpsert exercises #289's
+// "an untouched Event follows the Provider's recolours" — followEventColor
+// (reconcileAgainstStored's own pre-pass) resolves the incoming Color first;
+// this asserts the reconciler itself notices once that resolution lands on a
+// different Color, mirroring how it already notices Reminders/URL alone.
+func TestReconcileSeries_ColorChangeAloneMakesSeriesAnUpsert(t *testing.T) {
+	withoutColor := basicWrite(t, "Standup")
+	withColor := withoutColor
+	withColor.Color = strPtr("#DC2127FF")
+
+	existing := []ExistingSeries{{MasterID: "master-1", ExternalUID: "uid-1", Content: withoutColor}}
+	incoming := []IncomingSeries{{ExternalUID: "uid-1", Write: withColor}}
+
+	result := ReconcileSeries(existing, incoming, nil)
+	if result.NoOpCount != 0 || len(result.Upserts) != 1 {
+		t.Fatalf("expected a Color change alone to force an upsert, got noop=%d upserts=%+v", result.NoOpCount, result.Upserts)
+	}
+}
+
+// TestReconcileSeries_ProviderColorShadowChangeAloneMakesSeriesAnUpsert
+// covers the case where only the shadow moved — the displayed Color a User
+// recoloured here stayed put, but the Provider's own colour changed
+// underneath it (#289, ADR-0075). The shadow must still persist, or a later
+// coincidental match would never resume tracking.
+func TestReconcileSeries_ProviderColorShadowChangeAloneMakesSeriesAnUpsert(t *testing.T) {
+	base := basicWrite(t, "Standup")
+	base.Color = strPtr("#123456FF")
+	base.ProviderColor = strPtr("#FBD75BFF")
+
+	shadowMoved := base
+	shadowMoved.ProviderColor = strPtr("#DC2127FF")
+
+	existing := []ExistingSeries{{MasterID: "master-1", ExternalUID: "uid-1", Content: base}}
+	incoming := []IncomingSeries{{ExternalUID: "uid-1", Write: shadowMoved}}
+
+	result := ReconcileSeries(existing, incoming, nil)
+	if result.NoOpCount != 0 || len(result.Upserts) != 1 {
+		t.Fatalf("expected a shadow-only change to still force an upsert, got noop=%d upserts=%+v", result.NoOpCount, result.Upserts)
+	}
+}
+
+func TestReconcileSeries_UnchangedColorAndShadowIsANoOp(t *testing.T) {
+	write := basicWrite(t, "Standup")
+	write.Color = strPtr("#DC2127FF")
+	write.ProviderColor = strPtr("#DC2127FF")
+
+	existing := []ExistingSeries{{MasterID: "master-1", ExternalUID: "uid-1", Content: write}}
+	incoming := []IncomingSeries{{ExternalUID: "uid-1", Write: write}}
+
+	result := ReconcileSeries(existing, incoming, nil)
+	if result.NoOpCount != 1 || len(result.Upserts) != 0 {
+		t.Fatalf("expected an unchanged Color/ProviderColor to be a no-op, got noop=%d upserts=%+v", result.NoOpCount, result.Upserts)
+	}
+}
+
+// TestReconcileSeries_OverrideColorChangeAloneMakesSeriesAnUpsert mirrors
+// TestReconcileSeries_OverrideURLChangeAloneMakesSeriesAnUpsert for Color.
+func TestReconcileSeries_OverrideColorChangeAloneMakesSeriesAnUpsert(t *testing.T) {
+	recurrenceID := mustTime(t, "2026-01-08T10:00:00Z")
+	withoutColor := basicWrite(t, "Standup")
+	withoutColor.Overrides = []OverrideWrite{{RecurrenceID: recurrenceID, Title: "Standup (moved)"}}
+
+	withColor := basicWrite(t, "Standup")
+	withColor.Overrides = []OverrideWrite{{RecurrenceID: recurrenceID, Title: "Standup (moved)", Color: strPtr("#DC2127FF")}}
+
+	existing := []ExistingSeries{{MasterID: "master-1", ExternalUID: "uid-1", Content: withoutColor}}
+	incoming := []IncomingSeries{{ExternalUID: "uid-1", Write: withColor}}
+
+	result := ReconcileSeries(existing, incoming, nil)
+	if result.NoOpCount != 0 || len(result.Upserts) != 1 {
+		t.Fatalf("expected an Override Color change alone to force an upsert, got noop=%d upserts=%+v", result.NoOpCount, result.Upserts)
+	}
+}
+
 // TestReconcileSeries_ReminderSetComparedNotOrder mirrors
 // TestReconcileSeries_ExdatesComparedAsASetNotOrder for Reminders: the same
 // Reminders in a different order, or carrying a different (unread-back) ID,

@@ -459,3 +459,236 @@ func TestConnectionService_FullRefresh_NotFoundForNonLinkedCalendar(t *testing.T
 		t.Fatalf("expected ErrRefreshNotLinked, got %v", err)
 	}
 }
+
+// --- #289: Linked Calendar presentation is local ---
+
+// setEventColorDirectly stands in for a future Write-back's local recolour
+// (#290+ — not built yet) so these tests can exercise "an Event recoloured
+// here survives a Refresh" without it: it writes straight through the
+// repository, exactly the shape a real local edit would leave behind (Color
+// changed, ProviderColor — the shadow — untouched).
+func setEventColorDirectly(t *testing.T, svc *ConnectionService, eventID string, color *string) {
+	t.Helper()
+	ctx := context.Background()
+
+	existing, err := svc.events.events.GetByID(ctx, eventID)
+	if err != nil {
+		t.Fatalf("get event: %v", err)
+	}
+	fields := repository.EventFields{
+		CalendarID: existing.CalendarID, Title: existing.Title, Start: existing.Start, End: existing.End,
+		AllDay: existing.AllDay, Rrule: existing.Rrule, Tzid: existing.Tzid,
+		Description: existing.Description, Location: existing.Location, URL: existing.URL,
+		Color:         color,
+		ProviderEtag:  existing.ProviderEtag,
+		RSVPStatus:    existing.RSVPStatus,
+		ConferenceURL: existing.ConferenceURL,
+		GuestCount:    existing.GuestCount,
+		ProviderColor: existing.ProviderColor,
+	}
+	if _, err := svc.events.events.Update(ctx, eventID, fields, existing.ChangeSeq, existing.Sequence); err != nil {
+		t.Fatalf("set event color directly: %v", err)
+	}
+}
+
+func TestConnectionService_FullRefresh_SeedsEventColorFromColorID(t *testing.T) {
+	google := newFakeGoogleServer(t)
+	google.calendarListItems = []map[string]any{googleCalendarItem("primary", "Work", "#0b8043", "owner", true)}
+	google.eventsByCalendar = map[string][]map[string]any{
+		"primary": {{
+			"id":      "evt-1",
+			"summary": "Tomato meeting",
+			"colorId": "11",
+			"start":   map[string]any{"dateTime": "2026-01-15T10:00:00-05:00", "timeZone": "America/New_York"},
+			"end":     map[string]any{"dateTime": "2026-01-15T11:00:00-05:00", "timeZone": "America/New_York"},
+		}},
+	}
+
+	svc, auth, userID, workspaceID := newTestConnectionServiceWithWorkspace(t, google)
+	calendar := importOneCalendar(t, svc, auth, userID, workspaceID, "primary")
+
+	masters, _, err := svc.events.ListSeriesByCalendar(context.Background(), userID, calendar.ID)
+	if err != nil {
+		t.Fatalf("list series: %v", err)
+	}
+	if len(masters) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(masters))
+	}
+	if masters[0].Color == nil || *masters[0].Color != "#DC2127FF" {
+		t.Fatalf("expected Color seeded from colorId 11, got %v", masters[0].Color)
+	}
+	if masters[0].ProviderColor == nil || *masters[0].ProviderColor != "#DC2127FF" {
+		t.Fatalf("expected ProviderColor (the shadow) seeded identically, got %v", masters[0].ProviderColor)
+	}
+}
+
+func TestConnectionService_FullRefresh_UntouchedEventFollowsProviderRecolour(t *testing.T) {
+	google := newFakeGoogleServer(t)
+	google.calendarListItems = []map[string]any{googleCalendarItem("primary", "Work", "#0b8043", "owner", true)}
+	google.eventsByCalendar = map[string][]map[string]any{
+		"primary": {{
+			"id": "evt-1", "summary": "Meeting", "colorId": "5",
+			"start": map[string]any{"dateTime": "2026-01-15T10:00:00-05:00", "timeZone": "America/New_York"},
+			"end":   map[string]any{"dateTime": "2026-01-15T11:00:00-05:00", "timeZone": "America/New_York"},
+		}},
+	}
+
+	svc, auth, userID, workspaceID := newTestConnectionServiceWithWorkspace(t, google)
+	calendar := importOneCalendar(t, svc, auth, userID, workspaceID, "primary")
+
+	// The Provider recolours the same event (colorId 5 -> 11) before the
+	// next Full Refresh.
+	google.eventsByCalendar["primary"][0]["colorId"] = "11"
+
+	if _, err := svc.FullRefresh(context.Background(), userID, calendar.ID); err != nil {
+		t.Fatalf("second full refresh: %v", err)
+	}
+
+	masters, _, err := svc.events.ListSeriesByCalendar(context.Background(), userID, calendar.ID)
+	if err != nil {
+		t.Fatalf("list series: %v", err)
+	}
+	if len(masters) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(masters))
+	}
+	if masters[0].Color == nil || *masters[0].Color != "#DC2127FF" {
+		t.Fatalf("expected the untouched Event to follow the Provider's recolour, got %v", masters[0].Color)
+	}
+}
+
+func TestConnectionService_FullRefresh_LocallyRecolouredEventSurvivesProviderColourUnchanged(t *testing.T) {
+	google := newFakeGoogleServer(t)
+	google.calendarListItems = []map[string]any{googleCalendarItem("primary", "Work", "#0b8043", "owner", true)}
+	google.eventsByCalendar = map[string][]map[string]any{
+		"primary": {{
+			"id": "evt-1", "summary": "Meeting", "colorId": "5",
+			"start": map[string]any{"dateTime": "2026-01-15T10:00:00-05:00", "timeZone": "America/New_York"},
+			"end":   map[string]any{"dateTime": "2026-01-15T11:00:00-05:00", "timeZone": "America/New_York"},
+		}},
+	}
+
+	svc, auth, userID, workspaceID := newTestConnectionServiceWithWorkspace(t, google)
+	calendar := importOneCalendar(t, svc, auth, userID, workspaceID, "primary")
+
+	masters, _, err := svc.events.ListSeriesByCalendar(context.Background(), userID, calendar.ID)
+	if err != nil {
+		t.Fatalf("list series: %v", err)
+	}
+	customColor := "#123456FF"
+	setEventColorDirectly(t, svc, masters[0].ID, &customColor)
+
+	// The Provider's own colour (colorId 5) is unchanged on the next Refresh.
+	if _, err := svc.FullRefresh(context.Background(), userID, calendar.ID); err != nil {
+		t.Fatalf("second full refresh: %v", err)
+	}
+
+	masters, _, err = svc.events.ListSeriesByCalendar(context.Background(), userID, calendar.ID)
+	if err != nil {
+		t.Fatalf("list series: %v", err)
+	}
+	if masters[0].Color == nil || *masters[0].Color != customColor {
+		t.Fatalf("expected the local recolour to survive an unchanged Provider colour, got %v", masters[0].Color)
+	}
+}
+
+func TestConnectionService_FullRefresh_CalendarNameFollowsProviderRename(t *testing.T) {
+	google := newFakeGoogleServer(t)
+	google.calendarListItems = []map[string]any{googleCalendarItem("primary", "Family", "#0b8043", "owner", true)}
+	google.eventsByCalendar = map[string][]map[string]any{"primary": {}}
+	google.eventsSummaryByCalendar = map[string]string{"primary": "Family"}
+
+	svc, auth, userID, workspaceID := newTestConnectionServiceWithWorkspace(t, google)
+	calendar := importOneCalendar(t, svc, auth, userID, workspaceID, "primary")
+	if calendar.Name != "Family" {
+		t.Fatalf("expected the picker's own name at import, got %q", calendar.Name)
+	}
+
+	// Nobody has renamed the Calendar here — a rename at the Provider must
+	// reach it.
+	google.eventsSummaryByCalendar["primary"] = "Family (renamed)"
+
+	if _, err := svc.FullRefresh(context.Background(), userID, calendar.ID); err != nil {
+		t.Fatalf("second full refresh: %v", err)
+	}
+
+	got, err := svc.calendars.Get(context.Background(), userID, calendar.ID)
+	if err != nil {
+		t.Fatalf("get calendar: %v", err)
+	}
+	if got.Name != "Family (renamed)" {
+		t.Fatalf("expected the untouched Calendar to follow the Provider's rename, got %q", got.Name)
+	}
+}
+
+func TestConnectionService_FullRefresh_RenamedCalendarHereKeepsItsNameAcrossLaterRefreshes(t *testing.T) {
+	google := newFakeGoogleServer(t)
+	google.calendarListItems = []map[string]any{googleCalendarItem("primary", "Family", "#0b8043", "owner", true)}
+	google.eventsByCalendar = map[string][]map[string]any{"primary": {}}
+	google.eventsSummaryByCalendar = map[string]string{"primary": "Family"}
+
+	svc, auth, userID, workspaceID := newTestConnectionServiceWithWorkspace(t, google)
+	calendar := importOneCalendar(t, svc, auth, userID, workspaceID, "primary")
+
+	// The User renames the Linked Calendar here.
+	renamed, err := svc.calendars.Update(context.Background(), userID, calendar.ID, CalendarWrite{Name: "Work", Color: calendar.Color}, false, false)
+	if err != nil {
+		t.Fatalf("rename calendar: %v", err)
+	}
+	if renamed.Name != "Work" {
+		t.Fatalf("expected the rename to take, got %q", renamed.Name)
+	}
+
+	// The Provider's own name is unrelated and unchanged — the local rename
+	// must survive regardless.
+	if _, err := svc.FullRefresh(context.Background(), userID, calendar.ID); err != nil {
+		t.Fatalf("full refresh: %v", err)
+	}
+	got, err := svc.calendars.Get(context.Background(), userID, calendar.ID)
+	if err != nil {
+		t.Fatalf("get calendar: %v", err)
+	}
+	if got.Name != "Work" {
+		t.Fatalf("expected the local rename to survive, got %q", got.Name)
+	}
+
+	// The Provider now also renames its own calendar — the local rename must
+	// still win, and the rename never reaches the Provider (there is no
+	// Write-back yet — #290+ — so nothing could push it even if this failed
+	// silently; the fake server's own calendarList fixture is untouched by
+	// this Refresh, which is the other half of that guarantee).
+	google.eventsSummaryByCalendar["primary"] = "Family (renamed at Google too)"
+	if _, err := svc.FullRefresh(context.Background(), userID, calendar.ID); err != nil {
+		t.Fatalf("third full refresh: %v", err)
+	}
+	got, err = svc.calendars.Get(context.Background(), userID, calendar.ID)
+	if err != nil {
+		t.Fatalf("get calendar: %v", err)
+	}
+	if got.Name != "Work" {
+		t.Fatalf("expected the local rename to keep winning over a later Provider rename, got %q", got.Name)
+	}
+}
+
+func TestConnectionService_FullRefresh_CalendarColorIgnoresLaterProviderRecolours(t *testing.T) {
+	google := newFakeGoogleServer(t)
+	google.calendarListItems = []map[string]any{googleCalendarItem("primary", "Work", "#0b8043", "owner", true)}
+	google.eventsByCalendar = map[string][]map[string]any{"primary": {}}
+
+	svc, auth, userID, workspaceID := newTestConnectionServiceWithWorkspace(t, google)
+	calendar := importOneCalendar(t, svc, auth, userID, workspaceID, "primary")
+	seededColor := calendar.Color
+
+	// A later Refresh must never move the Calendar's own colour — there is no
+	// publisher value to track beneath it (ADR-0052), unlike the name.
+	if _, err := svc.FullRefresh(context.Background(), userID, calendar.ID); err != nil {
+		t.Fatalf("second full refresh: %v", err)
+	}
+
+	got, err := svc.calendars.Get(context.Background(), userID, calendar.ID)
+	if err != nil {
+		t.Fatalf("get calendar: %v", err)
+	}
+	if got.Color != seededColor {
+		t.Fatalf("expected the Calendar's colour to stay exactly as seeded at import (%q), got %q", seededColor, got.Color)
+	}
+}

@@ -112,7 +112,12 @@ func ReconcileSeries(existing []ExistingSeries, incoming []IncomingSeries, unpar
 // content diff might) is what lets a KeepAlarms toggle actually reach
 // storage on the next Refresh that reconciles the series (#87, ADR-0032) —
 // a scheduled Refresh a conditional GET still short-circuits before this
-// runs, but a forced "Refresh now" always reaches it.
+// runs, but a forced "Refresh now" always reaches it. Color and ProviderColor
+// are compared too (#289, ADR-0075): on a Linked Calendar, a Refresh moving
+// either forward — the displayed colour tracking an untouched Event's
+// recolour at the Provider, or the shadow alone advancing behind a locally
+// recoloured one — is a real content change, exactly like ProviderEtag/
+// RSVPStatus/ConferenceURL/GuestCount above them.
 func seriesContentEqual(a, b SeriesWrite) bool {
 	if a.Title != b.Title || a.Description != b.Description || a.Location != b.Location || a.URL != b.URL {
 		return false
@@ -142,6 +147,9 @@ func seriesContentEqual(a, b SeriesWrite) bool {
 		return false
 	}
 	if a.GuestCount != b.GuestCount {
+		return false
+	}
+	if !colorEqual(a.Color, b.Color) || !stringPtrEqual(a.ProviderColor, b.ProviderColor) {
 		return false
 	}
 	return overrideSetEqual(a.Overrides, b.Overrides)
@@ -185,10 +193,7 @@ func overrideSetEqual(a, b []OverrideWrite) bool {
 	if len(a) != len(b) {
 		return false
 	}
-	byRecurrenceID := make(map[int64]OverrideWrite, len(a))
-	for _, o := range a {
-		byRecurrenceID[o.RecurrenceID.UnixNano()] = o
-	}
+	byRecurrenceID := overridesByRecurrenceID(a)
 	for _, o := range b {
 		match, ok := byRecurrenceID[o.RecurrenceID.UnixNano()]
 		if !ok || !overrideContentEqual(match, o) {
@@ -196,6 +201,19 @@ func overrideSetEqual(a, b []OverrideWrite) bool {
 		}
 	}
 	return true
+}
+
+// overridesByRecurrenceID indexes overrides by RecurrenceID (the same
+// unambiguous-at-this-scope key overrideSetEqual's own doc comment explains)
+// — the one map-building shape shared by overrideSetEqual,
+// followSeriesEventColor (provider_event_color.go), and applyDeltaOverrides
+// (reconcile_delta.go), instead of each independently re-implementing it.
+func overridesByRecurrenceID(overrides []OverrideWrite) map[int64]OverrideWrite {
+	byRecurrenceID := make(map[int64]OverrideWrite, len(overrides))
+	for _, o := range overrides {
+		byRecurrenceID[o.RecurrenceID.UnixNano()] = o
+	}
+	return byRecurrenceID
 }
 
 func overrideContentEqual(a, b OverrideWrite) bool {
@@ -223,7 +241,10 @@ func overrideContentEqual(a, b OverrideWrite) bool {
 	if !stringPtrEqual(a.ConferenceURL, b.ConferenceURL) {
 		return false
 	}
-	return a.GuestCount == b.GuestCount
+	if a.GuestCount != b.GuestCount {
+		return false
+	}
+	return colorEqual(a.Color, b.Color) && stringPtrEqual(a.ProviderColor, b.ProviderColor)
 }
 
 // reminderSetEqual compares two Reminder slices as a set of (offset,

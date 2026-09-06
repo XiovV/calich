@@ -327,6 +327,14 @@ type SeriesWrite struct {
 	RSVPStatus    *string
 	ConferenceURL *string
 	GuestCount    int
+	// ProviderColor is the hex a Linked Calendar's Refresh last mapped from
+	// the Provider's own colorId — the shadow the until-touched rule compares
+	// Color against (#289, ADR-0075), set only by the Google mapper. On the
+	// mapper's own output Color and ProviderColor are equal (both the Provider
+	// colour); the reconciler then diverges them, keeping a locally recoloured
+	// Event's Color while advancing its shadow. nil on every other source and
+	// on a Provider event carrying no colorId.
+	ProviderColor *string
 }
 
 // AttachmentWrite is one Attachment whose bytes are already on disk under
@@ -363,6 +371,10 @@ type OverrideWrite struct {
 	RSVPStatus    *string
 	ConferenceURL *string
 	GuestCount    int
+	// ProviderColor mirrors SeriesWrite.ProviderColor, scoped to this
+	// Override alone (#289, ADR-0075) — Google addresses each instance's
+	// colour independently.
+	ProviderColor *string
 }
 
 // fields projects the Master's own columns onto repository.EventFields for
@@ -389,6 +401,7 @@ func (w SeriesWrite) fields(calendarID string) repository.EventFields {
 		RSVPStatus:    w.RSVPStatus,
 		ConferenceURL: w.ConferenceURL,
 		GuestCount:    w.GuestCount,
+		ProviderColor: w.ProviderColor,
 	}
 }
 
@@ -418,6 +431,7 @@ func (o OverrideWrite) fields(calendarID, masterID string) repository.EventField
 		RSVPStatus:    o.RSVPStatus,
 		ConferenceURL: o.ConferenceURL,
 		GuestCount:    o.GuestCount,
+		ProviderColor: o.ProviderColor,
 	}
 }
 
