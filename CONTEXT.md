@@ -323,6 +323,10 @@ _Avoid_: full sync, initial sync, resync
 The Refresh mode that reconciles only what a Provider reports as changed since a cursor. Absence means *unchanged*, so deletions are applied only where the Provider states one explicitly, and tombstone-by-absence is structurally unreachable rather than merely switched off. The distinction is not a nicety: applying Full Refresh's rules to delta input deletes an entire Calendar. See ADR-0053.
 _Avoid_: incremental sync, partial refresh
 
+**Write-back**:
+The outbound counterpart to Refresh: one change made here — an Event created, edited or deleted — carried to the Provider that a Linked Calendar mirrors. Only ever on a **writable** Linked Calendar, and only ever the fields this app models, so what the Provider holds beyond them survives a change made here untouched. Queued rather than performed as part of the change itself: the local edit succeeds whether or not the Provider is reachable, which is the whole point on an instance someone runs precisely so their calendar does not depend on somebody else's uptime — and the reason a Write-back can be outstanding, and can ultimately fail, long after the edit that caused it looked complete. Deliberately not called sync, for the same reason Refresh is not: Sync in this repo means CalDAV's two-way exchange. See ADR-0075, ADR-0077, ADR-0078, ADR-0079.
+_Avoid_: push, sync, export, two-way sync, upload
+
 **External UID**:
 The foreign identifier a Refresh matches a series on — a feed's iCalendar `UID`, or a Provider's own event id — stored alongside the Event rather than as its id. The id stays a minted UUID, so a Calendar with a Source keeps the `{masterId}.ics` shape ADR-0025 requires and a 200-character foreign id never reaches a URL. The narrow reopening of ADR-0030's discard-the-foreign-UID rule, and the reason a Refresh can leave an unchanged series untouched instead of rewriting the whole Calendar. See ADR-0033.
 _Avoid_: source UID, foreign ID, original UID

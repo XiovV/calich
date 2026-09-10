@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { Dialog } from "@base-ui/react/dialog";
-import { useCalendarsStore } from "../lib/calendarsStore";
 import { useConnectionsStore } from "../lib/connectionsStore";
+import { useEventsStore } from "../lib/eventsStore";
+import { refetchCalendarsAndReconcile } from "../lib/shellStore";
 import { type PickerCalendar } from "../lib/connectionsApi";
 import { useWorkspacesStore } from "../lib/workspacesStore";
 import { deleteCalendarCascade } from "../lib/deleteCalendarCascade";
@@ -31,7 +32,7 @@ interface CalendarPickerModalProps {
 export function CalendarPickerModal({ connectionId, onClose }: CalendarPickerModalProps) {
   const listPickerCalendars = useConnectionsStore((state) => state.listPickerCalendars);
   const importCalendars = useConnectionsStore((state) => state.importCalendars);
-  const fetchCalendars = useCalendarsStore((state) => state.fetchCalendars);
+  const fetchEvents = useEventsStore((state) => state.fetchEvents);
   // The picker's own trigger — Connect's redirect landing back on a fresh
   // full-page load — is the one moment nothing here can assume the active
   // Workspace has resolved yet: AppShell's own fetchWorkspaces() fires on
@@ -159,8 +160,14 @@ export function CalendarPickerModal({ connectionId, onClose }: CalendarPickerMod
       // immediately (#286) — a full re-fetch, not a local append, since the
       // server resolves each new Calendar's Access/isOwner/ownerName/
       // shareCount and this is a one-time action rather than a hot path
-      // worth optimizing.
-      await fetchCalendars();
+      // worth optimizing. Reconciling (not a plain fetchCalendars) is what
+      // checks the newly-imported Calendar's toggle without a reload — the
+      // same gap ImportExportSection's ICS import closed for #229. Its
+      // Events need their own refetch alongside it, same as
+      // ImportExportSection.handleConfirmImport — otherwise the grid stays
+      // empty for the new Calendar until the next mount/focus/workspace
+      // refetch.
+      await Promise.all([refetchCalendarsAndReconcile(), fetchEvents()]);
       onClose();
     } catch (err) {
       setError(errorMessage(err));

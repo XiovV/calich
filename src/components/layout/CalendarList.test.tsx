@@ -10,7 +10,7 @@ vi.mock("../../lib/connectionsApi", async () => {
   const actual = await vi.importActual<typeof import("../../lib/connectionsApi")>("../../lib/connectionsApi");
   return {
     ...actual,
-    connectionsApi: { listPickerCalendars: vi.fn(), importCalendars: vi.fn() },
+    connectionsApi: { list: vi.fn(async () => []), listPickerCalendars: vi.fn(), importCalendars: vi.fn() },
   };
 });
 vi.mock("../../lib/icsApi", () => ({
@@ -23,6 +23,7 @@ const { useCalendarsStore } = await import("../../lib/calendarsStore");
 const { useEventsStore } = await import("../../lib/eventsStore");
 const { useShellStore } = await import("../../lib/shellStore");
 const { useWorkspacesStore } = await import("../../lib/workspacesStore");
+const { useConnectionsStore } = await import("../../lib/connectionsStore");
 const { connectionsApi } = await import("../../lib/connectionsApi");
 const { CalendarList } = await import("./CalendarList");
 
@@ -50,6 +51,7 @@ beforeEach(() => {
   useAuthStore.setState({ accessToken: "token-123" });
   useEventsStore.setState({ events: [] });
   useShellStore.setState({ checkedCalendarIds: new Set<string>() });
+  useConnectionsStore.setState({ connections: [] });
 });
 
 async function openMenu(calendarName: string) {
@@ -89,6 +91,7 @@ describe("Linked Calendar grouping", () => {
     access: "viewer",
     isOwner: true,
     sourceKind: "connection",
+    connectionId: 1,
     connectionAccountEmail: "work@gmail.com",
   };
   const personalLinked: Calendar = {
@@ -98,6 +101,7 @@ describe("Linked Calendar grouping", () => {
     access: "viewer",
     isOwner: true,
     sourceKind: "connection",
+    connectionId: 2,
     connectionAccountEmail: "personal@gmail.com",
   };
 
@@ -148,6 +152,7 @@ describe("Linked Calendar grouping", () => {
       isOwner: false,
       ownerName: "Bob",
       sourceKind: "connection",
+      connectionId: 3,
       connectionAccountEmail: "bob@gmail.com",
     };
     useCalendarsStore.setState({ calendars: [owned, sharedLinked] });
@@ -159,6 +164,48 @@ describe("Linked Calendar grouping", () => {
     expect(screen.queryByText("bob@gmail.com")).not.toBeInTheDocument();
     expect(screen.getAllByText("Colleague's Google")).toHaveLength(1);
     expect(screen.getByText("Shared by Bob")).toBeInTheDocument();
+  });
+
+  // The grouping keys on the Connection id, never on the account Email. The
+  // Email is populated only by the *list* endpoint's batched join; the
+  // single-Calendar GET that refreshCalendar re-reads a Linked Calendar with
+  // omits it, so a Calendar that has just been refreshed arrives back in the
+  // store with connectionAccountEmail undefined. Keying on the Email dropped
+  // it into an "Unknown account" heading until an unrelated list fetch put the
+  // Email back — visible as the Calendar jumping between headings for a few
+  // seconds after every Refresh.
+  it("keeps a refreshed Linked Calendar in its Connection's group when the account email is missing", () => {
+    useConnectionsStore.setState({
+      connections: [
+        { id: 1, provider: "google", accountEmail: "work@gmail.com", status: "live", createdAt: "2026-01-01T00:00:00Z" },
+      ],
+    });
+    // Exactly what calendarsApi.get returns: the Connection id, no Email.
+    const refreshed: Calendar = { ...workLinked, connectionAccountEmail: undefined };
+    useCalendarsStore.setState({ calendars: [owned, refreshed] });
+    render(<CalendarList />);
+
+    expect(screen.getByText("work@gmail.com")).toBeInTheDocument();
+    expect(screen.queryByText("Unknown account")).not.toBeInTheDocument();
+    expect(screen.getByText("Work")).toBeInTheDocument();
+  });
+
+  // The two halves of one Connection must not split across two headings just
+  // because one of them was refreshed and the other was not — the case the
+  // screenshots showed, with a single account rendering twice.
+  it("keeps a refreshed and an unrefreshed Linked Calendar under one heading", () => {
+    useConnectionsStore.setState({
+      connections: [
+        { id: 1, provider: "google", accountEmail: "work@gmail.com", status: "live", createdAt: "2026-01-01T00:00:00Z" },
+      ],
+    });
+    const sibling: Calendar = { ...workLinked, id: "cal-work-2", name: "Work Two" };
+    const refreshed: Calendar = { ...workLinked, connectionAccountEmail: undefined };
+    useCalendarsStore.setState({ calendars: [refreshed, sibling] });
+    render(<CalendarList />);
+
+    expect(screen.getAllByText("work@gmail.com")).toHaveLength(1);
+    expect(screen.queryByText("Unknown account")).not.toBeInTheDocument();
   });
 
   // #288: a Linked Calendar can be refreshed on demand, exactly like a

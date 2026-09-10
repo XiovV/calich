@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/XiovV/calich/server/internal/outbox"
 	"github.com/XiovV/calich/server/internal/repository"
 )
 
@@ -136,8 +138,11 @@ func TestConnectionService_SendWriteBack_RefusesReadOnlySourceWithoutCallingGoog
 		t.Fatalf("enqueue write-back: %v", err)
 	}
 
-	if err := svc.SendWriteBack(ctx, msg); err != nil {
-		t.Fatalf("expected SendWriteBack to treat a no-longer-writable Source as done, got %v", err)
+	// Terminal, and explicitly not a delivery: the row records why it never
+	// went out rather than claiming Google accepted it (ADR-0079).
+	err = svc.SendWriteBack(ctx, msg)
+	if !errors.Is(err, outbox.ErrSkipped) {
+		t.Fatalf("expected a no-longer-writable Source to skip the push, got %v", err)
 	}
 	if len(google.patchRequests) != 0 {
 		t.Fatalf("expected no PATCH sent to a read-only Source, got %d", len(google.patchRequests))
@@ -147,7 +152,8 @@ func TestConnectionService_SendWriteBack_RefusesReadOnlySourceWithoutCallingGoog
 // TestConnectionService_SendWriteBack_NoOpWhenEventDeletedSinceQueued and
 // TestConnectionService_SendWriteBack_NoOpWhenNeverReachedTheProvider cover
 // the two other "nothing left to push" outcomes SendWriteBack's own doc
-// comment names — both a success (mark sent), never a retry.
+// comment names — both terminal (mark skipped, with the reason), never a retry
+// and never a claim of delivery (ADR-0079).
 func TestConnectionService_SendWriteBack_NoOpWhenEventDeletedSinceQueued(t *testing.T) {
 	google := newFakeGoogleServer(t)
 	svc, g, _, _, _ := newTestConnectionServiceForWriteBack(t, google)
@@ -156,8 +162,8 @@ func TestConnectionService_SendWriteBack_NoOpWhenEventDeletedSinceQueued(t *test
 	if err != nil {
 		t.Fatalf("enqueue write-back: %v", err)
 	}
-	if err := svc.SendWriteBack(context.Background(), msg); err != nil {
-		t.Fatalf("expected a deleted event to no-op rather than error, got %v", err)
+	if err := svc.SendWriteBack(context.Background(), msg); !errors.Is(err, outbox.ErrSkipped) {
+		t.Fatalf("expected a deleted event to skip rather than error or claim delivery, got %v", err)
 	}
 	if len(google.patchRequests) != 0 {
 		t.Fatalf("expected no PATCH sent for a deleted event, got %d", len(google.patchRequests))
@@ -185,8 +191,8 @@ func TestConnectionService_SendWriteBack_NoOpWhenNeverReachedTheProvider(t *test
 	if err != nil {
 		t.Fatalf("enqueue write-back: %v", err)
 	}
-	if err := connSvc.SendWriteBack(ctx, msg); err != nil {
-		t.Fatalf("expected a never-linked event to no-op rather than error, got %v", err)
+	if err := connSvc.SendWriteBack(ctx, msg); !errors.Is(err, outbox.ErrSkipped) {
+		t.Fatalf("expected a never-linked event to skip rather than error or claim delivery, got %v", err)
 	}
 	if len(google.patchRequests) != 0 {
 		t.Fatalf("expected no PATCH sent for an event with no ExternalUID, got %d", len(google.patchRequests))
@@ -568,5 +574,89 @@ func TestConnectionService_FullRefresh_NeverRevertsAnEventWithAPendingWriteBack(
 	}
 	if got.Title != "Dentist (local edit, not yet pushed)" {
 		t.Fatalf("expected the local edit to survive the Refresh, got title %q", got.Title)
+	}
+}
+
+// TestClassifyWriteBackFailure covers ADR-0079's retry classification: a Google
+// 4xx describes a request that will be rejected identically every time, so it
+// fails on the first response instead of walking the backoff schedule, while the
+// three statuses that describe a moment rather than the request stay retryable.
+// The original 400 this rule exists for — a malformed patch body — would
+// otherwise have burned four retries over thirteen minutes before its Event
+// showed any marker at all.
+func TestClassifyWriteBackFailure(t *testing.T) {
+	tests := []struct {
+		name      string
+		err       error
+		permanent bool
+	}{
+		{name: "400 is a body Google will reject identically forever", err: &googleHTTPError{sentinel: ErrGoogleWriteBackFailed, statusCode: http.StatusBadRequest}, permanent: true},
+		{name: "401 is a grant that no longer authenticates", err: &googleHTTPError{sentinel: ErrGoogleWriteBackFailed, statusCode: http.StatusUnauthorized}, permanent: true},
+		{name: "403 is a calendar this account may not write", err: &googleHTTPError{sentinel: ErrGoogleWriteBackFailed, statusCode: http.StatusForbidden}, permanent: true},
+		{name: "404 is an event that is gone", err: &googleHTTPError{sentinel: ErrGoogleWriteBackFailed, statusCode: http.StatusNotFound}, permanent: true},
+		{name: "408 describes a moment, not the request", err: &googleHTTPError{sentinel: ErrGoogleWriteBackFailed, statusCode: http.StatusRequestTimeout}},
+		{name: "429 is the one where waiting is the remedy", err: &googleHTTPError{sentinel: ErrGoogleWriteBackFailed, statusCode: http.StatusTooManyRequests}},
+		{name: "412 belongs to SendWriteBack's own refetch loop", err: &googleHTTPError{sentinel: ErrGoogleWriteBackFailed, statusCode: http.StatusPreconditionFailed}},
+		{name: "500 is the outage backoff was built for", err: &googleHTTPError{sentinel: ErrGoogleWriteBackFailed, statusCode: http.StatusInternalServerError}},
+		{name: "503 likewise", err: &googleHTTPError{sentinel: ErrGoogleWriteBackFailed, statusCode: http.StatusServiceUnavailable}},
+		{name: "a transport error carries no status to classify", err: errors.New("dial tcp: connection refused")},
+		{name: "a skip is not a failure and must not be reclassified", err: skipWriteBack("this calendar no longer exists here")},
+		{name: "nil stays nil", err: nil},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := classifyWriteBackFailure(tc.err)
+			if errors.Is(got, outbox.ErrPermanent) != tc.permanent {
+				t.Fatalf("permanent = %v, want %v (got %v)", !tc.permanent, tc.permanent, got)
+			}
+			// Whatever the classification, the original error must survive it —
+			// the outbox row's last_error is where Google's own reason lands.
+			if tc.err != nil && !errors.Is(got, tc.err) {
+				t.Fatalf("expected the original error preserved, got %v", got)
+			}
+		})
+	}
+}
+
+// TestGoogleHTTPError_CarriesGooglesOwnReason covers the observability half of
+// ADR-0079. Every call in google.go used to drain a failed response into
+// io.Discard under a comment asserting it "carries nothing we need on failure",
+// which is exactly backwards for a 4xx: Google's body names the offending field,
+// and without it an outbox row reads "status 400" and explains nothing.
+func TestGoogleHTTPError_CarriesGooglesOwnReason(t *testing.T) {
+	withBody := &googleHTTPError{
+		sentinel:   ErrGoogleWriteBackFailed,
+		statusCode: http.StatusBadRequest,
+		body:       `{"error":{"message":"Invalid value for: Invalid format: \"\""}}`,
+	}
+	if !strings.Contains(withBody.Error(), "Invalid value for") {
+		t.Fatalf("expected Google's own reason in the error text, got %q", withBody.Error())
+	}
+	if !strings.Contains(withBody.Error(), "status 400") {
+		t.Fatalf("expected the status kept alongside the reason, got %q", withBody.Error())
+	}
+
+	// A response with no body reads exactly as it did before, rather than
+	// trailing an empty separator.
+	bare := &googleHTTPError{sentinel: ErrGoogleWriteBackFailed, statusCode: http.StatusForbidden}
+	if got, want := bare.Error(), ErrGoogleWriteBackFailed.Error()+": status 403"; got != want {
+		t.Fatalf("expected %q, got %q", want, got)
+	}
+}
+
+// TestReadGoogleErrorBody_IsBoundedAndSingleLine covers the two properties that
+// make storing a Provider's error body safe: a proxy or captive portal answering
+// with a large HTML page cannot flood last_error, and Google's pretty-printed
+// JSON collapses to one line for a column read in a terminal and a grid tooltip.
+func TestReadGoogleErrorBody_IsBoundedAndSingleLine(t *testing.T) {
+	got := readGoogleErrorBody(strings.NewReader("{\n  \"error\": {\n    \"message\": \"bad\"\n  }\n}"))
+	if want := `{ "error": { "message": "bad" } }`; got != want {
+		t.Fatalf("expected whitespace collapsed to one line\n got: %q\nwant: %q", got, want)
+	}
+
+	flood := readGoogleErrorBody(strings.NewReader(strings.Repeat("x", googleErrorBodyLimit*4)))
+	if len(flood) != googleErrorBodyLimit {
+		t.Fatalf("expected the body bounded to %d bytes, got %d", googleErrorBodyLimit, len(flood))
 	}
 }

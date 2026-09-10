@@ -4,6 +4,8 @@ import { Radio } from "@base-ui/react/radio";
 import { RadioGroup } from "@base-ui/react/radio-group";
 import { useConnectionsStore } from "../lib/connectionsStore";
 import { useCalendarsStore } from "../lib/calendarsStore";
+import { useEventsStore } from "../lib/eventsStore";
+import { useShellStore } from "../lib/shellStore";
 import { type DisconnectDisposition, type DisconnectImpact } from "../lib/connectionsApi";
 import { errorMessage } from "../lib/errorMessage";
 import { Button } from "../components/ui/Button";
@@ -60,6 +62,20 @@ export function DisconnectConnectionModal({
     setError(null);
     try {
       await disconnect(connectionId, disposition);
+      // A "delete" disposition has already removed these Calendars and their
+      // Events server-side — but an Event already loaded into eventsStore
+      // doesn't know that, and its Calendar no longer resolving is what
+      // renders it gray (calendarColors.ts's UNRESOLVED_CALENDAR_COLOR
+      // fallback) instead of dropping it, same failure deleteCalendarCascade
+      // and leaveCalendarCascade exist to avoid for their own delete paths.
+      // No rollback needed here, unlike those two: disconnect() has already
+      // succeeded by this point, so there's nothing to revert to.
+      if (disposition === "delete") {
+        for (const calendar of linkedCalendars) {
+          useEventsStore.getState().removeEventsByCalendarId(calendar.id);
+          useShellStore.getState().removeCheckedCalendarId(calendar.id);
+        }
+      }
       // A "delete" disposition removes Calendars from the sidebar; a "keep"
       // one turns them into ordinary owned Calendars. Either way the
       // sidebar's Connection heading is gone, so re-fetch — best-effort,

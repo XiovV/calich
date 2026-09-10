@@ -15,11 +15,15 @@ vi.mock("../lib/connectionsApi", async () => {
   };
 });
 vi.mock("../lib/calendarsApi", () => ({ calendarsApi: { list: vi.fn(), remove: vi.fn() } }));
+vi.mock("../lib/eventsApi", () => ({ eventsApi: { list: vi.fn() } }));
 
 const { connectionsApi } = await import("../lib/connectionsApi");
 const { calendarsApi } = await import("../lib/calendarsApi");
+const { eventsApi } = await import("../lib/eventsApi");
 const { useAuthStore } = await import("../lib/authStore");
 const { useCalendarsStore } = await import("../lib/calendarsStore");
+const { useEventsStore } = await import("../lib/eventsStore");
+const { useShellStore } = await import("../lib/shellStore");
 const { useWorkspacesStore } = await import("../lib/workspacesStore");
 const { CalendarPickerModal } = await import("./CalendarPickerModal");
 
@@ -48,8 +52,10 @@ beforeEach(() => {
   vi.clearAllMocks();
   useAuthStore.setState({ accessToken: "token-123" });
   useCalendarsStore.setState({ calendars: [] });
+  useEventsStore.setState({ events: [] });
   useWorkspacesStore.setState({ activeWorkspaceId: 7 });
   vi.mocked(calendarsApi.list).mockResolvedValue([]);
+  vi.mocked(eventsApi.list).mockResolvedValue([]);
 });
 
 afterEach(() => {
@@ -80,6 +86,62 @@ describe("CalendarPickerModal", () => {
     await waitFor(() => expect(connectionsApi.importCalendars).toHaveBeenCalledWith("token-123", 1, ["primary"]));
     expect(calendarsApi.list).toHaveBeenCalled();
     expect(onClose).toHaveBeenCalled();
+  });
+
+  // The import created a new Linked Calendar server-side; fetchCalendars is
+  // the only way this session learns its id. Without a reconcile after it —
+  // the same gap ImportExportSection's ICS import closed for #229 — the new
+  // Calendar's toggle stayed unset until a reload.
+  it("checks the imported calendar's toggle immediately, without a reload", async () => {
+    vi.mocked(connectionsApi.listPickerCalendars).mockResolvedValue([primary]);
+    vi.mocked(connectionsApi.importCalendars).mockResolvedValue([
+      { id: "cal-1", name: "someone@gmail.com", color: "#0B8043FF" },
+    ]);
+    vi.mocked(calendarsApi.list).mockResolvedValue([
+      { id: "cal-1", name: "someone@gmail.com", color: "#0B8043FF", isOwner: true, access: "owner" },
+    ]);
+    render(<CalendarPickerModal connectionId={1} onClose={vi.fn()} />);
+
+    await screen.findByLabelText("someone@gmail.com");
+    await userEvent.click(screen.getByRole("button", { name: /Add 1 calendar/ }));
+
+    await waitFor(() =>
+      expect(useShellStore.getState().checkedCalendarIds.has("cal-1")).toBe(true),
+    );
+    expect(useShellStore.getState().knownCalendarIds.has("cal-1")).toBe(true);
+  });
+
+  // The import created a new Linked Calendar's Events server-side too;
+  // nothing refetches eventsStore after Confirm, so its Events sat missing
+  // from the grid until the next mount/focus/workspace-change refetch —
+  // visible as "alt-tab and back makes them appear".
+  it("shows the imported calendar's events immediately, without a reload", async () => {
+    vi.mocked(connectionsApi.listPickerCalendars).mockResolvedValue([primary]);
+    vi.mocked(connectionsApi.importCalendars).mockResolvedValue([
+      { id: "cal-1", name: "someone@gmail.com", color: "#0B8043FF" },
+    ]);
+    vi.mocked(calendarsApi.list).mockResolvedValue([
+      { id: "cal-1", name: "someone@gmail.com", color: "#0B8043FF", isOwner: true, access: "owner" },
+    ]);
+    vi.mocked(eventsApi.list).mockResolvedValue([
+      {
+        id: "evt-1",
+        calendarId: "cal-1",
+        title: "Google calendar event",
+        start: new Date("2026-09-08T11:15:00Z"),
+        end: new Date("2026-09-08T14:15:00Z"),
+      },
+    ]);
+    render(<CalendarPickerModal connectionId={1} onClose={vi.fn()} />);
+
+    await screen.findByLabelText("someone@gmail.com");
+    await userEvent.click(screen.getByRole("button", { name: /Add 1 calendar/ }));
+
+    await waitFor(() =>
+      expect(useEventsStore.getState().events.some((event) => event.id === "evt-1")).toBe(
+        true,
+      ),
+    );
   });
 
   it("toggling a row changes what gets imported", async () => {

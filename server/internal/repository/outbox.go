@@ -15,6 +15,12 @@ import (
 const (
 	OutboxStatusPending = "pending"
 	OutboxStatusSent    = "sent"
+	// OutboxStatusSkipped is terminal like Sent, but claims no delivery
+	// (ADR-0079): the message ended without ever being dispatched, and
+	// last_error carries why. Kept distinct from Sent so "did this reach the
+	// Provider?" is answerable from the row, and from Failed because a skip
+	// raises no per-Event marker — it is usually a race the User caused.
+	OutboxStatusSkipped = "skipped"
 	OutboxStatusFailed  = "failed"
 )
 
@@ -667,6 +673,22 @@ func (r *OutboxRepository) MarkSent(ctx context.Context, id int64, sentAt time.T
 	)
 	if err != nil {
 		return fmt.Errorf("mark outbox message sent: %w", err)
+	}
+	return requireAffected(res)
+}
+
+// MarkSkipped ends a message that was never dispatched (ADR-0079), recording
+// the reason in the same last_error column a failure uses. Terminal: the Worker
+// will not consider it again. sent_at is deliberately left NULL — nothing was
+// sent, and a timestamp there would reintroduce exactly the ambiguity this
+// status exists to remove.
+func (r *OutboxRepository) MarkSkipped(ctx context.Context, id int64, reason string) error {
+	res, err := r.db.ExecContext(ctx,
+		`UPDATE outbox SET status = ?, last_error = ? WHERE id = ?`,
+		OutboxStatusSkipped, reason, id,
+	)
+	if err != nil {
+		return fmt.Errorf("mark outbox message skipped: %w", err)
 	}
 	return requireAffected(res)
 }

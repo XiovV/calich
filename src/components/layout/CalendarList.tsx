@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { formatDistanceToNow } from "date-fns";
 import { Menu } from "@base-ui/react/menu";
 import { MoreVertical, Plus, TriangleAlert, Users } from "lucide-react";
@@ -9,6 +9,7 @@ import { canManageCalendar, isLinkedCalendar, shareCountTooltip, type Calendar }
 import { resolveCalendarFill } from "../../lib/calendarColors";
 import { useAuthStore } from "../../lib/authStore";
 import { useCalendarsStore } from "../../lib/calendarsStore";
+import { useConnectionsStore } from "../../lib/connectionsStore";
 import { useEventsStore } from "../../lib/eventsStore";
 import { useShellStore } from "../../lib/shellStore";
 import { deleteCalendarCascade } from "../../lib/deleteCalendarCascade";
@@ -27,6 +28,13 @@ import { ShareCalendarModal } from "./ShareCalendarModal";
 // The row's action menu items share this shape so every row type — a click
 // away from Edit-only, Edit+Export+Delete, or Edit+Refresh+Unsubscribe — is
 // one list instead of three near-duplicate menus (#189).
+// UNRESOLVED_CONNECTION is the grouping key for a Linked Calendar whose
+// Connection id is missing from the payload — a state the server should never
+// produce, kept so that such a Calendar still renders instead of disappearing.
+// The heading reads "Unknown account" and offers no picker button, since there
+// is no Connection to re-open it with.
+const UNRESOLVED_CONNECTION = Symbol("unresolved connection");
+
 const menuItemClasses =
   "flex cursor-default items-center px-3 py-1.5 text-body text-ink data-[highlighted]:bg-surface-hover data-[disabled]:pointer-events-none data-[disabled]:opacity-50";
 const destructiveMenuItemClasses =
@@ -53,6 +61,21 @@ export function CalendarList() {
     (state) => state.toggleCalendarChecked,
   );
   const refreshCalendar = useCalendarsStore((state) => state.refreshCalendar);
+  // Linked Calendars group by Connection, so the sidebar needs the
+  // Connections themselves to label each heading — it can no longer rely on
+  // the account Email riding along on every Calendar, which only the list
+  // endpoint populates (see linkedCalendarsByConnection below). Settings used
+  // to be the only place that fetched these; a User who never opens Settings
+  // would otherwise see every heading fall back to "Unknown account".
+  const connections = useConnectionsStore((state) => state.connections);
+  const fetchConnections = useConnectionsStore((state) => state.fetchConnections);
+  useEffect(() => {
+    if (!accessToken) return;
+    // A failure here costs the heading its label and nothing else, so it is
+    // swallowed rather than surfaced: the sidebar's Calendars still render,
+    // still group correctly, and still toggle.
+    fetchConnections().catch(() => {});
+  }, [accessToken, fetchConnections]);
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [isSubscribeOpen, setIsSubscribeOpen] = useState(false);
   // The Calendar picker, re-opened from a Connection's sidebar heading to
@@ -95,17 +118,47 @@ export function CalendarList() {
   // Linked Calendars group under one heading per Connection rather than
   // beside every other owned Calendar (#286) — the sidebar's only way to
   // show "these came from that Google account".
-  const linkedCalendarsByConnection = new Map<
-    string,
-    { connectionId?: number; calendars: Calendar[] }
-  >();
+  //
+  // Keyed on the Connection's id, never on the account Email. The Email is a
+  // denormalized display field that only the *list* endpoint populates
+  // (attachConnectionEmails); every single-Calendar response omits it. Keying
+  // on it meant that refreshing a Linked Calendar — which replaces its store
+  // row with the single-Calendar GET's response — dropped the Calendar into an
+  // "Unknown account" heading until an unrelated list fetch happened to put
+  // the Email back. The id is on every response that carries a Source at all,
+  // so the grouping no longer depends on which endpoint a Calendar last came
+  // from.
+  // A Linked Calendar with no connectionId should not be reachable — the
+  // server sets it on every response carrying a Connection Source — but it
+  // groups under UNRESOLVED_CONNECTION rather than being dropped. A Calendar
+  // vanishing from the sidebar entirely is a far worse failure than one
+  // sitting under an unnamed heading, and this is the sidebar's last line
+  // against a payload shape changing underneath it.
+  const linkedCalendarsByConnection = new Map<number | typeof UNRESOLVED_CONNECTION, Calendar[]>();
   for (const calendar of calendars) {
     if (!canManageCalendar(calendar) || !isLinkedCalendar(calendar)) continue;
-    const email = calendar.connectionAccountEmail ?? "Unknown account";
-    const group = linkedCalendarsByConnection.get(email) ?? { calendars: [] };
-    group.calendars.push(calendar);
-    group.connectionId ??= calendar.connectionId;
-    linkedCalendarsByConnection.set(email, group);
+    const key = calendar.connectionId ?? UNRESOLVED_CONNECTION;
+    const group = linkedCalendarsByConnection.get(key) ?? [];
+    group.push(calendar);
+    linkedCalendarsByConnection.set(key, group);
+  }
+
+  // The heading's label, resolved at render rather than carried on the rows.
+  // The Connections store is the durable source; a Calendar's own
+  // connectionAccountEmail stands in while that first fetch is still in
+  // flight, and "Unknown account" is now a genuine unresolved-Connection
+  // state rather than an artefact of which endpoint answered last.
+  function connectionLabel(
+    connectionId: number | typeof UNRESOLVED_CONNECTION,
+    group: Calendar[],
+  ): string {
+    return (
+      (connectionId !== UNRESOLVED_CONNECTION
+        ? connections.find((connection) => connection.id === connectionId)?.accountEmail
+        : undefined) ??
+      group.find((calendar) => calendar.connectionAccountEmail)?.connectionAccountEmail ??
+      "Unknown account"
+    );
   }
   const sharedCalendars = calendars.filter(
     (calendar) => !canManageCalendar(calendar),
@@ -388,24 +441,27 @@ export function CalendarList() {
       {/* One heading per Connection, labelled with the connected account's
           Email (#286) — two connected accounts produce two separate
           headings, since each is its own Map entry. */}
-      {Array.from(linkedCalendarsByConnection.entries()).map(([accountEmail, group]) => (
-        <div key={accountEmail}>
-          <div className="flex items-center justify-between py-2 ps-5 pe-2">
-            <p className="text-label-sm font-medium text-ink-muted">{accountEmail}</p>
-            {group.connectionId !== undefined && (
-              <IconButton
-                size="tiny"
-                onClick={() => setPickerConnectionId(group.connectionId ?? null)}
-                aria-label={`Choose calendars from ${accountEmail}`}
-                title={`Choose calendars from ${accountEmail}`}
-              >
-                <Plus className="size-4" />
-              </IconButton>
-            )}
+      {Array.from(linkedCalendarsByConnection.entries()).map(([connectionId, group]) => {
+        const accountEmail = connectionLabel(connectionId, group);
+        return (
+          <div key={connectionId === UNRESOLVED_CONNECTION ? "unresolved-connection" : connectionId}>
+            <div className="flex items-center justify-between py-2 ps-5 pe-2">
+              <p className="text-label-sm font-medium text-ink-muted">{accountEmail}</p>
+              {connectionId !== UNRESOLVED_CONNECTION && (
+                <IconButton
+                  size="tiny"
+                  onClick={() => setPickerConnectionId(connectionId)}
+                  aria-label={`Choose calendars from ${accountEmail}`}
+                  title={`Choose calendars from ${accountEmail}`}
+                >
+                  <Plus className="size-4" />
+                </IconButton>
+              )}
+            </div>
+            <ul>{group.map(renderCalendarItem)}</ul>
           </div>
-          <ul>{group.calendars.map(renderCalendarItem)}</ul>
-        </div>
-      ))}
+        );
+      })}
 
       {sharedCalendars.length > 0 && (
         <>

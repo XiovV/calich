@@ -226,3 +226,106 @@ func TestBuildGooglePatch_NonHTTPEventURLIsNeverSent(t *testing.T) {
 		t.Fatalf("expected no source for a non-http Event URL, got %+v", patch.Source)
 	}
 }
+
+// TestBuildGooglePatch_GoldenWireBodies pins the exact bytes every Write-back
+// push sends, one case per encoding shape. It exists because its absence is
+// what let Write-back ship broken: the assertions above this one check which
+// top-level keys the body carries and never descend into `start`/`end`, so a
+// shared decode struct with no `omitempty` shipped `"date":""` beside every
+// populated `dateTime` and Google rejected every push with 400 — an edit, a
+// create, an instance patch and a cancellation alike, since all four build
+// their boundaries through encodeGoogleEventDateTime.
+//
+// The rule those bytes encode is stated in googleEventDateTimePatchJSON's own
+// doc comment: `date` and `dateTime` are mutually exclusive at Google, exactly
+// one is sent, and the unused half is an explicit null rather than an absent
+// key so that editing a timed Event into an all-day one actually clears the
+// stale value. A golden is the right shape for this because the failure mode is
+// a change to the *wire format* that no type-level assertion can see; it should
+// be updated deliberately, in a diff a reviewer can read, and never loosened
+// into a partial match.
+func TestBuildGooglePatch_GoldenWireBodies(t *testing.T) {
+	sarajevo := "Europe/Sarajevo"
+	start := time.Date(2026, 9, 10, 14, 0, 0, 0, time.UTC)
+	end := time.Date(2026, 9, 10, 15, 0, 0, 0, time.UTC)
+
+	tests := []struct {
+		name  string
+		patch googleEventPatchBody
+		want  string
+	}{
+		{
+			name:  "timed with an Anchor zone sends dateTime and timeZone, date explicitly null",
+			patch: buildGooglePatch("Standup", start, end, false, &sarajevo, "", "", "", ""),
+			want:  `{"summary":"Standup","description":"","location":"","start":{"date":null,"dateTime":"2026-09-10T16:00:00+02:00","timeZone":"Europe/Sarajevo"},"end":{"date":null,"dateTime":"2026-09-10T17:00:00+02:00","timeZone":"Europe/Sarajevo"},"source":null}`,
+		},
+		{
+			name:  "all-day sends a bare date, dateTime explicitly null and no zone at all",
+			patch: buildGooglePatch("Holiday", start, end, true, &sarajevo, "", "", "", ""),
+			want:  `{"summary":"Holiday","description":"","location":"","start":{"date":"2026-09-10","dateTime":null},"end":{"date":"2026-09-10","dateTime":null},"source":null}`,
+		},
+		{
+			// A Floating Event (ADR-0019) has no zone to round-trip through, so
+			// it travels as a "Z" instant with timeZone omitted entirely.
+			name:  "floating sends a Z instant with no timeZone key",
+			patch: buildGooglePatch("Floats", start, end, false, nil, "", "", "", ""),
+			want:  `{"summary":"Floats","description":"","location":"","start":{"date":null,"dateTime":"2026-09-10T14:00:00Z"},"end":{"date":null,"dateTime":"2026-09-10T15:00:00Z"},"source":null}`,
+		},
+		{
+			// The recurrence array is exactly the one RRULE line — never an
+			// EXDATE, which ADR-0078 forbids as a second representation of a
+			// cancellation Google already models as a cancelled instance.
+			name:  "recurring adds exactly one RRULE line",
+			patch: buildGooglePatch("Weekly", start, end, false, &sarajevo, "FREQ=WEEKLY", "", "", ""),
+			want:  `{"summary":"Weekly","description":"","location":"","start":{"date":null,"dateTime":"2026-09-10T16:00:00+02:00","timeZone":"Europe/Sarajevo"},"end":{"date":null,"dateTime":"2026-09-10T17:00:00+02:00","timeZone":"Europe/Sarajevo"},"recurrence":["RRULE:FREQ=WEEKLY"],"source":null}`,
+		},
+		{
+			name:  "an Event URL becomes a source object",
+			patch: buildGooglePatch("Linked", start, end, false, &sarajevo, "", "", "", "https://example.com/x"),
+			want:  `{"summary":"Linked","description":"","location":"","start":{"date":null,"dateTime":"2026-09-10T16:00:00+02:00","timeZone":"Europe/Sarajevo"},"end":{"date":null,"dateTime":"2026-09-10T17:00:00+02:00","timeZone":"Europe/Sarajevo"},"source":{"title":"Linked","url":"https://example.com/x"}}`,
+		},
+		{
+			// Clearing Event URL is why Source is not omitempty: an absent key
+			// would read to Google as "leave whatever is there alone".
+			name:  "no Event URL sends source as an explicit null, not an absent key",
+			patch: buildGooglePatch("Bare", start, end, false, nil, "", "some notes", "a room", ""),
+			want:  `{"summary":"Bare","description":"some notes","location":"a room","start":{"date":null,"dateTime":"2026-09-10T14:00:00Z"},"end":{"date":null,"dateTime":"2026-09-10T15:00:00Z"},"source":null}`,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := json.Marshal(tc.patch)
+			if err != nil {
+				t.Fatalf("marshal patch: %v", err)
+			}
+			if string(got) != tc.want {
+				t.Fatalf("wire body mismatch\n got: %s\nwant: %s", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestGoogleEventDateTimePatchJSON_RefusesAnAmbiguousBoundary covers the
+// invariant the golden bodies above are instances of: a boundary carrying both
+// date and dateTime, or neither, is the malformed pair Google answers with 400,
+// so it fails at the seam rather than travelling. Enforcing it in MarshalJSON
+// is what makes "exactly one of the pair" true by construction — there is no
+// call site that can opt out of it.
+func TestGoogleEventDateTimePatchJSON_RefusesAnAmbiguousBoundary(t *testing.T) {
+	tests := []struct {
+		name string
+		dt   googleEventDateTimePatchJSON
+	}{
+		{name: "both set is the pair Google rejects", dt: googleEventDateTimePatchJSON{Date: "2026-09-10", DateTime: "2026-09-10T14:00:00Z"}},
+		{name: "neither set carries no boundary at all", dt: googleEventDateTimePatchJSON{TimeZone: "Europe/Sarajevo"}},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := json.Marshal(tc.dt); err == nil {
+				t.Fatal("expected marshalling an ambiguous boundary to fail, got nil error")
+			}
+		})
+	}
+}

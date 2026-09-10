@@ -78,9 +78,12 @@ export function isSubscribedCalendar(calendar: Calendar | undefined): boolean {
 }
 
 // isLinkedCalendar reports whether calendar is a Linked Calendar (#286,
-// ADR-0052): mirrored from one calendar of a Connection, and read-only here
-// until write-back ships — see calendarReadOnlyReason. Grouped in the
-// sidebar under its Connection's heading rather than under "My calendars".
+// ADR-0052): mirrored from one calendar of a Connection. Writable or not
+// depending on what the Provider's own ACL grants the connecting account
+// (ADR-0075) — which is why writability is read from access, never from this
+// predicate; see calendarReadOnlyReason. Grouped in the sidebar under its
+// Connection's heading rather than under "My calendars", keyed on the
+// Connection's id.
 export function isLinkedCalendar(calendar: Calendar | undefined): boolean {
   return calendar?.sourceKind === "connection";
 }

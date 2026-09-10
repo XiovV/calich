@@ -2,10 +2,12 @@ package service
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"testing"
 	"time"
 
+	"github.com/XiovV/calich/server/internal/outbox"
 	"github.com/XiovV/calich/server/internal/repository"
 )
 
@@ -459,8 +461,10 @@ func TestConnectionService_SendWriteBack_DeleteRaisesNeedsAttentionWhenNoLongerW
 		t.Fatalf("flip source read-only: %v", err)
 	}
 
-	if err := svc.SendWriteBack(ctx, pending[0]); err != nil {
-		t.Fatalf("expected the undeliverable delete handled, got %v", err)
+	// Skipped, not sent: the delete never reached Google, and the Source's
+	// needs-attention state below is what actually reaches the User (ADR-0079).
+	if err := svc.SendWriteBack(ctx, pending[0]); !errors.Is(err, outbox.ErrSkipped) {
+		t.Fatalf("expected the undeliverable delete skipped, got %v", err)
 	}
 	if len(google.deleteRequests) != 0 {
 		t.Fatalf("expected no delete sent to a read-only Source, got %d", len(google.deleteRequests))
