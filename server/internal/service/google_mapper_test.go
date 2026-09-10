@@ -203,6 +203,41 @@ func TestMapGoogleEvents_RDATEAndEXRULEAreDroppedAndCounted(t *testing.T) {
 	}
 }
 
+// TestMapGoogleEvents_MissingTitleIsDroppedAndCounted covers a visibility-
+// restricted event: Google omits summary entirely for an event on a
+// calendar shared with only "See only free/busy" (rendered at Google's own
+// end as the generic "Google calendar event" block). Such an event must be
+// dropped rather than reach the reconciler with an empty title, which
+// event_series.go's ReconcileSubscribedSeries would reject outright and
+// abort the whole Refresh (#293).
+func TestMapGoogleEvents_MissingTitleIsDroppedAndCounted(t *testing.T) {
+	events := []googleEvent{
+		{
+			ID:    "restricted",
+			Start: googleEventDateTime{DateTime: "2026-02-01T11:15:00-05:00", TimeZone: "America/New_York"},
+			End:   googleEventDateTime{DateTime: "2026-02-01T14:15:00-05:00", TimeZone: "America/New_York"},
+		},
+		{
+			ID:      "normal",
+			Summary: "Dentist",
+			Start:   googleEventDateTime{DateTime: "2026-02-01T10:00:00-05:00", TimeZone: "America/New_York"},
+			End:     googleEventDateTime{DateTime: "2026-02-01T10:30:00-05:00", TimeZone: "America/New_York"},
+		},
+	}
+
+	series, summary := mapGoogleEvents(events)
+
+	if len(series) != 1 || series[0].ExternalUID != "normal" {
+		t.Fatalf("expected only the titled event to be written, got %+v", series)
+	}
+	if len(summary.Dropped) != 1 || summary.Dropped[0].Reason != DroppedMissingTitle || summary.Dropped[0].Count != 1 {
+		t.Fatalf("expected 1 DroppedMissingTitle, got %+v", summary.Dropped)
+	}
+	if len(summary.OrphanExternalUIDs) != 1 || summary.OrphanExternalUIDs[0] != "restricted" {
+		t.Fatalf("expected the restricted event counted as unparseable so a Full Refresh never tombstones a previously-visible copy of it, got %+v", summary.OrphanExternalUIDs)
+	}
+}
+
 func TestMapGoogleEvents_EXDATEWithTZIDParamIsParsed(t *testing.T) {
 	events := []googleEvent{
 		{
@@ -580,6 +615,35 @@ func TestMapGoogleEventChanges_OrphanInstanceIsCountedNotEmitted(t *testing.T) {
 	}
 	if len(summary.OrphanExternalUIDs) != 1 || summary.OrphanExternalUIDs[0] != "orphan-series" {
 		t.Fatalf("expected orphan-series counted, got %+v", summary.OrphanExternalUIDs)
+	}
+}
+
+// TestMapGoogleEventChanges_MissingTitleIsDroppedAndCounted is
+// TestMapGoogleEvents_MissingTitleIsDroppedAndCounted's Delta-mode sibling:
+// a Master newly turned visibility-restricted mid-batch must not reach
+// ReconcileDelta with an empty title (#293).
+func TestMapGoogleEventChanges_MissingTitleIsDroppedAndCounted(t *testing.T) {
+	events := []googleEvent{
+		{
+			ID:    "restricted",
+			Start: googleEventDateTime{DateTime: "2026-02-01T11:15:00-05:00", TimeZone: "America/New_York"},
+			End:   googleEventDateTime{DateTime: "2026-02-01T14:15:00-05:00", TimeZone: "America/New_York"},
+		},
+	}
+
+	changes, deletions, summary := mapGoogleEventChanges(events)
+
+	if len(changes) != 0 {
+		t.Fatalf("expected no changes for a title-less master, got %+v", changes)
+	}
+	if len(deletions) != 0 {
+		t.Fatalf("expected no deletions, got %+v", deletions)
+	}
+	if len(summary.Dropped) != 1 || summary.Dropped[0].Reason != DroppedMissingTitle || summary.Dropped[0].Count != 1 {
+		t.Fatalf("expected 1 DroppedMissingTitle, got %+v", summary.Dropped)
+	}
+	if len(summary.OrphanExternalUIDs) != 1 || summary.OrphanExternalUIDs[0] != "restricted" {
+		t.Fatalf("expected the restricted event counted as unparseable, got %+v", summary.OrphanExternalUIDs)
 	}
 }
 

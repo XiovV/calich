@@ -66,6 +66,37 @@ func TestConnectionService_ImportCalendars_RunsInitialFullRefreshSynchronously(t
 	}
 }
 
+// TestConnectionService_ImportCalendars_NameFollowsSummaryOverride guards a
+// shared calendar the account holder has locally renamed at Google (a
+// calendarList entry's summaryOverride) — the picker already resolves that
+// name correctly (toPickerCalendar's displayName()), but ImportCalendars
+// runs its Linked Calendar's first Full Refresh synchronously right after
+// creating it (#287), and that refresh's own name-follows-provider
+// mechanism (#289, ADR-0032) must keep resolving summaryOverride too, not
+// regress to events.list's bare, override-unaware summary.
+func TestConnectionService_ImportCalendars_NameFollowsSummaryOverride(t *testing.T) {
+	google := newFakeGoogleServer(t)
+	item := googleCalendarItem("primary", "Work", "#0b8043", "reader", true)
+	item["summaryOverride"] = "DD's Work"
+	google.calendarListItems = []map[string]any{item}
+	google.eventsByCalendar = map[string][]map[string]any{"primary": {}}
+	google.eventsSummaryByCalendar = map[string]string{"primary": "Work"}
+
+	svc, auth, userID, workspaceID := newTestConnectionServiceWithWorkspace(t, google)
+	calendar := importOneCalendar(t, svc, auth, userID, workspaceID, "primary")
+
+	// importOneCalendar's returned Calendar is captured before
+	// runInitialFullRefresh runs (ImportCalendars appends it to created,
+	// then refreshes) — re-fetch to see what actually landed afterward.
+	got, err := svc.calendars.Get(context.Background(), userID, calendar.ID)
+	if err != nil {
+		t.Fatalf("get calendar: %v", err)
+	}
+	if got.Name != "DD's Work" {
+		t.Fatalf("expected the picker's summaryOverride-aware name to survive the initial full refresh, got %q", got.Name)
+	}
+}
+
 func TestConnectionService_ImportCalendars_InitialFullRefreshFailureDoesNotUndoTheCalendar(t *testing.T) {
 	google := newFakeGoogleServer(t)
 	google.calendarListItems = []map[string]any{googleCalendarItem("primary", "someone@gmail.com", "#0b8043", "owner", true)}
@@ -618,6 +649,7 @@ func TestConnectionService_FullRefresh_CalendarNameFollowsProviderRename(t *test
 	// Nobody has renamed the Calendar here — a rename at the Provider must
 	// reach it.
 	google.eventsSummaryByCalendar["primary"] = "Family (renamed)"
+	google.calendarListItems[0]["summary"] = "Family (renamed)"
 
 	if _, err := svc.FullRefresh(context.Background(), userID, calendar.ID); err != nil {
 		t.Fatalf("second full refresh: %v", err)

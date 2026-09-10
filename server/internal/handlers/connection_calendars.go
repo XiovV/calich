@@ -8,6 +8,7 @@
 package handlers
 
 import (
+	"log/slog"
 	"net/http"
 
 	"github.com/XiovV/calich/server/internal/httpauth"
@@ -65,6 +66,9 @@ func (h *CalendarHandler) ListConnectionCalendars(w http.ResponseWriter, r *http
 	}
 
 	calendars, err := h.connections.ListCalendars(r.Context(), userID, workspaceID, id)
+	if err != nil {
+		slog.Error("listing google calendars failed", "error", err)
+	}
 	if respondError(w, err, connectionCalendarsErrors, "failed to list this connection's calendars") {
 		return
 	}

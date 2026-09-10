@@ -76,6 +76,12 @@ const (
 	DroppedRDATE          = "RDATE recurrence line"
 	DroppedEXRULE         = "EXRULE recurrence line"
 	DroppedOrphanInstance = "recurring event instance without its master"
+	// DroppedMissingTitle is a Master whose Summary Google omitted entirely
+	// — what a visibility-restricted event (a calendar shared with only "See
+	// only free/busy") comes back as. Unstorable outright (ErrInvalidTitle),
+	// so it is dropped here rather than left to fail deep in the reconciler
+	// and abort the whole Refresh (#293).
+	DroppedMissingTitle = "event has no title"
 )
 
 // GoogleMappingSummary tallies what mapGoogleEvents could not carry across,
@@ -135,6 +141,11 @@ func mapGoogleEvents(events []googleEvent) ([]IncomingSeries, GoogleMappingSumma
 		}
 
 		write, dropped := mapGoogleMaster(*master, instances)
+		if strings.TrimSpace(write.Title) == "" {
+			summary.add(DroppedMissingTitle, "")
+			summary.OrphanExternalUIDs = append(summary.OrphanExternalUIDs, master.ID)
+			continue
+		}
 		for _, reason := range dropped {
 			summary.add(reason, write.Title)
 		}
@@ -229,6 +240,11 @@ func mapGoogleEventChanges(events []googleEvent) (changes []DeltaSeriesChange, d
 
 		if master != nil {
 			write, dropped := mapGoogleMaster(*master, instances)
+			if strings.TrimSpace(write.Title) == "" {
+				summary.add(DroppedMissingTitle, "")
+				summary.OrphanExternalUIDs = append(summary.OrphanExternalUIDs, master.ID)
+				continue
+			}
 			for _, reason := range dropped {
 				summary.add(reason, write.Title)
 			}

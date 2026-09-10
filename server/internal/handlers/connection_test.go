@@ -39,7 +39,7 @@ func newFakeGoogleTestServer(t *testing.T) *fakeGoogleTestServer {
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"access_token":  "fake-access-token",
 			"refresh_token": f.refreshToken,
-			"scope":         "openid email https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/calendar.calendarlist.readonly",
+			"scope":         "openid https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/calendar.calendarlist.readonly",
 		})
 	})
 	mux.HandleFunc("/userinfo", func(w http.ResponseWriter, r *http.Request) {

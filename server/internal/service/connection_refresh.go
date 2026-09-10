@@ -336,12 +336,6 @@ func (s *ConnectionService) doRefresh(ctx context.Context, userID int64, calenda
 		log.Printf("linked calendar refresh (calendar=%s): provider returned no cursor; next cycle will be a full refresh", calendar.ID)
 	}
 
-	// changes.Summary is "" whenever this response omitted it — treated by
-	// resolveFollowedField as "the Provider supplied nothing this round",
-	// leaving both the displayed Name and its shadow exactly as they were
-	// (#289, ADR-0032).
-	newName, newFeedName := resolveFollowedField(calendar.Name, source.FeedName, changes.Summary)
-
 	// Writability is per-Calendar, derived from Google's own accessRole and
 	// re-read on every Refresh (#290, ADR-0075) — never fixed at import time,
 	// since a calendar merely shared into the connected account, or one whose
@@ -351,14 +345,29 @@ func (s *ConnectionService) doRefresh(ctx context.Context, userID int64, calenda
 	// successfully: it's logged and the Source's existing Mode carries
 	// forward unchanged, mirroring this function's own cursor-storage
 	// leniency below.
+	//
+	// The same re-read is also the Provider's own current calendar name
+	// (feedName): events.list's top-level Summary field never carries a
+	// summaryOverride, so tracking it directly would forget the account
+	// holder's own rename at Google the moment this Refresh ran, contrary to
+	// what the picker's identical displayName() already promised at import
+	// (#289, ADR-0032). A re-read failure leaves feedName empty —
+	// resolveFollowedField's own "the Provider supplied nothing this round"
+	// case — mirroring writeMode's own leave-it-unchanged fallback below.
 	writeMode := source.Mode
+	var feedName string
 	if entry, err := s.google.getCalendarListEntry(ctx, accessToken, *source.ExternalCalendarID); err != nil {
 		log.Printf("linked calendar refresh (calendar=%s): could not re-read access role, keeping mode %q: %v", calendar.ID, source.Mode, err)
-	} else if entry.writable() {
-		writeMode = repository.SourceModeWritable
 	} else {
-		writeMode = repository.SourceModeReadOnly
+		feedName = entry.displayName()
+		if entry.writable() {
+			writeMode = repository.SourceModeWritable
+		} else {
+			writeMode = repository.SourceModeReadOnly
+		}
 	}
+
+	newName, newFeedName := resolveFollowedField(calendar.Name, source.FeedName, feedName)
 
 	return RefreshResult{
 			Created:                summary.Created,

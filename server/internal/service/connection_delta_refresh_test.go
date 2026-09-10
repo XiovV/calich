@@ -276,9 +276,8 @@ func TestConnectionService_DeltaRefresh_RequestedWithNoCursorIsACallerError(t *t
 	}
 }
 
-// #289: a Delta Refresh's own events.list response carries the Provider's
-// calendar name too (its top-level "summary", on every page, not just a
-// Full listing's) — an untouched Linked Calendar's name follows a rename
+// #289: a Delta Refresh re-reads the calendarList entry too (already needed
+// for AccessRole), so an untouched Linked Calendar's name follows a rename
 // there exactly as a Full Refresh's does.
 func TestConnectionService_DeltaRefresh_CalendarNameFollowsProviderRename(t *testing.T) {
 	google := newFakeGoogleServer(t)
@@ -291,6 +290,7 @@ func TestConnectionService_DeltaRefresh_CalendarNameFollowsProviderRename(t *tes
 	calendar := importOneCalendar(t, svc, auth, userID, workspaceID, "primary")
 
 	google.eventsSummaryByCalendar["primary"] = "Family (renamed)"
+	google.calendarListItems[0]["summary"] = "Family (renamed)"
 	google.nextSyncToken = "cursor-2"
 
 	if _, err := svc.RefreshLinked(context.Background(), userID, calendar.ID, RefreshModeDelta); err != nil {

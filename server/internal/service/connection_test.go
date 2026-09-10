@@ -61,11 +61,13 @@ type fakeGoogleServer struct {
 	// sends the stored cursor.
 	lastSyncTokenSeen string
 	// eventsSummaryByCalendar keys events.list's own top-level "summary" field
-	// by calendar id (#289) — the Provider's own current name for the
-	// calendar, echoed on every response (Full and Delta alike), which a
-	// Linked Calendar's name tracks until it's renamed here. A calendar
-	// absent from this map gets no "summary" field at all, mirroring a
-	// response that omitted it.
+	// by calendar id — echoed on every response (Full and Delta alike) purely
+	// for wire-format realism; a Linked Calendar's name-follows-provider rule
+	// (#289) reads the calendarList entry's own summary/summaryOverride
+	// instead (getCalendarListEntry, already re-read every cycle for
+	// AccessRole), since this field never carries a summaryOverride the way
+	// calendarList's does. A calendar absent from this map gets no "summary"
+	// field at all, mirroring a response that omitted it.
 	eventsSummaryByCalendar map[string]string
 	// patchRequests records every events.patch request this server received
 	// (#290), in arrival order — a Write-back test's own assertion that the
@@ -164,7 +166,7 @@ type capturedGooglePatch struct {
 func newFakeGoogleServer(t *testing.T) *fakeGoogleServer {
 	t.Helper()
 
-	f := &fakeGoogleServer{refreshToken: "1/fake-refresh-token", email: "someone@gmail.com", scope: "openid email https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/calendar.calendarlist.readonly", nextSyncToken: "sync-token-1"}
+	f := &fakeGoogleServer{refreshToken: "1/fake-refresh-token", email: "someone@gmail.com", scope: "openid https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/calendar.calendarlist.readonly", nextSyncToken: "sync-token-1"}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/token", func(w http.ResponseWriter, r *http.Request) {
@@ -666,6 +668,26 @@ func TestConnectionService_Callback_RefusesInsufficientScopes(t *testing.T) {
 
 	if _, err := svc.Callback(context.Background(), "auth-code", state, "https://calendar.example.com/callback"); err == nil {
 		t.Fatalf("expected insufficient granted scopes to fail")
+	}
+}
+
+// TestConnectionService_Callback_AcceptsCanonicalEmailScope covers what real
+// Google actually echoes back for a requested "email" scope: the canonical
+// "https://www.googleapis.com/auth/userinfo.email", never the bare alias
+// (#285) — grantsRequiredScopes must recognize that as satisfying the
+// request, not treat every real connection as insufficiently scoped.
+func TestConnectionService_Callback_AcceptsCanonicalEmailScope(t *testing.T) {
+	google := newFakeGoogleServer(t)
+	google.scope = "openid https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/calendar.calendarlist.readonly"
+	svc, auth, userID := newTestConnectionService(t, google)
+
+	state, err := auth.IssueConnectState(userID)
+	if err != nil {
+		t.Fatalf("issue connect state: %v", err)
+	}
+
+	if _, err := svc.Callback(context.Background(), "auth-code", state, "https://calendar.example.com/callback"); err != nil {
+		t.Fatalf("expected Google's real canonical email scope to satisfy the request, got: %v", err)
 	}
 }
 

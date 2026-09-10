@@ -16,7 +16,19 @@ export default defineConfig({
       // (scripts/qa-env.sh) runs its own throwaway backend on another port so
       // it can't collide with the one you're running by hand — it points this
       // proxy at that one instead.
-      "/api": process.env.API_PROXY_TARGET ?? "http://localhost:8080",
+      "/api": {
+        target: process.env.API_PROXY_TARGET ?? "http://localhost:8080",
+        // changeOrigin defaults to true when Vite expands the string
+        // shorthand, which rewrites the Host header to the backend's own
+        // address. The backend's RequestBaseURL (server/internal/caldavserver/
+        // handler.go) trusts that header to reconstruct URLs it hands to
+        // third parties — e.g. the Google OAuth redirect_uri (#285) — so
+        // rewriting it here makes the backend build a callback URL that
+        // points at itself instead of at the Vite origin the browser is
+        // actually on. Forcing it false preserves the real Host, matching
+        // what a production reverse proxy is expected to forward.
+        changeOrigin: false,
+      },
     },
   },
   // The file extension picks the environment, so neither kind of test has to

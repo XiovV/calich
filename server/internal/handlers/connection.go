@@ -5,6 +5,7 @@ package handlers
 
 import (
 	"fmt"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -106,6 +107,7 @@ func (h *ConnectionHandler) Callback(w http.ResponseWriter, r *http.Request) {
 
 	connection, err := h.connections.Callback(r.Context(), code, state, connectRedirectURI(r))
 	if err != nil {
+		slog.Error("connecting a google account failed", "error", err)
 		http.Redirect(w, r, settingsConnectionsPath+"?connect_error=failed", http.StatusFound)
 		return
 	}
