@@ -197,19 +197,17 @@ type EventFields struct {
 	// Refresh reconciles by it rather than ever updating it in place.
 	ExternalUID *string
 	// ProviderEtag/RSVPStatus/ConferenceURL/GuestCount/ProviderColor mirror
-	// Event's own fields (#287, #289, ADR-0052, ADR-0075) — unlike
-	// ExternalUID, these are written on every Update too, since a Linked
-	// Calendar's Full Refresh must move them forward when the Provider's own
-	// copy changes. Update writes whatever this EventFields carries
-	// unconditionally, with no merge against the existing row — every caller
-	// today (SeriesWrite/OverrideWrite.fields()) either owns these fields (a
-	// Refresh) or leaves them at zero value (every other write path), and
-	// requireWritableCalendar's read-only clamp keeps the latter off a
-	// Linked Calendar's Events entirely. Write-back (ADR-0075) will change
-	// that: whichever write path it adds must read the existing row's
-	// values forward into its own EventFields first, or a plain field edit
-	// will silently null these out. ProviderColor in particular is never
-	// pushed back to the Provider — colour is one-way inbound (ADR-0075).
+	// Event's own fields (#287, #289, ADR-0052, ADR-0075) — set on Create,
+	// like ExternalUID, but unlike ExternalUID also ignored by Update
+	// (#298): Update's SQL simply doesn't reference these five columns, so
+	// no EventFields passed to it — however it carries these fields — can
+	// touch them. They move only through ApplyProviderOwnedFields,
+	// UpdateProviderEtag, and AdoptProviderIdentity, the three narrow
+	// writers built for exactly this, which makes "only Refresh and
+	// Write-back's own responses move these" true by construction rather
+	// than a carry-forward each caller must remember. ProviderColor in
+	// particular is never pushed back to the Provider — colour is one-way
+	// inbound (ADR-0075).
 	ProviderEtag  *string
 	RSVPStatus    *string
 	ConferenceURL *string
@@ -377,14 +375,18 @@ func (r *EventRepository) ListAllWithAnyReminder(ctx context.Context) ([]Event, 
 }
 
 // Update rewrites id's columns from f. f.ParentID and f.RecurrenceID are
-// ignored — see EventFields. sequence is the row's new iTIP SEQUENCE
+// ignored — see EventFields. So, also per EventFields' own doc comment, are
+// f.ProviderEtag/RSVPStatus/ConferenceURL/GuestCount/ProviderColor (#298):
+// this SQL simply has no column for them, so no caller of Update — however
+// it populates those fields on f — can zero a Linked Calendar's Provider
+// state with a plain edit. sequence is the row's new iTIP SEQUENCE
 // (ADR-0059, #201) — the caller decides its value (bumped on a material
 // change, left as-is otherwise), since only EventService knows whether f
 // differs from the row being replaced.
 func (r *EventRepository) Update(ctx context.Context, id string, f EventFields, changeSeq, sequence int64) (Event, error) {
 	res, err := r.db.ExecContext(ctx,
-		`UPDATE events SET calendar_id = ?, title = ?, "start" = ?, "end" = ?, all_day = ?, rrule = ?, tzid = ?, description = ?, location = ?, url = ?, color = ?, change_seq = ?, sequence = ?, provider_etag = ?, rsvp_status = ?, conference_url = ?, guest_count = ?, provider_color = ? WHERE id = ?`,
-		f.CalendarID, f.Title, f.Start.UTC(), f.End.UTC(), f.AllDay, f.Rrule, f.Tzid, f.Description, f.Location, f.URL, f.Color, changeSeq, sequence, f.ProviderEtag, f.RSVPStatus, f.ConferenceURL, f.GuestCount, f.ProviderColor, id,
+		`UPDATE events SET calendar_id = ?, title = ?, "start" = ?, "end" = ?, all_day = ?, rrule = ?, tzid = ?, description = ?, location = ?, url = ?, color = ?, change_seq = ?, sequence = ? WHERE id = ?`,
+		f.CalendarID, f.Title, f.Start.UTC(), f.End.UTC(), f.AllDay, f.Rrule, f.Tzid, f.Description, f.Location, f.URL, f.Color, changeSeq, sequence, id,
 	)
 	if err != nil {
 		return Event{}, fmt.Errorf("update event: %w", err)
@@ -434,16 +436,21 @@ func (r *EventRepository) AdoptProviderIdentity(ctx context.Context, id, externa
 	return requireAffected(res)
 }
 
-// ApplyProviderOwnedFields moves rsvpStatus/conferenceURL/guestCount
-// forward on id's row alone (#291, ADR-0075) — SendWriteBack's own
-// conflict-retry loop, reached after a 412 forces a refetch of the
-// Provider's current copy anyway. Deliberately narrower than Update: no
-// other column moves, and change_seq never bumps — these three are the
-// Provider's own read-only state, not a second edit to the Event.
-func (r *EventRepository) ApplyProviderOwnedFields(ctx context.Context, id string, rsvpStatus, conferenceURL *string, guestCount int) error {
+// ApplyProviderOwnedFields moves rsvpStatus/conferenceURL/guestCount/
+// providerColor forward on id's row alone (#291, #298, ADR-0075) — one of
+// upsertSeries' two narrow writers for a Refresh-reconciled update (the
+// other being UpdateProviderEtag), and also SendWriteBack's own
+// conflict-retry loop (reconcileProviderOwnedFields), reached after a 412
+// forces a refetch of the Provider's current copy anyway; that caller
+// passes the row's own already-stored providerColor back unchanged, since
+// colour there is governed by the until-touched rule the next ordinary
+// Refresh re-applies, not by a conflict retry. Deliberately narrower than
+// Update: no other column moves, and change_seq never bumps — these four
+// are the Provider's own read-only state, not a second edit to the Event.
+func (r *EventRepository) ApplyProviderOwnedFields(ctx context.Context, id string, rsvpStatus, conferenceURL *string, guestCount int, providerColor *string) error {
 	res, err := r.db.ExecContext(ctx,
-		`UPDATE events SET rsvp_status = ?, conference_url = ?, guest_count = ? WHERE id = ?`,
-		rsvpStatus, conferenceURL, guestCount, id,
+		`UPDATE events SET rsvp_status = ?, conference_url = ?, guest_count = ?, provider_color = ? WHERE id = ?`,
+		rsvpStatus, conferenceURL, guestCount, providerColor, id,
 	)
 	if err != nil {
 		return fmt.Errorf("apply provider-owned fields: %w", err)

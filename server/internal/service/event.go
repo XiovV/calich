@@ -908,22 +908,12 @@ func (s *EventService) Update(ctx context.Context, userID int64, id string, writ
 	// when it fires.
 	effects := classifyUpdate(existing, write)
 
-	// ProviderEtag/RSVPStatus/ConferenceURL/GuestCount/ProviderColor are a
-	// Linked Calendar's own Refresh-owned columns (#287, #289, ADR-0052,
-	// ADR-0075) — write.fields() carries none of them (every ordinary write
-	// path leaves them at zero value), and EventRepository.Update writes
-	// whatever EventFields it's given unconditionally, with no merge against
-	// the stored row. Without this, editing so much as the title of an Event
-	// on a Linked Calendar would silently null out its Provider RSVP,
-	// conference link, guest count and colour shadow. Carrying existing's
-	// values forward is a no-op for every Event this app itself owns, where
-	// both sides are already zero.
+	// write.fields() leaves ProviderEtag/RSVPStatus/ConferenceURL/GuestCount/
+	// ProviderColor at zero value, and repository.EventRepository.Update's
+	// SQL has no column for any of the five (#298) — a Linked Calendar's
+	// Refresh-owned state survives a plain field edit like this title-only
+	// one by construction, not by carrying existing's values forward here.
 	fields := write.fields()
-	fields.ProviderEtag = existing.ProviderEtag
-	fields.RSVPStatus = existing.RSVPStatus
-	fields.ConferenceURL = existing.ConferenceURL
-	fields.GuestCount = existing.GuestCount
-	fields.ProviderColor = existing.ProviderColor
 
 	// Write-back (#290, ADR-0075): an Event on a writable Linked Calendar gets
 	// its push queued in the very same transaction as the local write it

@@ -814,9 +814,10 @@ func TestEventRepository_MarkWriteBackFailed_NotFound(t *testing.T) {
 	}
 }
 
-// TestEventRepository_ApplyProviderOwnedFields covers #291's conflict-retry
-// helper: RSVPStatus/ConferenceURL/GuestCount move, and nothing else does —
-// in particular the title an ordinary Update would otherwise carry.
+// TestEventRepository_ApplyProviderOwnedFields covers #291/#298's
+// conflict-retry and Refresh-reconcile helper: RSVPStatus/ConferenceURL/
+// GuestCount/ProviderColor move, and nothing else does — in particular the
+// title an ordinary Update would otherwise carry.
 func TestEventRepository_ApplyProviderOwnedFields(t *testing.T) {
 	repo, userID, calendarID, _ := newTestEventRepository(t)
 	ctx := context.Background()
@@ -824,7 +825,8 @@ func TestEventRepository_ApplyProviderOwnedFields(t *testing.T) {
 
 	rsvp := "declined"
 	conferenceURL := "https://meet.example.com/xyz"
-	if err := repo.ApplyProviderOwnedFields(ctx, "evt-1", &rsvp, &conferenceURL, 5); err != nil {
+	providerColor := "#123456"
+	if err := repo.ApplyProviderOwnedFields(ctx, "evt-1", &rsvp, &conferenceURL, 5, &providerColor); err != nil {
 		t.Fatalf("apply provider-owned fields: %v", err)
 	}
 
@@ -840,6 +842,9 @@ func TestEventRepository_ApplyProviderOwnedFields(t *testing.T) {
 	}
 	if got.GuestCount != 5 {
 		t.Fatalf("expected GuestCount applied, got %d", got.GuestCount)
+	}
+	if got.ProviderColor == nil || *got.ProviderColor != "#123456" {
+		t.Fatalf("expected ProviderColor applied, got %v", got.ProviderColor)
 	}
 	if got.Title != "evt-1" {
 		t.Fatalf("expected the title left untouched, got %q", got.Title)

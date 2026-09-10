@@ -102,7 +102,7 @@ func (s *EventService) writeSeries(ctx context.Context, userID int64, calendarID
 		}
 
 		for _, w := range writes {
-			if err := s.upsertSeries(ctx, repos, calendarID, uuid.NewString(), userID, reminderUserID, seq, w, false); err != nil {
+			if err := s.upsertSeries(ctx, repos, calendarID, uuid.NewString(), userID, reminderUserID, seq, w, false, false); err != nil {
 				return err
 			}
 		}
@@ -217,7 +217,7 @@ func (s *EventService) createSubscribedSeries(ctx context.Context, repos txRepos
 	if err != nil {
 		return err
 	}
-	return s.upsertSeries(ctx, repos, calendarID, uuid.NewString(), userID, ownerID, seq, write, false)
+	return s.upsertSeries(ctx, repos, calendarID, uuid.NewString(), userID, ownerID, seq, write, false, true)
 }
 
 // updateSubscribedSeries updates masterID's row and its Overrides in place
@@ -235,7 +235,7 @@ func (s *EventService) updateSubscribedSeries(ctx context.Context, repos txRepos
 	if err != nil {
 		return err
 	}
-	return s.upsertSeries(ctx, repos, calendarID, masterID, userID, ownerID, seq, write, false)
+	return s.upsertSeries(ctx, repos, calendarID, masterID, userID, ownerID, seq, write, false, true)
 }
 
 // tombstoneSubscribedSeries deletes masterID outright (cascading to its
@@ -550,7 +550,23 @@ func validateSeriesWrite(write *SeriesWrite) error {
 // User's Calendar default must stay free to keep applying wherever the
 // import or feed didn't itself specify one — writeSeries,
 // createSubscribedSeries, and updateSubscribedSeries all pass false.
-func (s *EventService) upsertSeries(ctx context.Context, repos txRepos, calendarID, masterID string, userID, reminderUserID, seq int64, write SeriesWrite, markExplicit bool) error {
+//
+// providerOwned decides whether an existing Master/Override's update also
+// moves ProviderEtag/RSVPStatus/ConferenceURL/GuestCount/ProviderColor
+// forward, via ApplyProviderOwnedFields and UpdateProviderEtag (#298,
+// ADR-0075) — repository.EventRepository.Update's SQL no longer has a
+// column for any of the five, so skipping this for a caller that doesn't
+// own fresh Provider data (writeSeries, PutSeries) is what makes their zero
+// values structurally unable to blank a Linked Calendar's stored ones,
+// rather than relying on write.fields() happening to leave them zero today.
+// createSubscribedSeries and updateSubscribedSeries pass true: their write
+// comes from ReconcileSeries' own diff against a fresh Provider fetch (or,
+// for a plain ICS Subscription, from a source that never sets these fields
+// at all, so moving its zero values forward is a no-op). Never needed on a
+// Create branch — repository.EventRepository.Create's SQL still writes
+// these columns directly from f, correctly, since a freshly-minted row has
+// no prior value to protect.
+func (s *EventService) upsertSeries(ctx context.Context, repos txRepos, calendarID, masterID string, userID, reminderUserID, seq int64, write SeriesWrite, markExplicit, providerOwned bool) error {
 	// masterID missing is create-vs-update's only signal, deliberately —
 	// including for updateSubscribedSeries's caller (ReconcileSubscribedSeries),
 	// which believes masterID already exists: recreating a row unexpectedly
@@ -573,6 +589,14 @@ func (s *EventService) upsertSeries(ctx context.Context, repos txRepos, calendar
 		// material-change detected, unlike EventService.Update's own bump.
 		if _, err := repos.events.Update(ctx, masterID, master, seq, existingMaster.Sequence); err != nil {
 			return fmt.Errorf("update master: %w", err)
+		}
+		if providerOwned {
+			if err := repos.events.ApplyProviderOwnedFields(ctx, masterID, master.RSVPStatus, master.ConferenceURL, master.GuestCount, master.ProviderColor); err != nil {
+				return fmt.Errorf("apply master provider-owned fields: %w", err)
+			}
+			if err := repos.events.UpdateProviderEtag(ctx, masterID, master.ProviderEtag); err != nil {
+				return fmt.Errorf("update master provider etag: %w", err)
+			}
 		}
 	} else {
 		if _, err := repos.events.Create(ctx, masterID, &userID, master, seq); err != nil {
@@ -627,6 +651,14 @@ func (s *EventService) upsertSeries(ctx context.Context, repos txRepos, calendar
 		if existing, ok := existingByRecurrenceID[key]; ok {
 			if _, err := repos.events.Update(ctx, existing.ID, override, seq, existing.Sequence); err != nil {
 				return fmt.Errorf("update override: %w", err)
+			}
+			if providerOwned {
+				if err := repos.events.ApplyProviderOwnedFields(ctx, existing.ID, override.RSVPStatus, override.ConferenceURL, override.GuestCount, override.ProviderColor); err != nil {
+					return fmt.Errorf("apply override provider-owned fields: %w", err)
+				}
+				if err := repos.events.UpdateProviderEtag(ctx, existing.ID, override.ProviderEtag); err != nil {
+					return fmt.Errorf("update override provider etag: %w", err)
+				}
 			}
 			if err := repos.reminders.ReplaceByEventID(ctx, reminderUserID, existing.ID, o.Reminders); err != nil {
 				return fmt.Errorf("persist override reminders: %w", err)
@@ -718,7 +750,7 @@ func (s *EventService) PutSeries(ctx context.Context, userID int64, calendarID, 
 		// PUTting User's own Reminders, not the Calendar's Owner's
 		// (ADR-0064) — hence userID for both userID and reminderUserID, and
 		// markExplicit true (see upsertSeries' doc comment).
-		return s.upsertSeries(ctx, repos, calendarID, masterID, userID, userID, seq, write, true)
+		return s.upsertSeries(ctx, repos, calendarID, masterID, userID, userID, seq, write, true, false)
 	})
 	if err != nil {
 		return repository.Event{}, nil, fmt.Errorf("put series: %w", err)

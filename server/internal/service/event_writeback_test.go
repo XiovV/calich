@@ -357,6 +357,213 @@ func TestEventService_Update_CarriesForwardProviderOwnedFields(t *testing.T) {
 	}
 }
 
+// TestEventService_UpsertSeries_NeverWritesProviderOwnedFieldsWhenNotProviderOwned
+// is #298's structural guarantee, exercised directly at upsertSeries' own
+// seam rather than through EventService.Update: a write shaped like a
+// CalDAV PUT or an ICS import — carrying zero Provider-owned fields, exactly
+// what SeriesWrite.fields() produces for every caller but a Refresh
+// reconcile — must never blank a Linked Calendar Master's stored Provider
+// state. repository.EventRepository.Update has no column for any of the
+// five, and upsertSeries only calls the narrow writers that do
+// (ApplyProviderOwnedFields, UpdateProviderEtag) when providerOwned is
+// true, so this survives by construction rather than by upsertSeries
+// remembering to carry the old values forward.
+func TestEventService_UpsertSeries_NeverWritesProviderOwnedFieldsWhenNotProviderOwned(t *testing.T) {
+	g := newTestGraph(t)
+	userID, calendarID := newTestLinkedCalendar(t, g, repository.SourceModeWritable)
+	event := seedLinkedMaster(t, g, userID, calendarID, "evt-linked-upsert")
+	ctx := context.Background()
+
+	err := g.Events.withTx(ctx, func(repos txRepos) error {
+		seq, err := repos.sync.NextChangeSeq(ctx)
+		if err != nil {
+			return err
+		}
+		write := SeriesWrite{Title: "Renamed only", Start: event.Start, End: event.End}
+		return g.Events.upsertSeries(ctx, repos, calendarID, event.ID, userID, userID, seq, write, false, false)
+	})
+	if err != nil {
+		t.Fatalf("upsert series: %v", err)
+	}
+
+	got, err := g.EventRepo.GetByID(ctx, event.ID)
+	if err != nil {
+		t.Fatalf("get event: %v", err)
+	}
+	if got.Title != "Renamed only" {
+		t.Fatalf("expected the title to update, got %q", got.Title)
+	}
+	if got.RSVPStatus == nil || *got.RSVPStatus != "accepted" {
+		t.Fatalf("expected RSVPStatus to survive, got %v", got.RSVPStatus)
+	}
+	if got.ConferenceURL == nil || *got.ConferenceURL != "https://meet.example.com/abc" {
+		t.Fatalf("expected ConferenceURL to survive, got %v", got.ConferenceURL)
+	}
+	if got.GuestCount != 3 {
+		t.Fatalf("expected GuestCount to survive, got %d", got.GuestCount)
+	}
+	if got.ProviderEtag == nil || *got.ProviderEtag != "etag-1" {
+		t.Fatalf("expected ProviderEtag to survive, got %v", got.ProviderEtag)
+	}
+}
+
+// TestEventService_ReconcileSubscribedSeries_MovesProviderOwnedFieldsForwardOnUpdate
+// is Full/Delta Refresh's own forward-movement path (#298, ADR-0075):
+// ReconcileSubscribedSeries' update branch (providerOwned=true in
+// upsertSeries) must still move a fresh Provider fetch's RSVPStatus/
+// ConferenceURL/GuestCount/ProviderEtag/ProviderColor onto an existing
+// Master, now that repository.EventRepository.Update itself no longer
+// touches those columns — this is the acceptance criterion that the
+// existing Write-back and Refresh suites must stay green against.
+func TestEventService_ReconcileSubscribedSeries_MovesProviderOwnedFieldsForwardOnUpdate(t *testing.T) {
+	g := newTestGraph(t)
+	userID, calendarID := newTestLinkedCalendar(t, g, repository.SourceModeWritable)
+	event := seedLinkedMaster(t, g, userID, calendarID, "evt-linked-refresh")
+	ctx := context.Background()
+
+	newRSVP := "declined"
+	newConference := "https://meet.example.com/fresh"
+	newEtag := "etag-2"
+	newColor := "#abcdef"
+	result := ReconcileResult{
+		Upserts: []SeriesUpsert{
+			{
+				MasterID: event.ID,
+				Write: SeriesWrite{
+					Title: event.Title, Start: event.Start, End: event.End,
+					ExternalUID:   *event.ExternalUID,
+					ProviderEtag:  &newEtag,
+					RSVPStatus:    &newRSVP,
+					ConferenceURL: &newConference,
+					GuestCount:    7,
+					ProviderColor: &newColor,
+				},
+			},
+		},
+	}
+
+	summary, err := g.Events.ReconcileSubscribedSeries(ctx, userID, calendarID, result)
+	if err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if summary.Updated != 1 {
+		t.Fatalf("expected 1 update, got %+v", summary)
+	}
+
+	got, err := g.EventRepo.GetByID(ctx, event.ID)
+	if err != nil {
+		t.Fatalf("get event: %v", err)
+	}
+	if got.RSVPStatus == nil || *got.RSVPStatus != newRSVP {
+		t.Fatalf("expected RSVPStatus to move forward, got %v", got.RSVPStatus)
+	}
+	if got.ConferenceURL == nil || *got.ConferenceURL != newConference {
+		t.Fatalf("expected ConferenceURL to move forward, got %v", got.ConferenceURL)
+	}
+	if got.GuestCount != 7 {
+		t.Fatalf("expected GuestCount to move forward, got %d", got.GuestCount)
+	}
+	if got.ProviderEtag == nil || *got.ProviderEtag != newEtag {
+		t.Fatalf("expected ProviderEtag to move forward, got %v", got.ProviderEtag)
+	}
+	if got.ProviderColor == nil || *got.ProviderColor != newColor {
+		t.Fatalf("expected ProviderColor to move forward, got %v", got.ProviderColor)
+	}
+}
+
+// TestEventService_UpsertSeries_NeverWritesProviderOwnedFieldsOnOverrideWhenNotProviderOwned
+// is the Override branch's own copy of the Master test above (#298): an
+// Override's Provider-owned fields live at a different row id than its
+// Master's, reached by upsertSeries' separate existing-Override-found
+// branch, so it needs its own construction check rather than trusting the
+// Master branch's coverage to stand in for it.
+func TestEventService_UpsertSeries_NeverWritesProviderOwnedFieldsOnOverrideWhenNotProviderOwned(t *testing.T) {
+	g := newTestGraph(t)
+	userID, calendarID := newTestLinkedCalendar(t, g, repository.SourceModeWritable)
+	ctx := context.Background()
+
+	masterStart := time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC)
+	masterID := "evt-linked-master-for-override"
+	externalUID := "google-event-series-1"
+	seq, err := g.SyncRepo.NextChangeSeq(ctx)
+	if err != nil {
+		t.Fatalf("next change seq: %v", err)
+	}
+	if _, err := g.EventRepo.Create(ctx, masterID, &userID, repository.EventFields{
+		CalendarID:  calendarID,
+		Title:       "Standup",
+		Start:       masterStart,
+		End:         masterStart.Add(30 * time.Minute),
+		Rrule:       "FREQ=DAILY",
+		ExternalUID: &externalUID,
+	}, seq); err != nil {
+		t.Fatalf("seed master: %v", err)
+	}
+
+	recurrenceID := masterStart.AddDate(0, 0, 1)
+	overrideID := "evt-linked-override"
+	overrideStart := recurrenceID.Add(time.Hour)
+	rsvp := "accepted"
+	conferenceURL := "https://meet.example.com/override"
+	etag := "override-etag-1"
+	seq, err = g.SyncRepo.NextChangeSeq(ctx)
+	if err != nil {
+		t.Fatalf("next change seq: %v", err)
+	}
+	if _, err := g.EventRepo.Create(ctx, overrideID, &userID, repository.EventFields{
+		CalendarID:    calendarID,
+		Title:         "Standup (moved)",
+		Start:         overrideStart,
+		End:           overrideStart.Add(30 * time.Minute),
+		ParentID:      &masterID,
+		RecurrenceID:  &recurrenceID,
+		ExternalUID:   &externalUID,
+		ProviderEtag:  &etag,
+		RSVPStatus:    &rsvp,
+		ConferenceURL: &conferenceURL,
+		GuestCount:    2,
+	}, seq); err != nil {
+		t.Fatalf("seed override: %v", err)
+	}
+
+	err = g.Events.withTx(ctx, func(repos txRepos) error {
+		seq, err := repos.sync.NextChangeSeq(ctx)
+		if err != nil {
+			return err
+		}
+		write := SeriesWrite{
+			Title: "Standup", Start: masterStart, End: masterStart.Add(30 * time.Minute), Rrule: "FREQ=DAILY",
+			Overrides: []OverrideWrite{
+				{RecurrenceID: recurrenceID, Title: "Standup (renamed only)", Start: overrideStart, End: overrideStart.Add(30 * time.Minute)},
+			},
+		}
+		return g.Events.upsertSeries(ctx, repos, calendarID, masterID, userID, userID, seq, write, false, false)
+	})
+	if err != nil {
+		t.Fatalf("upsert series: %v", err)
+	}
+
+	got, err := g.EventRepo.GetByID(ctx, overrideID)
+	if err != nil {
+		t.Fatalf("get override: %v", err)
+	}
+	if got.Title != "Standup (renamed only)" {
+		t.Fatalf("expected the title to update, got %q", got.Title)
+	}
+	if got.RSVPStatus == nil || *got.RSVPStatus != "accepted" {
+		t.Fatalf("expected override RSVPStatus to survive, got %v", got.RSVPStatus)
+	}
+	if got.ConferenceURL == nil || *got.ConferenceURL != "https://meet.example.com/override" {
+		t.Fatalf("expected override ConferenceURL to survive, got %v", got.ConferenceURL)
+	}
+	if got.GuestCount != 2 {
+		t.Fatalf("expected override GuestCount to survive, got %d", got.GuestCount)
+	}
+	if got.ProviderEtag == nil || *got.ProviderEtag != "override-etag-1" {
+		t.Fatalf("expected override ProviderEtag to survive, got %v", got.ProviderEtag)
+	}
+}
+
 // TestEventService_PutSeries_RefusesConnectionCalendarMatchingCalDAVsPosture
 // covers the CalDAV write seam directly (#290): a CalDAV PUT onto a Linked
 // Calendar is refused independent of Exposure (ADR-0080) or the Source's

@@ -375,7 +375,7 @@ func (s *ConnectionService) sendWriteBackUpsert(ctx context.Context, msg reposit
 		}
 		mapped := toGoogleEvent(fresh)
 		etag = googleEtag(mapped.ETag)
-		if err := s.reconcileProviderOwnedFields(ctx, event.ID, mapped); err != nil {
+		if err := s.reconcileProviderOwnedFields(ctx, event.ID, mapped, event.ProviderColor); err != nil {
 			return err
 		}
 	}
@@ -516,7 +516,7 @@ func (s *ConnectionService) sendWriteBackInstance(ctx context.Context, msg repos
 		}
 		mapped := toGoogleEvent(fresh)
 		etag = googleEtag(mapped.ETag)
-		if err := s.reconcileProviderOwnedFields(ctx, override.ID, mapped); err != nil {
+		if err := s.reconcileProviderOwnedFields(ctx, override.ID, mapped, override.ProviderColor); err != nil {
 			return err
 		}
 	}
@@ -627,14 +627,15 @@ func (s *ConnectionService) sendWriteBackInstanceCancel(ctx context.Context, msg
 // pending edit about to be re-pushed with the fresh etag, or (colour)
 // governed by the until-touched rule the next ordinary Refresh already
 // re-applies within minutes, so this narrower, more time-critical path has
-// no need to duplicate it. RSVPStatus, ConferenceURL and GuestCount are the
-// Provider's alone, never this app's to have an opinion about, so they
-// always move forward unconditionally, exactly as an ordinary Refresh
-// already applies them.
-func (s *ConnectionService) reconcileProviderOwnedFields(ctx context.Context, id string, fresh googleEvent) error {
+// no need to duplicate it: providerColor is the caller's own already-stored
+// value, passed straight back rather than derived from fresh. RSVPStatus,
+// ConferenceURL and GuestCount are the Provider's alone, never this app's to
+// have an opinion about, so they always move forward unconditionally,
+// exactly as an ordinary Refresh already applies them.
+func (s *ConnectionService) reconcileProviderOwnedFields(ctx context.Context, id string, fresh googleEvent, providerColor *string) error {
 	rsvp, guestCount := googleGuestInfo(fresh.Attendees)
 	conferenceURL := googleConferenceURL(fresh.ConferenceData)
-	return s.events.ApplyProviderOwnedFields(ctx, id, rsvp, conferenceURL, guestCount)
+	return s.events.ApplyProviderOwnedFields(ctx, id, rsvp, conferenceURL, guestCount, providerColor)
 }
 
 // markWriteBackPermanentlyFailed records a Write-back push that will never
