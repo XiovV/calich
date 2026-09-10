@@ -640,22 +640,50 @@ func (s *ConnectionService) reconcileProviderOwnedFields(ctx context.Context, id
 
 // markWriteBackPermanentlyFailed records a Write-back push that will never
 // reach the Provider on its own (#291, ADR-0075, ADR-0076): a per-Event
-// marker (EventService.MarkWriteBackFailed) so the grid can show it, and the
+// marker (EventService.MarkWriteBackFailed) so the grid can show it, the
 // affected Linked Calendar's Source raised into needs-attention
 // (CalendarService.RecordWriteBackFailure) so the sidebar's existing
 // broken-Source badge — already rendered for a failed Refresh — picks this
-// up too. Tolerant of the Event or its Calendar having vanished since (a
-// concurrent delete, an unshared or moved Calendar): there is nothing left
-// to mark, which is success, not failure. Always returns nil on the
-// happy/tolerant path so every caller can hand it straight back to the
-// outbox Worker as "msg is handled" — retrying a push that would only ever
-// fail the same way again serves nobody.
+// up too, and a Notification (#299, ADR-0081) so a phone, which has no
+// protocol affordance to learn its own edit never reached Google, has
+// somewhere to learn it at all. Tolerant of the Event or its Calendar having
+// vanished since (a concurrent delete, an unshared or moved Calendar): there
+// is nothing left to mark, which is success, not failure. Always returns nil
+// on the happy/tolerant path so every caller can hand it straight back to
+// the outbox Worker as "msg is handled" — retrying a push that would only
+// ever fail the same way again serves nobody.
 func (s *ConnectionService) markWriteBackPermanentlyFailed(ctx context.Context, userID int64, eventID, calendarID, reason string) error {
 	if err := s.events.MarkWriteBackFailed(ctx, eventID, reason); err != nil && !errors.Is(err, repository.ErrNotFound) {
 		return fmt.Errorf("mark event write-back failed: %w", err)
 	}
 	if err := s.calendars.RecordWriteBackFailure(ctx, userID, calendarID, ErrorClassNeedsAttention, reason); err != nil && !errors.Is(err, repository.ErrNotFound) {
 		return fmt.Errorf("record write-back failure on source: %w", err)
+	}
+	if err := s.raiseWriteBackFailureNotification(ctx, userID, calendarID); err != nil {
+		return err
+	}
+	return nil
+}
+
+// raiseWriteBackFailureNotification upserts the coalesced-on-the-Source
+// Notification markWriteBackPermanentlyFailed's own doc comment describes
+// (#299, ADR-0081): re-raising the same Calendar's failure — a dead grant
+// failing every one of its queued pushes in the same instant — upserts the
+// one existing row (repository.NotificationRepository.UpsertWriteBackFailure's
+// own partial unique index) rather than adding a Notification per Event.
+// Tolerant of the Calendar having vanished since, mirroring every other step
+// markWriteBackPermanentlyFailed already takes.
+func (s *ConnectionService) raiseWriteBackFailureNotification(ctx context.Context, userID int64, calendarID string) error {
+	calendar, err := s.calendars.GetByIDUnchecked(ctx, calendarID)
+	if err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			return nil
+		}
+		return fmt.Errorf("load calendar for write-back failure notification: %w", err)
+	}
+	title := fmt.Sprintf("%q could not be synced to Google", calendar.Name)
+	if _, err := s.notifications.UpsertWriteBackFailure(ctx, userID, calendarID, title, s.now()); err != nil {
+		return fmt.Errorf("raise write-back failure notification: %w", err)
 	}
 	return nil
 }

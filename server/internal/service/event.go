@@ -99,6 +99,15 @@ var (
 	// or events.patch status:cancelled), and split a series ("this and
 	// following", performed by hand — see ReparentFrom).
 	ErrLinkedCalendarWriteUnsupported = errors.New("this kind of write is not yet supported on a linked calendar")
+	// ErrLinkedCalendarWriteBackRevertUnsupported is returned by PutSeries
+	// when a CalDAV PUT to a writable Linked Calendar would revert an
+	// Override back to its Master's rule, or un-cancel an Exception (#299,
+	// ADR-0081): both are expressible at Google (patch an instance back to
+	// the master's values; patch a cancelled instance back to confirmed) but
+	// deliberately deferred, being the two rarest things a phone does.
+	// Returned before any local write, so the refused PUT leaves the stored
+	// series unchanged rather than partially applying.
+	ErrLinkedCalendarWriteBackRevertUnsupported = errors.New("restoring a cancelled or overridden occurrence is not yet supported on a linked calendar")
 	// ErrConnectionNeedsReconnect is returned by Update when write.CalendarID
 	// carries a Connection-kind Source whose Connection has moved off
 	// ConnectionStatusLive (#291, ADR-0075): a Connection that no longer

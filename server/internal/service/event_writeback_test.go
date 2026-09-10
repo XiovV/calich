@@ -380,7 +380,7 @@ func TestEventService_UpsertSeries_NeverWritesProviderOwnedFieldsWhenNotProvider
 			return err
 		}
 		write := SeriesWrite{Title: "Renamed only", Start: event.Start, End: event.End}
-		return g.Events.upsertSeries(ctx, repos, calendarID, event.ID, userID, userID, seq, write, false, false)
+		return g.Events.upsertSeries(ctx, repos, calendarID, event.ID, userID, userID, seq, write, false, false, nil)
 	})
 	if err != nil {
 		t.Fatalf("upsert series: %v", err)
@@ -537,7 +537,7 @@ func TestEventService_UpsertSeries_NeverWritesProviderOwnedFieldsOnOverrideWhenN
 				{RecurrenceID: recurrenceID, Title: "Standup (renamed only)", Start: overrideStart, End: overrideStart.Add(30 * time.Minute)},
 			},
 		}
-		return g.Events.upsertSeries(ctx, repos, calendarID, masterID, userID, userID, seq, write, false, false)
+		return g.Events.upsertSeries(ctx, repos, calendarID, masterID, userID, userID, seq, write, false, false, nil)
 	})
 	if err != nil {
 		t.Fatalf("upsert series: %v", err)
@@ -564,18 +564,18 @@ func TestEventService_UpsertSeries_NeverWritesProviderOwnedFieldsOnOverrideWhenN
 	}
 }
 
-// TestEventService_PutSeries_RefusesConnectionCalendarMatchingCalDAVsPosture
-// covers the CalDAV write seam directly (#290): a CalDAV PUT onto a Linked
-// Calendar is refused independent of Exposure (ADR-0080) or the Source's
-// mode, since Write-back (ADR-0075) is the only path meant to carry an edit
-// to the Provider — but PutCalendarObject itself resolves calendarID
-// straight off the request path with no re-check of its own, so a client
-// holding a cached or guessed path could otherwise still reach PutSeries
-// directly once the Calendar's Source is writable. Expects
-// repository.ErrNotFound, matching GetCalendar's own posture (a Calendar
-// that "doesn't exist" to CalDAV, not one that exists but refuses the
-// write).
-func TestEventService_PutSeries_RefusesConnectionCalendarMatchingCalDAVsPosture(t *testing.T) {
+// TestEventService_PutSeries_RefusesUnexposedConnectionCalendarMatchingCalDAVsPosture
+// covers the CalDAV write seam directly: a CalDAV PUT onto a writable Linked
+// Calendar the requesting principal hasn't turned Exposure on for is refused
+// exactly as GetCalendar/AccessWithExposure already treat it (ADR-0080) — the
+// collection wasn't in their home-set to PUT into in the first place. This
+// used to be an unconditional refusal regardless of Exposure (#290); #299/
+// ADR-0081 compiles the PUT into Write-back pushes once Exposure and Access
+// both say yes — see event_put_series_writeback_test.go for that path.
+// Expects repository.ErrNotFound, matching GetCalendar's own posture (a
+// Calendar that "doesn't exist" to CalDAV, not one that exists but refuses
+// the write).
+func TestEventService_PutSeries_RefusesUnexposedConnectionCalendarMatchingCalDAVsPosture(t *testing.T) {
 	g := newTestGraph(t)
 	userID, calendarID := newTestLinkedCalendar(t, g, repository.SourceModeWritable)
 

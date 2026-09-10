@@ -101,7 +101,7 @@ func TestNotificationHandler_ListReturnsRecentNotificationsNewestFirst(t *testin
 	if len(got) != 1 {
 		t.Fatalf("expected 1 notification, got %+v", got)
 	}
-	if got[0].Title != "Standup" || got[0].EventID != eventID || got[0].Seen {
+	if got[0].Title != "Standup" || got[0].EventID == nil || *got[0].EventID != eventID || got[0].Seen {
 		t.Fatalf("unexpected notification: %+v", got[0])
 	}
 	if got[0].Kind != "reminder" || got[0].OccurrenceStart == nil {

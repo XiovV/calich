@@ -16,7 +16,7 @@ type fakeNotificationInserter struct {
 }
 
 func (f *fakeNotificationInserter) Insert(_ context.Context, userID int64, eventID string, occurrenceStart time.Time, title string, firedAt time.Time) (repository.Notification, error) {
-	n := repository.Notification{UserID: userID, EventID: eventID, OccurrenceStart: &occurrenceStart, Title: title, FiredAt: firedAt}
+	n := repository.Notification{UserID: userID, EventID: &eventID, OccurrenceStart: &occurrenceStart, Title: title, FiredAt: firedAt}
 	f.inserts = append(f.inserts, n)
 	return n, nil
 }
@@ -45,7 +45,7 @@ func TestNotificationDispatcher_NotificationChannelInsertsANotification(t *testi
 		t.Fatalf("expected 1 notification insert, got %+v", inserter.inserts)
 	}
 	got := inserter.inserts[0]
-	if got.UserID != 7 || got.EventID != "evt-1" || got.Title != "Standup" || !got.FiredAt.Equal(fixedNow) {
+	if got.UserID != 7 || got.EventID == nil || *got.EventID != "evt-1" || got.Title != "Standup" || !got.FiredAt.Equal(fixedNow) {
 		t.Fatalf("unexpected inserted notification: %+v", got)
 	}
 	if len(fallback.dispatched) != 0 {

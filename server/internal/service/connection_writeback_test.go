@@ -33,7 +33,7 @@ func newTestConnectionServiceForWriteBack(t *testing.T, google *fakeGoogleServer
 	}
 
 	connections := repository.NewConnectionRepository(g.DB)
-	svc = NewConnectionService(connections, g.Auth, g.Calendars, g.Events, "test-client-id", "test-client-secret", "test-encryption-key", true,
+	svc = NewConnectionService(connections, g.Auth, g.Calendars, g.Events, g.NotificationRepo, "test-client-id", "test-client-secret", "test-encryption-key", true,
 		withGoogleHTTPClient(google.Client()),
 		withGoogleEndpoints(google.URL+"/authorize", google.URL+"/token", google.URL+"/userinfo", google.URL+"/calendarList"),
 		withGoogleEventsURL(google.URL),
@@ -381,6 +381,31 @@ func TestConnectionService_SendWriteBack_MarksPermanentlyFailedAfterThreeConflic
 	}
 	if source.ErrorClass == nil || *source.ErrorClass != ErrorClassNeedsAttention {
 		t.Fatalf("expected the Source raised into needs-attention, got %v", source.ErrorClass)
+	}
+
+	// #299/ADR-0081: the same permanent failure also raises a Notification,
+	// coalesced on the Calendar rather than the Event — the only surface a
+	// phone (no per-Event marker of its own to look at) has to learn its
+	// edit never reached Google.
+	notifications, err := g.NotificationRepo.ListRecentByUser(ctx, userID, 10)
+	if err != nil {
+		t.Fatalf("list notifications: %v", err)
+	}
+	var writeBackFailures int
+	for _, n := range notifications {
+		if n.Kind != repository.KindWriteBackFailed {
+			continue
+		}
+		writeBackFailures++
+		if n.CalendarID == nil || *n.CalendarID != calendar.ID {
+			t.Fatalf("expected the notification to name calendar %q, got %v", calendar.ID, n.CalendarID)
+		}
+		if n.EventID != nil {
+			t.Fatalf("expected a nil event id, got %v", n.EventID)
+		}
+	}
+	if writeBackFailures != 1 {
+		t.Fatalf("expected exactly one write-back-failed notification, got %d in %+v", writeBackFailures, notifications)
 	}
 }
 

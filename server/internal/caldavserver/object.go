@@ -118,14 +118,13 @@ func (b *Backend) currentObjectETag(ctx context.Context, userID int64, calendarI
 		return false, "", nil
 	}
 
-	// A Linked Calendar's object path answers not-exists here regardless of
-	// Exposure (ADR-0080) or the Source's mode: both the PUT precondition
-	// and DeleteCalendarObject must treat it as a 404 rather than letting
-	// EventService.Delete's own writable-Linked-Calendar path run from a
-	// CalDAV request, which would bypass Write-back entirely (#292).
-	// PutSeries takes the same posture directly. Exposure can make the
-	// collection itself discoverable (#297); accepting an object write or
-	// delete on it is #299's to build.
+	// A Linked Calendar's object path answers not-exists exactly when
+	// Exposure says so (ADR-0080, #299, ADR-0081) — mirroring
+	// GetCalendar/AccessWithExposure's own posture, not a blanket refusal:
+	// PutSeries and EventService.Delete each apply their own write guard
+	// (Access, the Connection's own liveness, PutSeries' diff refusals)
+	// once the object is visible at all. This is visibility only; a Viewer
+	// Share on an exposed Linked Calendar still 403s the write itself.
 	cal, err := b.calendars.Get(ctx, userID, calendarID)
 	if err != nil {
 		if errors.Is(err, repository.ErrNotFound) {
@@ -134,7 +133,14 @@ func (b *Backend) currentObjectETag(ctx context.Context, userID int64, calendarI
 		return false, "", fmt.Errorf("get calendar: %w", err)
 	}
 	if cal.Source != nil && cal.Source.Kind == repository.SourceKindConnection {
-		return false, "", nil
+		isOwner := cal.UserID == userID
+		exposed, err := b.calendars.ResolveExposure(ctx, userID, cal, isOwner)
+		if err != nil {
+			return false, "", fmt.Errorf("resolve calendar exposure: %w", err)
+		}
+		if !exposed {
+			return false, "", nil
+		}
 	}
 
 	ics, _, err := icalendar.SeriesToICal(master, overrides, icalendar.CalDAVTarget(attachmentsURIPrefix(ctx)))
@@ -188,14 +194,19 @@ func seriesWriteFromParsed(parsed *icalendar.ParsedSeries) service.SeriesWrite {
 // mapPutSeriesError maps PutSeries' validation/lookup errors onto the HTTP
 // status a CalDAV client expects: a bad request body is 400, an unresolved
 // calendar or an id naming an Override is 404 (matching GetCalendarObject),
-// and a Subscribed Calendar's collection is 403 (ADR-0032) — it exists and
-// is visible, the write is simply refused.
+// a Subscribed Calendar's collection or a delta this app can't yet push to a
+// writable Linked Calendar's Provider is 403 (ADR-0032, #299/ADR-0081) —
+// the collection exists and is visible, the write is simply refused — and a
+// Linked Calendar whose Connection needs reconnecting is 409, mirroring the
+// REST API's own mapping (handlers/event.go) for the same sentinel.
 func mapPutSeriesError(err error) error {
 	switch {
-	case errors.Is(err, service.ErrCalendarReadOnly):
+	case errors.Is(err, service.ErrCalendarReadOnly), errors.Is(err, service.ErrLinkedCalendarWriteBackRevertUnsupported):
 		return webdav.NewHTTPError(http.StatusForbidden, err)
 	case errors.Is(err, service.ErrCalendarNotFound), errors.Is(err, service.ErrParentIsOverride), errors.Is(err, repository.ErrNotFound):
 		return webdav.NewHTTPError(http.StatusNotFound, err)
+	case errors.Is(err, service.ErrConnectionNeedsReconnect):
+		return webdav.NewHTTPError(http.StatusConflict, err)
 	case errors.Is(err, service.ErrInvalidTitle),
 		errors.Is(err, service.ErrInvalidTimeRange),
 		errors.Is(err, service.ErrInvalidRecurrenceRule),
@@ -247,6 +258,12 @@ func (b *Backend) DeleteCalendarObject(ctx context.Context, path string) error {
 	if err := b.events.Delete(ctx, userID, masterID); err != nil {
 		if errors.Is(err, service.ErrCalendarReadOnly) {
 			return webdav.NewHTTPError(http.StatusForbidden, err)
+		}
+		// Mirrors mapPutSeriesError's own mapping for the same sentinel
+		// (#299, ADR-0081) — a Connection whose grant needs reconnecting
+		// refuses a new Write-back rather than queuing one that can't land.
+		if errors.Is(err, service.ErrConnectionNeedsReconnect) {
+			return webdav.NewHTTPError(http.StatusConflict, err)
 		}
 		return fmt.Errorf("delete calendar object: %w", err)
 	}

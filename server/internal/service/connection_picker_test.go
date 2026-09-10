@@ -43,7 +43,7 @@ func newTestConnectionServiceWithGraph(t *testing.T, google *fakeGoogleServer, o
 		withGoogleEndpoints(google.URL+"/authorize", google.URL+"/token", google.URL+"/userinfo", google.URL+"/calendarList"),
 		withGoogleEventsURL(google.URL),
 	}, opts...)
-	svc = NewConnectionService(connections, g.Auth, g.Calendars, g.Events, "test-client-id", "test-client-secret", "test-encryption-key", true, allOpts...)
+	svc = NewConnectionService(connections, g.Auth, g.Calendars, g.Events, g.NotificationRepo, "test-client-id", "test-client-secret", "test-encryption-key", true, allOpts...)
 
 	return svc, g.Auth, user.ID, workspace.ID, g
 }

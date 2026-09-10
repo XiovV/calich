@@ -30,10 +30,14 @@ function showBrowserNotification(notification: AppNotification) {
   if (typeof Notification === "undefined") return;
 
   const timeFormat = useAuthStore.getState().user?.timeFormat ?? "24h";
-  const body =
-    notification.kind === "invite"
-      ? "You were invited."
-      : `Starts ${formatDateTime(notification.occurrenceStart, timeFormat)}`;
+  let body: string;
+  if (notification.kind === "invite") {
+    body = "You were invited.";
+  } else if (notification.kind === "writeback_failed") {
+    body = "A change couldn't be sent to Google.";
+  } else {
+    body = `Starts ${formatDateTime(notification.occurrenceStart, timeFormat)}`;
+  }
 
   const fire = () => {
     new Notification(notification.title, { body });

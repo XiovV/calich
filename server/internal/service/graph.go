@@ -262,7 +262,7 @@ func NewGraph(sqlDB *sql.DB, cfg config.Config, opts ...GraphOption) (*Graph, er
 	if built.googleEventsURL != nil {
 		connectionOpts = append(connectionOpts, withGoogleEventsURL(built.googleEventsURL.eventsURL))
 	}
-	g.Connections = NewConnectionService(g.ConnectionRepo, g.Auth, g.Calendars, g.Events, cfg.GoogleClientID, cfg.GoogleClientSecret, cfg.ConnectionsEncryptionKey, cfg.GoogleConfigured(), connectionOpts...)
+	g.Connections = NewConnectionService(g.ConnectionRepo, g.Auth, g.Calendars, g.Events, g.NotificationRepo, cfg.GoogleClientID, cfg.GoogleClientSecret, cfg.ConnectionsEncryptionKey, cfg.GoogleConfigured(), connectionOpts...)
 
 	return g, nil
 }

@@ -18,13 +18,15 @@ func NewNotificationHandler(notifications *service.NotificationService) *Notific
 	return &NotificationHandler{notifications: notifications}
 }
 
-// notificationResponse is a Notification's wire shape (ADR-0021, ADR-0061)
-// — the in-app feed panel's list item. OccurrenceStart is omitted for an
-// invite Notification, which concerns the Event series rather than one
-// Occurrence.
+// notificationResponse is a Notification's wire shape (ADR-0021, ADR-0061,
+// ADR-0081) — the in-app feed panel's list item. OccurrenceStart is omitted
+// for an invite or writeback_failed Notification, neither of which concerns
+// one Occurrence. EventID is omitted for writeback_failed, which concerns a
+// Calendar instead — CalendarID is present only there.
 type notificationResponse struct {
 	ID              int64   `json:"id"`
-	EventID         string  `json:"eventId"`
+	EventID         *string `json:"eventId,omitempty"`
+	CalendarID      *string `json:"calendarId,omitempty"`
 	Kind            string  `json:"kind"`
 	Title           string  `json:"title"`
 	OccurrenceStart *string `json:"occurrenceStart,omitempty"`
@@ -42,6 +44,7 @@ func toNotificationResponse(n repository.Notification) notificationResponse {
 	return notificationResponse{
 		ID:              n.ID,
 		EventID:         n.EventID,
+		CalendarID:      n.CalendarID,
 		Kind:            n.Kind,
 		Title:           n.Title,
 		OccurrenceStart: occurrenceStart,

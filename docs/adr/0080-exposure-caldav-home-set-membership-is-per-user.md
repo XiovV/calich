@@ -2,7 +2,7 @@
 
 Status: accepted — supersedes ADR-0074, reintroducing ADR-0054's viewer-dependent design
 
-Whether a Calendar appears in a User's own CalDAV home-set is now that User's own choice, resolved per `(calendar_id, user_id)` from `calendar_exposures` — a table reusing `calendar_user_colors`' shape verbatim (ADR-0038): no indirection, cascading on both Calendar and User. Absent a row, the default is exposed, except a Linked Calendar's own Owner, who defaults to unexposed. The home-set filter and the direct-path lookup both consult it for **every** Calendar, not only Connection-sourced ones, even though only a Linked Calendar gets a UI toggle today (Not in scope, below). Read-only for now — Exposure surviving a device's own write is #299.
+Whether a Calendar appears in a User's own CalDAV home-set is now that User's own choice, resolved per `(calendar_id, user_id)` from `calendar_exposures` — a table reusing `calendar_user_colors`' shape verbatim (ADR-0038): no indirection, cascading on both Calendar and User. Absent a row, the default is exposed, except a Linked Calendar's own Owner, who defaults to unexposed. The home-set filter and the direct-path lookup both consult it for **every** Calendar, not only Connection-sourced ones, even though only a Linked Calendar gets a UI toggle today (Not in scope, below). Read-only when this landed — a device's own write surviving Exposure is ADR-0081 (#299).
 
 ## Why the cost ADR-0074 refused to pay is already paid
 
