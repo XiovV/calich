@@ -98,6 +98,12 @@ func New(logger *slog.Logger, authHandler *handlers.AuthHandler, calendarHandler
 			r.Get("/{id}/default-reminders", calendarHandler.GetDefaultReminders)
 			r.Put("/{id}/default-reminders", calendarHandler.SetDefaultReminders)
 
+			// Exposure (ADR-0080): the caller's own choice of whether this
+			// Calendar appears in their own CalDAV home-set, beside their
+			// colour override and Default reminders — open to any User with
+			// Access, not Owner-only, same posture as both.
+			r.Put("/{id}/exposure", calendarHandler.SetExposure)
+
 			// Sharing (ADR-0034): grant/revoke/list are Owner-only,
 			// enforced by CalendarService rather than here; leave needs no
 			// such check.

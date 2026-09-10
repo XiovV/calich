@@ -113,7 +113,12 @@ func (h *CalendarHandler) ImportConnectionCalendars(w http.ResponseWriter, r *ht
 			httpresponse.Error(w, http.StatusInternalServerError, "internal_error", "failed to import calendars")
 			return
 		}
-		responses[i] = toCalendarResponse(calendar, isOwner, ownerName, shareCount)
+		exposed, err := h.calendars.ResolveExposure(r.Context(), userID, calendar, isOwner)
+		if err != nil {
+			httpresponse.Error(w, http.StatusInternalServerError, "internal_error", "failed to import calendars")
+			return
+		}
+		responses[i] = toCalendarResponse(calendar, isOwner, ownerName, shareCount, exposed)
 	}
 	httpresponse.JSON(w, http.StatusCreated, responses)
 }

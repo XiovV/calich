@@ -522,8 +522,12 @@ func (r *EventRepository) BumpChangeSeqForCalendar(ctx context.Context, calendar
 // Linked Calendar becomes an ordinary owned Calendar with nothing left
 // pointing at an account that is no longer connected. Affects zero rows on
 // an empty Calendar, so it deliberately does not go through requireAffected.
-// change_seq never bumps — a Linked Calendar reaches no CalDAV client
-// (ADR-0074), so there is no sync stream for this to perturb.
+// change_seq never bumps — every column this clears (external_uid,
+// provider_etag, rsvp_status, conference_url, guest_count, provider_color,
+// write_back_error) is Provider-identity bookkeeping the CalDAV object
+// mapping never serializes into an Event's .ics bytes (ADR-0025), so there
+// is no sync stream for clearing them to perturb even now that Exposure
+// (ADR-0080) can put a Linked Calendar in front of a CalDAV client.
 func (r *EventRepository) ClearProviderIdentityByCalendar(ctx context.Context, calendarID string) error {
 	if _, err := r.db.ExecContext(ctx,
 		`UPDATE events SET external_uid = NULL, provider_etag = NULL, rsvp_status = NULL,

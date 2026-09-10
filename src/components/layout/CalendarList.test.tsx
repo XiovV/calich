@@ -5,7 +5,9 @@ import type { Calendar } from "../../lib/calendar";
 
 // Same convention as the other component tests: the *Api modules are mocked,
 // the stores are real.
-vi.mock("../../lib/calendarsApi", () => ({ calendarsApi: { list: vi.fn() } }));
+vi.mock("../../lib/calendarsApi", () => ({
+  calendarsApi: { list: vi.fn(), setExposure: vi.fn(async () => true) },
+}));
 vi.mock("../../lib/connectionsApi", async () => {
   const actual = await vi.importActual<typeof import("../../lib/connectionsApi")>("../../lib/connectionsApi");
   return {
@@ -25,6 +27,7 @@ const { useShellStore } = await import("../../lib/shellStore");
 const { useWorkspacesStore } = await import("../../lib/workspacesStore");
 const { useConnectionsStore } = await import("../../lib/connectionsStore");
 const { connectionsApi } = await import("../../lib/connectionsApi");
+const { calendarsApi } = await import("../../lib/calendarsApi");
 const { CalendarList } = await import("./CalendarList");
 
 const owned: Calendar = {
@@ -218,5 +221,73 @@ describe("Linked Calendar grouping", () => {
 
     expect(await screen.findByRole("menuitem", { name: "Refresh" })).toBeInTheDocument();
     expect(screen.queryByRole("menuitem", { name: "Export" })).not.toBeInTheDocument();
+  });
+});
+
+// #297, ADR-0080: Exposure's toggle lives in a Linked Calendar's row menu —
+// the one surface both its Owner and an accessor it was Shared to reach.
+describe("Linked Calendar Exposure toggle", () => {
+  const ownedLinked: Calendar = {
+    id: "cal-owned-linked",
+    name: "Work",
+    color: "#8E44ADFF",
+    access: "viewer",
+    isOwner: true,
+    sourceKind: "connection",
+    connectionId: 1,
+    connectionAccountEmail: "work@gmail.com",
+    exposed: false,
+  };
+  const sharedLinked: Calendar = {
+    id: "cal-shared-linked",
+    name: "Colleague's Google",
+    color: "#3498DBFF",
+    access: "viewer",
+    isOwner: false,
+    ownerName: "Bob",
+    sourceKind: "connection",
+    connectionId: 3,
+    connectionAccountEmail: "bob@gmail.com",
+    exposed: true,
+  };
+
+  it("offers the toggle to the Linked Calendar's own Owner, reflecting the resolved default", async () => {
+    useCalendarsStore.setState({ calendars: [ownedLinked] });
+    render(<CalendarList />);
+
+    await openMenu("Work");
+
+    const item = await screen.findByRole("menuitemcheckbox", { name: "Show on my devices" });
+    expect(item).toHaveAttribute("aria-checked", "false");
+  });
+
+  it("also offers the toggle to an accessor it was Shared to, reflecting their own resolved default", async () => {
+    useCalendarsStore.setState({ calendars: [owned, sharedLinked] });
+    render(<CalendarList />);
+
+    await openMenu("Colleague's Google");
+
+    const item = await screen.findByRole("menuitemcheckbox", { name: "Show on my devices" });
+    expect(item).toHaveAttribute("aria-checked", "true");
+  });
+
+  it("omits the toggle on a Calendar that isn't Linked", async () => {
+    useCalendarsStore.setState({ calendars: [owned] });
+    render(<CalendarList />);
+
+    await openMenu("Personal");
+
+    expect(screen.queryByRole("menuitemcheckbox", { name: "Show on my devices" })).not.toBeInTheDocument();
+  });
+
+  it("writes the caller's own choice when toggled", async () => {
+    useCalendarsStore.setState({ calendars: [ownedLinked] });
+    render(<CalendarList />);
+
+    await openMenu("Work");
+    await userEvent.click(await screen.findByRole("menuitemcheckbox", { name: "Show on my devices" }));
+
+    expect(calendarsApi.setExposure).toHaveBeenCalledWith("token-123", "cal-owned-linked", true);
+    expect(useCalendarsStore.getState().calendars.find((c) => c.id === "cal-owned-linked")?.exposed).toBe(true);
   });
 });

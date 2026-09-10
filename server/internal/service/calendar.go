@@ -78,13 +78,17 @@ type CalendarService struct {
 	defaultReminders  *repository.CalendarDefaultReminderRepository
 	explicitReminders *repository.EventReminderExplicitRepository
 	colorOverrides    *repository.CalendarUserColorRepository
-	workspaces        *repository.WorkspaceRepository
-	groupShares       *repository.CalendarGroupShareRepository
-	groups            *repository.GroupRepository
+	// exposures is Exposure's storage (ADR-0080): each User's own override of
+	// whether a Calendar appears in their own CalDAV home-set, keyed and
+	// shaped exactly like colorOverrides above.
+	exposures   *repository.CalendarExposureRepository
+	workspaces  *repository.WorkspaceRepository
+	groupShares *repository.CalendarGroupShareRepository
+	groups      *repository.GroupRepository
 }
 
-func NewCalendarService(db *sql.DB, calendars *repository.CalendarRepository, sources *repository.SourceRepository, shares *repository.CalendarShareRepository, users *repository.UserRepository, eventReminders *repository.EventReminderRepository, defaultReminders *repository.CalendarDefaultReminderRepository, explicitReminders *repository.EventReminderExplicitRepository, colorOverrides *repository.CalendarUserColorRepository, workspaces *repository.WorkspaceRepository, groupShares *repository.CalendarGroupShareRepository, groups *repository.GroupRepository) *CalendarService {
-	return &CalendarService{db: db, calendars: calendars, sources: sources, shares: shares, users: users, eventReminders: eventReminders, defaultReminders: defaultReminders, explicitReminders: explicitReminders, colorOverrides: colorOverrides, workspaces: workspaces, groupShares: groupShares, groups: groups}
+func NewCalendarService(db *sql.DB, calendars *repository.CalendarRepository, sources *repository.SourceRepository, shares *repository.CalendarShareRepository, users *repository.UserRepository, eventReminders *repository.EventReminderRepository, defaultReminders *repository.CalendarDefaultReminderRepository, explicitReminders *repository.EventReminderExplicitRepository, colorOverrides *repository.CalendarUserColorRepository, exposures *repository.CalendarExposureRepository, workspaces *repository.WorkspaceRepository, groupShares *repository.CalendarGroupShareRepository, groups *repository.GroupRepository) *CalendarService {
+	return &CalendarService{db: db, calendars: calendars, sources: sources, shares: shares, users: users, eventReminders: eventReminders, defaultReminders: defaultReminders, explicitReminders: explicitReminders, colorOverrides: colorOverrides, exposures: exposures, workspaces: workspaces, groupShares: groupShares, groups: groups}
 }
 
 // attachSource populates c.Source from the calendar_sources table (#284,
@@ -252,6 +256,11 @@ type CalendarWithAccess struct {
 	// ShareCount is how many Shares the Calendar carries — what tells a
 	// caller whether more than one person would be notified (#111).
 	ShareCount int
+	// Exposed is the caller's own resolved Exposure answer (ADR-0080): their
+	// own override on this Calendar if they've set one, otherwise
+	// ResolveExposure's default. Read-only over the REST API today — only
+	// the CalDAV home-set filter and direct-path lookup act on it.
+	Exposed bool
 }
 
 // ListAccessible returns every Calendar userID has any Access to — owned
@@ -363,7 +372,11 @@ func (s *CalendarService) toCalendarWithAccess(ctx context.Context, userID int64
 	if err != nil {
 		return CalendarWithAccess{}, err
 	}
-	return CalendarWithAccess{Calendar: c, Access: ResolveAccess(userID, c, role), Color: color, IsOwner: isOwner, OwnerName: ownerName, ShareCount: shareCount}, nil
+	exposed, err := s.ResolveExposure(ctx, userID, c, isOwner)
+	if err != nil {
+		return CalendarWithAccess{}, err
+	}
+	return CalendarWithAccess{Calendar: c, Access: ResolveAccess(userID, c, role), Color: color, IsOwner: isOwner, OwnerName: ownerName, ShareCount: shareCount, Exposed: exposed}, nil
 }
 
 // resolveDisplayColor computes DisplayColor(user, calendar) (ADR-0038,
@@ -435,6 +448,96 @@ func (s *CalendarService) usedDisplayColors(ctx context.Context, userID, workspa
 	return used, nil
 }
 
+// defaultExposure computes Exposure's *default* answer (ADR-0080,
+// CONTEXT.md's Exposure entry) for calendar, used only when the asking User
+// has never set their own override: every Calendar defaults to exposed,
+// except a Linked Calendar's own Owner, who defaults to unexposed — the
+// connecting User almost certainly already syncs it natively at the
+// Provider (ADR-0074's reasoning, carried forward as a default rather than
+// an unconditional rule). isOwner must be unclamped ownership
+// (calendar.UserID == userID), never Access.IsOwner(), mirroring
+// resolveDisplayColor's own isOwner-vs-clamped-Access distinction.
+func defaultExposure(isOwner bool, calendar repository.Calendar) bool {
+	return !(isOwner && isConnectionSource(calendar))
+}
+
+// ResolveExposure resolves userID's own Exposure answer for calendar
+// (ADR-0080): their own override row if they've set one, otherwise
+// defaultExposure's answer. Exported for a handler that already holds an
+// Access-checked Calendar and its ownership (Create, Update, Subscribe,
+// ImportConnectionCalendars) and just needs Exposure's value for the
+// response, without AccessWithColor's heavier full resolution.
+func (s *CalendarService) ResolveExposure(ctx context.Context, userID int64, calendar repository.Calendar, isOwner bool) (bool, error) {
+	override, err := s.exposures.Get(ctx, userID, calendar.ID)
+	if err == nil {
+		return override, nil
+	}
+	if !errors.Is(err, repository.ErrNotFound) {
+		return false, fmt.Errorf("get calendar exposure: %w", err)
+	}
+	return defaultExposure(isOwner, calendar), nil
+}
+
+// SetExposure sets userID's own Exposure choice on id (ADR-0080) — open to
+// any User with Access, Owner and accessor alike, unlike ADR-0038's colour
+// override: Exposure has no "the Calendar's own" value for an Owner's write
+// to land on instead, every principal answers only for themselves. Gated on
+// requireRead, the same bar SetColorOverride uses.
+func (s *CalendarService) SetExposure(ctx context.Context, userID int64, id string, exposed bool) error {
+	if err := s.requireRead(ctx, userID, id); err != nil {
+		return err
+	}
+	if err := s.exposures.Upsert(ctx, userID, id, exposed); err != nil {
+		return fmt.Errorf("upsert calendar exposure: %w", err)
+	}
+	return nil
+}
+
+// AccessWithExposure resolves userID's Access to id together with their own
+// resolved Exposure answer (ADR-0080) — CalDAV's direct-path GetCalendar,
+// which must 404 identically whether id doesn't exist, the caller has no
+// Access, or Access says yes but Exposure says no, mirroring the home-set
+// listing's own condition (CONTEXT.md's Linked Calendar entry). Deliberately
+// lean, unlike AccessWithColor: CalDAV has no use for the display colour or
+// ownership metadata that resolving would also touch. Skips the Exposure
+// lookup entirely when Access already says no, rather than spending a query
+// resolving a value the caller is about to discard.
+func (s *CalendarService) AccessWithExposure(ctx context.Context, userID int64, id string) (Access, repository.Calendar, bool, error) {
+	access, calendar, err := s.Access(ctx, userID, id)
+	if err != nil {
+		return AccessNone, repository.Calendar{}, false, err
+	}
+	if !access.CanRead() {
+		return access, calendar, false, nil
+	}
+	isOwner := calendar.UserID == userID
+	exposed, err := s.ResolveExposure(ctx, userID, calendar, isOwner)
+	if err != nil {
+		return AccessNone, repository.Calendar{}, false, err
+	}
+	return access, calendar, exposed, nil
+}
+
+// RequireExposedAccess refuses id as repository.ErrNotFound unless userID
+// can read it and it resolves as exposed to them (ADR-0080) — the one check
+// every CalDAV entry point that resolves a Calendar straight off the
+// request path must apply: calendar-query and calendar-multiget (query.go),
+// sync-collection (sync.go), and PROPPATCH (proppatch.go), alongside
+// GetCalendar's own use of AccessWithExposure directly. Without this, a
+// client holding a cached or guessed collection path could keep reading (or
+// renaming) a Calendar through one of those paths after Exposure said no,
+// even though PROPFIND home-set discovery already hides it.
+func (s *CalendarService) RequireExposedAccess(ctx context.Context, userID int64, id string) error {
+	access, _, exposed, err := s.AccessWithExposure(ctx, userID, id)
+	if err != nil {
+		return err
+	}
+	if !access.CanRead() || !exposed {
+		return repository.ErrNotFound
+	}
+	return nil
+}
+
 // AccessWithColor resolves userID's Access to id's Calendar together with
 // their resolved display colour (ADR-0038) — the REST single-Calendar fetch
 // path, which must show the caller's own colour rather than always the
@@ -452,7 +555,11 @@ func (s *CalendarService) AccessWithColor(ctx context.Context, userID int64, id 
 	if err != nil {
 		return CalendarWithAccess{}, err
 	}
-	return CalendarWithAccess{Calendar: calendar, Access: access, Color: color, IsOwner: isOwner, OwnerName: ownerName, ShareCount: shareCount}, nil
+	exposed, err := s.ResolveExposure(ctx, userID, calendar, isOwner)
+	if err != nil {
+		return CalendarWithAccess{}, err
+	}
+	return CalendarWithAccess{Calendar: calendar, Access: access, Color: color, IsOwner: isOwner, OwnerName: ownerName, ShareCount: shareCount, Exposed: exposed}, nil
 }
 
 // OwnershipMeta resolves calendar's un-clamped ownership answer for userID
@@ -784,10 +891,10 @@ func (s *CalendarService) Share(ctx context.Context, ownerID int64, calendarID, 
 // RevokeShare removes targetUserID's Share on calendarID. Only calendarID's
 // Owner may call this. targetUserID's own Reminders on calendarID's Events,
 // their Default reminders and explicit-opt-out markers on calendarID itself,
-// and their colour override, are all cleared with it — a Reminder, default,
-// or colour with no Access behind it would otherwise linger, invisible,
-// until targetUserID was ever shared with it again (ADR-0064's and
-// ADR-0038's acceptance criteria).
+// and their colour and Exposure overrides, are all cleared with it — a
+// Reminder, default, colour, or Exposure choice with no Access behind it
+// would otherwise linger, invisible, until targetUserID was ever shared with
+// it again (ADR-0064's, ADR-0038's, and ADR-0080's acceptance criteria).
 func (s *CalendarService) RevokeShare(ctx context.Context, ownerID int64, calendarID string, targetUserID int64) error {
 	if _, err := s.requireOwner(ctx, ownerID, calendarID); err != nil {
 		return err
@@ -905,8 +1012,8 @@ func (s *CalendarService) ShareTargets(ctx context.Context, ownerID int64, calen
 // repository.ErrNotFound if userID holds no Share on calendarID (including
 // when userID is the Owner, who never has one). userID's own Reminders on
 // calendarID's Events, their Default reminders and explicit-opt-out markers
-// on calendarID itself, and their colour override, are all cleared with it,
-// mirroring RevokeShare (ADR-0064, ADR-0038).
+// on calendarID itself, and their colour and Exposure overrides, are all
+// cleared with it, mirroring RevokeShare (ADR-0064, ADR-0038, ADR-0080).
 func (s *CalendarService) LeaveShare(ctx context.Context, userID int64, calendarID string) error {
 	return s.withShareRevocationTx(ctx, func(repos shareRevocationRepos) error {
 		if err := repos.shares.Delete(ctx, calendarID, userID); err != nil {
@@ -930,16 +1037,18 @@ type shareRevocationRepos struct {
 	defaultReminders  *repository.CalendarDefaultReminderRepository
 	explicitReminders *repository.EventReminderExplicitRepository
 	colorOverrides    *repository.CalendarUserColorRepository
+	exposures         *repository.CalendarExposureRepository
 }
 
 // withShareRevocationTx runs fn inside a transaction, passing it
 // transaction-bound clones of the Share, EventReminder,
-// CalendarDefaultReminder, EventReminderExplicit, and CalendarUserColor
-// repositories, so RevokeShare's and LeaveShare's five writes — the Share
-// delete and clearUserCalendarState's four — commit or roll back atomically:
-// a crash or error partway through must never leave a User's Reminders or
-// colour override lingering for a Calendar they no longer have Access to
-// (#259, ADR-0018). Reads and validation belong outside fn, before
+// CalendarDefaultReminder, EventReminderExplicit, CalendarUserColor, and
+// CalendarExposure repositories, so RevokeShare's and LeaveShare's six
+// writes — the Share delete and clearUserCalendarState's five — commit or
+// roll back atomically: a crash or error partway through must never leave a
+// User's Reminders, colour override, or Exposure choice lingering for a
+// Calendar they no longer have Access to (#259, ADR-0018). Reads and
+// validation belong outside fn, before
 // withShareRevocationTx is called (ADR-0018) — RevokeShare's requireOwner
 // check runs against the pooled repos beforehand, exactly as EventService's
 // withTx expects of its own callers.
@@ -951,17 +1060,18 @@ func (s *CalendarService) withShareRevocationTx(ctx context.Context, fn func(rep
 			defaultReminders:  s.defaultReminders.WithTx(tx),
 			explicitReminders: s.explicitReminders.WithTx(tx),
 			colorOverrides:    s.colorOverrides.WithTx(tx),
+			exposures:         s.exposures.WithTx(tx),
 		})
 	})
 }
 
 // clearUserCalendarState clears every per-User-per-Calendar row a Share's
 // end leaves behind — Reminders on the Calendar's Events, Default reminders
-// and explicit-opt-out markers on the Calendar itself, and the colour
-// override — RevokeShare's and LeaveShare's shared tail (ADR-0064,
-// ADR-0038): a Reminder, default, or colour with no Access behind it would
-// otherwise linger, invisible, until userID was ever shared with calendarID
-// again.
+// and explicit-opt-out markers on the Calendar itself, and the colour and
+// Exposure overrides — RevokeShare's and LeaveShare's shared tail (ADR-0064,
+// ADR-0038, ADR-0080): a Reminder, default, colour, or Exposure choice with
+// no Access behind it would otherwise linger, invisible, until userID was
+// ever shared with calendarID again.
 func clearUserCalendarState(ctx context.Context, repos shareRevocationRepos, userID int64, calendarID string) error {
 	if err := repos.eventReminders.DeleteByUserAndCalendar(ctx, userID, calendarID); err != nil {
 		return fmt.Errorf("clear reminders: %w", err)
@@ -974,6 +1084,9 @@ func clearUserCalendarState(ctx context.Context, repos shareRevocationRepos, use
 	}
 	if err := repos.colorOverrides.Delete(ctx, userID, calendarID); err != nil {
 		return fmt.Errorf("clear calendar color override: %w", err)
+	}
+	if err := repos.exposures.Delete(ctx, userID, calendarID); err != nil {
+		return fmt.Errorf("clear calendar exposure override: %w", err)
 	}
 	return nil
 }

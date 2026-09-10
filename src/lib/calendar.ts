@@ -45,6 +45,11 @@ export interface Calendar {
   // Source points at, which the sidebar's per-Connection heading re-opens
   // the Calendar picker with.
   connectionId?: number;
+  // exposed is the caller's own resolved Exposure answer (#297, ADR-0080):
+  // whether this Calendar appears in their own CalDAV home-set. Defaults to
+  // true for every Calendar except a Linked Calendar for its own Owner, who
+  // defaults to false — overridable either way, independently per caller.
+  exposed?: boolean;
 }
 
 // isBrokenSubscription reports whether calendar's last Refresh failed —

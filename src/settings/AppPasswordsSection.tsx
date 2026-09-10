@@ -6,6 +6,8 @@ import { Input } from "../components/ui/Input";
 import { useAppPasswordsStore } from "../lib/appPasswordsStore";
 import { useAsyncAction } from "../hooks/useAsyncAction";
 import { errorMessage } from "../lib/errorMessage";
+import { useCalendarsStore } from "../lib/calendarsStore";
+import { canManageCalendar, isLinkedCalendar } from "../lib/calendar";
 
 // The Settings page's App passwords section (#62, ADR-0024): lets a user
 // generate a per-device credential for native CalDAV clients, shown once with
@@ -15,12 +17,21 @@ export function AppPasswordsSection() {
   const fetchAppPasswords = useAppPasswordsStore((state) => state.fetchAppPasswords);
   const createAppPassword = useAppPasswordsStore((state) => state.createAppPassword);
   const revokeAppPassword = useAppPasswordsStore((state) => state.revokeAppPassword);
+  // calendars only informs the Exposure nudge below (#297, ADR-0080) — this
+  // section otherwise has nothing to do with Calendars.
+  const calendars = useCalendarsStore((state) => state.calendars);
 
   const [label, setLabel] = useState("");
   const [revealedSecret, setRevealedSecret] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [revokingId, setRevokingId] = useState<number | null>(null);
   const [nudgeReminderDelivery, setNudgeReminderDelivery] = useState(false);
+  // nudgeExposure fires the same moment and follows the same one-shot
+  // "leaving this page means it won't be shown again" rule as
+  // nudgeReminderDelivery (ADR-0027's pattern, reused by #297/ADR-0080): a
+  // first App Password is the first proof this User has a device to expose
+  // a Linked Calendar to at all.
+  const [nudgeExposure, setNudgeExposure] = useState(false);
   const { isSubmitting, error, setError, run } = useAsyncAction();
 
   useEffect(() => {
@@ -34,6 +45,12 @@ export function AppPasswordsSection() {
     if (!label.trim()) return;
 
     const isFirstAppPassword = appPasswords.length === 0;
+    // Only a Linked Calendar this User owns and hasn't already exposed is
+    // worth nudging about — an ordinary or Subscribed Calendar has no
+    // unexposed default to surprise anyone with (#297, ADR-0080).
+    const hasUnexposedLinkedCalendar = calendars.some(
+      (calendar) => isLinkedCalendar(calendar) && canManageCalendar(calendar) && !calendar.exposed,
+    );
 
     await run(async () => {
       const secret = await createAppPassword(label.trim());
@@ -41,6 +58,7 @@ export function AppPasswordsSection() {
       setCopied(false);
       setLabel("");
       setNudgeReminderDelivery(isFirstAppPassword);
+      setNudgeExposure(isFirstAppPassword && hasUnexposedLinkedCalendar);
     });
   }
 
@@ -92,6 +110,12 @@ export function AppPasswordsSection() {
               This device will show its own reminder pop-ups. Copy the password above, then visit
               Reminder delivery in the left-hand nav to stop getting them twice — leaving this
               page means it won't be shown again.
+            </p>
+          )}
+          {nudgeExposure && (
+            <p className="mt-2 text-label-sm text-ink-muted">
+              One of your linked calendars won't show up on this device yet — turn on "Show on my
+              devices" from that calendar's menu in the sidebar to bring it over.
             </p>
           )}
         </div>

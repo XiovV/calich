@@ -124,6 +124,7 @@ func newShareTestServer(t *testing.T) shareTestServer {
 		r.With(httpauth.RequireWorkspace(workspaceSvc)).Get("/", calendarHandler.List)
 		r.Get("/{id}", calendarHandler.Get)
 		r.Patch("/{id}", calendarHandler.Update)
+		r.Put("/{id}/exposure", calendarHandler.SetExposure)
 		r.Get("/{id}/shares", calendarHandler.ListShares)
 		r.Post("/{id}/shares", calendarHandler.Share)
 		r.Delete("/{id}/shares/{userId}", calendarHandler.RevokeShare)

@@ -14,10 +14,20 @@ import (
 
 // createLinkedCalendar creates a Linked Calendar in env's own Workspace,
 // backed by a freshly-inserted Connection row to satisfy calendar_sources'
-// foreign key — the ADR-0074 fixture: a Calendar whose Source is
-// Connection-kind must never reach a CalDAV home-set, unlike every other
-// kind this package's other PROPFIND tests exercise.
+// foreign key, read-only at the Source (ADR-0080's default resolution only
+// looks at Source.Kind, so mode is incidental here — createLinkedCalendarWithMode
+// is the variant that varies it).
 func (env testCalDAVEnv) createLinkedCalendar(t *testing.T, id, name string) {
+	t.Helper()
+	env.createLinkedCalendarWithMode(t, id, name, repository.SourceModeReadOnly)
+}
+
+// createLinkedCalendarWithMode is createLinkedCalendar's mode-parameterized
+// sibling, for a test asserting the CalDAV privilege set a writable Linked
+// Calendar's Owner gets versus a read-only one's (ADR-0075, ADR-0080) — the
+// mode has never varied in this package before Exposure gave a Linked
+// Calendar's own Owner a reason to actually reach its collection.
+func (env testCalDAVEnv) createLinkedCalendarWithMode(t *testing.T, id, name string, mode repository.SourceMode) {
 	t.Helper()
 
 	connections := repository.NewConnectionRepository(env.db)
@@ -35,7 +45,7 @@ func (env testCalDAVEnv) createLinkedCalendar(t *testing.T, id, name string) {
 		Name: name, Color: "#12809CFF",
 	}, repository.SourceFields{
 		Kind:               repository.SourceKindConnection,
-		Mode:               repository.SourceModeReadOnly,
+		Mode:               mode,
 		ConnectionID:       &conn.ID,
 		ExternalCalendarID: &externalID,
 	}); err != nil {
@@ -43,11 +53,15 @@ func (env testCalDAVEnv) createLinkedCalendar(t *testing.T, id, name string) {
 	}
 }
 
-// TestPropfind_HomeSet_ExcludesLinkedCalendar covers ADR-0074's "a Linked
-// Calendar appears in no principal's CalDAV home-set" for the Owner's own
-// side — the ordinary Calendar env.calendarID ("cal-1") is unaffected and
-// still appears, exactly like TestPropfind_HomeSet_ListsOneCollectionPerCalendar.
-func TestPropfind_HomeSet_ExcludesLinkedCalendar(t *testing.T) {
+// TestPropfind_HomeSet_ExcludesLinkedCalendarFromOwnerByDefault covers
+// ADR-0080's default for a Linked Calendar's own Owner: absent an explicit
+// Exposure choice, it stays out of their own CalDAV home-set — the
+// connecting User almost certainly already syncs it natively at the
+// Provider, unchanged from ADR-0074's reasoning even though the rule is no
+// longer unconditional. The ordinary Calendar env.calendarID ("cal-1") is
+// unaffected and still appears, exactly like
+// TestPropfind_HomeSet_ListsOneCollectionPerCalendar.
+func TestPropfind_HomeSet_ExcludesLinkedCalendarFromOwnerByDefault(t *testing.T) {
 	env := newTestCalDAVEnv(t)
 	env.createLinkedCalendar(t, uuid.NewString(), "Linked")
 
@@ -57,7 +71,7 @@ func TestPropfind_HomeSet_ExcludesLinkedCalendar(t *testing.T) {
 
 	body := readBody(t, resp)
 	if strings.Contains(body, "Linked") {
-		t.Fatalf("expected the Linked Calendar to be absent from the home-set, got:\n%s", body)
+		t.Fatalf("expected the Linked Calendar to be absent from its Owner's home-set by default, got:\n%s", body)
 	}
 	wantCollection := fmt.Sprintf("/dav/%d/calendars/%s/", env.userID, env.calendarID)
 	if !strings.Contains(body, wantCollection) {
@@ -65,22 +79,21 @@ func TestPropfind_HomeSet_ExcludesLinkedCalendar(t *testing.T) {
 	}
 }
 
-// TestPropfind_HomeSet_ExcludesLinkedCalendarFromAccessorsSeat covers
-// ADR-0074's "a Linked Calendar appears in no principal's CalDAV home-set"
-// asserted from the accessor's seat rather than the Owner's — the exact
-// failure mode of ADR-0054's superseded rule, where a home-set correct for
-// the Owner was wrong for a Workspace Member it was Shared to. The Member is
-// Shared both an ordinary Calendar and the Linked one; only the ordinary one
-// reaches their home-set.
-func TestPropfind_HomeSet_ExcludesLinkedCalendarFromAccessorsSeat(t *testing.T) {
+// TestPropfind_HomeSet_IncludesLinkedCalendarInAccessorsSeatByDefault covers
+// ADR-0080's default for a Workspace Member a Linked Calendar was Shared
+// to: present by default in their own home-set, since they have no native
+// Provider copy of it to duplicate. This is the inverted acceptance
+// criterion ADR-0074 (and this test, before Exposure) asserted the opposite
+// of — the single most important behavioural change #297 makes. The Member
+// is Shared both an ordinary Calendar and the Linked one; both reach their
+// home-set.
+func TestPropfind_HomeSet_IncludesLinkedCalendarInAccessorsSeatByDefault(t *testing.T) {
 	env := newTestCalDAVEnv(t)
 	memberID, memberSecret := env.addWorkspaceMember(t, "member")
 
 	linkedID := uuid.NewString()
 	env.createLinkedCalendar(t, linkedID, "Linked")
 
-	// The ordinary Calendar is Shared to the Member as a control: their
-	// home-set is not simply empty of everything.
 	if _, _, err := env.calendarService.Share(context.Background(), env.userID, env.calendarID, "member@example.com", repository.RoleViewer); err != nil {
 		t.Fatalf("share ordinary calendar: %v", err)
 	}
@@ -93,19 +106,114 @@ func TestPropfind_HomeSet_ExcludesLinkedCalendarFromAccessorsSeat(t *testing.T) 
 	defer resp.Body.Close()
 
 	body := readBody(t, resp)
-	if strings.Contains(body, "Linked") {
-		t.Fatalf("expected the Shared Linked Calendar to be absent from the accessor's home-set, got:\n%s", body)
+	wantOrdinary := fmt.Sprintf("/dav/%d/calendars/%s/", memberID, env.calendarID)
+	wantLinked := fmt.Sprintf("/dav/%d/calendars/%s/", memberID, linkedID)
+	if !strings.Contains(body, wantOrdinary) {
+		t.Fatalf("expected the ordinary Shared calendar to be listed at the accessor's own path, got:\n%s", body)
 	}
-	wantCollection := fmt.Sprintf("/dav/%d/calendars/%s/", memberID, env.calendarID)
-	if !strings.Contains(body, wantCollection) {
-		t.Fatalf("expected the ordinary Shared calendar to still be listed at the accessor's own path, got:\n%s", body)
+	if !strings.Contains(body, wantLinked) {
+		t.Fatalf("expected the Shared Linked Calendar to be present in the accessor's home-set by default, got:\n%s", body)
 	}
 }
 
-// TestPropfind_HomeSet_StillListsSubscribedCalendar guards the ADR-0074
-// filter against over-reach: it keys on the Source's Kind being Connection,
-// never merely on a Source existing, so a Subscribed Calendar in the same
-// home-set stays exposed over CalDAV exactly as ADR-0032 established.
+// TestPropfind_HomeSet_OwnerExplicitExposureOverridesDefault covers an
+// explicit Exposure choice overriding the default in the "on" direction
+// (ADR-0080's acceptance criteria): the Owner who has moved off native
+// Provider sync can turn their own Linked Calendar back on.
+func TestPropfind_HomeSet_OwnerExplicitExposureOverridesDefault(t *testing.T) {
+	env := newTestCalDAVEnv(t)
+	linkedID := uuid.NewString()
+	env.createLinkedCalendar(t, linkedID, "Linked")
+
+	if err := env.calendarService.SetExposure(context.Background(), env.userID, linkedID, true); err != nil {
+		t.Fatalf("set exposure: %v", err)
+	}
+
+	homeSetPath := fmt.Sprintf("/dav/%d/calendars/", env.userID)
+	resp := propfind(t, env.srv, homeSetPath, "admin@example.com", env.appPasswordSecret, "1", propfindDisplayName)
+	defer resp.Body.Close()
+
+	body := readBody(t, resp)
+	wantCollection := fmt.Sprintf("/dav/%d/calendars/%s/", env.userID, linkedID)
+	if !strings.Contains(body, wantCollection) {
+		t.Fatalf("expected an explicit Exposure override to include the Owner's own Linked Calendar, got:\n%s", body)
+	}
+}
+
+// TestPropfind_HomeSet_AccessorExplicitExposureOverridesDefault covers the
+// same override in the "off" direction: a Workspace Member who doesn't want
+// a Shared Linked Calendar cluttering their devices can turn it off, even
+// though it defaults to on for them.
+func TestPropfind_HomeSet_AccessorExplicitExposureOverridesDefault(t *testing.T) {
+	env := newTestCalDAVEnv(t)
+	memberID, memberSecret := env.addWorkspaceMember(t, "member")
+
+	linkedID := uuid.NewString()
+	env.createLinkedCalendar(t, linkedID, "Linked")
+	if _, _, err := env.calendarService.Share(context.Background(), env.userID, linkedID, "member@example.com", repository.RoleViewer); err != nil {
+		t.Fatalf("share linked calendar: %v", err)
+	}
+	if err := env.calendarService.SetExposure(context.Background(), memberID, linkedID, false); err != nil {
+		t.Fatalf("set exposure: %v", err)
+	}
+
+	homeSetPath := fmt.Sprintf("/dav/%d/calendars/", memberID)
+	resp := propfind(t, env.srv, homeSetPath, "member@example.com", memberSecret, "1", propfindDisplayName)
+	defer resp.Body.Close()
+
+	body := readBody(t, resp)
+	if strings.Contains(body, "Linked") {
+		t.Fatalf("expected an explicit Exposure override to exclude the accessor's own Shared Linked Calendar, got:\n%s", body)
+	}
+}
+
+// TestPropfind_HomeSet_RevokedShareWinsOverLeftoverExposureRow covers
+// "Access resolves first, Exposure second" (ADR-0080's acceptance
+// criteria): a stray Exposure row saying "show it" must never resurrect a
+// Calendar the caller's Access to was revoked. RevokeShare already clears
+// this row along the ordinary path (mirroring ADR-0038's colour-override
+// cleanup); the row is recreated directly against the repository here so
+// the assertion is about resolution order, not about that cleanup happening
+// to run.
+func TestPropfind_HomeSet_RevokedShareWinsOverLeftoverExposureRow(t *testing.T) {
+	env := newTestCalDAVEnv(t)
+	memberID, memberSecret := env.addWorkspaceMember(t, "member")
+
+	linkedID := uuid.NewString()
+	env.createLinkedCalendar(t, linkedID, "Linked")
+	if _, _, err := env.calendarService.Share(context.Background(), env.userID, linkedID, "member@example.com", repository.RoleViewer); err != nil {
+		t.Fatalf("share linked calendar: %v", err)
+	}
+	if err := env.calendarService.RevokeShare(context.Background(), env.userID, linkedID, memberID); err != nil {
+		t.Fatalf("revoke share: %v", err)
+	}
+
+	exposures := repository.NewCalendarExposureRepository(env.db)
+	if err := exposures.Upsert(context.Background(), memberID, linkedID, true); err != nil {
+		t.Fatalf("upsert stray exposure row: %v", err)
+	}
+
+	homeSetPath := fmt.Sprintf("/dav/%d/calendars/", memberID)
+	resp := propfind(t, env.srv, homeSetPath, "member@example.com", memberSecret, "1", propfindDisplayName)
+	defer resp.Body.Close()
+
+	body := readBody(t, resp)
+	if strings.Contains(body, "Linked") {
+		t.Fatalf("expected a revoked Share to exclude the Calendar despite a stray Exposure row saying exposed, got:\n%s", body)
+	}
+
+	path := fmt.Sprintf("/dav/%d/calendars/%s/", memberID, linkedID)
+	directResp := propfind(t, env.srv, path, "member@example.com", memberSecret, "0", propfindDisplayName)
+	defer directResp.Body.Close()
+	if directResp.StatusCode != 404 {
+		t.Fatalf("expected 404 on the direct path despite the stray Exposure row, got %d", directResp.StatusCode)
+	}
+}
+
+// TestPropfind_HomeSet_StillListsSubscribedCalendar guards Exposure's
+// default resolution against over-reach: a Subscribed Calendar defaults to
+// exposed for everyone, Owner included, exactly as ADR-0032 established —
+// only a Linked Calendar's own Owner gets the unexposed default.
 func TestPropfind_HomeSet_StillListsSubscribedCalendar(t *testing.T) {
 	env := newTestCalDAVEnv(t)
 
@@ -132,9 +240,10 @@ func TestPropfind_HomeSet_StillListsSubscribedCalendar(t *testing.T) {
 	}
 }
 
-// TestPropfind_LinkedCalendar_DirectPathReturnsNotFound covers ADR-0074's
-// exclusion holding even for a stale or guessed URL, mirroring ListCalendars'
-// own condition rather than just hiding the collection from a listing.
+// TestPropfind_LinkedCalendar_DirectPathReturnsNotFound covers ADR-0080's
+// default exclusion holding even for a stale or guessed URL, mirroring
+// ListCalendars' own condition rather than just hiding the collection from
+// a listing.
 func TestPropfind_LinkedCalendar_DirectPathReturnsNotFound(t *testing.T) {
 	env := newTestCalDAVEnv(t)
 	linkedID := uuid.NewString()
@@ -146,5 +255,32 @@ func TestPropfind_LinkedCalendar_DirectPathReturnsNotFound(t *testing.T) {
 
 	if resp.StatusCode != 404 {
 		t.Fatalf("expected 404 for a Linked Calendar's direct path, got %d", resp.StatusCode)
+	}
+}
+
+// TestPropfind_LinkedCalendar_AccessorExplicitlyHiddenDirectPathReturnsNotFound
+// covers "not exposed ⇒ 404 on the direct path, matching the listing"
+// (ADR-0080's acceptance criteria) for an explicit override rather than a
+// default: an accessor who turned their own Shared Linked Calendar off gets
+// the same 404 a stale URL would.
+func TestPropfind_LinkedCalendar_AccessorExplicitlyHiddenDirectPathReturnsNotFound(t *testing.T) {
+	env := newTestCalDAVEnv(t)
+	memberID, memberSecret := env.addWorkspaceMember(t, "member")
+
+	linkedID := uuid.NewString()
+	env.createLinkedCalendar(t, linkedID, "Linked")
+	if _, _, err := env.calendarService.Share(context.Background(), env.userID, linkedID, "member@example.com", repository.RoleViewer); err != nil {
+		t.Fatalf("share linked calendar: %v", err)
+	}
+	if err := env.calendarService.SetExposure(context.Background(), memberID, linkedID, false); err != nil {
+		t.Fatalf("set exposure: %v", err)
+	}
+
+	path := fmt.Sprintf("/dav/%d/calendars/%s/", memberID, linkedID)
+	resp := propfind(t, env.srv, path, "member@example.com", memberSecret, "0", propfindDisplayName)
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 404 {
+		t.Fatalf("expected 404 for an explicitly-hidden Linked Calendar's direct path, got %d", resp.StatusCode)
 	}
 }

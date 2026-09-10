@@ -358,12 +358,13 @@ func TestEventService_Update_CarriesForwardProviderOwnedFields(t *testing.T) {
 }
 
 // TestEventService_PutSeries_RefusesConnectionCalendarMatchingCalDAVsPosture
-// covers the CalDAV write seam directly (#290): ADR-0074 hides every Linked
-// Calendar from CalDAV discovery, and caldavserver.GetCalendar independently
-// 404s one on a fresh PROPFIND — but PutCalendarObject itself resolves
-// calendarID straight off the request path with no such re-check, so a
-// client holding a cached or guessed path could otherwise still reach
-// PutSeries directly once the Calendar's Source is writable. Expects
+// covers the CalDAV write seam directly (#290): a CalDAV PUT onto a Linked
+// Calendar is refused independent of Exposure (ADR-0080) or the Source's
+// mode, since Write-back (ADR-0075) is the only path meant to carry an edit
+// to the Provider — but PutCalendarObject itself resolves calendarID
+// straight off the request path with no re-check of its own, so a client
+// holding a cached or guessed path could otherwise still reach PutSeries
+// directly once the Calendar's Source is writable. Expects
 // repository.ErrNotFound, matching GetCalendar's own posture (a Calendar
 // that "doesn't exist" to CalDAV, not one that exists but refuses the
 // write).

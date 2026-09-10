@@ -680,14 +680,18 @@ func (s *EventService) PutSeries(ctx context.Context, userID int64, calendarID, 
 	if err != nil {
 		return repository.Event{}, nil, err
 	}
-	// ADR-0074 hides every Linked Calendar from CalDAV discovery
-	// unconditionally — caldavserver.GetCalendar 404s one directly, so no
-	// real client ever learns a path into one. This is the same refusal for
-	// a client that already holds (cached, or guessed) a path from before —
+	// A CalDAV PUT onto a Linked Calendar is refused outright, independent
+	// of Exposure (ADR-0080) and of the Source's mode: Write-back (ADR-0075)
+	// is the only path an edit reaches a Linked Calendar's Provider through,
+	// and letting a native client's PUT run EventService's ordinary write
+	// path here would bypass it entirely (#290, #292). Exposure can make a
+	// writable Linked Calendar's collection discoverable and its
+	// current-user-privilege-set advertise write (#297) — accepting a write
+	// there is #299's to build, not this refusal's to relax. Answers
 	// repository.ErrNotFound, not ErrLinkedCalendarWriteUnsupported, so a
-	// stale PUT looks exactly like one aimed at a Calendar that never
-	// existed, matching GetCalendar's own posture rather than confirming
-	// the Calendar is there but refusing the write on it (#290).
+	// PUT to a guessed or cached path looks exactly like one aimed at a
+	// Calendar that never existed, matching GetCalendar's own posture rather
+	// than confirming the Calendar is there but refusing the write on it.
 	if isConnectionSource(calendar) {
 		return repository.Event{}, nil, repository.ErrNotFound
 	}

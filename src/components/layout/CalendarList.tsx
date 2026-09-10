@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { formatDistanceToNow } from "date-fns";
 import { Menu } from "@base-ui/react/menu";
-import { MoreVertical, Plus, TriangleAlert, Users } from "lucide-react";
+import { Check, MoreVertical, Plus, TriangleAlert, Users } from "lucide-react";
 import { CalendarPickerModal } from "../../settings/CalendarPickerModal";
 import { IconButton } from "../ui/IconButton";
 import { iconButtonClasses } from "../ui/iconButtonClasses";
@@ -61,6 +61,7 @@ export function CalendarList() {
     (state) => state.toggleCalendarChecked,
   );
   const refreshCalendar = useCalendarsStore((state) => state.refreshCalendar);
+  const setCalendarExposure = useCalendarsStore((state) => state.setCalendarExposure);
   // Linked Calendars group by Connection, so the sidebar needs the
   // Connections themselves to label each heading — it can no longer rely on
   // the account Email riding along on every Calendar, which only the list
@@ -380,6 +381,27 @@ export function CalendarList() {
                   >
                     Export
                   </Menu.Item>
+                )}
+                {/* Exposure (#297, ADR-0080): the one surface both the
+                    Calendar's Owner and an accessor it was Shared to reach,
+                    since an accessor has no Connection of their own under
+                    Settings to find this beside. Speaks in terms of
+                    devices, never CalDAV. */}
+                {isLinked && (
+                  <Menu.CheckboxItem
+                    checked={Boolean(calendar.exposed)}
+                    onCheckedChange={(checked) => setCalendarExposure(calendar.id, checked)}
+                    closeOnClick={false}
+                    className={menuItemClasses}
+                  >
+                    <Menu.CheckboxItemIndicator
+                      keepMounted
+                      className="mr-2 flex size-3.5 shrink-0 items-center justify-center data-[unchecked]:opacity-0"
+                    >
+                      <Check className="size-3.5" />
+                    </Menu.CheckboxItemIndicator>
+                    Show on my devices
+                  </Menu.CheckboxItem>
                 )}
                 <div role="separator" className="my-1 border-t border-border" />
                 {canManage ? (
