@@ -59,6 +59,37 @@ describe("taskDropIntent", () => {
     expect(evening).toMatchObject({ durationMinutes: 60 });
   });
 
+  it("moves a Time block dropped on a Month Day cell, preserving the resolved time-of-day and its own duration (#315)", () => {
+    // The caller has already combined the target day with the block's own
+    // time-of-day (mirroring computeMoveToDate) before this is called — the
+    // resolved instant below stands in for that.
+    const resolvedDropTime = new Date(2026, 8, 20, 9, 0);
+
+    const result = taskDropIntent(
+      { kind: "timeBlock", durationMinutes: 90 },
+      { surface: "monthDay", date: resolvedDropTime },
+    );
+
+    expect(result).toEqual({ action: "setTimeBlock", start: resolvedDropTime, durationMinutes: 90 });
+    expect(result).not.toHaveProperty("due");
+  });
+
+  it("sets the Deadline and creates no Time block when a panel row is dropped on a Month Day cell (#315)", () => {
+    const dropDate = new Date(2026, 8, 21);
+
+    const result = taskDropIntent({ kind: "panelRow" }, { surface: "monthDay", date: dropDate });
+
+    expect(result).toEqual({ action: "setDeadlineAndClearTimeBlock", due: dropDate });
+  });
+
+  it("sets the Deadline and creates no Time block when an all-day chip is dropped on a Month Day cell (#315)", () => {
+    const dropDate = new Date(2026, 8, 22);
+
+    const result = taskDropIntent({ kind: "allDayChip" }, { surface: "monthDay", date: dropDate });
+
+    expect(result).toEqual({ action: "setDeadlineAndClearTimeBlock", due: dropDate });
+  });
+
   // A minimal model of a Task's two independent axes, updated by whichever
   // write taskDropIntent returns — just enough to drive the round trip below
   // without pulling in the real Task shape.

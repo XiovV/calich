@@ -2,14 +2,17 @@ import { format } from "date-fns";
 import { Menu } from "@base-ui/react/menu";
 import { MoreVertical } from "lucide-react";
 import { getCalendarBlockStyle } from "../../lib/calendarColors";
+import { computeMoveToDate } from "../../lib/gridTime";
 import { usePointerDrag } from "../../hooks/usePointerDrag";
 import { useTaskListsStore } from "../../lib/taskListsStore";
+import { getTaskListById } from "../../lib/taskListsApi";
 import { taskDropIntent } from "../../lib/taskDropIntent";
+import { taskTimeBlockEnd } from "../../lib/taskTimeBlockSegments";
 import type { Task } from "../../lib/tasksApi";
 import { useTasksStore } from "../../lib/tasksStore";
 import { TaskCompletionControl } from "./TaskCompletionControl";
 import { TaskDragPreview } from "../../calendar-grid/TaskDragPreview";
-import { resolveGridDropTime } from "../../calendar-grid/gridDropTargets";
+import { resolveGridDropTime, resolveMonthDropDate } from "../../calendar-grid/gridDropTargets";
 import { iconButtonClasses } from "../ui/iconButtonClasses";
 
 interface TaskRowProps {
@@ -20,11 +23,16 @@ interface TaskRowProps {
 const menuItemClasses =
   "flex cursor-default items-center px-3 py-1.5 text-body text-ink data-[highlighted]:bg-surface-hover";
 
-// TaskRow is one row inside a Task bucket (#310, #311, #313, ADR-0083): its
-// own Deadline beside the title, so Thursday's work reads differently from
-// Friday's inside the same bucket. A plain click opens the detail surface; a
-// drag onto the hourly grid gives it a Time block instead (issue #309 story
-// 47), reusing `usePointerDrag` — the same gesture-pure mousedown-origin /
+// TaskRow is one row inside a Task bucket (#310, #311, #313, #315,
+// ADR-0083): its own Deadline beside the title, so Thursday's work reads
+// differently from Friday's inside the same bucket. A plain click opens the
+// detail surface; a drag onto the hourly grid gives it a Time block instead
+// (issue #309 story 47). A drag onto a Month Day cell moves that Time block,
+// preserving its time-of-day, if the Task already has one — the row still
+// shows for an already-scheduled Task, bucketed by its own start when it
+// carries no Deadline — and otherwise gives it a Deadline instead: Month
+// never invents an hour from a gesture that named none (#315, ADR-0083).
+// Reuses `usePointerDrag` — the same gesture-pure mousedown-origin /
 // window-mousemove-mouseup hook every draggable Occurrence uses. It works
 // unmodified here even though the Task drag starts in a different DOM
 // subtree than the grid it can land on: `usePointerDrag` never touches the
@@ -34,13 +42,39 @@ export function TaskRow({ task, onOpenDetail }: TaskRowProps) {
   const setTaskCompleted = useTasksStore((state) => state.setTaskCompleted);
   const setTaskTimeBlock = useTasksStore((state) => state.setTaskTimeBlock);
   const clearTaskTimeBlock = useTasksStore((state) => state.clearTaskTimeBlock);
-  const taskList = useTaskListsStore((state) =>
-    state.taskLists.find((list) => list.id === task.taskListId),
+  const setTaskDeadlineAndClearTimeBlock = useTasksStore(
+    (state) => state.setTaskDeadlineAndClearTimeBlock,
   );
+  const taskList = useTaskListsStore((state) => getTaskListById(state.taskLists, task.taskListId));
 
   const drag = usePointerDrag<Task>({
     onClick: onOpenDetail,
     onDrag: (draggedTask, state) => {
+      const monthDate = resolveMonthDropDate(state.position.x, state.position.y);
+      if (monthDate) {
+        // A row in the panel isn't always a fresh, unscheduled Task — one
+        // already carrying a Time block still shows here (bucketed by its
+        // own start when it has no Deadline), so this drag has to read as
+        // "timeBlock", not a blanket "panelRow", or dropping it on a Month
+        // Day cell would wrongly wipe that block into a Deadline instead of
+        // preserving its time-of-day (#315, ADR-0083).
+        if (draggedTask.start) {
+          const { start } = computeMoveToDate(draggedTask.start, taskTimeBlockEnd(draggedTask), monthDate);
+          const write = taskDropIntent(
+            { kind: "timeBlock", durationMinutes: draggedTask.durationMinutes as number },
+            { surface: "monthDay", date: start },
+          );
+          if (write.action !== "setTimeBlock") return;
+          void setTaskTimeBlock(draggedTask.id, write.start, write.durationMinutes);
+          return;
+        }
+
+        const write = taskDropIntent({ kind: "panelRow" }, { surface: "monthDay", date: monthDate });
+        if (write.action !== "setDeadlineAndClearTimeBlock") return;
+        void setTaskDeadlineAndClearTimeBlock(draggedTask.id, write.due);
+        return;
+      }
+
       const dropTime = resolveGridDropTime(state.position.x, state.position.y);
       if (!dropTime) return;
       const write = taskDropIntent({ kind: "panelRow" }, { surface: "hourlyGrid", time: dropTime });

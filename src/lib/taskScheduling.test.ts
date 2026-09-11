@@ -5,6 +5,7 @@ import {
   bucketTasks,
   taskBucket,
   taskDeadlineFallsOnDay,
+  taskFallsOnMonthDay,
   taskPlacement,
   type PlaceableTask,
   type SchedulableTask,
@@ -197,6 +198,47 @@ describe("taskDeadlineFallsOnDay", () => {
 
     expect(taskDeadlineFallsOnDay(due, day, "America/New_York")).toBe(true);
     expect(taskDeadlineFallsOnDay(due, day, "Pacific/Auckland")).toBe(false);
+  });
+});
+
+describe("taskFallsOnMonthDay", () => {
+  function placeable(overrides: Partial<PlaceableTask> = {}): PlaceableTask {
+    return { start: null, due: null, ...overrides };
+  }
+
+  it("is false for a panel-only Task with neither a Time block nor a Deadline", () => {
+    const day = fromZonedTime(new Date(2026, 8, 15, 0, 0), "America/New_York");
+    expect(taskFallsOnMonthDay(placeable(), day, "America/New_York")).toBe(false);
+  });
+
+  it("is true when the Time block's start falls on day, in viewerZone", () => {
+    const start = fromZonedTime(new Date(2026, 8, 15, 14, 0), "America/New_York");
+    const day = fromZonedTime(new Date(2026, 8, 15, 0, 0), "America/New_York");
+    expect(taskFallsOnMonthDay(placeable({ start }), day, "America/New_York")).toBe(true);
+  });
+
+  it("is true when the Deadline falls on day and there is no Time block", () => {
+    const due = fromZonedTime(new Date(2026, 8, 15, 0, 0), "America/New_York");
+    const day = fromZonedTime(new Date(2026, 8, 15, 12, 0), "America/New_York");
+    expect(taskFallsOnMonthDay(placeable({ due }), day, "America/New_York")).toBe(true);
+  });
+
+  // ADR-0083: the Time block wins outright — a Task blocked Tuesday but due
+  // Friday renders on Tuesday's Month cell, not Friday's.
+  it("prefers the Time block's day over the Deadline's when both are present", () => {
+    const start = fromZonedTime(new Date(2026, 8, 15, 14, 0), "America/New_York");
+    const due = fromZonedTime(new Date(2026, 8, 18, 0, 0), "America/New_York");
+    const tuesday = fromZonedTime(new Date(2026, 8, 15, 0, 0), "America/New_York");
+    const friday = fromZonedTime(new Date(2026, 8, 18, 0, 0), "America/New_York");
+
+    expect(taskFallsOnMonthDay(placeable({ start, due }), tuesday, "America/New_York")).toBe(true);
+    expect(taskFallsOnMonthDay(placeable({ start, due }), friday, "America/New_York")).toBe(false);
+  });
+
+  it("is false when the effective date falls on a different calendar day than day", () => {
+    const start = fromZonedTime(new Date(2026, 8, 15, 14, 0), "America/New_York");
+    const day = fromZonedTime(new Date(2026, 8, 16, 0, 0), "America/New_York");
+    expect(taskFallsOnMonthDay(placeable({ start }), day, "America/New_York")).toBe(false);
   });
 });
 

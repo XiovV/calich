@@ -31,3 +31,22 @@ export function isPointOverTasksPanel(clientX: number, clientY: number): boolean
   const target = document.elementFromPoint(clientX, clientY);
   return target?.closest("[data-tasks-panel]") != null;
 }
+
+/**
+ * Resolves a drag's drop point to a Month Day cell's date (#315), against
+ * `data-cell-date` — the same attribute `MonthGrid`'s own `getCellDateAtPoint`
+ * reads for an Event drag, here read from `TaskRow`'s panel-drop gesture,
+ * which (unlike a drag already on the grid) has no `cells` array of its own
+ * to match against. `date.toDateString()` round-trips through `new Date()`
+ * unambiguously, so no such array is needed. `null` when the drop landed
+ * anywhere else, including the hourly grid or the all-day lane, neither of
+ * which carries this attribute.
+ */
+export function resolveMonthDropDate(clientX: number, clientY: number): Date | null {
+  const target = document.elementFromPoint(clientX, clientY);
+  const cellElement = target?.closest<HTMLElement>("[data-cell-date]");
+  const dateKey = cellElement?.dataset.cellDate;
+  if (!dateKey) return null;
+
+  return new Date(dateKey);
+}

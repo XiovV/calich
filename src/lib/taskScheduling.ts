@@ -87,12 +87,36 @@ export function taskPlacement(task: PlaceableTask): TaskPlacement {
  * whatever date its UTC instant happens to carry.
  */
 export function taskDeadlineFallsOnDay(due: Date, day: Date, viewerZone: string): boolean {
+  return instantFallsOnDay(due, day, viewerZone);
+}
+
+/**
+ * Whether `instant` falls on the same calendar date as `day`, in
+ * `viewerZone` — the general form `taskDeadlineFallsOnDay` specializes to a
+ * Deadline specifically. Used directly by `taskFallsOnMonthDay` (#315),
+ * which needs the same day comparison against whichever of a Task's two
+ * axes placement precedence picked, not a Deadline by name.
+ */
+function instantFallsOnDay(instant: Date, day: Date, viewerZone: string): boolean {
   return (
     differenceInCalendarDays(
-      zonedCalendarDay(due, viewerZone),
+      zonedCalendarDay(instant, viewerZone),
       zonedCalendarDay(day, viewerZone),
     ) === 0
   );
+}
+
+/**
+ * Whether `task` should render on `day` in Month view (#315, ADR-0083):
+ * placement precedence's Time-block-first, Deadline-second rule, collapsed
+ * to a single day test since Month draws both surfaces as one chip rather
+ * than splitting them across the hourly grid and the all-day lane the way
+ * Day/Week do. `false` for a panel-only Task (neither axis set).
+ */
+export function taskFallsOnMonthDay(task: PlaceableTask, day: Date, viewerZone: string): boolean {
+  const effective = task.start ?? task.due;
+  if (!effective) return false;
+  return instantFallsOnDay(effective, day, viewerZone);
 }
 
 /**

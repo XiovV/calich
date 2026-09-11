@@ -13,6 +13,17 @@ export interface TaskList {
   isDefault: boolean;
 }
 
+// getTaskListById mirrors calendar.ts's own getCalendarById — the same
+// find-by-id lookup every Task List colour resolution needs (TaskRow,
+// TaskBlock, TaskDeadlineChip, MonthTaskChip), kept in one place rather than
+// inlined at each call site.
+export function getTaskListById(
+  taskLists: TaskList[],
+  id: number,
+): TaskList | undefined {
+  return taskLists.find((list) => list.id === id);
+}
+
 export const taskListsApi = {
   // Every Task List the caller owns in the active Workspace.
   async list(accessToken: string): Promise<TaskList[]> {
