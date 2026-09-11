@@ -1,12 +1,14 @@
 import { fromZonedTime } from "date-fns-tz";
 import { describe, expect, it, vi } from "vitest";
 import {
-  compareTasksWithinBucket,
+  compareTasksWithinHeading,
   bucketTasks,
   taskBucket,
   taskDeadlineFallsOnDay,
   taskFallsOnMonthDay,
   taskPlacement,
+  tasksByPriorityLevel,
+  tasksByTaskList,
   type PlaceableTask,
   type SchedulableTask,
 } from "./taskScheduling";
@@ -104,19 +106,19 @@ describe("taskBucket", () => {
   });
 });
 
-describe("compareTasksWithinBucket", () => {
+describe("compareTasksWithinHeading", () => {
   it("orders an earlier Deadline before a later one", () => {
     const earlier = makeTask({ due: new Date(2026, 8, 10) });
     const later = makeTask({ due: new Date(2026, 8, 20) });
-    expect(compareTasksWithinBucket(earlier, later)).toBeLessThan(0);
-    expect(compareTasksWithinBucket(later, earlier)).toBeGreaterThan(0);
+    expect(compareTasksWithinHeading(earlier, later)).toBeLessThan(0);
+    expect(compareTasksWithinHeading(later, earlier)).toBeGreaterThan(0);
   });
 
   it("orders an undated Task after any dated one", () => {
     const dated = makeTask({ due: new Date(2026, 8, 10) });
     const undated = makeTask({ due: null });
-    expect(compareTasksWithinBucket(dated, undated)).toBeLessThan(0);
-    expect(compareTasksWithinBucket(undated, dated)).toBeGreaterThan(0);
+    expect(compareTasksWithinHeading(dated, undated)).toBeLessThan(0);
+    expect(compareTasksWithinHeading(undated, dated)).toBeGreaterThan(0);
   });
 
   it("breaks a Deadline tie by Priority descending (High before Medium before Low before None)", () => {
@@ -125,16 +127,16 @@ describe("compareTasksWithinBucket", () => {
     const medium = makeTask({ due, priority: 5 });
     const low = makeTask({ due, priority: 9 });
     const none = makeTask({ due, priority: 0 });
-    expect(compareTasksWithinBucket(high, medium)).toBeLessThan(0);
-    expect(compareTasksWithinBucket(medium, low)).toBeLessThan(0);
-    expect(compareTasksWithinBucket(low, none)).toBeLessThan(0);
+    expect(compareTasksWithinHeading(high, medium)).toBeLessThan(0);
+    expect(compareTasksWithinHeading(medium, low)).toBeLessThan(0);
+    expect(compareTasksWithinHeading(low, none)).toBeLessThan(0);
   });
 
   it("breaks a Deadline-and-Priority tie by creation time ascending", () => {
     const due = new Date(2026, 8, 10);
     const createdFirst = makeTask({ due, priority: 5, createdAt: new Date(2026, 0, 1) });
     const createdSecond = makeTask({ due, priority: 5, createdAt: new Date(2026, 0, 2) });
-    expect(compareTasksWithinBucket(createdFirst, createdSecond)).toBeLessThan(0);
+    expect(compareTasksWithinHeading(createdFirst, createdSecond)).toBeLessThan(0);
   });
 
   it("is a true tie (0) when Deadline, Priority and creation time all match", () => {
@@ -142,7 +144,7 @@ describe("compareTasksWithinBucket", () => {
     const createdAt = new Date(2026, 0, 1);
     const a = makeTask({ due, priority: 5, createdAt });
     const b = makeTask({ due, priority: 5, createdAt });
-    expect(compareTasksWithinBucket(a, b)).toBe(0);
+    expect(compareTasksWithinHeading(a, b)).toBe(0);
   });
 });
 
@@ -269,5 +271,83 @@ describe("bucketTasks", () => {
     expect(buckets.today).toEqual([todayUrgent, todaySoon]);
     expect(buckets.upcoming).toEqual([upcomingTask]);
     expect(buckets.noDate).toEqual([noDateTask]);
+  });
+});
+
+describe("tasksByPriorityLevel", () => {
+  it("splits Tasks into their four Priority headings, each pre-sorted", () => {
+    const due = new Date(2026, 8, 10);
+    const high = makeTask({ due, priority: 1 });
+    const anotherHigh = makeTask({ due: new Date(2026, 8, 5), priority: 2 });
+    const medium = makeTask({ due, priority: 5 });
+    const low = makeTask({ due, priority: 9 });
+    const none = makeTask({ due, priority: 0 });
+
+    const headings = tasksByPriorityLevel([medium, none, anotherHigh, low, high]);
+
+    expect(headings.high).toEqual([anotherHigh, high]);
+    expect(headings.medium).toEqual([medium]);
+    expect(headings.low).toEqual([low]);
+    expect(headings.none).toEqual([none]);
+  });
+
+  it("orders within one Priority level by the same Deadline-then-creation-time rule a Task bucket uses", () => {
+    const earlier = makeTask({ priority: 5, due: new Date(2026, 8, 10) });
+    const later = makeTask({ priority: 5, due: new Date(2026, 8, 20) });
+
+    const headings = tasksByPriorityLevel([later, earlier]);
+
+    expect(headings.medium).toEqual([earlier, later]);
+  });
+
+  it("breaks a Deadline tie within one Priority level by creation time ascending", () => {
+    const due = new Date(2026, 8, 10);
+    const createdFirst = makeTask({ priority: 5, due, createdAt: new Date(2026, 0, 1) });
+    const createdSecond = makeTask({ priority: 5, due, createdAt: new Date(2026, 0, 2) });
+
+    const headings = tasksByPriorityLevel([createdSecond, createdFirst]);
+
+    expect(headings.medium).toEqual([createdFirst, createdSecond]);
+  });
+
+  it("holds an empty array for a Priority level with no Tasks", () => {
+    const headings = tasksByPriorityLevel([makeTask({ priority: 1 })]);
+
+    expect(headings.low).toEqual([]);
+    expect(headings.none).toEqual([]);
+  });
+});
+
+describe("tasksByTaskList", () => {
+  function makeListTask(taskListId: number, overrides: Partial<SchedulableTask> = {}) {
+    return { ...makeTask(overrides), taskListId };
+  }
+
+  it("splits Tasks by their own Task List id, each pre-sorted", () => {
+    const workLater = makeListTask(1, { due: new Date(2026, 8, 20) });
+    const workEarlier = makeListTask(1, { due: new Date(2026, 8, 10) });
+    const homeTask = makeListTask(2, { due: new Date(2026, 8, 15) });
+
+    const headings = tasksByTaskList([workLater, homeTask, workEarlier]);
+
+    expect(headings.get(1)).toEqual([workEarlier, workLater]);
+    expect(headings.get(2)).toEqual([homeTask]);
+  });
+
+  it("breaks a Deadline tie within one Task List by Priority descending, then by creation time ascending", () => {
+    const due = new Date(2026, 8, 10);
+    const high = makeListTask(1, { due, priority: 1 });
+    const mediumCreatedFirst = makeListTask(1, { due, priority: 5, createdAt: new Date(2026, 0, 1) });
+    const mediumCreatedSecond = makeListTask(1, { due, priority: 5, createdAt: new Date(2026, 0, 2) });
+
+    const headings = tasksByTaskList([mediumCreatedSecond, high, mediumCreatedFirst]);
+
+    expect(headings.get(1)).toEqual([high, mediumCreatedFirst, mediumCreatedSecond]);
+  });
+
+  it("holds no entry for a Task List with no Tasks", () => {
+    const headings = tasksByTaskList([makeListTask(1)]);
+
+    expect(headings.has(2)).toBe(false);
   });
 });

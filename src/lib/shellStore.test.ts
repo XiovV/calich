@@ -17,6 +17,12 @@ describe("useShellStore", () => {
     expect(useShellStore.getState().tasksPanelOpen).toBe(false);
   });
 
+  // #316, ADR-0083: Group by resets to Task bucket on load rather than
+  // remembering the caller's last-chosen axis.
+  it("defaults tasksPanelAxis to taskBucket", () => {
+    expect(useShellStore.getState().tasksPanelAxis).toBe("taskBucket");
+  });
+
   // #312, ADR-0083: unlike tasksPanelOpen and showCompletedTasks, this one
   // defaults on — the calendar shows what's due unless the User turns it off.
   it("defaults showTasksOnCalendar to true", () => {
@@ -182,6 +188,19 @@ describe("setTasksPanelOpen", () => {
 
     useShellStore.getState().setTasksPanelOpen(false);
     expect(useShellStore.getState().tasksPanelOpen).toBe(false);
+  });
+});
+
+describe("setTasksPanelAxis", () => {
+  it("sets tasksPanelAxis", () => {
+    useShellStore.getState().setTasksPanelAxis("priority");
+    expect(useShellStore.getState().tasksPanelAxis).toBe("priority");
+
+    useShellStore.getState().setTasksPanelAxis("taskList");
+    expect(useShellStore.getState().tasksPanelAxis).toBe("taskList");
+
+    useShellStore.getState().setTasksPanelAxis("taskBucket");
+    expect(useShellStore.getState().tasksPanelAxis).toBe("taskBucket");
   });
 });
 

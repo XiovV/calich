@@ -5,6 +5,13 @@ import { reconcileCheckedIds } from "./reconcileCheckedIds";
 
 export type ActiveView = "day" | "week" | "month" | "year";
 
+// TasksPanelAxis is the Tasks panel's "Group by" choice (#316, ADR-0083):
+// which heading the panel currently arranges its Tasks under. Named around
+// "axis" rather than "group" deliberately — a Group already means a set of
+// Workspace Members in this codebase (CONTEXT.md), and the headings
+// themselves are Task buckets, Task Lists or Priorities, never "groups".
+export type TasksPanelAxis = "taskBucket" | "taskList" | "priority";
+
 interface ShellState {
   selectedDate: Date;
   activeView: ActiveView;
@@ -28,6 +35,10 @@ interface ShellState {
   // ADR-0083): closed by default, session state like activeCalendarSetId
   // with no Preference behind it and nothing persisted between loads.
   tasksPanelOpen: boolean;
+  // tasksPanelAxis is the panel's chosen Group by axis (#316, ADR-0083):
+  // session state like tasksPanelOpen, resetting to "taskBucket" on load
+  // rather than remembering the caller's last choice.
+  tasksPanelAxis: TasksPanelAxis;
   // checkedTaskListIds/knownTaskListIds are the Lists filter's own
   // checked/known pair — the Task List counterpart to
   // checkedCalendarIds/knownCalendarIds, carrying the identical reconcile
@@ -55,6 +66,7 @@ interface ShellState {
   setActiveView: (view: ActiveView) => void;
   setActiveCalendarSetId: (id: number | null) => void;
   setTasksPanelOpen: (open: boolean) => void;
+  setTasksPanelAxis: (axis: TasksPanelAxis) => void;
   setCheckedCalendarIds: (ids: Iterable<string>) => void;
   // reconcileCheckedCalendarIds auto-checks only ids not previously known —
   // e.g. a Calendar shared with the caller while the tab was in the
@@ -92,6 +104,7 @@ export const useShellStore = create<ShellState>((set) => ({
     useCalendarsStore.getState().calendars.map((calendar) => calendar.id),
   ),
   tasksPanelOpen: false,
+  tasksPanelAxis: "taskBucket",
   // Unlike checkedCalendarIds/knownCalendarIds above, not seeded from the
   // store at module-init time: taskListsStore sits downstream of authStore,
   // which itself imports shellStore, so reading it synchronously here would
@@ -111,6 +124,7 @@ export const useShellStore = create<ShellState>((set) => ({
   setActiveView: (view) => set({ activeView: view }),
   setActiveCalendarSetId: (id) => set({ activeCalendarSetId: id }),
   setTasksPanelOpen: (open) => set({ tasksPanelOpen: open }),
+  setTasksPanelAxis: (axis) => set({ tasksPanelAxis: axis }),
   setCheckedCalendarIds: (ids) => set({ checkedCalendarIds: new Set(ids) }),
   reconcileCheckedCalendarIds: (ids) =>
     set((state) => {

@@ -1,6 +1,6 @@
 import { differenceInCalendarDays } from "date-fns";
 import { toZonedTime } from "date-fns-tz";
-import { priorityRank } from "./taskPriority";
+import { priorityLevelFromValue, priorityRank, type PriorityLevel } from "./taskPriority";
 
 /**
  * The four headings the Tasks panel sorts Tasks under (#311, ADR-0083,
@@ -141,12 +141,14 @@ export function taskBucket(task: SchedulableTask, now: Date, viewerZone: string)
 }
 
 /**
- * Within-bucket ordering (#311, issue #309 story 24): Deadline ascending
- * with undated Tasks last, then Priority descending (by level, not the raw
- * value's own inverted scale — see `priorityRank`), then creation time
- * ascending, so the top of a bucket is reliably the thing to do next.
+ * Within-heading ordering (#311, #316, issue #309 story 24): Deadline
+ * ascending with undated Tasks last, then Priority descending (by level, not
+ * the raw value's own inverted scale — see `priorityRank`), then creation
+ * time ascending, so the top of a heading is reliably the thing to do next —
+ * on every Group by axis a Task bucket, a Task List, or a Priority level
+ * alike, since none of them carries an ordering of its own.
  */
-export function compareTasksWithinBucket(a: SchedulableTask, b: SchedulableTask): number {
+export function compareTasksWithinHeading(a: SchedulableTask, b: SchedulableTask): number {
   const dueDiff = compareDeadlineAscendingUndatedLast(a.due, b.due);
   if (dueDiff !== 0) return dueDiff;
 
@@ -165,7 +167,7 @@ function compareDeadlineAscendingUndatedLast(a: Date | null, b: Date | null): nu
 
 /**
  * `tasks` split into the four Task buckets, each already sorted by
- * `compareTasksWithinBucket` — what the Tasks panel renders directly.
+ * `compareTasksWithinHeading` — what the Tasks panel renders directly.
  * Generic over `T` so a caller can hand it real `Task`s (which carry an id,
  * title, etc. beyond `SchedulableTask`'s fields) and get them back typed.
  */
@@ -186,8 +188,69 @@ export function bucketTasks<T extends SchedulableTask>(
   }
 
   for (const bucket of TASK_BUCKET_ORDER) {
-    buckets[bucket].sort(compareTasksWithinBucket);
+    buckets[bucket].sort(compareTasksWithinHeading);
   }
 
   return buckets;
+}
+
+/**
+ * Priority levels High to None — the order the panel's Group by: Priority
+ * axis renders its headings in (#316, ADR-0083). The reverse of
+ * taskPriority.ts's own `PRIORITY_LEVELS` (ascending, for the detail
+ * surface's picker), which orders least to most rather than most pressing
+ * first.
+ */
+export const PRIORITY_HEADING_ORDER: readonly PriorityLevel[] = ["high", "medium", "low", "none"];
+
+/**
+ * `tasks` split by Priority level, each already sorted by
+ * `compareTasksWithinHeading` — the Group by: Priority axis's data source
+ * (#316, ADR-0083). Within-heading ordering is unchanged from a Task
+ * bucket's: Priority already breaks a Deadline tie there, so grouping by it
+ * outright doesn't disturb Deadline-then-creation-time ordering within one
+ * level.
+ */
+export function tasksByPriorityLevel<T extends SchedulableTask>(
+  tasks: T[],
+): Record<PriorityLevel, T[]> {
+  const headings: Record<PriorityLevel, T[]> = { none: [], low: [], medium: [], high: [] };
+
+  for (const task of tasks) {
+    headings[priorityLevelFromValue(task.priority)].push(task);
+  }
+
+  for (const level of PRIORITY_HEADING_ORDER) {
+    headings[level].sort(compareTasksWithinHeading);
+  }
+
+  return headings;
+}
+
+/**
+ * `tasks` split by their own Task List id, each already sorted by
+ * `compareTasksWithinHeading` — the Group by: Task List axis's data source
+ * (#316, ADR-0083). Keyed rather than pre-ordered: heading order and colour
+ * come from the Task Lists the panel already holds (the checked ones, in
+ * list order), so this only has to answer which Tasks belong under each id.
+ */
+export function tasksByTaskList<T extends SchedulableTask & { taskListId: number }>(
+  tasks: T[],
+): Map<number, T[]> {
+  const headings = new Map<number, T[]>();
+
+  for (const task of tasks) {
+    const forList = headings.get(task.taskListId);
+    if (forList) {
+      forList.push(task);
+    } else {
+      headings.set(task.taskListId, [task]);
+    }
+  }
+
+  for (const forList of headings.values()) {
+    forList.sort(compareTasksWithinHeading);
+  }
+
+  return headings;
 }
