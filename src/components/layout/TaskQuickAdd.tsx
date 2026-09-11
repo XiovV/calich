@@ -21,9 +21,12 @@ export function TaskQuickAdd() {
     const taskListId = resolveQuickAddTaskListId(taskLists, checkedTaskListIds);
     if (taskListId === null) return;
 
-    setTitle("");
     try {
       await createTask(trimmed, taskListId);
+      // Cleared only on success: clearing eagerly would lose the typed
+      // title on a failed create, with no dialog left open to recover it
+      // from.
+      setTitle("");
     } catch {
       toast.error("Couldn't create the task.");
     }

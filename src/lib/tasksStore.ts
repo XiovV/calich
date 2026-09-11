@@ -6,21 +6,22 @@ import type { TaskList } from "./taskListsApi";
 
 // The Tasks panel's own data source (#310, ADR-0083): every incomplete Task
 // the caller owns in the active Workspace, plus a bounded tail of completed
-// ones fetched only when "Show completed" asks. Mirrors taskListsStore's
-// shape for fetch/create/update/delete (ADR-0067's server-first discipline:
-// the surface showing the result is a dialog-less list, and each of those
-// writes already knows nothing more than what the server hands back).
-// Completion is the one write that IS optimistic — the click is the
-// feedback, and the client already knows the result before asking
-// (ADR-0067, ADR-0068).
+// ones fetched only when "Show completed" asks. fetchTasks/fetchCompletedTasks/
+// createTask mirror taskListsStore's server-first discipline (ADR-0067): the
+// surface showing the result is a dialog-less list, and each of those writes
+// already knows nothing more than what the server hands back. Completion is
+// the one write that IS optimistic — the click is the feedback, and the
+// client already knows the result before asking (ADR-0067, ADR-0068).
+// update and delete exist on the server (/api/tasks supports both) but
+// nothing in this ticket's UI calls either yet — no rename or delete
+// affordance on a Task row — so this store exposes only what quick-add and
+// the completion control actually use.
 interface TasksState {
   tasks: Task[];
   completedTasks: Task[];
   fetchTasks: () => Promise<void>;
   fetchCompletedTasks: () => Promise<void>;
   createTask: (title: string, taskListId: number) => Promise<Task>;
-  updateTask: (id: number, title: string) => Promise<void>;
-  deleteTask: (id: number) => Promise<void>;
   setTaskCompleted: (id: number, completed: boolean) => Promise<boolean>;
 }
 
@@ -71,19 +72,6 @@ export const useTasksStore = create<TasksState>((set, get) => ({
     const created = await tasksApi.create(requireAccessToken(), title, taskListId);
     set({ tasks: [...get().tasks, created] });
     return created;
-  },
-
-  updateTask: async (id, title) => {
-    const updated = await tasksApi.update(requireAccessToken(), id, title);
-    set({ tasks: get().tasks.map((t) => (t.id === id ? updated : t)) });
-  },
-
-  deleteTask: async (id) => {
-    await tasksApi.remove(requireAccessToken(), id);
-    set({
-      tasks: get().tasks.filter((t) => t.id !== id),
-      completedTasks: get().completedTasks.filter((t) => t.id !== id),
-    });
   },
 
   // setTaskCompleted paints the toggle immediately and puts it back on

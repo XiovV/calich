@@ -169,15 +169,19 @@ func (s *TaskListService) Delete(ctx context.Context, userID, workspaceID, id in
 		return ErrCannotDeleteDefaultTaskList
 	}
 
-	defaultList, err := s.taskLists.GetDefault(ctx, userID, workspaceID)
-	if err != nil {
-		return fmt.Errorf("get default task list: %w", err)
-	}
-
 	err = repository.WithTx(ctx, s.db, func(tx *sql.Tx) error {
 		txTasks := s.tasks.WithTx(tx)
 		txLists := s.taskLists.WithTx(tx)
 
+		// Read inside the same transaction as the reparent and the delete,
+		// not before it opens: reading which Task List is default earlier
+		// would let a concurrent SetDefault land in between, reparenting
+		// these Tasks to a Task List that is no longer the default by the
+		// time this transaction commits.
+		defaultList, err := txLists.GetDefault(ctx, userID, workspaceID)
+		if err != nil {
+			return err
+		}
 		if err := txTasks.ReparentToDefault(ctx, id, defaultList.ID, userID, workspaceID); err != nil {
 			return err
 		}

@@ -282,6 +282,27 @@ func TestTaskHandler_List_UnwindowedIncludesUndated(t *testing.T) {
 	}
 }
 
+// TestTaskHandler_List_ScopedToWorkspace covers the other half of scoping
+// TestTaskHandler_SecondUserCannotReadUpdateCompleteOrDeleteFirstsTask
+// doesn't: the same User, switching between two of their own Workspaces,
+// rather than two different Users.
+func TestTaskHandler_List_ScopedToWorkspace(t *testing.T) {
+	s := newTaskHandlerTestServer(t)
+	token, userID, firstWorkspaceID := s.register(t, "alice")
+	firstInboxID := s.defaultTaskListID(t, token, firstWorkspaceID)
+	s.createTask(t, token, firstWorkspaceID, firstInboxID, "Buy milk")
+
+	secondWorkspace, err := s.graph.Workspaces.CreateForOwner(context.Background(), userID, "Second workspace")
+	if err != nil {
+		t.Fatalf("create second workspace: %v", err)
+	}
+
+	tasks := s.listTasks(t, token, secondWorkspace.ID)
+	if len(tasks) != 0 {
+		t.Fatalf("expected no tasks from the first workspace to leak into the second, got %v", tasks)
+	}
+}
+
 func TestTaskHandler_List_ExcludesCompletedUnlessAsked(t *testing.T) {
 	s := newTaskHandlerTestServer(t)
 	token, _, workspaceID := s.register(t, "alice")

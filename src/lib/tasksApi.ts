@@ -6,7 +6,9 @@ import { workspaceHeaders } from "./workspaceHeaders";
 // Workspace via workspaceHeaders, same as every other Workspace-scoped
 // call. This ticket only ever reads/writes title and completed — notes,
 // due, start and priority exist on the server but nothing here sends them
-// yet.
+// yet. The server also supports update and delete (PATCH/DELETE
+// /api/tasks/{id}), but no UI here calls either yet, so this client omits
+// them until something needs to.
 
 export interface Task {
   id: number;
@@ -54,19 +56,6 @@ export const tasksApi = {
     return (await response.json()) as Task;
   },
 
-  // Renames id.
-  async update(accessToken: string, id: number, title: string): Promise<Task> {
-    const response = await authedFetch(accessToken, `/api/tasks/${id}`, {
-      method: "PATCH",
-      credentials: "include",
-      headers: workspaceHeaders({ "Content-Type": "application/json" }),
-      body: JSON.stringify({ title }),
-    });
-    if (!response.ok) throw await errorFromResponse(response);
-
-    return (await response.json()) as Task;
-  },
-
   // Marks id completed.
   async complete(accessToken: string, id: number): Promise<Task> {
     const response = await authedFetch(accessToken, `/api/tasks/${id}/complete`, {
@@ -91,13 +80,4 @@ export const tasksApi = {
     return (await response.json()) as Task;
   },
 
-  // Deletes id outright.
-  async remove(accessToken: string, id: number): Promise<void> {
-    const response = await authedFetch(accessToken, `/api/tasks/${id}`, {
-      method: "DELETE",
-      credentials: "include",
-      headers: workspaceHeaders(),
-    });
-    if (!response.ok) throw await errorFromResponse(response);
-  },
 };
