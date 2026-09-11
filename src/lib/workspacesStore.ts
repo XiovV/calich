@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { useAuthStore } from "./authStore";
+import { useShellStore } from "./shellStore";
 import { workspacesApi, type Workspace } from "./workspacesApi";
 
 interface WorkspacesState {
@@ -43,5 +44,10 @@ export const useWorkspacesStore = create<WorkspacesState>((set, get) => ({
   setActiveWorkspaceId: (id) => {
     if (!get().workspaces.some((workspace) => workspace.id === id)) return;
     set({ activeWorkspaceId: id });
+    // A Calendar Set belongs to one Workspace (ADR-0082): its id could
+    // coincide with an unrelated Set's in the one just entered, or point at
+    // nothing there at all. Every Workspace switch lands back on "All
+    // calendars" rather than risk looking through either (#304).
+    useShellStore.getState().setActiveCalendarSetId(null);
   },
 }));

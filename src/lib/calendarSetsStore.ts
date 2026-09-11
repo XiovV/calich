@@ -47,6 +47,15 @@ export const useCalendarSetsStore = create<CalendarSetsState>((set, get) => ({
   deleteCalendarSet: async (id) => {
     await calendarSetsApi.remove(requireAccessToken(), id);
     set({ calendarSets: get().calendarSets.filter((s) => s.id !== id) });
+    // Deleting the Set currently being looked through falls back to "All
+    // calendars" rather than leaving the caller looking through something
+    // that no longer exists (#304). A stale id already degrades to "All
+    // calendars" wherever useActiveCalendarSet resolves it, but the
+    // switcher's own selection needs activeCalendarSetId itself cleared to
+    // render that fallback rather than nothing checked at all.
+    if (useShellStore.getState().activeCalendarSetId === id) {
+      useShellStore.getState().setActiveCalendarSetId(null);
+    }
   },
 
   // Both immediate-effect, no save step (#302): the toggle in the

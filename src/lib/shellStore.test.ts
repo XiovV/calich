@@ -5,6 +5,12 @@ describe("useShellStore", () => {
   it("defaults activeView to week", () => {
     expect(useShellStore.getState().activeView).toBe("week");
   });
+
+  // #304, ADR-0082: no Preference seeds this, unlike Default view — every
+  // reload starts on "All calendars" since the store itself re-initializes.
+  it("defaults activeCalendarSetId to null (All calendars)", () => {
+    expect(useShellStore.getState().activeCalendarSetId).toBeNull();
+  });
 });
 
 describe("reconcileCheckedCalendarIds", () => {
