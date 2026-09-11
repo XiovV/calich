@@ -357,6 +357,44 @@ _Avoid_: calendar group (Group is a set of Members), collection, folder, profile
 The Calendar Set a Session is currently looking through, or none — the default, shown as "All calendars". Narrows *what exists* in the UI rather than what is switched on: a Calendar outside it is absent from the sidebar and from the Event modal's Calendar picker, not unchecked. Leaves Calendar toggle alone, which stays one global answer per Calendar, so the grid renders what is both in the Active Calendar Set and toggled on. Session state in the same sense Active view is, but with no Preference seeding it: every load and every Workspace switch returns to "All calendars", deliberately and not as a memory of where the User last was. Invisible below the UI — Exposure still decides CalDAV home-set membership, and Reminders, Notifications and Write-back are all indifferent to what their User happens to be looking through today. See ADR-0082.
 _Avoid_: current set, selected set, set filter, scope
 
+## Tasks
+
+**Task**:
+A unit of work a User tracks, belonging to exactly one Task List and private to its owner. Modelled on iCalendar's `VTODO` — the entity an Event is deliberately not: it may carry no time at all, where an Event is defined by having one. Carries a Deadline and a Time block on two independent axes, each separately absent, and their presence alone decides where it renders, with no discriminator beside them: a Time block draws it on the hourly grid, a Deadline alone puts it in the all-day lane, and neither leaves it in the Tasks panel only. Never an Event and never backed by one — time-blocking a Task sets its own fields rather than creating an Event, because an Event lives on a Calendar and would publish a private Task to everyone with Access. See ADR-0083.
+_Avoid_: todo, item, action item, ticket (that is a Provider's word for its own issues, coming later)
+
+**Deadline**:
+When a Task is due, held as its `VTODO` `DUE`. Absent by default. The *only* thing that decides which Task bucket a Task falls in when it has one, and deliberately independent of the Time block: "due Friday, worked on Tuesday" is the ordinary case for time-blocking, not a conflict to reconcile, so a Deadline is never moved or overwritten by scheduling work against it. See ADR-0083.
+_Avoid_: due date (it may carry a time), due, target date
+
+**Time block**:
+The window a User has scheduled to work on a Task, held as its `VTODO` `DTSTART` plus a duration — never as `DUE`, which RFC 5545 makes mutually exclusive with `DURATION` and which means a deadline rather than an end. What a Task dragged onto the grid acquires, and what it renders as there, drawn in its Task List's color. Absent by default, and absent again if the block is dragged back off. Not an Event and not backed by one, but shares the grid with Occurrences and so competes with them for horizontal space in overlap layout (ADR-0004). See ADR-0083.
+_Avoid_: scheduled time, work block, task event, block (too general)
+
+**Task bucket**:
+One of the four headings the Tasks panel derives for a Task — **Overdue**, **Today**, **Upcoming**, or **No date** — computed at render from its Deadline against today in the Viewer zone, falling back to its Time block's start when it has no Deadline, and **No date** when it has neither. Computed, never stored, in exactly the sense an Occurrence is: nothing moves a Task from Upcoming to Today at midnight, because there is nothing stored to move — the panel re-derives and the Task is elsewhere. A Task with a Friday Deadline blocked on Tuesday is Upcoming, since a Deadline always wins over a Time block; the panel answers "when is this due", the grid answers "when am I doing it". See ADR-0083.
+_Avoid_: group (Group is a set of Workspace Members — a hard collision), section, category, status (that is completion)
+
+**Task List**:
+A named, private container of Tasks belonging to one User within one Workspace. A container, not a filter — a Task belongs to exactly one, which is what separates it from a Calendar Set (a saved filter over Calendars, where membership is many-to-many and optional). Deliberately not a Calendar: it holds no Events, and Access, Share, Role, Source and Exposure are all concepts it does not have, its read path being `WHERE user_id = ?` on the same terms as a Calendar Set. Carries its own color, which is what a Task's Time block renders in — a Task on the grid takes no Calendar color, having no Calendar. Exactly one of a User's Task Lists per Workspace is the **default**, an ordinary row carrying a movable flag rather than a hardcoded absence: it is where a Task with no stated Task List goes, where a deleted Task List's Tasks are reparented, and the one Task List that cannot itself be deleted while it holds the flag. Auto-created as "Inbox" when a `(User, Workspace)` pair comes into being, and renameable and recolorable afterward like any other. See ADR-0082, ADR-0083.
+_Avoid_: list (too general — it collides with the ordinary programming word in both prose and code), task group, project, folder, calendar (it is not one)
+
+**Completion**:
+Whether a Task is done, held as the instant it was completed and absent while it is not — never a status enum. `VTODO`'s other `STATUS` values (`IN-PROCESS`, `CANCELLED`) and `PERCENT-COMPLETE` are deliberately unmodelled: nothing in this app can produce one, there being no CalDAV or Provider path inbound to Tasks, so modelling them would carry three values unreachable by construction. Deliberately unlike Response, which models all four `PARTSTAT` values precisely because a mail client can send any of them. Toggled by one click with no confirmation (ADR-0068) and written optimistically (ADR-0067), from the Tasks panel or from the Task's Time block on the grid — which is why completing one leaves the block in place, rendered completed, rather than removing it from under the cursor. Never affects which Task bucket a Task falls in: one completed late stays under Overdue, struck through, because it was. See ADR-0026, ADR-0046, ADR-0083.
+_Avoid_: done, status (that is `VTODO`'s enum, which this is not), checked, complete (as a noun)
+
+There is deliberately **no term for a repeating Task.** A `VTODO` may carry an `RRULE`, but a recurring todo's completion has no good resting place: completing one instance must produce the next, which means either storing instances — contradicting the computed-never-stored rule Task bucket and Occurrence both hold to — or mutating the row's Deadline on every completion. Recurrence on a Task is unmodelled rather than partly modelled.
+
+**Priority**:
+How important a Task is — **None** (the default), **Low**, **Medium** or **High** — held as `VTODO`'s `PRIORITY` and mapped to its 0–9 range rather than to an enum of this app's own, so the numeric value a native client writes survives. One of the three axes the Tasks panel can group by, and the only one of them that is a stored field rather than something derived. See ADR-0083.
+_Avoid_: importance, urgency (that is what a Deadline expresses), severity, rank
+
+**Tasks panel**:
+The right-hand panel holding a User's Tasks, toggled from the top bar and closed by default. Shows Tasks from the Task Lists currently checked in its Lists filter, arranged under one grouping axis at a time — by Task bucket, by Task List, or by Priority — and hiding completed ones unless asked. All of its view state is the Session's, in `shellStore` beside Active view and the Active Calendar Set, with no Preference behind any of it and nothing persisted between loads. Its Lists filter is the Task List counterpart to Calendar toggle and carries the same reconcile rule: a Task List unseen at the last reconcile is checked automatically, one deliberately unchecked stays unchecked. See ADR-0082, ADR-0083.
+_Avoid_: task sidebar (Sidebar is the left one), todo panel, right sidebar, drawer
+
+There is deliberately **no Reminder on a Task.** A Reminder belongs to one User on one Event, is resolved server-side against per-Calendar Default reminders, and is served per-principal over CalDAV (ADR-0020, ADR-0064) — extending all of that to a second entity is a feature rather than a field, and a second parallel reminder path would have to be merged back into the first. A Deadline therefore notifies nobody in this cut. Subtasks (`RELATED-TO`), tags (`CATEGORIES`), Attachments and Location are unmodelled on the same terms: cheap to add later, not free to add badly now.
+
 ## Deployment
 
 **Data directory**:
