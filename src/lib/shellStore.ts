@@ -34,6 +34,10 @@ interface ShellState {
   // rule via reconcileCheckedIds (#317, ADR-0083).
   checkedTaskListIds: Set<number>;
   knownTaskListIds: Set<number>;
+  // showCompletedTasks is "Show completed" (#310, ADR-0083): session state
+  // like tasksPanelOpen, closed (hidden) by default and with no Preference
+  // behind it — reopening the panel later starts hidden again.
+  showCompletedTasks: boolean;
   // requestedEventId is set by a click on an invite Notification (the
   // NotificationBell has no reach into AppShell's own eventModalState) and
   // cleared once AppShell has resolved it into an opened EventModal — a
@@ -67,6 +71,7 @@ interface ShellState {
   reconcileCheckedTaskListIds: (ids: Iterable<number>) => void;
   toggleTaskListChecked: (id: number) => void;
   addCheckedTaskListId: (id: number) => void;
+  setShowCompletedTasks: (show: boolean) => void;
 }
 
 export const useShellStore = create<ShellState>((set) => ({
@@ -90,6 +95,7 @@ export const useShellStore = create<ShellState>((set) => ({
   // function's body.
   checkedTaskListIds: new Set<number>(),
   knownTaskListIds: new Set<number>(),
+  showCompletedTasks: false,
   requestedEventId: null,
   requestEventOpen: (eventId) => set({ requestedEventId: eventId }),
   clearRequestedEventOpen: () => set({ requestedEventId: null }),
@@ -152,6 +158,7 @@ export const useShellStore = create<ShellState>((set) => ({
       checkedTaskListIds: new Set(state.checkedTaskListIds).add(id),
       knownTaskListIds: new Set(state.knownTaskListIds).add(id),
     })),
+  setShowCompletedTasks: (show) => set({ showCompletedTasks: show }),
 }));
 
 // Shared by every caller that refetches Calendars and needs the checked set

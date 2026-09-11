@@ -58,6 +58,7 @@ type App struct {
 	GroupHandler        *handlers.GroupHandler
 	CalendarSetHandler  *handlers.CalendarSetHandler
 	TaskListHandler     *handlers.TaskListHandler
+	TaskHandler         *handlers.TaskHandler
 	ConnectionHandler   *handlers.ConnectionHandler
 
 	CalDAVBackend *caldavserver.Backend
@@ -122,6 +123,7 @@ func newFromGraph(graph *service.Graph, cfg config.Config) *App {
 	a.GroupHandler = handlers.NewGroupHandler(a.Groups)
 	a.CalendarSetHandler = handlers.NewCalendarSetHandler(a.CalendarSets)
 	a.TaskListHandler = handlers.NewTaskListHandler(a.TaskLists)
+	a.TaskHandler = handlers.NewTaskHandler(a.Tasks)
 	a.ConnectionHandler = handlers.NewConnectionHandler(a.Connections)
 
 	a.CalDAVBackend = caldavserver.NewBackend(a.Calendars, a.Events, a.Attachments, cfg.MaxAttachmentSize, cfg.MaxAttachmentsPerEvent)

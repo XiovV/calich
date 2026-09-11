@@ -67,6 +67,7 @@ type Graph struct {
 	GroupRepo            *repository.GroupRepository
 	CalendarSetRepo      *repository.CalendarSetRepository
 	TaskListRepo         *repository.TaskListRepository
+	TaskRepo             *repository.TaskRepository
 	NotificationRepo     *repository.NotificationRepository
 	AppPasswordRepo      *repository.AppPasswordRepository
 	FiredReminderRepo    *repository.FiredReminderRepository
@@ -94,6 +95,7 @@ type Graph struct {
 	Groups        *GroupService
 	CalendarSets  *CalendarSetService
 	TaskLists     *TaskListService
+	Tasks         *TaskService
 	Imports       *ImportService
 	Notifications *NotificationService
 	Subscriptions *SubscribeService
@@ -222,6 +224,7 @@ func NewGraph(sqlDB *sql.DB, cfg config.Config, opts ...GraphOption) (*Graph, er
 		GroupRepo:            repository.NewGroupRepository(sqlDB),
 		CalendarSetRepo:      repository.NewCalendarSetRepository(sqlDB),
 		TaskListRepo:         repository.NewTaskListRepository(sqlDB),
+		TaskRepo:             repository.NewTaskRepository(sqlDB),
 		NotificationRepo:     repository.NewNotificationRepository(sqlDB),
 		AppPasswordRepo:      repository.NewAppPasswordRepository(sqlDB),
 		FiredReminderRepo:    repository.NewFiredReminderRepository(sqlDB),
@@ -231,7 +234,8 @@ func NewGraph(sqlDB *sql.DB, cfg config.Config, opts ...GraphOption) (*Graph, er
 
 	g.RateLimiter = NewAuthRateLimiter(g.RateLimitRepo, cfg.AuthRateLimitPerEmail, cfg.AuthRateLimitPerIP, cfg.RegisterRateLimitPerIP)
 	g.Workspaces = NewWorkspaceService(sqlDB, g.WorkspaceRepo, g.WorkspaceInviteRepo, g.CalendarRepo, g.ShareRepo, g.TaskListRepo)
-	g.TaskLists = NewTaskListService(sqlDB, g.TaskListRepo)
+	g.TaskLists = NewTaskListService(sqlDB, g.TaskListRepo, g.TaskRepo)
+	g.Tasks = NewTaskService(g.TaskRepo, g.TaskListRepo)
 	g.Groups = NewGroupService(g.GroupRepo, g.WorkspaceRepo)
 	g.Calendars = NewCalendarService(sqlDB, g.CalendarRepo, g.SourceRepo, g.ShareRepo, g.UserRepo, g.EventReminderRepo, g.DefaultReminderRepo, g.ExplicitReminderRepo, g.ColorOverrideRepo, g.ExposureRepo, g.WorkspaceRepo, g.GroupShareRepo, g.GroupRepo)
 	// CalendarSets needs Calendars for AddCalendar's Access check (#302,

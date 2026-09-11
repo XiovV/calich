@@ -35,10 +35,11 @@ var (
 type TaskListService struct {
 	db        *sql.DB
 	taskLists *repository.TaskListRepository
+	tasks     *repository.TaskRepository
 }
 
-func NewTaskListService(db *sql.DB, taskLists *repository.TaskListRepository) *TaskListService {
-	return &TaskListService{db: db, taskLists: taskLists}
+func NewTaskListService(db *sql.DB, taskLists *repository.TaskListRepository, tasks *repository.TaskRepository) *TaskListService {
+	return &TaskListService{db: db, taskLists: taskLists, tasks: tasks}
 }
 
 // ListForUser returns every Task List userID owns inside workspaceID.
@@ -156,7 +157,9 @@ func (s *TaskListService) SetDefault(ctx context.Context, userID, workspaceID, i
 
 // Delete removes id outright, scoped to userID and workspaceID, refusing
 // while it holds the default flag (ADR-0083) — promote another Task List to
-// default first via SetDefault.
+// default first via SetDefault. Its Tasks are reparented to the caller's
+// default Task List in the same transaction as the delete (#310, ADR-0083),
+// so deleting a container never silently deletes work.
 func (s *TaskListService) Delete(ctx context.Context, userID, workspaceID, id int64) error {
 	list, err := s.taskLists.GetByID(ctx, id, userID, workspaceID)
 	if err != nil {
@@ -166,7 +169,21 @@ func (s *TaskListService) Delete(ctx context.Context, userID, workspaceID, id in
 		return ErrCannotDeleteDefaultTaskList
 	}
 
-	if err := s.taskLists.Delete(ctx, id, userID, workspaceID); err != nil {
+	defaultList, err := s.taskLists.GetDefault(ctx, userID, workspaceID)
+	if err != nil {
+		return fmt.Errorf("get default task list: %w", err)
+	}
+
+	err = repository.WithTx(ctx, s.db, func(tx *sql.Tx) error {
+		txTasks := s.tasks.WithTx(tx)
+		txLists := s.taskLists.WithTx(tx)
+
+		if err := txTasks.ReparentToDefault(ctx, id, defaultList.ID, userID, workspaceID); err != nil {
+			return err
+		}
+		return txLists.Delete(ctx, id, userID, workspaceID)
+	})
+	if err != nil {
 		return fmt.Errorf("delete task list: %w", err)
 	}
 	return nil

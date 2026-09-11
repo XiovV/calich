@@ -97,6 +97,25 @@ func scanTaskListRow(row rowScanner) (TaskList, error) {
 	return l, err
 }
 
+// GetDefault returns the Task List currently holding the default flag for
+// (userID, workspaceID) — exactly one always does (ADR-0083). Used by
+// TaskListService.Delete to find where a deleted Task List's Tasks are
+// reparented to.
+func (r *TaskListRepository) GetDefault(ctx context.Context, userID, workspaceID int64) (TaskList, error) {
+	row := r.db.QueryRowContext(ctx,
+		`SELECT `+taskListColumns+` FROM task_lists WHERE user_id = ? AND workspace_id = ? AND is_default = 1`,
+		userID, workspaceID,
+	)
+	list, err := scanTaskListRow(row)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return TaskList{}, ErrNotFound
+		}
+		return TaskList{}, fmt.Errorf("scan default task list: %w", err)
+	}
+	return list, nil
+}
+
 // Rename updates id's name, scoped to userID and workspaceID like GetByID.
 func (r *TaskListRepository) Rename(ctx context.Context, id, userID, workspaceID int64, name string) (TaskList, error) {
 	res, err := r.db.ExecContext(ctx,
