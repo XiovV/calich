@@ -6,6 +6,13 @@ export type ActiveView = "day" | "week" | "month" | "year";
 interface ShellState {
   selectedDate: Date;
   activeView: ActiveView;
+  // activeCalendarSetId is the Active Calendar Set (#303, ADR-0082): null
+  // means "All calendars", the absence of a Set rather than a row of its
+  // own. Session state like selectedDate and activeView, but with no
+  // reconcile behaviour of its own and no effect on checkedCalendarIds —
+  // narrowing what exists and narrowing what's toggled on are kept
+  // orthogonal. See inScopeCalendars.
+  activeCalendarSetId: number | null;
   checkedCalendarIds: Set<string>;
   // knownCalendarIds is the Calendar ids seen as of the last reconcile — the
   // record that lets it tell "wasn't there last time" (auto-check) apart
@@ -24,6 +31,7 @@ interface ShellState {
   clearRequestedEventOpen: () => void;
   setSelectedDate: (date: Date) => void;
   setActiveView: (view: ActiveView) => void;
+  setActiveCalendarSetId: (id: number | null) => void;
   setCheckedCalendarIds: (ids: Iterable<string>) => void;
   // reconcileCheckedCalendarIds auto-checks only ids not previously known —
   // e.g. a Calendar shared with the caller while the tab was in the
@@ -45,6 +53,7 @@ interface ShellState {
 export const useShellStore = create<ShellState>((set) => ({
   selectedDate: new Date(),
   activeView: "week",
+  activeCalendarSetId: null,
   checkedCalendarIds: new Set(
     useCalendarsStore.getState().calendars.map((calendar) => calendar.id),
   ),
@@ -56,6 +65,7 @@ export const useShellStore = create<ShellState>((set) => ({
   clearRequestedEventOpen: () => set({ requestedEventId: null }),
   setSelectedDate: (date) => set({ selectedDate: date }),
   setActiveView: (view) => set({ activeView: view }),
+  setActiveCalendarSetId: (id) => set({ activeCalendarSetId: id }),
   setCheckedCalendarIds: (ids) => set({ checkedCalendarIds: new Set(ids) }),
   reconcileCheckedCalendarIds: (ids) =>
     set((state) => {

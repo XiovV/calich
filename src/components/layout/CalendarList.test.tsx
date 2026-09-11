@@ -26,6 +26,7 @@ const { useEventsStore } = await import("../../lib/eventsStore");
 const { useShellStore } = await import("../../lib/shellStore");
 const { useWorkspacesStore } = await import("../../lib/workspacesStore");
 const { useConnectionsStore } = await import("../../lib/connectionsStore");
+const { useCalendarSetsStore } = await import("../../lib/calendarSetsStore");
 const { connectionsApi } = await import("../../lib/connectionsApi");
 const { calendarsApi } = await import("../../lib/calendarsApi");
 const { CalendarList } = await import("./CalendarList");
@@ -53,8 +54,9 @@ beforeEach(() => {
   vi.clearAllMocks();
   useAuthStore.setState({ accessToken: "token-123" });
   useEventsStore.setState({ events: [] });
-  useShellStore.setState({ checkedCalendarIds: new Set<string>() });
+  useShellStore.setState({ checkedCalendarIds: new Set<string>(), activeCalendarSetId: null });
   useConnectionsStore.setState({ connections: [] });
+  useCalendarSetsStore.setState({ calendarSets: [] });
 });
 
 async function openMenu(calendarName: string) {
@@ -289,5 +291,107 @@ describe("Linked Calendar Exposure toggle", () => {
 
     expect(calendarsApi.setExposure).toHaveBeenCalledWith("token-123", "cal-owned-linked", true);
     expect(useCalendarsStore.getState().calendars.find((c) => c.id === "cal-owned-linked")?.exposed).toBe(true);
+  });
+});
+
+// #303, ADR-0082: the sidebar narrows to the Active Calendar Set before
+// grouping, so an out-of-Set Calendar is absent rather than unchecked.
+describe("Calendar Set narrowing", () => {
+  const workCalendar: Calendar = {
+    id: "cal-work",
+    name: "Work",
+    color: "#8E44ADFF",
+    access: "owner",
+    isOwner: true,
+  };
+  const personalCalendar: Calendar = {
+    id: "cal-personal",
+    name: "Personal",
+    color: "#3498DBFF",
+    access: "owner",
+    isOwner: true,
+  };
+  const feedCalendar: Calendar = {
+    id: "cal-feed",
+    name: "Holidays",
+    color: "#2ECC71FF",
+    access: "owner",
+    isOwner: true,
+    sourceUrl: "https://example.com/feed.ics",
+  };
+  const workSet = { id: 1, name: "Work", calendarIds: ["cal-work"] };
+
+  it("renders an out-of-Set Calendar's row as absent, not merely unchecked", () => {
+    useCalendarsStore.setState({ calendars: [workCalendar, personalCalendar] });
+    useCalendarSetsStore.setState({ calendarSets: [workSet] });
+    useShellStore.setState({
+      checkedCalendarIds: new Set(["cal-work", "cal-personal"]),
+      activeCalendarSetId: workSet.id,
+    });
+    render(<CalendarList />);
+
+    expect(screen.getByText("Work")).toBeInTheDocument();
+    expect(screen.queryByText("Personal")).not.toBeInTheDocument();
+    expect(screen.queryByRole("checkbox", { name: "Personal" })).not.toBeInTheDocument();
+  });
+
+  it("keeps a surviving heading, filtered to its in-Set Calendars", () => {
+    useCalendarsStore.setState({ calendars: [workCalendar, personalCalendar] });
+    useCalendarSetsStore.setState({ calendarSets: [workSet] });
+    useShellStore.setState({
+      checkedCalendarIds: new Set(["cal-work", "cal-personal"]),
+      activeCalendarSetId: workSet.id,
+    });
+    render(<CalendarList />);
+
+    expect(screen.getByText("My calendars")).toBeInTheDocument();
+  });
+
+  it("hides a heading with no in-Set Calendars left under it", () => {
+    useCalendarsStore.setState({ calendars: [workCalendar, feedCalendar] });
+    useCalendarSetsStore.setState({ calendarSets: [workSet] });
+    useShellStore.setState({
+      checkedCalendarIds: new Set(["cal-work", "cal-feed"]),
+      activeCalendarSetId: workSet.id,
+    });
+    render(<CalendarList />);
+
+    expect(screen.getByText("My calendars")).toBeInTheDocument();
+    expect(screen.queryByText("Subscribed calendars")).not.toBeInTheDocument();
+  });
+
+  it("keeps every heading, even an empty one, while All calendars is active", () => {
+    useCalendarsStore.setState({ calendars: [workCalendar] });
+    useCalendarSetsStore.setState({ calendarSets: [workSet] });
+    useShellStore.setState({
+      checkedCalendarIds: new Set(["cal-work"]),
+      activeCalendarSetId: null,
+    });
+    render(<CalendarList />);
+
+    expect(screen.getByText("My calendars")).toBeInTheDocument();
+    expect(screen.getByText("Subscribed calendars")).toBeInTheDocument();
+  });
+
+  it("keeps a Calendar's toggle value across a Set switch and back", async () => {
+    useCalendarsStore.setState({ calendars: [workCalendar, personalCalendar] });
+    useCalendarSetsStore.setState({ calendarSets: [workSet] });
+    useShellStore.setState({
+      checkedCalendarIds: new Set(["cal-work", "cal-personal"]),
+      activeCalendarSetId: null,
+    });
+    render(<CalendarList />);
+
+    await userEvent.click(screen.getByRole("checkbox", { name: "Personal" }));
+    expect(useShellStore.getState().checkedCalendarIds.has("cal-personal")).toBe(false);
+
+    // Switching into a Set that excludes "Personal" hides its row entirely;
+    // switching back to All calendars must not have touched its checked
+    // value while it was gone.
+    useShellStore.setState({ activeCalendarSetId: workSet.id });
+    useShellStore.setState({ activeCalendarSetId: null });
+
+    expect(useShellStore.getState().checkedCalendarIds.has("cal-personal")).toBe(false);
+    expect(screen.getByRole("checkbox", { name: "Personal" })).toHaveAttribute("aria-checked", "false");
   });
 });

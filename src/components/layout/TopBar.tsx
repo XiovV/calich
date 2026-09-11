@@ -6,6 +6,7 @@ import { useVersion } from "../../hooks/useVersion";
 import { navigateDate } from "../../lib/navigateDate";
 import { formatDateLabel } from "../../lib/formatDateLabel";
 import { UserMenu } from "../../auth/UserMenu";
+import { CalendarSetSwitcher } from "./CalendarSetSwitcher";
 import { ViewSwitcher } from "./ViewSwitcher";
 import { WorkspaceSwitcher } from "./WorkspaceSwitcher";
 import { ThemeToggle } from "./ThemeToggle";
@@ -63,6 +64,7 @@ export function TopBar() {
 
       <div className="ml-auto flex items-center gap-2">
         <WorkspaceSwitcher />
+        <CalendarSetSwitcher />
         <ViewSwitcher />
         <ThemeToggle />
         <NotificationBell />

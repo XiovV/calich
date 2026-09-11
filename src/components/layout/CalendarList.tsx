@@ -8,6 +8,8 @@ import { iconButtonClasses } from "../ui/iconButtonClasses";
 import { canManageCalendar, isLinkedCalendar, shareCountTooltip, type Calendar } from "../../lib/calendar";
 import { connectionGroupLabel, groupCalendarsForSidebar, UNRESOLVED_CONNECTION } from "../../lib/calendarGrouping";
 import { resolveCalendarFill } from "../../lib/calendarColors";
+import { inScopeCalendars } from "../../lib/calendarSetScope";
+import { useActiveCalendarSet } from "../../lib/calendarSetsStore";
 import { useAuthStore } from "../../lib/authStore";
 import { useCalendarsStore } from "../../lib/calendarsStore";
 import { useConnectionsStore } from "../../lib/connectionsStore";
@@ -103,11 +105,24 @@ export function CalendarList() {
   } | null>(null);
   const [isConfirmingExport, setIsConfirmingExport] = useState(false);
 
+  // Narrowed to the Active Calendar Set before grouping (#303, ADR-0082):
+  // an out-of-Set Calendar is absent from every heading below, not merely
+  // unchecked — CalendarToggle still reads off the untouched
+  // checkedCalendarIds, so a Calendar's toggle value survives switching
+  // Sets even while its row is gone. isSetActive gates whether an emptied
+  // heading below hides itself: "no Calendars at all" (today's ordinary
+  // empty state, headings stay so their Add buttons stay reachable) reads
+  // differently from "none left in this Set" (ADR-0082's "hidden rather
+  // than merely unchecked").
+  const activeCalendarSet = useActiveCalendarSet();
+  const isSetActive = activeCalendarSet !== null;
+  const visibleCalendars = inScopeCalendars(calendars, activeCalendarSet);
+
   // Grouped exactly as the Calendar Set membership dialog groups them
   // (#302, ADR-0082) — see calendarGrouping.ts, the one place this logic
   // lives.
   const { myCalendars, subscribedCalendars, linkedByConnection: linkedCalendarsByConnection, sharedCalendars } =
-    groupCalendarsForSidebar(calendars);
+    groupCalendarsForSidebar(visibleCalendars);
 
   const deletingCalendar = calendars.find(
     (calendar) => calendar.id === deletingCalendarId,
@@ -376,33 +391,44 @@ export function CalendarList() {
 
   return (
     <div>
-      <div className="flex items-center justify-between py-2 ps-5 pe-2">
-        <p className="text-label-sm font-medium text-ink-muted">
-          My calendars
-        </p>
-        <IconButton
-          size="tiny"
-          onClick={() => setIsCreateOpen(true)}
-          aria-label="Add calendar"
-        >
-          <Plus className="size-4" />
-        </IconButton>
-      </div>
-      <ul>{myCalendars.map(renderCalendarItem)}</ul>
+      {/* Hidden only once a Set has narrowed this heading's own group to
+          nothing (#303) — with no Set active, it stays put even at zero
+          Calendars, exactly as today, so its Add button stays reachable. */}
+      {(!isSetActive || myCalendars.length > 0) && (
+        <>
+          <div className="flex items-center justify-between py-2 ps-5 pe-2">
+            <p className="text-label-sm font-medium text-ink-muted">
+              My calendars
+            </p>
+            <IconButton
+              size="tiny"
+              onClick={() => setIsCreateOpen(true)}
+              aria-label="Add calendar"
+            >
+              <Plus className="size-4" />
+            </IconButton>
+          </div>
+          <ul>{myCalendars.map(renderCalendarItem)}</ul>
+        </>
+      )}
 
-      <div className="flex items-center justify-between py-2 ps-5 pe-2">
-        <p className="text-label-sm font-medium text-ink-muted">
-          Subscribed calendars
-        </p>
-        <IconButton
-          size="tiny"
-          onClick={() => setIsSubscribeOpen(true)}
-          aria-label="Subscribe to a calendar"
-        >
-          <Plus className="size-4" />
-        </IconButton>
-      </div>
-      <ul>{subscribedCalendars.map(renderCalendarItem)}</ul>
+      {(!isSetActive || subscribedCalendars.length > 0) && (
+        <>
+          <div className="flex items-center justify-between py-2 ps-5 pe-2">
+            <p className="text-label-sm font-medium text-ink-muted">
+              Subscribed calendars
+            </p>
+            <IconButton
+              size="tiny"
+              onClick={() => setIsSubscribeOpen(true)}
+              aria-label="Subscribe to a calendar"
+            >
+              <Plus className="size-4" />
+            </IconButton>
+          </div>
+          <ul>{subscribedCalendars.map(renderCalendarItem)}</ul>
+        </>
+      )}
 
       {/* One heading per Connection, labelled with the connected account's
           Email (#286) — two connected accounts produce two separate

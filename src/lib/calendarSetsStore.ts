@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { useAuthStore } from "./authStore";
 import { type CalendarSet, calendarSetsApi } from "./calendarSetsApi";
+import { useShellStore } from "./shellStore";
 
 // The Calendar Sets Settings Section's data source (#301, #302): every
 // Calendar Set the caller owns in the active Workspace, each carrying its
@@ -71,3 +72,16 @@ export const useCalendarSetsStore = create<CalendarSetsState>((set, get) => ({
     });
   },
 }));
+
+// useActiveCalendarSet resolves shellStore's activeCalendarSetId against
+// this store's own list (#303, ADR-0082) — the one place that lookup
+// happens, shared by the sidebar, the grid, and the top-bar switcher.
+// Resolves to null both for "All calendars" and for an id this store
+// doesn't (yet, or any longer) carry, so a stale id left over from a
+// Workspace or Set the caller has since lost degrades to "All calendars"
+// rather than throwing.
+export function useActiveCalendarSet(): CalendarSet | null {
+  const activeCalendarSetId = useShellStore((state) => state.activeCalendarSetId);
+  const calendarSets = useCalendarSetsStore((state) => state.calendarSets);
+  return calendarSets.find((calendarSet) => calendarSet.id === activeCalendarSetId) ?? null;
+}
