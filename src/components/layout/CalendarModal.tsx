@@ -4,6 +4,7 @@ import { canManageCalendar, isSubscribedCalendar, type Calendar } from "../../li
 import { getNextUnusedColor } from "../../lib/calendarColors";
 import { calendarsApi } from "../../lib/calendarsApi";
 import { useAuthStore } from "../../lib/authStore";
+import { useActiveCalendarSet, useCalendarSetsStore } from "../../lib/calendarSetsStore";
 import { useCalendarsStore } from "../../lib/calendarsStore";
 import { createCalendarCascade } from "../../lib/createCalendarCascade";
 import type { Reminder } from "../../lib/event";
@@ -44,6 +45,12 @@ export function CalendarModal(props: CalendarModalProps) {
   const emailAvailable = useAuthStore(
     (state) => state.user?.emailReminderChannelAvailable ?? false,
   );
+  // Add-to-Set checkbox (#308, ADR-0082): present only on create and only
+  // while a Set is active, unticked by default so a Set's membership only
+  // ever changes because the User asked.
+  const activeCalendarSet = useActiveCalendarSet();
+  const addCalendarToSet = useCalendarSetsStore((state) => state.addCalendarToSet);
+  const [addToActiveSet, setAddToActiveSet] = useState(false);
 
   const [name, setName] = useState(mode === "edit" ? props.calendar.name : "");
   const [color, setColor] = useState(() =>
@@ -154,6 +161,11 @@ export function CalendarModal(props: CalendarModalProps) {
       // isOwner, so without it the New-event modal's Calendar picker treats
       // the brand-new Calendar as unwritable and hides it until reload.
       createCalendarCascade({ id, name: name.trim(), color, isOwner: true, access: "owner" });
+      if (activeCalendarSet && addToActiveSet) {
+        addCalendarToSet(activeCalendarSet.id, id).catch(() =>
+          toast.error("Failed to add the calendar to the set."),
+        );
+      }
       props.onCreated?.(id);
     }
     onClose();
@@ -229,6 +241,17 @@ export function CalendarModal(props: CalendarModalProps) {
               <ColorSwatchPicker value={color} onValueChange={setColor} />
             </div>
           </div>
+
+          {mode === "create" && activeCalendarSet && (
+            <label className="mt-4 flex items-start gap-2 text-label-sm text-ink">
+              <Checkbox
+                checked={addToActiveSet}
+                onCheckedChange={setAddToActiveSet}
+                aria-label={`Add to ${activeCalendarSet.name}`}
+              />
+              <span>Add to {activeCalendarSet.name}</span>
+            </label>
+          )}
 
           {calendarId && (
             <>

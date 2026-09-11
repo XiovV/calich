@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
 import { Dialog } from "@base-ui/react/dialog";
+import { useActiveCalendarSet, useCalendarSetsStore } from "../lib/calendarSetsStore";
 import { useConnectionsStore } from "../lib/connectionsStore";
 import { useEventsStore } from "../lib/eventsStore";
 import { refetchCalendarsAndReconcile } from "../lib/shellStore";
+import { toast } from "../lib/toast";
 import { type PickerCalendar } from "../lib/connectionsApi";
 import { useWorkspacesStore } from "../lib/workspacesStore";
 import { deleteCalendarCascade } from "../lib/deleteCalendarCascade";
@@ -40,6 +42,12 @@ export function CalendarPickerModal({ connectionId, onClose }: CalendarPickerMod
   // time, throwing "No active workspace" on the request workspaceHeaders()
   // builds before AppShell's fetch has had a chance to answer.
   const activeWorkspaceId = useWorkspacesStore((state) => state.activeWorkspaceId);
+  // Add-to-Set checkbox (#308, ADR-0082): one checkbox covers the whole
+  // batch rather than one per row, present only while a Set is active and
+  // unticked by default.
+  const activeCalendarSet = useActiveCalendarSet();
+  const addCalendarToSet = useCalendarSetsStore((state) => state.addCalendarToSet);
+  const [addToActiveSet, setAddToActiveSet] = useState(false);
 
   const [calendars, setCalendars] = useState<PickerCalendar[] | null>(null);
   const [checkedIds, setCheckedIds] = useState<Set<string>>(new Set());
@@ -155,7 +163,16 @@ export function CalendarPickerModal({ connectionId, onClose }: CalendarPickerMod
     setIsImporting(true);
     setError(null);
     try {
-      await importCalendars(connectionId, toImport);
+      const imported = await importCalendars(connectionId, toImport);
+      if (activeCalendarSet && addToActiveSet) {
+        await Promise.all(
+          imported.map((calendar) =>
+            addCalendarToSet(activeCalendarSet.id, calendar.id).catch(() =>
+              toast.error(`Failed to add "${calendar.name}" to the set.`),
+            ),
+          ),
+        );
+      }
       // The picker's whole point is calendars appearing on the grid
       // immediately (#286) — a full re-fetch, not a local append, since the
       // server resolves each new Calendar's Access/isOwner/ownerName/
@@ -234,6 +251,17 @@ export function CalendarPickerModal({ connectionId, onClose }: CalendarPickerMod
                 </li>
               ))}
             </ul>
+          )}
+
+          {activeCalendarSet && (
+            <label className="mt-4 flex items-start gap-2 text-label-sm text-ink">
+              <Checkbox
+                checked={addToActiveSet}
+                onCheckedChange={setAddToActiveSet}
+                aria-label={`Add to ${activeCalendarSet.name}`}
+              />
+              <span>Add to {activeCalendarSet.name}</span>
+            </label>
           )}
 
           <div className="mt-5 flex justify-end gap-2">
