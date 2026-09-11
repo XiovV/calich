@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { MemoryRouter, Route, Routes } from "react-router";
 import type { Calendar } from "../../lib/calendar";
 
 // Same convention as the other component tests: the *Api modules are mocked,
@@ -59,6 +60,21 @@ beforeEach(() => {
   useCalendarSetsStore.setState({ calendarSets: [] });
 });
 
+// CalendarList now navigates to Settings' Calendar sets Section from the
+// empty-Set state (#306), so every render needs a Router context for
+// useNavigate to work. The destination route is a stand-in, not the real
+// Section — CalendarList only needs to prove it asked to go there.
+function renderCalendarList() {
+  return render(
+    <MemoryRouter>
+      <Routes>
+        <Route path="/" element={<CalendarList />} />
+        <Route path="/settings/calendar-sets" element={<div>Calendar sets destination</div>} />
+      </Routes>
+    </MemoryRouter>,
+  );
+}
+
 async function openMenu(calendarName: string) {
   await userEvent.click(screen.getByRole("button", { name: `${calendarName} actions` }));
 }
@@ -66,7 +82,7 @@ async function openMenu(calendarName: string) {
 describe("CalendarList row menu", () => {
   it("offers Share on a calendar the viewer owns", async () => {
     useCalendarsStore.setState({ calendars: [owned] });
-    render(<CalendarList />);
+    renderCalendarList();
 
     await openMenu("Personal");
 
@@ -75,7 +91,7 @@ describe("CalendarList row menu", () => {
 
   it("omits Share entirely on a calendar the viewer only has Editor Access to", async () => {
     useCalendarsStore.setState({ calendars: [editorAccess] });
-    render(<CalendarList />);
+    renderCalendarList();
 
     await openMenu("Team");
 
@@ -112,7 +128,7 @@ describe("Linked Calendar grouping", () => {
 
   it("shows one heading per Connection's account email", () => {
     useCalendarsStore.setState({ calendars: [owned, workLinked, personalLinked] });
-    render(<CalendarList />);
+    renderCalendarList();
 
     expect(screen.getByText("work@gmail.com")).toBeInTheDocument();
     expect(screen.getByText("personal@gmail.com")).toBeInTheDocument();
@@ -122,7 +138,7 @@ describe("Linked Calendar grouping", () => {
 
   it("keeps a Linked Calendar out of My calendars", () => {
     useCalendarsStore.setState({ calendars: [owned, workLinked] });
-    render(<CalendarList />);
+    renderCalendarList();
 
     expect(screen.getByText("My calendars")).toBeInTheDocument();
     // "Work" only ever renders under its Connection's own heading.
@@ -135,7 +151,7 @@ describe("Linked Calendar grouping", () => {
     useWorkspacesStore.setState({ activeWorkspaceId: 7 });
     vi.mocked(connectionsApi.listPickerCalendars).mockResolvedValue([]);
     useCalendarsStore.setState({ calendars: [{ ...workLinked, connectionId: 42 }] });
-    render(<CalendarList />);
+    renderCalendarList();
 
     await userEvent.click(
       screen.getByRole("button", { name: "Choose calendars from work@gmail.com" }),
@@ -161,7 +177,7 @@ describe("Linked Calendar grouping", () => {
       connectionAccountEmail: "bob@gmail.com",
     };
     useCalendarsStore.setState({ calendars: [owned, sharedLinked] });
-    render(<CalendarList />);
+    renderCalendarList();
 
     expect(screen.getByText("Shared with me")).toBeInTheDocument();
     // No Connection heading is rendered — that grouping is the Owner's, and
@@ -188,7 +204,7 @@ describe("Linked Calendar grouping", () => {
     // Exactly what calendarsApi.get returns: the Connection id, no Email.
     const refreshed: Calendar = { ...workLinked, connectionAccountEmail: undefined };
     useCalendarsStore.setState({ calendars: [owned, refreshed] });
-    render(<CalendarList />);
+    renderCalendarList();
 
     expect(screen.getByText("work@gmail.com")).toBeInTheDocument();
     expect(screen.queryByText("Unknown account")).not.toBeInTheDocument();
@@ -207,7 +223,7 @@ describe("Linked Calendar grouping", () => {
     const sibling: Calendar = { ...workLinked, id: "cal-work-2", name: "Work Two" };
     const refreshed: Calendar = { ...workLinked, connectionAccountEmail: undefined };
     useCalendarsStore.setState({ calendars: [refreshed, sibling] });
-    render(<CalendarList />);
+    renderCalendarList();
 
     expect(screen.getAllByText("work@gmail.com")).toHaveLength(1);
     expect(screen.queryByText("Unknown account")).not.toBeInTheDocument();
@@ -217,7 +233,7 @@ describe("Linked Calendar grouping", () => {
   // Subscribed one — and, like one, offers no per-Calendar Export.
   it("offers Refresh and not Export on a Linked Calendar", async () => {
     useCalendarsStore.setState({ calendars: [workLinked] });
-    render(<CalendarList />);
+    renderCalendarList();
 
     await openMenu("Work");
 
@@ -255,7 +271,7 @@ describe("Linked Calendar Exposure toggle", () => {
 
   it("offers the toggle to the Linked Calendar's own Owner, reflecting the resolved default", async () => {
     useCalendarsStore.setState({ calendars: [ownedLinked] });
-    render(<CalendarList />);
+    renderCalendarList();
 
     await openMenu("Work");
 
@@ -265,7 +281,7 @@ describe("Linked Calendar Exposure toggle", () => {
 
   it("also offers the toggle to an accessor it was Shared to, reflecting their own resolved default", async () => {
     useCalendarsStore.setState({ calendars: [owned, sharedLinked] });
-    render(<CalendarList />);
+    renderCalendarList();
 
     await openMenu("Colleague's Google");
 
@@ -275,7 +291,7 @@ describe("Linked Calendar Exposure toggle", () => {
 
   it("omits the toggle on a Calendar that isn't Linked", async () => {
     useCalendarsStore.setState({ calendars: [owned] });
-    render(<CalendarList />);
+    renderCalendarList();
 
     await openMenu("Personal");
 
@@ -284,7 +300,7 @@ describe("Linked Calendar Exposure toggle", () => {
 
   it("writes the caller's own choice when toggled", async () => {
     useCalendarsStore.setState({ calendars: [ownedLinked] });
-    render(<CalendarList />);
+    renderCalendarList();
 
     await openMenu("Work");
     await userEvent.click(await screen.findByRole("menuitemcheckbox", { name: "Show on my devices" }));
@@ -328,7 +344,7 @@ describe("Calendar Set narrowing", () => {
       checkedCalendarIds: new Set(["cal-work", "cal-personal"]),
       activeCalendarSetId: workSet.id,
     });
-    render(<CalendarList />);
+    renderCalendarList();
 
     expect(screen.getByText("Work")).toBeInTheDocument();
     expect(screen.queryByText("Personal")).not.toBeInTheDocument();
@@ -342,7 +358,7 @@ describe("Calendar Set narrowing", () => {
       checkedCalendarIds: new Set(["cal-work", "cal-personal"]),
       activeCalendarSetId: workSet.id,
     });
-    render(<CalendarList />);
+    renderCalendarList();
 
     expect(screen.getByText("My calendars")).toBeInTheDocument();
   });
@@ -354,7 +370,7 @@ describe("Calendar Set narrowing", () => {
       checkedCalendarIds: new Set(["cal-work", "cal-feed"]),
       activeCalendarSetId: workSet.id,
     });
-    render(<CalendarList />);
+    renderCalendarList();
 
     expect(screen.getByText("My calendars")).toBeInTheDocument();
     expect(screen.queryByText("Subscribed calendars")).not.toBeInTheDocument();
@@ -367,7 +383,7 @@ describe("Calendar Set narrowing", () => {
       checkedCalendarIds: new Set(["cal-work"]),
       activeCalendarSetId: null,
     });
-    render(<CalendarList />);
+    renderCalendarList();
 
     expect(screen.getByText("My calendars")).toBeInTheDocument();
     expect(screen.getByText("Subscribed calendars")).toBeInTheDocument();
@@ -380,7 +396,7 @@ describe("Calendar Set narrowing", () => {
       checkedCalendarIds: new Set(["cal-work", "cal-personal"]),
       activeCalendarSetId: null,
     });
-    render(<CalendarList />);
+    renderCalendarList();
 
     await userEvent.click(screen.getByRole("checkbox", { name: "Personal" }));
     expect(useShellStore.getState().checkedCalendarIds.has("cal-personal")).toBe(false);
@@ -393,5 +409,59 @@ describe("Calendar Set narrowing", () => {
 
     expect(useShellStore.getState().checkedCalendarIds.has("cal-personal")).toBe(false);
     expect(screen.getByRole("checkbox", { name: "Personal" })).toHaveAttribute("aria-checked", "false");
+  });
+});
+
+// #306, ADR-0082: an empty Active Calendar Set — created empty, or emptied by
+// cascade when a Share was revoked or a Calendar deleted — names itself in
+// the sidebar rather than rendering nothing, and offers both a route to
+// manage Sets and a way back to "All calendars". The grid renders nothing in
+// this state too, via the same inScopeCalendars answer CalendarList itself
+// uses; that absence needs no message of its own.
+describe("Empty Calendar Set", () => {
+  const emptySet = { id: 2, name: "Empty", calendarIds: [] };
+  const workCalendar: Calendar = {
+    id: "cal-work",
+    name: "Work",
+    color: "#8E44ADFF",
+    access: "owner",
+    isOwner: true,
+  };
+
+  function activateEmptySet() {
+    useCalendarsStore.setState({ calendars: [workCalendar] });
+    useCalendarSetsStore.setState({ calendarSets: [emptySet] });
+    useShellStore.setState({
+      checkedCalendarIds: new Set(["cal-work"]),
+      activeCalendarSetId: emptySet.id,
+    });
+  }
+
+  it("names the situation instead of rendering nothing", () => {
+    activateEmptySet();
+    renderCalendarList();
+
+    expect(screen.getByText(`"${emptySet.name}" has no calendars in it.`)).toBeInTheDocument();
+    expect(screen.queryByText("My calendars")).not.toBeInTheDocument();
+    expect(screen.queryByText("Work")).not.toBeInTheDocument();
+  });
+
+  it("offers a route to the Calendar Sets Settings Section", async () => {
+    activateEmptySet();
+    renderCalendarList();
+
+    await userEvent.click(screen.getByRole("button", { name: "Manage sets" }));
+
+    expect(await screen.findByText("Calendar sets destination")).toBeInTheDocument();
+  });
+
+  it("offers a way back to All calendars", async () => {
+    activateEmptySet();
+    renderCalendarList();
+
+    await userEvent.click(screen.getByRole("button", { name: "Back to All calendars" }));
+
+    expect(useShellStore.getState().activeCalendarSetId).toBeNull();
+    expect(await screen.findByText("My calendars")).toBeInTheDocument();
   });
 });

@@ -1,8 +1,10 @@
 import { useEffect, useState } from "react";
 import { formatDistanceToNow } from "date-fns";
 import { Menu } from "@base-ui/react/menu";
-import { Check, MoreVertical, Plus, TriangleAlert, Users } from "lucide-react";
+import { Check, Layers, MoreVertical, Plus, TriangleAlert, Users } from "lucide-react";
+import { useNavigate } from "react-router";
 import { CalendarPickerModal } from "../../settings/CalendarPickerModal";
+import { Button } from "../ui/Button";
 import { IconButton } from "../ui/IconButton";
 import { iconButtonClasses } from "../ui/iconButtonClasses";
 import { canManageCalendar, isLinkedCalendar, shareCountTooltip, type Calendar } from "../../lib/calendar";
@@ -53,6 +55,7 @@ function subscriptionErrorReason(calendar: Calendar): string | undefined {
 }
 
 export function CalendarList() {
+  const navigate = useNavigate();
   const calendars = useCalendarsStore((state) => state.calendars);
   const events = useEventsStore((state) => state.events);
   const accessToken = useAuthStore((state) => state.accessToken);
@@ -60,6 +63,7 @@ export function CalendarList() {
   const toggleCalendarChecked = useShellStore(
     (state) => state.toggleCalendarChecked,
   );
+  const setActiveCalendarSetId = useShellStore((state) => state.setActiveCalendarSetId);
   const refreshCalendar = useCalendarsStore((state) => state.refreshCalendar);
   const setCalendarExposure = useCalendarsStore((state) => state.setCalendarExposure);
   // Linked Calendars group by Connection, so the sidebar needs the
@@ -117,6 +121,14 @@ export function CalendarList() {
   const activeCalendarSet = useActiveCalendarSet();
   const isSetActive = activeCalendarSet !== null;
   const visibleCalendars = inScopeCalendars(calendars, activeCalendarSet);
+  // An empty Active Calendar Set is a legitimate state (#306, ADR-0082),
+  // reached either by creating one empty or by every member falling out via
+  // cascade (a revoked Share, a deleted Calendar). Named explicitly rather
+  // than falling through to the ordinary heading logic below, which would
+  // render nothing at all and read as a loading failure. The grid renders
+  // nothing here too, via the same inScopeCalendars answer — that absence is
+  // correct and needs no message of its own.
+  const isEmptySet = isSetActive && visibleCalendars.length === 0;
 
   // Grouped exactly as the Calendar Set membership dialog groups them
   // (#302, ADR-0082) — see calendarGrouping.ts, the one place this logic
@@ -391,9 +403,35 @@ export function CalendarList() {
 
   return (
     <div>
+      {isEmptySet && activeCalendarSet && (
+        <div className="flex flex-col items-center gap-3 px-5 py-10 text-center">
+          <Layers className="size-8 text-ink-muted" aria-hidden="true" />
+          <p className="text-body text-ink">
+            "{activeCalendarSet.name}" has no calendars in it.
+          </p>
+          <div className="flex flex-col items-stretch gap-2">
+            <Button
+              size="small"
+              onClick={() => navigate("/settings/calendar-sets")}
+            >
+              Manage sets
+            </Button>
+            <Button
+              variant="ghost"
+              size="small"
+              onClick={() => setActiveCalendarSetId(null)}
+            >
+              Back to All calendars
+            </Button>
+          </div>
+        </div>
+      )}
+
       {/* Hidden only once a Set has narrowed this heading's own group to
           nothing (#303) — with no Set active, it stays put even at zero
-          Calendars, exactly as today, so its Add button stays reachable. */}
+          Calendars, exactly as today, so its Add button stays reachable.
+          isEmptySet already implies myCalendars is empty here, so no
+          separate guard is needed for it. */}
       {(!isSetActive || myCalendars.length > 0) && (
         <>
           <div className="flex items-center justify-between py-2 ps-5 pe-2">
