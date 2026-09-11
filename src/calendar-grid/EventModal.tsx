@@ -71,6 +71,8 @@ import {
   type CalendarPickerEmptyReason,
 } from "../lib/calendar";
 import { resolveOccurrenceColor, toOpaqueHex } from "../lib/calendarColors";
+import { inScopeCalendars } from "../lib/calendarSetScope";
+import { useActiveCalendarSet } from "../lib/calendarSetsStore";
 import { ColorSwatchPicker } from "../components/layout/ColorSwatchPicker";
 import { CalendarModal } from "../components/layout/CalendarModal";
 import { useShellStore } from "../lib/shellStore";
@@ -112,6 +114,8 @@ const CALENDAR_EMPTY_STATE_COPY: Record<CalendarPickerEmptyReason, string> = {
     "Your calendars are all hidden. Show one in the sidebar to add events to it.",
   unwritable:
     "You don't have a calendar you can add events to — everything you can see is shared with view-only access.",
+  outOfSet:
+    "This calendar set has nothing you can add events to. Switch to All calendars to see the rest of your calendars.",
 };
 
 type EventModalProps =
@@ -271,6 +275,7 @@ export function EventModal(props: EventModalProps) {
   const { mode, onClose } = props;
 
   const checkedCalendarIds = useShellStore((state) => state.checkedCalendarIds);
+  const activeCalendarSet = useActiveCalendarSet();
   const events = useEventsStore((state) => state.events);
   const fetchEvents = useEventsStore((state) => state.fetchEvents);
   const addEvent = useEventsStore((state) => state.addEvent);
@@ -302,10 +307,17 @@ export function EventModal(props: EventModalProps) {
   // (#111, ADR-0034) — a Subscribed Calendar (Refresh is its only
   // legitimate writer, #84, ADR-0032) and a Calendar the caller has no more
   // than Viewer Access to both never appear as Calendar picker options,
-  // whether checked or not.
+  // whether checked or not. Deliberately unscoped by the Active Calendar
+  // Set: the eventForOptions rescue just below still needs to find an
+  // edited Event's own Calendar here even if it has since fallen out of
+  // the Set, the same grace it already gets for falling out of checked.
   const writableCalendars = calendars.filter((c) => canWriteCalendarEvents(c));
+  // The picker itself narrows to in-Set, checked, writable (#305,
+  // ADR-0082) — a second way of not seeing a Calendar, exactly like
+  // unchecked, so defaultCalendarId below falls inside the Active Calendar
+  // Set by construction rather than needing its own Set-awareness.
   const checkedCalendars = getCheckedCalendars(
-    writableCalendars,
+    inScopeCalendars(writableCalendars, activeCalendarSet),
     checkedCalendarIds,
   );
   // An event's calendar may have been unchecked (hidden) since it was created —
@@ -369,13 +381,22 @@ export function EventModal(props: EventModalProps) {
   const showAttachmentUploader =
     mode === "edit" && calendarHasOtherRecipients(editedCalendar);
 
-  // #174: when no Calendar is a valid write target, the picker's empty
-  // state names why instead of rendering an empty dropdown next to a
+  // #174, #305: when no Calendar is a valid write target, the picker's
+  // empty state names why instead of rendering an empty dropdown next to a
   // silently disabled Save — the remedy differs per reason (create one,
-  // show one, or neither applies).
+  // show one, switch to All calendars, or neither applies). calendars is
+  // narrowed to the Active Calendar Set's own membership here, exactly as
+  // ADR-0082 asks — a Set that's itself empty must report "outOfSet"
+  // regardless of what the caller owns outside it, which is why this
+  // passes the narrowed list rather than the full one calendarOptions
+  // above deliberately doesn't (see its own comment).
   const calendarEmptyReason =
     calendarOptions.length === 0
-      ? calendarPickerEmptyReason(calendars, checkedCalendarIds)
+      ? calendarPickerEmptyReason(
+          inScopeCalendars(calendars, activeCalendarSet),
+          checkedCalendarIds,
+          activeCalendarSet !== null,
+        )
       : undefined;
   // Whether the Calendar row is actually rendering its empty-state branch
   // (#193) — calendarEmptyReason alone is a bad proxy for this: it's
@@ -1226,7 +1247,12 @@ export function EventModal(props: EventModalProps) {
                       <p className="text-label-sm text-ink-muted">
                         {CALENDAR_EMPTY_STATE_COPY[calendarEmptyReason]}
                       </p>
-                      {calendarEmptyReason !== "hidden" && (
+                      {/* Neither "hidden" (go show one in the sidebar) nor
+                        "outOfSet" (go switch to All calendars, #305) is
+                        remedied by creating a new Calendar — offering this
+                        button there would suggest a fix that leaves the
+                        caller exactly as stuck as before. */}
+                      {calendarEmptyReason !== "hidden" && calendarEmptyReason !== "outOfSet" && (
                         <button
                           type="button"
                           onClick={() => setIsCreateCalendarOpen(true)}

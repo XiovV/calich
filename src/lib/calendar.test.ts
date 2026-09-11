@@ -303,18 +303,18 @@ describe("defaultCalendarId", () => {
 // "everything's read-only" must stay distinguishable rather than collapsing
 // into one generic message.
 describe("calendarPickerEmptyReason", () => {
-  it("is 'none' when the caller has no calendars at all", () => {
-    expect(calendarPickerEmptyReason([], new Set())).toBe("none");
+  it("is 'none' when the caller has no calendars at all and no Active Calendar Set", () => {
+    expect(calendarPickerEmptyReason([], new Set(), false)).toBe("none");
   });
 
   it("is 'hidden' when calendars exist but none is checked", () => {
     const calendars = [makeCalendar({ id: "cal-1", access: "owner", isOwner: true })];
-    expect(calendarPickerEmptyReason(calendars, new Set())).toBe("hidden");
+    expect(calendarPickerEmptyReason(calendars, new Set(), false)).toBe("hidden");
   });
 
   it("is 'hidden' even when the unchecked calendars are all unwritable", () => {
     const calendars = [makeCalendar({ id: "cal-1", access: "viewer", isOwner: false })];
-    expect(calendarPickerEmptyReason(calendars, new Set())).toBe("hidden");
+    expect(calendarPickerEmptyReason(calendars, new Set(), false)).toBe("hidden");
   });
 
   it("is 'unwritable' when checked calendars exist but none is writable", () => {
@@ -327,6 +327,34 @@ describe("calendarPickerEmptyReason", () => {
         sourceUrl: "https://example.com/feed.ics",
       }),
     ];
-    expect(calendarPickerEmptyReason(calendars, new Set(["cal-1", "cal-2"]))).toBe("unwritable");
+    expect(calendarPickerEmptyReason(calendars, new Set(["cal-1", "cal-2"]), false)).toBe("unwritable");
+  });
+
+  // #305, ADR-0082: a second way of not seeing a Calendar — fires only when
+  // the caller passes the Active Calendar Set's own (already narrowed to
+  // empty) membership, distinct from "none" which means no Calendars exist
+  // anywhere.
+  it("is 'outOfSet' when the Active Calendar Set's own membership is empty", () => {
+    expect(calendarPickerEmptyReason([], new Set(), true)).toBe("outOfSet");
+  });
+
+  // The existing hidden/unwritable precedence is unchanged inside a
+  // non-empty Set — same three cases as above, just evaluated over the
+  // Set's members (still non-empty) instead of every Calendar.
+  it("is 'hidden', not 'outOfSet', when a non-empty Set's members exist but none is checked", () => {
+    const calendars = [makeCalendar({ id: "cal-1", access: "owner", isOwner: true })];
+    expect(calendarPickerEmptyReason(calendars, new Set(), true)).toBe("hidden");
+  });
+
+  it("is 'unwritable', not 'outOfSet', when a non-empty Set holds only read-only Calendars that are checked", () => {
+    const calendars = [
+      makeCalendar({
+        id: "cal-1",
+        access: "viewer",
+        isOwner: true,
+        sourceUrl: "https://example.com/feed.ics",
+      }),
+    ];
+    expect(calendarPickerEmptyReason(calendars, new Set(["cal-1"]), true)).toBe("unwritable");
   });
 });

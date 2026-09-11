@@ -56,6 +56,7 @@ const { groupsApi } = await import("../lib/groupsApi");
 const { workspaceMembersApi } = await import("../lib/workspaceMembersApi");
 const { useAuthStore } = await import("../lib/authStore");
 const { useCalendarsStore } = await import("../lib/calendarsStore");
+const { useCalendarSetsStore } = await import("../lib/calendarSetsStore");
 const { useEventsStore } = await import("../lib/eventsStore");
 const { useShellStore } = await import("../lib/shellStore");
 const { EventModal } = await import("./EventModal");
@@ -115,7 +116,9 @@ function seed(events: Event[], calendars: Calendar[] = [owned]) {
   useCalendarsStore.setState({ calendars });
   useShellStore.setState({
     checkedCalendarIds: new Set(calendars.map((c) => c.id)),
+    activeCalendarSetId: null,
   });
+  useCalendarSetsStore.setState({ calendarSets: [] });
   useEventsStore.setState({ events });
   useAuthStore.setState({
     status: "authenticated",
@@ -294,6 +297,75 @@ describe("EventModal — creating a calendar from the empty state (#233)", () =>
     expect(
       screen.getByRole("button", { name: "Create a calendar" }),
     ).toBeInTheDocument();
+  });
+});
+
+// #305, ADR-0082: a second way of not seeing a Calendar — the picker
+// narrows to the Active Calendar Set on top of checked/writable, and its
+// own empty state ("outOfSet") never suggests creating a new Calendar,
+// since the remedy is switching Sets, not owning more Calendars.
+describe("EventModal — the Calendar picker narrows to the Active Calendar Set (#305)", () => {
+  const teamRoom: Calendar = {
+    id: "cal-3",
+    name: "Team room",
+    color: "#2ECC71FF",
+    access: "owner",
+    isOwner: true,
+  };
+
+  it("explains an empty Active Calendar Set as 'outOfSet', with no Create-a-calendar remedy", () => {
+    seed([], [owned]);
+    useCalendarSetsStore.setState({
+      calendarSets: [{ id: 1, name: "Empty set", calendarIds: [] }],
+    });
+    useShellStore.setState({ activeCalendarSetId: 1 });
+    renderCreate();
+
+    expect(
+      screen.getByText(
+        "This calendar set has nothing you can add events to. Switch to All calendars to see the rest of your calendars.",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Create a calendar" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("reports 'unwritable', not 'outOfSet', when a non-empty Set holds only a read-only Calendar", () => {
+    seed([], [viewerOnly]);
+    useCalendarSetsStore.setState({
+      calendarSets: [{ id: 1, name: "Shared", calendarIds: ["cal-2"] }],
+    });
+    useShellStore.setState({
+      activeCalendarSetId: 1,
+      checkedCalendarIds: new Set(["cal-2"]),
+    });
+    renderCreate();
+
+    expect(
+      screen.getByText(
+        "You don't have a calendar you can add events to — everything you can see is shared with view-only access.",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("offers only the Active Calendar Set's own members, defaulting the selection inside it", async () => {
+    seed([], [owned, teamRoom]);
+    useCalendarSetsStore.setState({
+      calendarSets: [{ id: 1, name: "Work", calendarIds: ["cal-3"] }],
+    });
+    useShellStore.setState({
+      activeCalendarSetId: 1,
+      checkedCalendarIds: new Set(["cal-1", "cal-3"]),
+    });
+    renderCreate();
+
+    const picker = screen.getByRole("combobox", { name: "Calendar" });
+    expect(picker).toHaveTextContent("Team room");
+
+    await userEvent.click(picker);
+    expect(await screen.findByRole("option", { name: "Team room" })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: "Personal" })).not.toBeInTheDocument();
   });
 });
 
