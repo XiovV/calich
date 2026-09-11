@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { formatDistanceToNow } from "date-fns";
 import { Menu } from "@base-ui/react/menu";
-import { Check, Layers, MoreVertical, Plus, TriangleAlert, Users } from "lucide-react";
+import { Check, ChevronRight, Layers, MoreVertical, Plus, TriangleAlert, Users } from "lucide-react";
 import { useNavigate } from "react-router";
 import { CalendarPickerModal } from "../../settings/CalendarPickerModal";
 import { Button } from "../ui/Button";
@@ -11,7 +11,8 @@ import { canManageCalendar, isLinkedCalendar, shareCountTooltip, type Calendar }
 import { connectionGroupLabel, groupCalendarsForSidebar, UNRESOLVED_CONNECTION } from "../../lib/calendarGrouping";
 import { resolveCalendarFill } from "../../lib/calendarColors";
 import { inScopeCalendars } from "../../lib/calendarSetScope";
-import { useActiveCalendarSet } from "../../lib/calendarSetsStore";
+import { useActiveCalendarSet, useCalendarSetsStore } from "../../lib/calendarSetsStore";
+import type { CalendarSet } from "../../lib/calendarSetsApi";
 import { useAuthStore } from "../../lib/authStore";
 import { useCalendarsStore } from "../../lib/calendarsStore";
 import { useConnectionsStore } from "../../lib/connectionsStore";
@@ -64,6 +65,13 @@ export function CalendarList() {
     (state) => state.toggleCalendarChecked,
   );
   const setActiveCalendarSetId = useShellStore((state) => state.setActiveCalendarSetId);
+  // The row menu's own "Add to set" submenu (#307, ADR-0082) reads the same
+  // Sets the top-bar switcher lists — it relies on CalendarSetSwitcher's
+  // effect to have fetched them already, the same way it relies on some
+  // ancestor to have fetched calendars, rather than fetching a second copy.
+  const calendarSets = useCalendarSetsStore((state) => state.calendarSets);
+  const addCalendarToSet = useCalendarSetsStore((state) => state.addCalendarToSet);
+  const removeCalendarFromSet = useCalendarSetsStore((state) => state.removeCalendarFromSet);
   const refreshCalendar = useCalendarsStore((state) => state.refreshCalendar);
   const setCalendarExposure = useCalendarsStore((state) => state.setCalendarExposure);
   // Linked Calendars group by Connection, so the sidebar needs the
@@ -108,6 +116,9 @@ export function CalendarList() {
     summary: ExportSummary;
   } | null>(null);
   const [isConfirmingExport, setIsConfirmingExport] = useState(false);
+  // Keyed "calendarId:setId", so one Calendar's row can have several Set
+  // toggles in flight at once without disabling each other.
+  const [pendingSetToggles, setPendingSetToggles] = useState<Set<string>>(new Set());
 
   // Narrowed to the Active Calendar Set before grouping (#303, ADR-0082):
   // an out-of-Set Calendar is absent from every heading below, not merely
@@ -209,6 +220,30 @@ export function CalendarList() {
       setRefreshingCalendarIds((ids) => {
         const next = new Set(ids);
         next.delete(calendar.id);
+        return next;
+      });
+    }
+  }
+
+  // Immediate effect, no save step, mirroring CalendarSetMembershipDialog
+  // (#302, #307): membership carries no Role and grants no Access, so this
+  // has nothing to do with canManageCalendar and runs identically for an
+  // owned, Subscribed, or shared-in row.
+  async function handleToggleSetMembership(calendar: Calendar, calendarSet: CalendarSet, isMember: boolean) {
+    const key = `${calendar.id}:${calendarSet.id}`;
+    setPendingSetToggles((keys) => new Set(keys).add(key));
+    try {
+      if (isMember) {
+        await removeCalendarFromSet(calendarSet.id, calendar.id);
+      } else {
+        await addCalendarToSet(calendarSet.id, calendar.id);
+      }
+    } catch {
+      toast.error(`Failed to update "${calendarSet.name}".`);
+    } finally {
+      setPendingSetToggles((keys) => {
+        const next = new Set(keys);
+        next.delete(key);
         return next;
       });
     }
@@ -373,6 +408,56 @@ export function CalendarList() {
                     </Menu.CheckboxItemIndicator>
                     Show on my devices
                   </Menu.CheckboxItem>
+                )}
+                {/* Add to set (#307, ADR-0082): every row shape gets this,
+                    since a Calendar Set is the viewer's own private view
+                    filter, not a permission — unlike Share/Refresh/Export
+                    above, it isn't gated on canManage or on origin. Absent
+                    rather than an empty submenu at zero Sets (#307's own
+                    acceptance criteria), matching this menu's habit of
+                    dropping an item entirely rather than disabling it. */}
+                {calendarSets.length > 0 && (
+                  <Menu.SubmenuRoot>
+                    <Menu.SubmenuTrigger className={`${menuItemClasses} justify-between`}>
+                      Add to set
+                      <ChevronRight className="ml-2 size-3.5 shrink-0 text-ink-muted" />
+                    </Menu.SubmenuTrigger>
+                    <Menu.Portal>
+                      <Menu.Positioner sideOffset={4} className="z-[60]">
+                        <Menu.Popup className="rounded-shell-md border border-border bg-surface py-1 shadow-elevation-2">
+                          {calendarSets.map((calendarSet) => {
+                            const isMember = calendarSet.calendarIds.includes(calendar.id);
+                            const isPending = pendingSetToggles.has(`${calendar.id}:${calendarSet.id}`);
+                            return (
+                              <Menu.CheckboxItem
+                                key={calendarSet.id}
+                                checked={isMember}
+                                disabled={isPending}
+                                closeOnClick={false}
+                                onCheckedChange={() =>
+                                  handleToggleSetMembership(calendar, calendarSet, isMember)
+                                }
+                                aria-label={
+                                  isMember
+                                    ? `Remove ${calendar.name} from ${calendarSet.name}`
+                                    : `Add ${calendar.name} to ${calendarSet.name}`
+                                }
+                                className={menuItemClasses}
+                              >
+                                <Menu.CheckboxItemIndicator
+                                  keepMounted
+                                  className="mr-2 flex size-3.5 shrink-0 items-center justify-center data-[unchecked]:opacity-0"
+                                >
+                                  <Check className="size-3.5" />
+                                </Menu.CheckboxItemIndicator>
+                                <span className="min-w-0 truncate">{calendarSet.name}</span>
+                              </Menu.CheckboxItem>
+                            );
+                          })}
+                        </Menu.Popup>
+                      </Menu.Positioner>
+                    </Menu.Portal>
+                  </Menu.SubmenuRoot>
                 )}
                 <div role="separator" className="my-1 border-t border-border" />
                 {canManage ? (

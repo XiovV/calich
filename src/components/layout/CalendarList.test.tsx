@@ -20,6 +20,13 @@ vi.mock("../../lib/icsApi", () => ({
   icsApi: { downloadCalendar: vi.fn(), calendarOversizedAttachments: vi.fn() },
 }));
 vi.mock("../../lib/toast", () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
+vi.mock("../../lib/calendarSetsApi", async () => {
+  const actual = await vi.importActual<typeof import("../../lib/calendarSetsApi")>("../../lib/calendarSetsApi");
+  return {
+    ...actual,
+    calendarSetsApi: { ...actual.calendarSetsApi, addCalendar: vi.fn(), removeCalendar: vi.fn() },
+  };
+});
 
 const { useAuthStore } = await import("../../lib/authStore");
 const { useCalendarsStore } = await import("../../lib/calendarsStore");
@@ -30,6 +37,7 @@ const { useConnectionsStore } = await import("../../lib/connectionsStore");
 const { useCalendarSetsStore } = await import("../../lib/calendarSetsStore");
 const { connectionsApi } = await import("../../lib/connectionsApi");
 const { calendarsApi } = await import("../../lib/calendarsApi");
+const { calendarSetsApi } = await import("../../lib/calendarSetsApi");
 const { CalendarList } = await import("./CalendarList");
 
 const owned: Calendar = {
@@ -463,5 +471,121 @@ describe("Empty Calendar Set", () => {
 
     expect(useShellStore.getState().activeCalendarSetId).toBeNull();
     expect(await screen.findByText("My calendars")).toBeInTheDocument();
+  });
+});
+
+// #307, ADR-0082: a Calendar can be put into a Calendar Set straight from its
+// sidebar row menu, without opening Settings — the same immediate-effect
+// toggle CalendarSetMembershipDialog offers, reached from where the intent
+// actually arises.
+describe("Add to set", () => {
+  const workSet = { id: 1, name: "Work", calendarIds: ["cal-1"] };
+  const weekendSet = { id: 2, name: "Weekend", calendarIds: [] };
+  const linked: Calendar = {
+    id: "cal-linked",
+    name: "Google Work",
+    color: "#8E44ADFF",
+    access: "viewer",
+    isOwner: true,
+    sourceKind: "connection",
+    connectionId: 1,
+    connectionAccountEmail: "work@gmail.com",
+  };
+
+  async function openAddToSet(calendarName: string) {
+    await openMenu(calendarName);
+    await userEvent.click(await screen.findByRole("menuitem", { name: "Add to set" }));
+  }
+
+  it("is absent with zero Sets rather than an empty submenu", async () => {
+    useCalendarsStore.setState({ calendars: [owned] });
+    useCalendarSetsStore.setState({ calendarSets: [] });
+    renderCalendarList();
+
+    await openMenu("Personal");
+
+    expect(await screen.findByRole("menuitem", { name: "Edit" })).toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: "Add to set" })).not.toBeInTheDocument();
+  });
+
+  it("lists the caller's Sets, marking the ones this Calendar already belongs to", async () => {
+    useCalendarsStore.setState({ calendars: [owned] });
+    useCalendarSetsStore.setState({ calendarSets: [workSet, weekendSet] });
+    renderCalendarList();
+
+    await openAddToSet("Personal");
+
+    expect(await screen.findByRole("menuitemcheckbox", { name: "Remove Personal from Work" })).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
+    expect(screen.getByRole("menuitemcheckbox", { name: "Add Personal to Weekend" })).toHaveAttribute(
+      "aria-checked",
+      "false",
+    );
+  });
+
+  it("adds membership immediately when an unmarked Set is selected", async () => {
+    useCalendarsStore.setState({ calendars: [owned] });
+    useCalendarSetsStore.setState({ calendarSets: [weekendSet] });
+    vi.mocked(calendarSetsApi.addCalendar).mockResolvedValue(undefined);
+    renderCalendarList();
+
+    await openAddToSet("Personal");
+    await userEvent.click(await screen.findByRole("menuitemcheckbox", { name: "Add Personal to Weekend" }));
+
+    expect(calendarSetsApi.addCalendar).toHaveBeenCalledWith("token-123", weekendSet.id, "cal-1");
+    expect(useCalendarSetsStore.getState().calendarSets[0].calendarIds).toContain("cal-1");
+  });
+
+  it("removes membership immediately when a marked Set is selected", async () => {
+    useCalendarsStore.setState({ calendars: [owned] });
+    useCalendarSetsStore.setState({ calendarSets: [workSet] });
+    vi.mocked(calendarSetsApi.removeCalendar).mockResolvedValue(undefined);
+    renderCalendarList();
+
+    await openAddToSet("Personal");
+    await userEvent.click(await screen.findByRole("menuitemcheckbox", { name: "Remove Personal from Work" }));
+
+    expect(calendarSetsApi.removeCalendar).toHaveBeenCalledWith("token-123", workSet.id, "cal-1");
+    expect(useCalendarSetsStore.getState().calendarSets[0].calendarIds).not.toContain("cal-1");
+  });
+
+  it("works identically on a shared-in row", async () => {
+    useCalendarsStore.setState({ calendars: [editorAccess] });
+    useCalendarSetsStore.setState({ calendarSets: [weekendSet] });
+    renderCalendarList();
+
+    await openMenu("Team");
+
+    expect(await screen.findByRole("menuitem", { name: "Add to set" })).toBeInTheDocument();
+  });
+
+  it("works identically on a Linked Calendar row", async () => {
+    useCalendarsStore.setState({ calendars: [linked] });
+    useCalendarSetsStore.setState({ calendarSets: [weekendSet] });
+    renderCalendarList();
+
+    await openMenu("Google Work");
+
+    expect(await screen.findByRole("menuitem", { name: "Add to set" })).toBeInTheDocument();
+  });
+
+  it("works identically on a Subscribed Calendar row", async () => {
+    const subscribed: Calendar = {
+      id: "cal-subscribed",
+      name: "Holidays",
+      color: "#2ECC71FF",
+      access: "owner",
+      isOwner: true,
+      sourceUrl: "https://example.com/feed.ics",
+    };
+    useCalendarsStore.setState({ calendars: [subscribed] });
+    useCalendarSetsStore.setState({ calendarSets: [weekendSet] });
+    renderCalendarList();
+
+    await openMenu("Holidays");
+
+    expect(await screen.findByRole("menuitem", { name: "Add to set" })).toBeInTheDocument();
   });
 });
