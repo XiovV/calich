@@ -16,6 +16,7 @@ import {
   toReminderDrafts,
   type ReminderDraft,
 } from "../../calendar-grid/reminderDrafts";
+import { AddToActiveSetCheckbox } from "./AddToActiveSetCheckbox";
 import { ColorSwatchPicker } from "./ColorSwatchPicker";
 import { Button } from "../ui/Button";
 import { buttonClasses } from "../ui/buttonClasses";
@@ -242,15 +243,12 @@ export function CalendarModal(props: CalendarModalProps) {
             </div>
           </div>
 
-          {mode === "create" && activeCalendarSet && (
-            <label className="mt-4 flex items-start gap-2 text-label-sm text-ink">
-              <Checkbox
-                checked={addToActiveSet}
-                onCheckedChange={setAddToActiveSet}
-                aria-label={`Add to ${activeCalendarSet.name}`}
-              />
-              <span>Add to {activeCalendarSet.name}</span>
-            </label>
+          {mode === "create" && (
+            <AddToActiveSetCheckbox
+              activeCalendarSet={activeCalendarSet}
+              checked={addToActiveSet}
+              onCheckedChange={setAddToActiveSet}
+            />
           )}
 
           {calendarId && (

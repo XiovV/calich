@@ -9,6 +9,7 @@ import { useShellStore } from "../../lib/shellStore";
 import { toast } from "../../lib/toast";
 import { errorMessage } from "../../lib/errorMessage";
 import { getNextUnusedColor } from "../../lib/calendarColors";
+import { AddToActiveSetCheckbox } from "./AddToActiveSetCheckbox";
 import { ColorSwatchPicker } from "./ColorSwatchPicker";
 import { Button } from "../ui/Button";
 import { buttonClasses } from "../ui/buttonClasses";
@@ -206,16 +207,11 @@ export function SubscribeCalendarModal({ onClose }: SubscribeCalendarModalProps)
                   </span>
                 </label>
 
-                {activeCalendarSet && (
-                  <label className="mt-4 flex items-start gap-2 text-label-sm text-ink">
-                    <Checkbox
-                      checked={addToActiveSet}
-                      onCheckedChange={setAddToActiveSet}
-                      aria-label={`Add to ${activeCalendarSet.name}`}
-                    />
-                    <span>Add to {activeCalendarSet.name}</span>
-                  </label>
-                )}
+                <AddToActiveSetCheckbox
+                  activeCalendarSet={activeCalendarSet}
+                  checked={addToActiveSet}
+                  onCheckedChange={setAddToActiveSet}
+                />
               </>
             )}
 

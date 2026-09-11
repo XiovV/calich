@@ -9,6 +9,7 @@ import { type PickerCalendar } from "../lib/connectionsApi";
 import { useWorkspacesStore } from "../lib/workspacesStore";
 import { deleteCalendarCascade } from "../lib/deleteCalendarCascade";
 import { errorMessage } from "../lib/errorMessage";
+import { AddToActiveSetCheckbox } from "../components/layout/AddToActiveSetCheckbox";
 import { Button } from "../components/ui/Button";
 import { buttonClasses } from "../components/ui/buttonClasses";
 import { Checkbox } from "../components/ui/Checkbox";
@@ -253,16 +254,11 @@ export function CalendarPickerModal({ connectionId, onClose }: CalendarPickerMod
             </ul>
           )}
 
-          {activeCalendarSet && (
-            <label className="mt-4 flex items-start gap-2 text-label-sm text-ink">
-              <Checkbox
-                checked={addToActiveSet}
-                onCheckedChange={setAddToActiveSet}
-                aria-label={`Add to ${activeCalendarSet.name}`}
-              />
-              <span>Add to {activeCalendarSet.name}</span>
-            </label>
-          )}
+          <AddToActiveSetCheckbox
+            activeCalendarSet={activeCalendarSet}
+            checked={addToActiveSet}
+            onCheckedChange={setAddToActiveSet}
+          />
 
           <div className="mt-5 flex justify-end gap-2">
             <Dialog.Close
