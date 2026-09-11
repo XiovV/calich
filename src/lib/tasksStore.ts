@@ -22,6 +22,7 @@ interface TasksState {
   updateTaskNotes: (id: number, notes: string) => Promise<Task>;
   setTaskDeadline: (id: number, due: Date) => Promise<Task>;
   clearTaskDeadline: (id: number) => Promise<Task>;
+  setTaskTimeBlock: (id: number, start: Date, durationMinutes: number) => Promise<boolean>;
   updateTaskPriority: (id: number, priority: number) => Promise<Task>;
   moveTask: (id: number, taskListId: number) => Promise<Task>;
   deleteTask: (id: number) => Promise<void>;
@@ -107,6 +108,27 @@ export const useTasksStore = create<TasksState>((set, get) => ({
     const updated = await tasksApi.clearDeadline(requireAccessToken(), id);
     replaceTask(set, updated);
     return updated;
+  },
+
+  // setTaskTimeBlock is written optimistically (ADR-0067): unlike the detail
+  // surface's server-first writes, the grid drop *is* the feedback — there's
+  // no dialog left open to show a failure in, so the block paints
+  // immediately and rolls back with a toast if the server refuses. Mirrors
+  // eventsStore.updateEvent's own discipline for the same gesture on an
+  // Event.
+  setTaskTimeBlock: async (id, start, durationMinutes) => {
+    const current = get().tasks.find((t) => t.id === id) ?? get().completedTasks.find((t) => t.id === id);
+    if (!current) return false;
+
+    const updated: Task = { ...current, start, durationMinutes };
+    return write({
+      apply: () => replaceTask(set, updated),
+      revert: () => replaceTask(set, current),
+      dispatch: async () => {
+        await tasksApi.setTimeBlock(requireAccessToken(), id, start, durationMinutes);
+      },
+      fallbackMessage: `Couldn't schedule "${current.title}".`,
+    });
   },
 
   updateTaskPriority: async (id, priority) => {

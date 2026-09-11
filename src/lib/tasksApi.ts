@@ -129,6 +129,26 @@ export const tasksApi = {
     return fromWire((await response.json()) as TaskWire);
   },
 
+  // Sets id's Time block (start + a duration) — a panel row dropped on the
+  // hourly grid (#313, ADR-0083). Never touches the Deadline, the two axes
+  // being independent.
+  async setTimeBlock(
+    accessToken: string,
+    id: number,
+    start: Date,
+    durationMinutes: number,
+  ): Promise<Task> {
+    const response = await authedFetch(accessToken, `/api/tasks/${id}/time-block`, {
+      method: "PUT",
+      credentials: "include",
+      headers: workspaceHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({ start: start.toISOString(), durationMinutes }),
+    });
+    if (!response.ok) throw await errorFromResponse(response);
+
+    return fromWire((await response.json()) as TaskWire);
+  },
+
   // Changes id's raw PRIORITY value (0-9) — the detail surface's Priority
   // field, chosen from None/Low/Medium/High and translated by the caller
   // (taskPriority.ts), never sent as a level of its own.

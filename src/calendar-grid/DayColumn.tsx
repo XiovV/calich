@@ -2,7 +2,10 @@ import { useEffect, useRef, useState } from "react";
 import { isSameDay } from "date-fns";
 import { layoutOverlappingEvents } from "../lib/layoutOverlappingEvents";
 import { getDaySegments, type OccurrenceDaySegment } from "../lib/occurrenceSegments";
+import { getTaskTimeBlockDaySegments, type TaskTimeBlockSegment } from "../lib/taskTimeBlockSegments";
 import { occurrenceKey, type Occurrence } from "../lib/occurrence";
+import type { Task } from "../lib/tasksApi";
+import { useTaskListsStore } from "../lib/taskListsStore";
 import { useWorkingHours } from "../hooks/useWorkingHours";
 import { CLICK_DISTANCE_THRESHOLD_PX, isDragGesture } from "../lib/pointerDrag";
 import {
@@ -15,12 +18,29 @@ import {
 import { columnLayoutToBox } from "../lib/eventBlockGeometry";
 import type { CalendarBlockStyle } from "../lib/calendarColors";
 import { EventBlock, type EventDragKind } from "./EventBlock";
+import { TaskBlock } from "./TaskBlock";
 import { CurrentTimeLine } from "./CurrentTimeLine";
 import { DraftBlockPreview } from "./DraftBlockPreview";
 import { EventDragPreview } from "./EventDragPreview";
 import { DragReadout } from "./DragReadout";
 
 const DRAFT_PSEUDO_EVENT_ID = "__draft-preview__";
+
+/**
+ * One item the day column's overlap-layout pass can place — an Occurrence's
+ * day segment or a Task's Time block day segment (#313, ADR-0083: Time
+ * blocks join Events in overlap layout, ADR-0004, rather than drawing over
+ * them). `layoutOverlappingEvents` only needs `start`/`end`, so this union
+ * feeds it directly; the `kind` discriminant is this file's own, not
+ * something either segment type carries.
+ */
+type GridBlockItem =
+  | (OccurrenceDaySegment & { kind: "occurrence" })
+  | (TaskTimeBlockSegment & { kind: "task" });
+
+function isDraftItem(item: GridBlockItem): boolean {
+  return item.kind === "occurrence" && item.occurrence.event.id === DRAFT_PSEUDO_EVENT_ID;
+}
 
 export interface EventDragPreviewData {
   top: number;
@@ -39,6 +59,12 @@ export interface EventDragPreviewData {
 interface DayColumnProps {
   day: Date;
   occurrences: Occurrence[];
+  /** Every Task placed on the hourly grid (`taskPlacement(task) === "grid"`)
+   * that should be visible somewhere in the window — the caller (TimeGrid)
+   * has already applied "Show tasks on calendar" and "Show completed", the
+   * same division it makes for `deadlineTasks` (#312). This column filters
+   * to the ones whose block actually touches `day`. */
+  tasks: Task[];
   pixelsPerHour: number;
   now: Date;
   onDraftCreated: (day: Date, draft: DraftBlock) => void;
@@ -57,6 +83,7 @@ interface DayColumnProps {
 export function DayColumn({
   day,
   occurrences,
+  tasks,
   pixelsPerHour,
   now,
   onDraftCreated,
@@ -67,6 +94,8 @@ export function DayColumn({
   isLastColumn,
 }: DayColumnProps) {
   const daySegments = getDaySegments(occurrences, day);
+  const taskSegments = getTaskTimeBlockDaySegments(tasks, day);
+  const taskLists = useTaskListsStore((state) => state.taskLists);
   const isToday = isSameDay(day, now);
   const workingHours = useWorkingHours();
 
@@ -95,8 +124,9 @@ export function DayColumn({
   // shrink to make room for it instead of the preview overlapping them. A
   // create-drag never crosses midnight (bounded to this one day column), so
   // its segment is just its own unclipped bounds.
-  const draftSegment: OccurrenceDaySegment | null = draftBlock
+  const draftSegment: GridBlockItem | null = draftBlock
     ? {
+        kind: "occurrence",
         occurrence: {
           event: {
             id: DRAFT_PSEUDO_EVENT_ID,
@@ -112,18 +142,26 @@ export function DayColumn({
         end: draftBlock.end,
       }
     : null;
-  const layoutInput = draftSegment ? [...daySegments, draftSegment] : daySegments;
+  const occurrenceItems: GridBlockItem[] = daySegments.map((segment) => ({
+    ...segment,
+    kind: "occurrence",
+  }));
+  const taskItems: GridBlockItem[] = taskSegments.map((segment) => ({
+    ...segment,
+    kind: "task",
+  }));
+  const layoutInput = draftSegment
+    ? [...occurrenceItems, ...taskItems, draftSegment]
+    : [...occurrenceItems, ...taskItems];
 
   const allLayouts = layoutOverlappingEvents(layoutInput);
-  const layouts = allLayouts.filter(
-    (layout) =>
-      layout.occurrence.occurrence.event.id !== DRAFT_PSEUDO_EVENT_ID &&
-      occurrenceKey(layout.occurrence.occurrence) !== draggingKey,
-  );
+  const layouts = allLayouts.filter((layout) => {
+    const item = layout.occurrence;
+    if (isDraftItem(item)) return false;
+    return !(item.kind === "occurrence" && occurrenceKey(item.occurrence) === draggingKey);
+  });
   const draftLayout = draftBlock
-    ? allLayouts.find(
-        (layout) => layout.occurrence.occurrence.event.id === DRAFT_PSEUDO_EVENT_ID,
-      )
+    ? allLayouts.find((layout) => isDraftItem(layout.occurrence))
     : undefined;
 
   function offsetYFromEvent(clientY: number): number {
@@ -166,6 +204,13 @@ export function DayColumn({
     <div
       ref={columnRef}
       onMouseDown={handleMouseDown}
+      // Read by TaskRow's resolveGridDropTime (#313) to find which day
+      // column, and which offset within it, a Task panel row was dropped on
+      // — the same
+      // data-attribute-plus-elementFromPoint technique AllDayLane/MonthGrid
+      // already use for their own cross-cell drags, here reaching across
+      // into the Tasks panel's own DOM subtree instead of just this grid's.
+      data-grid-day-ms={day.getTime()}
       className="relative flex-1 border-l border-border select-none"
       style={{ height: pixelsPerHour * HOURS_IN_DAY }}
     >
@@ -188,20 +233,37 @@ export function DayColumn({
           style={{ top: hour * pixelsPerHour }}
         />
       ))}
-      {layouts.map((layout) => (
-        <EventBlock
-          key={occurrenceKey(layout.occurrence.occurrence)}
-          occurrence={layout.occurrence.occurrence}
-          segmentStart={layout.occurrence.start}
-          segmentEnd={layout.occurrence.end}
-          column={layout.column}
-          columnCount={layout.columnCount}
-          pixelsPerHour={pixelsPerHour}
-          now={now}
-          onOccurrenceClick={onOccurrenceClick}
-          onDragStart={onOccurrenceDragStart}
-        />
-      ))}
+      {layouts.map((layout) => {
+        const item = layout.occurrence;
+        if (item.kind === "occurrence") {
+          return (
+            <EventBlock
+              key={occurrenceKey(item.occurrence)}
+              occurrence={item.occurrence}
+              segmentStart={item.start}
+              segmentEnd={item.end}
+              column={layout.column}
+              columnCount={layout.columnCount}
+              pixelsPerHour={pixelsPerHour}
+              now={now}
+              onOccurrenceClick={onOccurrenceClick}
+              onDragStart={onOccurrenceDragStart}
+            />
+          );
+        }
+        return (
+          <TaskBlock
+            key={`task-${item.task.id}`}
+            task={item.task}
+            taskList={taskLists.find((list) => list.id === item.task.taskListId)}
+            segmentStart={item.start}
+            segmentEnd={item.end}
+            column={layout.column}
+            columnCount={layout.columnCount}
+            pixelsPerHour={pixelsPerHour}
+          />
+        );
+      })}
       {isToday && <CurrentTimeLine now={now} pixelsPerHour={pixelsPerHour} />}
       {draftBlock &&
         draftLayout &&

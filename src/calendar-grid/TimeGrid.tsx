@@ -200,6 +200,20 @@ export function TimeGrid({
     return daysToShow.some((day) => taskDeadlineFallsOnDay(due, day, zone));
   });
 
+  // Time-blocked Tasks render on the hourly grid — placement precedence's
+  // `grid` surface (#313, ADR-0083). Unlike `deadlineTasks`, this is never
+  // gated by "Show completed": the AC is that a completed block "stays in
+  // place ... rather than being removed from under the cursor", full stop —
+  // completing one must never make it vanish, which excluding it whenever
+  // "Show completed" happens to be off (the default) would do. "Show tasks
+  // on calendar" still gates the whole feature outright. DayColumn itself
+  // narrows this list to whichever day's block actually touches it, the same
+  // division it already makes for the full `visibleOccurrences` list handed
+  // to every column.
+  const gridTasks = showTasksOnCalendar
+    ? [...tasks, ...completedTasks].filter((task) => taskPlacement(task) === "grid")
+    : [];
+
   useEffect(() => {
     const interval = setInterval(
       () => setNow(new Date()),
@@ -333,6 +347,7 @@ export function TimeGrid({
                 key={day.toISOString()}
                 day={day}
                 occurrences={visibleOccurrences}
+                tasks={gridTasks}
                 pixelsPerHour={PIXELS_PER_HOUR}
                 now={now}
                 onDraftCreated={onDraftCreated}

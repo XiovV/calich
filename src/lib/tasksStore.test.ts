@@ -8,6 +8,7 @@ vi.mock("./tasksApi", () => ({
     updateNotes: vi.fn(),
     setDeadline: vi.fn(),
     clearDeadline: vi.fn(),
+    setTimeBlock: vi.fn(),
     updatePriority: vi.fn(),
     move: vi.fn(),
     complete: vi.fn(),
@@ -221,5 +222,53 @@ describe("setTaskCompleted", () => {
 
     expect(ok).toBe(false);
     expect(tasksApi.complete).not.toHaveBeenCalled();
+  });
+});
+
+// setTaskTimeBlock covers #313: the grid drop's own write, optimistic like
+// setTaskCompleted (ADR-0067) since the block appearing on the grid is the
+// feedback — and, in every case, leaving the Deadline exactly as it was, the
+// two axes being independent (ADR-0083).
+describe("setTaskTimeBlock", () => {
+  const dueDated = { ...buyMilk, due: new Date(2026, 8, 20) };
+
+  it("paints the Time block immediately, before the API call resolves, leaving the Deadline untouched", () => {
+    useTasksStore.setState({ tasks: [dueDated], completedTasks: [] });
+    const start = new Date(2026, 8, 15, 14, 0);
+    let resolveSet: () => void = () => {};
+    vi.mocked(tasksApi.setTimeBlock).mockReturnValue(
+      new Promise((resolve) => {
+        resolveSet = () => resolve({ ...dueDated, start, durationMinutes: 60 });
+      }),
+    );
+
+    const promise = useTasksStore.getState().setTaskTimeBlock(dueDated.id, start, 60);
+
+    expect(useTasksStore.getState().tasks).toEqual([{ ...dueDated, start, durationMinutes: 60 }]);
+    expect(tasksApi.setTimeBlock).toHaveBeenCalledWith("token-123", dueDated.id, start, 60);
+
+    resolveSet();
+    return promise;
+  });
+
+  it("rolls back and shows a toast when the server refuses, leaving the Deadline untouched", async () => {
+    useTasksStore.setState({ tasks: [dueDated], completedTasks: [] });
+    const start = new Date(2026, 8, 15, 14, 0);
+    vi.mocked(tasksApi.setTimeBlock).mockRejectedValue(new Error("network error"));
+
+    const ok = await useTasksStore.getState().setTaskTimeBlock(dueDated.id, start, 60);
+
+    expect(ok).toBe(false);
+    expect(useTasksStore.getState().tasks).toEqual([dueDated]);
+    expect(toast.error).toHaveBeenCalledWith(`Couldn't schedule "${dueDated.title}".`);
+  });
+
+  it("resolves false and touches nothing when the task isn't in either list", async () => {
+    useTasksStore.setState({ tasks: [], completedTasks: [] });
+
+    const ok = await useTasksStore.getState().setTaskTimeBlock(999, new Date(), 60);
+
+    expect(ok).toBe(false);
+    expect(tasksApi.setTimeBlock).not.toHaveBeenCalled();
   });
 });

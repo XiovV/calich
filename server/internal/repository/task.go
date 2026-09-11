@@ -217,6 +217,40 @@ func (r *TaskRepository) ClearDue(ctx context.Context, id, userID, workspaceID i
 	return r.GetByID(ctx, id, userID, workspaceID)
 }
 
+// SetTimeBlock sets id's Time block (start + duration_minutes), scoped to
+// userID and workspaceID like GetByID — the Deadline (`due`) is untouched,
+// the two axes being independent (ADR-0083).
+func (r *TaskRepository) SetTimeBlock(ctx context.Context, id, userID, workspaceID int64, start time.Time, durationMinutes int) (Task, error) {
+	res, err := r.db.ExecContext(ctx,
+		`UPDATE tasks SET start = ?, duration_minutes = ? WHERE id = ? AND user_id = ? AND workspace_id = ?`,
+		start, durationMinutes, id, userID, workspaceID,
+	)
+	if err != nil {
+		return Task{}, fmt.Errorf("set task time block: %w", err)
+	}
+	if err := requireAffected(res); err != nil {
+		return Task{}, err
+	}
+	return r.GetByID(ctx, id, userID, workspaceID)
+}
+
+// ClearTimeBlock clears id's Time block (start and duration_minutes both to
+// NULL), scoped to userID and workspaceID like GetByID. The Deadline is
+// untouched.
+func (r *TaskRepository) ClearTimeBlock(ctx context.Context, id, userID, workspaceID int64) (Task, error) {
+	res, err := r.db.ExecContext(ctx,
+		`UPDATE tasks SET start = NULL, duration_minutes = NULL WHERE id = ? AND user_id = ? AND workspace_id = ?`,
+		id, userID, workspaceID,
+	)
+	if err != nil {
+		return Task{}, fmt.Errorf("clear task time block: %w", err)
+	}
+	if err := requireAffected(res); err != nil {
+		return Task{}, err
+	}
+	return r.GetByID(ctx, id, userID, workspaceID)
+}
+
 // UpdatePriority changes id's raw PRIORITY value (0-9), scoped to userID and
 // workspaceID like GetByID. Range validation is the service's job.
 func (r *TaskRepository) UpdatePriority(ctx context.Context, id, userID, workspaceID int64, priority int) (Task, error) {

@@ -38,7 +38,7 @@ function roundToIncrement(
   return new Date(roundedMs);
 }
 
-function snapToIncrement(date: Date, incrementMinutes: number): Date {
+export function snapToIncrement(date: Date, incrementMinutes: number): Date {
   return roundToIncrement(date, incrementMinutes, Math.round);
 }
 

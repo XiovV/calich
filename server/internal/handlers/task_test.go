@@ -70,6 +70,8 @@ func newTaskHandlerTestServer(t *testing.T) *taskHandlerTestServer {
 		r.Patch("/{id}/notes", taskHandler.UpdateNotes)
 		r.Put("/{id}/deadline", taskHandler.SetDeadline)
 		r.Delete("/{id}/deadline", taskHandler.ClearDeadline)
+		r.Put("/{id}/time-block", taskHandler.SetTimeBlock)
+		r.Delete("/{id}/time-block", taskHandler.ClearTimeBlock)
 		r.Patch("/{id}/priority", taskHandler.UpdatePriority)
 		r.Put("/{id}/task-list", taskHandler.Move)
 		r.Put("/{id}/complete", taskHandler.Complete)
@@ -523,6 +525,76 @@ func TestTaskHandler_SetAndClearDeadline(t *testing.T) {
 	}
 	if cleared.Due != nil {
 		t.Fatalf("expected due to be cleared, got %v", cleared.Due)
+	}
+}
+
+// TestTaskHandler_SetAndClearTimeBlock covers #313: a panel row dropped on
+// the hourly grid sets a Time block independent of the Deadline, and
+// clearing it (a later ticket's own gesture, reachable here directly)
+// leaves the Deadline exactly as it was either way.
+func TestTaskHandler_SetAndClearTimeBlock(t *testing.T) {
+	s := newTaskHandlerTestServer(t)
+	token, _, workspaceID := s.register(t, "alice")
+	inboxID := s.defaultTaskListID(t, token, workspaceID)
+	task := s.createTask(t, token, workspaceID, inboxID, "Write the spec")
+
+	due := time.Date(2026, time.September, 18, 0, 0, 0, 0, time.UTC)
+	deadlineResp := s.do(t, http.MethodPut, "/api/tasks/"+strconv.FormatInt(task.ID, 10)+"/deadline", token, workspaceID, setTaskDeadlineRequest{Due: due})
+	deadlineResp.Body.Close()
+	if deadlineResp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 setting deadline, got %d", deadlineResp.StatusCode)
+	}
+
+	start := time.Date(2026, time.September, 15, 14, 0, 0, 0, time.UTC)
+	setResp := s.do(t, http.MethodPut, "/api/tasks/"+strconv.FormatInt(task.ID, 10)+"/time-block", token, workspaceID, setTaskTimeBlockRequest{Start: start, DurationMinutes: 60})
+	defer setResp.Body.Close()
+	if setResp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 setting time block, got %d", setResp.StatusCode)
+	}
+	var withBlock taskResponse
+	if err := json.NewDecoder(setResp.Body).Decode(&withBlock); err != nil {
+		t.Fatalf("decode set time block response: %v", err)
+	}
+	if withBlock.Start == nil || !withBlock.Start.Equal(start) {
+		t.Fatalf("expected start %v, got %v", start, withBlock.Start)
+	}
+	if withBlock.DurationMinutes == nil || *withBlock.DurationMinutes != 60 {
+		t.Fatalf("expected duration 60, got %v", withBlock.DurationMinutes)
+	}
+	if withBlock.Due == nil || !withBlock.Due.Equal(due) {
+		t.Fatalf("expected deadline untouched at %v, got %v", due, withBlock.Due)
+	}
+
+	clearResp := s.do(t, http.MethodDelete, "/api/tasks/"+strconv.FormatInt(task.ID, 10)+"/time-block", token, workspaceID, nil)
+	defer clearResp.Body.Close()
+	if clearResp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 clearing time block, got %d", clearResp.StatusCode)
+	}
+	var cleared taskResponse
+	if err := json.NewDecoder(clearResp.Body).Decode(&cleared); err != nil {
+		t.Fatalf("decode clear time block response: %v", err)
+	}
+	if cleared.Start != nil || cleared.DurationMinutes != nil {
+		t.Fatalf("expected time block cleared, got start %v duration %v", cleared.Start, cleared.DurationMinutes)
+	}
+	if cleared.Due == nil || !cleared.Due.Equal(due) {
+		t.Fatalf("expected deadline still untouched at %v, got %v", due, cleared.Due)
+	}
+}
+
+// TestTaskHandler_SetTimeBlock_RejectsNonPositiveDuration covers #313's
+// input guard: a drop can never itself produce a non-positive duration, but
+// the endpoint refuses one rather than storing it.
+func TestTaskHandler_SetTimeBlock_RejectsNonPositiveDuration(t *testing.T) {
+	s := newTaskHandlerTestServer(t)
+	token, _, workspaceID := s.register(t, "alice")
+	inboxID := s.defaultTaskListID(t, token, workspaceID)
+	task := s.createTask(t, token, workspaceID, inboxID, "Write the spec")
+
+	resp := s.do(t, http.MethodPut, "/api/tasks/"+strconv.FormatInt(task.ID, 10)+"/time-block", token, workspaceID, setTaskTimeBlockRequest{Start: time.Now(), DurationMinutes: 0})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400 for a non-positive duration, got %d", resp.StatusCode)
 	}
 }
 

@@ -8,7 +8,11 @@ import { CalendarView } from "../../calendar-grid/CalendarView";
 import { EventModal } from "../../calendar-grid/EventModal";
 import { computeDefaultDraft, type DraftBlock } from "../../lib/gridTime";
 import { useEventsStore } from "../../lib/eventsStore";
-import { refetchCalendarsAndReconcile, useShellStore } from "../../lib/shellStore";
+import {
+  refetchCalendarsAndReconcile,
+  refetchTaskListsAndReconcile,
+  useShellStore,
+} from "../../lib/shellStore";
 import { useTasksStore } from "../../lib/tasksStore";
 import { useWorkspacesStore } from "../../lib/workspacesStore";
 import { occurrenceKey, type Occurrence } from "../../lib/occurrence";
@@ -68,9 +72,13 @@ export function AppShell() {
       fetchEvents();
       // Fetched here rather than only inside TasksPanel's own effect: "Show
       // tasks on calendar" (#312) renders a Deadline-only Task's chip in the
-      // all-day lane whether or not the panel is open, so the grid needs
-      // Tasks in the store regardless.
+      // all-day lane, and a Time-blocked Task's block on the hourly grid
+      // (#313), whether or not the panel is open, so the grid needs Tasks —
+      // and their Task Lists' colours, otherwise every chip/block would
+      // render in the unresolved fallback colour until the panel was opened
+      // at least once — in the store regardless.
       fetchTasks();
+      refetchTaskListsAndReconcile();
     }
 
     if (activeWorkspaceId === null) return;

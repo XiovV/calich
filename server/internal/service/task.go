@@ -23,6 +23,10 @@ var ErrInvalidTaskTitle = errors.New("task title must not be empty")
 // 0 is None.
 var ErrInvalidTaskPriority = errors.New("task priority must be between 0 and 9")
 
+// ErrInvalidTaskDuration is returned by TaskService.SetTimeBlock when
+// durationMinutes isn't positive.
+var ErrInvalidTaskDuration = errors.New("task time block duration must be positive")
+
 // TaskService creates, lists, updates, completes/uncompletes and deletes
 // Tasks (#310, ADR-0083). Private outright, like TaskListService — every
 // method is scoped to the caller's own userID and workspaceID by the
@@ -138,6 +142,30 @@ func (s *TaskService) ClearDeadline(ctx context.Context, userID, workspaceID, id
 	task, err := s.tasks.ClearDue(ctx, id, userID, workspaceID)
 	if err != nil {
 		return repository.Task{}, fmt.Errorf("clear task deadline: %w", err)
+	}
+	return task, nil
+}
+
+// SetTimeBlock sets id's Time block, scoped to userID and workspaceID — the
+// grid drop's own write (#313, ADR-0083): a Time block at start with
+// durationMinutes, independent of the Deadline (never touches due).
+func (s *TaskService) SetTimeBlock(ctx context.Context, userID, workspaceID, id int64, start time.Time, durationMinutes int) (repository.Task, error) {
+	if durationMinutes <= 0 {
+		return repository.Task{}, ErrInvalidTaskDuration
+	}
+
+	task, err := s.tasks.SetTimeBlock(ctx, id, userID, workspaceID, start, durationMinutes)
+	if err != nil {
+		return repository.Task{}, fmt.Errorf("set task time block: %w", err)
+	}
+	return task, nil
+}
+
+// ClearTimeBlock clears id's Time block, scoped to userID and workspaceID.
+func (s *TaskService) ClearTimeBlock(ctx context.Context, userID, workspaceID, id int64) (repository.Task, error) {
+	task, err := s.tasks.ClearTimeBlock(ctx, id, userID, workspaceID)
+	if err != nil {
+		return repository.Task{}, fmt.Errorf("clear task time block: %w", err)
 	}
 	return task, nil
 }

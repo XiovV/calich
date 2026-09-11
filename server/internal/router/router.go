@@ -304,6 +304,8 @@ func New(logger *slog.Logger, authHandler *handlers.AuthHandler, calendarHandler
 			r.Patch("/{id}/notes", taskHandler.UpdateNotes)
 			r.Put("/{id}/deadline", taskHandler.SetDeadline)
 			r.Delete("/{id}/deadline", taskHandler.ClearDeadline)
+			r.Put("/{id}/time-block", taskHandler.SetTimeBlock)
+			r.Delete("/{id}/time-block", taskHandler.ClearTimeBlock)
 			r.Patch("/{id}/priority", taskHandler.UpdatePriority)
 			r.Put("/{id}/task-list", taskHandler.Move)
 			r.Put("/{id}/complete", taskHandler.Complete)

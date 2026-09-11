@@ -60,6 +60,7 @@ func toTaskResponse(t repository.Task) taskResponse {
 var taskErrors = []errorCase{
 	{service.ErrInvalidTaskTitle, badRequest(service.ErrInvalidTaskTitle.Error())},
 	{service.ErrInvalidTaskPriority, badRequest(service.ErrInvalidTaskPriority.Error())},
+	{service.ErrInvalidTaskDuration, badRequest(service.ErrInvalidTaskDuration.Error())},
 	{repository.ErrNotFound, notFound("task not found")},
 }
 
@@ -252,6 +253,54 @@ func (h *TaskHandler) ClearDeadline(w http.ResponseWriter, r *http.Request) {
 
 	task, err := h.tasks.ClearDeadline(r.Context(), userID, workspaceID, id)
 	if respondError(w, err, taskErrors, "failed to clear task deadline") {
+		return
+	}
+
+	httpresponse.JSON(w, http.StatusOK, toTaskResponse(task))
+}
+
+type setTaskTimeBlockRequest struct {
+	Start           time.Time `json:"start"`
+	DurationMinutes int       `json:"durationMinutes"`
+}
+
+// SetTimeBlock serves PUT /api/tasks/{id}/time-block: a panel row dropped on
+// the hourly grid (#313, ADR-0083). Never touches the Deadline, the two axes
+// being independent.
+func (h *TaskHandler) SetTimeBlock(w http.ResponseWriter, r *http.Request) {
+	userID := httpauth.MustUserID(r.Context())
+	workspaceID := httpauth.MustWorkspaceID(r.Context())
+	id, ok := parseInt64Param(w, r, "id")
+	if !ok {
+		return
+	}
+
+	req, ok := decodeJSON[setTaskTimeBlockRequest](w, r)
+	if !ok {
+		return
+	}
+
+	task, err := h.tasks.SetTimeBlock(r.Context(), userID, workspaceID, id, req.Start, req.DurationMinutes)
+	if respondError(w, err, taskErrors, "failed to set task time block") {
+		return
+	}
+
+	httpresponse.JSON(w, http.StatusOK, toTaskResponse(task))
+}
+
+// ClearTimeBlock serves DELETE /api/tasks/{id}/time-block: dragging a Time
+// block off the grid (a later ticket's gesture) or any other caller that
+// wants the Task's block gone. Never touches the Deadline.
+func (h *TaskHandler) ClearTimeBlock(w http.ResponseWriter, r *http.Request) {
+	userID := httpauth.MustUserID(r.Context())
+	workspaceID := httpauth.MustWorkspaceID(r.Context())
+	id, ok := parseInt64Param(w, r, "id")
+	if !ok {
+		return
+	}
+
+	task, err := h.tasks.ClearTimeBlock(r.Context(), userID, workspaceID, id)
+	if respondError(w, err, taskErrors, "failed to clear task time block") {
 		return
 	}
 
