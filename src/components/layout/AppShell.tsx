@@ -3,6 +3,7 @@ import { startOfDay } from "date-fns";
 import { Outlet } from "react-router";
 import { TopBar } from "./TopBar";
 import { Sidebar } from "./Sidebar";
+import { TasksPanel } from "./TasksPanel";
 import { CalendarView } from "../../calendar-grid/CalendarView";
 import { EventModal } from "../../calendar-grid/EventModal";
 import { computeDefaultDraft, type DraftBlock } from "../../lib/gridTime";
@@ -21,6 +22,7 @@ export function AppShell() {
   const fetchEvents = useEventsStore((state) => state.fetchEvents);
   const fetchWorkspaces = useWorkspacesStore((state) => state.fetchWorkspaces);
   const activeWorkspaceId = useWorkspacesStore((state) => state.activeWorkspaceId);
+  const tasksPanelOpen = useShellStore((state) => state.tasksPanelOpen);
 
   useEffect(() => {
     fetchWorkspaces();
@@ -99,6 +101,11 @@ export function AppShell() {
             }
           />
         </main>
+        {tasksPanelOpen && (
+          <aside className="w-80 shrink-0 border-l border-border bg-surface">
+            <TasksPanel />
+          </aside>
+        )}
       </div>
       {eventModalState?.mode === "create" && (
         <EventModal

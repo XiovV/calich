@@ -21,10 +21,27 @@ type WorkspaceService struct {
 	invites      *repository.WorkspaceInviteRepository
 	calendarRepo *repository.CalendarRepository
 	shareRepo    *repository.CalendarShareRepository
+	taskListRepo *repository.TaskListRepository
 }
 
-func NewWorkspaceService(db *sql.DB, workspaces *repository.WorkspaceRepository, invites *repository.WorkspaceInviteRepository, calendarRepo *repository.CalendarRepository, shareRepo *repository.CalendarShareRepository) *WorkspaceService {
-	return &WorkspaceService{db: db, workspaces: workspaces, invites: invites, calendarRepo: calendarRepo, shareRepo: shareRepo}
+func NewWorkspaceService(db *sql.DB, workspaces *repository.WorkspaceRepository, invites *repository.WorkspaceInviteRepository, calendarRepo *repository.CalendarRepository, shareRepo *repository.CalendarShareRepository, taskListRepo *repository.TaskListRepository) *WorkspaceService {
+	return &WorkspaceService{db: db, workspaces: workspaces, invites: invites, calendarRepo: calendarRepo, shareRepo: shareRepo, taskListRepo: taskListRepo}
+}
+
+// createDefaultTaskListTx creates the Inbox Task List (ADR-0083) for a
+// (User, Workspace) pair that just came into being, bound to the same
+// transaction that created the pair — called from createForOwnerTx
+// (Workspace creation, covering both Bootstrap and Register) and
+// AddMemberInTx (Workspace Invite acceptance, covering both the new-account
+// and existing-account paths), the two points such a pair is created. A
+// brand-new pair has no other Task Lists yet, so the color is always the
+// first Swatch (pickFreeColor with nothing taken) rather than needing a
+// lookup.
+func (s *WorkspaceService) createDefaultTaskListTx(ctx context.Context, tx *sql.Tx, userID, workspaceID int64) error {
+	if _, err := s.taskListRepo.WithTx(tx).Create(ctx, userID, workspaceID, "Inbox", pickFreeColor(nil), true); err != nil {
+		return fmt.Errorf("create default task list: %w", err)
+	}
+	return nil
 }
 
 // CreateForOwner creates a new Workspace named name and, atomically, adds
@@ -66,6 +83,10 @@ func (s *WorkspaceService) createForOwnerTx(ctx context.Context, tx *sql.Tx, own
 		return repository.Workspace{}, fmt.Errorf("add owner membership: %w", err)
 	}
 
+	if err := s.createDefaultTaskListTx(ctx, tx, ownerUserID, workspace.ID); err != nil {
+		return repository.Workspace{}, err
+	}
+
 	return workspace, nil
 }
 
@@ -95,9 +116,15 @@ func (s *WorkspaceService) GetByID(ctx context.Context, id int64) (repository.Wo
 // AddMemberInTx adds userID to workspaceID with role, bound to a transaction
 // the caller already holds open — the seam AuthService's Workspace-invite
 // accept paths use to fold creating (or resolving) the User, adding their
-// Membership, and consuming the invite into one all-or-nothing unit.
+// Membership, and consuming the invite into one all-or-nothing unit. Also
+// provisions userID's Inbox Task List for workspaceID (ADR-0083) in the same
+// transaction — a Workspace Invite accept is the other of the two points a
+// (User, Workspace) pair comes into being, alongside createForOwnerTx.
 func (s *WorkspaceService) AddMemberInTx(ctx context.Context, tx *sql.Tx, workspaceID, userID int64, role string) error {
-	return s.workspaces.WithTx(tx).AddMember(ctx, workspaceID, userID, role)
+	if err := s.workspaces.WithTx(tx).AddMember(ctx, workspaceID, userID, role); err != nil {
+		return err
+	}
+	return s.createDefaultTaskListTx(ctx, tx, userID, workspaceID)
 }
 
 // IsMember reports whether userID belongs to workspaceID — the check

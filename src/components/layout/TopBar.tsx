@@ -1,4 +1,4 @@
-import { ChevronLeft, ChevronRight, Settings } from "lucide-react";
+import { ChevronLeft, ChevronRight, ListTodo, Settings } from "lucide-react";
 import { useNavigate } from "react-router";
 import { useShellStore } from "../../lib/shellStore";
 import { useWeekStartsOn } from "../../hooks/useWeekStartsOn";
@@ -19,6 +19,8 @@ export function TopBar() {
   const selectedDate = useShellStore((state) => state.selectedDate);
   const activeView = useShellStore((state) => state.activeView);
   const setSelectedDate = useShellStore((state) => state.setSelectedDate);
+  const tasksPanelOpen = useShellStore((state) => state.tasksPanelOpen);
+  const setTasksPanelOpen = useShellStore((state) => state.setTasksPanelOpen);
   const weekStartsOn = useWeekStartsOn();
   const version = useVersion();
 
@@ -68,6 +70,14 @@ export function TopBar() {
         <ViewSwitcher />
         <ThemeToggle />
         <NotificationBell />
+        <IconButton
+          onClick={() => setTasksPanelOpen(!tasksPanelOpen)}
+          aria-label="Tasks"
+          aria-pressed={tasksPanelOpen}
+          className={tasksPanelOpen ? "bg-surface-hover text-ink" : undefined}
+        >
+          <ListTodo className="size-5" />
+        </IconButton>
         <IconButton
           onClick={() => navigate("/settings")}
           aria-label="Settings"
