@@ -149,6 +149,20 @@ export const tasksApi = {
     return fromWire((await response.json()) as TaskWire);
   },
 
+  // Clears id's Time block (start and duration both to null) — dragging a
+  // block back to the panel, an all-day-lane drop's second write, or the
+  // Task's own "Unschedule" menu item (#314). Never touches the Deadline.
+  async clearTimeBlock(accessToken: string, id: number): Promise<Task> {
+    const response = await authedFetch(accessToken, `/api/tasks/${id}/time-block`, {
+      method: "DELETE",
+      credentials: "include",
+      headers: workspaceHeaders(),
+    });
+    if (!response.ok) throw await errorFromResponse(response);
+
+    return fromWire((await response.json()) as TaskWire);
+  },
+
   // Changes id's raw PRIORITY value (0-9) — the detail surface's Priority
   // field, chosen from None/Low/Medium/High and translated by the caller
   // (taskPriority.ts), never sent as a level of its own.

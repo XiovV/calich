@@ -9,6 +9,7 @@ vi.mock("./tasksApi", () => ({
     setDeadline: vi.fn(),
     clearDeadline: vi.fn(),
     setTimeBlock: vi.fn(),
+    clearTimeBlock: vi.fn(),
     updatePriority: vi.fn(),
     move: vi.fn(),
     complete: vi.fn(),
@@ -270,5 +271,130 @@ describe("setTaskTimeBlock", () => {
 
     expect(ok).toBe(false);
     expect(tasksApi.setTimeBlock).not.toHaveBeenCalled();
+  });
+});
+
+// clearTaskTimeBlock covers #314's "back to panel" drop-table row and the
+// Task's "Unschedule" menu item — both just want the block gone, optimistic
+// like setTaskTimeBlock since the block vanishing from the grid is the
+// feedback, and in every case leaving the Deadline untouched.
+describe("clearTaskTimeBlock", () => {
+  const blocked = {
+    ...buyMilk,
+    due: new Date(2026, 8, 20),
+    start: new Date(2026, 8, 15, 14, 0),
+    durationMinutes: 60,
+  };
+
+  it("clears the Time block immediately, before the API call resolves, leaving the Deadline untouched", () => {
+    useTasksStore.setState({ tasks: [blocked], completedTasks: [] });
+    let resolveClear: () => void = () => {};
+    vi.mocked(tasksApi.clearTimeBlock).mockReturnValue(
+      new Promise((resolve) => {
+        resolveClear = () => resolve({ ...blocked, start: null, durationMinutes: null });
+      }),
+    );
+
+    const promise = useTasksStore.getState().clearTaskTimeBlock(blocked.id);
+
+    expect(useTasksStore.getState().tasks).toEqual([{ ...blocked, start: null, durationMinutes: null }]);
+    expect(tasksApi.clearTimeBlock).toHaveBeenCalledWith("token-123", blocked.id);
+
+    resolveClear();
+    return promise;
+  });
+
+  it("rolls back and shows a toast when the server refuses", async () => {
+    useTasksStore.setState({ tasks: [blocked], completedTasks: [] });
+    vi.mocked(tasksApi.clearTimeBlock).mockRejectedValue(new Error("network error"));
+
+    const ok = await useTasksStore.getState().clearTaskTimeBlock(blocked.id);
+
+    expect(ok).toBe(false);
+    expect(useTasksStore.getState().tasks).toEqual([blocked]);
+    expect(toast.error).toHaveBeenCalledWith(`Couldn't unschedule "${blocked.title}".`);
+  });
+
+  it("resolves false and touches nothing when the task isn't in either list", async () => {
+    useTasksStore.setState({ tasks: [], completedTasks: [] });
+
+    const ok = await useTasksStore.getState().clearTaskTimeBlock(999);
+
+    expect(ok).toBe(false);
+    expect(tasksApi.clearTimeBlock).not.toHaveBeenCalled();
+  });
+});
+
+// setTaskDeadlineAndClearTimeBlock covers #314's all-day-lane drop-table
+// row — the one gesture that touches both axes: a Time block dragged into
+// the all-day lane sets the Deadline to the drop date and clears the block
+// in the same optimistic step, so the block never has a moment to render
+// stale before the second write lands.
+describe("setTaskDeadlineAndClearTimeBlock", () => {
+  const blocked = {
+    ...buyMilk,
+    due: null,
+    start: new Date(2026, 8, 15, 14, 0),
+    durationMinutes: 60,
+  };
+
+  it("paints the new Deadline and a cleared Time block immediately, before either API call resolves", () => {
+    useTasksStore.setState({ tasks: [blocked], completedTasks: [] });
+    const due = new Date(2026, 8, 18);
+    let resolveSet: () => void = () => {};
+    vi.mocked(tasksApi.setDeadline).mockReturnValue(
+      new Promise((resolve) => {
+        resolveSet = () => resolve({ ...blocked, due, start: null, durationMinutes: null });
+      }),
+    );
+    vi.mocked(tasksApi.clearTimeBlock).mockResolvedValue({ ...blocked, due, start: null, durationMinutes: null });
+
+    const promise = useTasksStore.getState().setTaskDeadlineAndClearTimeBlock(blocked.id, due);
+
+    expect(useTasksStore.getState().tasks).toEqual([{ ...blocked, due, start: null, durationMinutes: null }]);
+
+    resolveSet();
+    return promise;
+  });
+
+  it("dispatches clearTimeBlock before setDeadline, so a dropped second call never leaves the stale block on the server alongside the new Deadline", async () => {
+    useTasksStore.setState({ tasks: [blocked], completedTasks: [] });
+    const due = new Date(2026, 8, 18);
+    const calls: string[] = [];
+    vi.mocked(tasksApi.clearTimeBlock).mockImplementation(async () => {
+      calls.push("clearTimeBlock");
+      return { ...blocked, start: null, durationMinutes: null };
+    });
+    vi.mocked(tasksApi.setDeadline).mockImplementation(async () => {
+      calls.push("setDeadline");
+      return { ...blocked, due };
+    });
+
+    await useTasksStore.getState().setTaskDeadlineAndClearTimeBlock(blocked.id, due);
+
+    expect(calls).toEqual(["clearTimeBlock", "setDeadline"]);
+    expect(tasksApi.setDeadline).toHaveBeenCalledWith("token-123", blocked.id, due);
+    expect(tasksApi.clearTimeBlock).toHaveBeenCalledWith("token-123", blocked.id);
+  });
+
+  it("rolls back and shows a toast when either API call refuses", async () => {
+    useTasksStore.setState({ tasks: [blocked], completedTasks: [] });
+    const due = new Date(2026, 8, 18);
+    vi.mocked(tasksApi.setDeadline).mockRejectedValue(new Error("network error"));
+
+    const ok = await useTasksStore.getState().setTaskDeadlineAndClearTimeBlock(blocked.id, due);
+
+    expect(ok).toBe(false);
+    expect(useTasksStore.getState().tasks).toEqual([blocked]);
+    expect(toast.error).toHaveBeenCalledWith(`Couldn't reschedule "${blocked.title}".`);
+  });
+
+  it("resolves false and touches nothing when the task isn't in either list", async () => {
+    useTasksStore.setState({ tasks: [], completedTasks: [] });
+
+    const ok = await useTasksStore.getState().setTaskDeadlineAndClearTimeBlock(999, new Date());
+
+    expect(ok).toBe(false);
+    expect(tasksApi.setDeadline).not.toHaveBeenCalled();
   });
 });

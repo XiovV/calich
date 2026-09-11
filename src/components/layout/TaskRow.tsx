@@ -1,6 +1,7 @@
 import { format } from "date-fns";
+import { Menu } from "@base-ui/react/menu";
+import { MoreVertical } from "lucide-react";
 import { getCalendarBlockStyle } from "../../lib/calendarColors";
-import { PIXELS_PER_HOUR, snapToIncrement, yToTime } from "../../lib/gridTime";
 import { usePointerDrag } from "../../hooks/usePointerDrag";
 import { useTaskListsStore } from "../../lib/taskListsStore";
 import { taskDropIntent } from "../../lib/taskDropIntent";
@@ -8,31 +9,16 @@ import type { Task } from "../../lib/tasksApi";
 import { useTasksStore } from "../../lib/tasksStore";
 import { TaskCompletionControl } from "./TaskCompletionControl";
 import { TaskDragPreview } from "../../calendar-grid/TaskDragPreview";
+import { resolveGridDropTime } from "../../calendar-grid/gridDropTargets";
+import { iconButtonClasses } from "../ui/iconButtonClasses";
 
 interface TaskRowProps {
   task: Task;
   onOpenDetail: (task: Task) => void;
 }
 
-/**
- * Resolves a panel row's drop point to a grid day and time, if it landed on
- * one — the same data-attribute-plus-`elementFromPoint` technique
- * AllDayLane/MonthGrid already use for their own in-grid drags
- * (`getAllDayDateAtPoint`, `getCellDateAtPoint`), here reaching from the
- * Tasks panel's own DOM subtree into DayColumn's (#313). `null` when the
- * drop landed anywhere else (the all-day lane, Month, the panel itself) —
- * none of those targets are this ticket's (#314 and later widen this).
- */
-function resolveGridDropTime(clientX: number, clientY: number): Date | null {
-  const target = document.elementFromPoint(clientX, clientY);
-  const columnElement = target?.closest<HTMLElement>("[data-grid-day-ms]");
-  const dayMsKey = columnElement?.dataset.gridDayMs;
-  if (!columnElement || !dayMsKey) return null;
-
-  const day = new Date(Number(dayMsKey));
-  const offsetY = clientY - columnElement.getBoundingClientRect().top;
-  return snapToIncrement(yToTime(offsetY, day, PIXELS_PER_HOUR), 15);
-}
+const menuItemClasses =
+  "flex cursor-default items-center px-3 py-1.5 text-body text-ink data-[highlighted]:bg-surface-hover";
 
 // TaskRow is one row inside a Task bucket (#310, #311, #313, ADR-0083): its
 // own Deadline beside the title, so Thursday's work reads differently from
@@ -47,6 +33,7 @@ function resolveGridDropTime(clientX: number, clientY: number): Date | null {
 export function TaskRow({ task, onOpenDetail }: TaskRowProps) {
   const setTaskCompleted = useTasksStore((state) => state.setTaskCompleted);
   const setTaskTimeBlock = useTasksStore((state) => state.setTaskTimeBlock);
+  const clearTaskTimeBlock = useTasksStore((state) => state.clearTaskTimeBlock);
   const taskList = useTaskListsStore((state) =>
     state.taskLists.find((list) => list.id === task.taskListId),
   );
@@ -56,8 +43,9 @@ export function TaskRow({ task, onOpenDetail }: TaskRowProps) {
     onDrag: (draggedTask, state) => {
       const dropTime = resolveGridDropTime(state.position.x, state.position.y);
       if (!dropTime) return;
-      const { start, durationMinutes } = taskDropIntent({ surface: "hourlyGrid", time: dropTime });
-      void setTaskTimeBlock(draggedTask.id, start, durationMinutes);
+      const write = taskDropIntent({ kind: "panelRow" }, { surface: "hourlyGrid", time: dropTime });
+      if (write.action !== "setTimeBlock") return;
+      void setTaskTimeBlock(draggedTask.id, write.start, write.durationMinutes);
     },
   });
 
@@ -65,7 +53,7 @@ export function TaskRow({ task, onOpenDetail }: TaskRowProps) {
     <>
       <div
         onMouseDown={(domEvent) => drag.start(task, domEvent.clientX, domEvent.clientY)}
-        className="flex cursor-pointer items-center gap-2 rounded-shell-sm py-1.5 hover:bg-surface-hover"
+        className="group flex cursor-pointer items-center gap-2 rounded-shell-sm py-1.5 hover:bg-surface-hover"
       >
         <span
           // Stops the completion click (and the mousedown that precedes it)
@@ -91,6 +79,53 @@ export function TaskRow({ task, onOpenDetail }: TaskRowProps) {
         </span>
         {task.due && (
           <span className="shrink-0 text-label-sm text-ink-muted">{format(task.due, "MMM d")}</span>
+        )}
+        {/* Absent rather than disabled when there's no Time block to clear
+            (mirrors CalendarList's own row-menu philosophy) — there being
+            nothing else on this menu yet, that's the same as showing no
+            trigger at all (#314). Placed here, not the detail modal, so
+            removing a block never requires opening it first — the same
+            "no precise drag required" reasoning the menu item itself answers
+            to (issue #309 story 58). */}
+        {task.start && (
+          <Menu.Root>
+            <Menu.Trigger
+              aria-label={`"${task.title}" actions`}
+              title={`"${task.title}" actions`}
+              onMouseDown={(event) => event.stopPropagation()}
+              onClick={(event) => event.stopPropagation()}
+              className={iconButtonClasses({
+                size: "tiny",
+                className:
+                  "shrink-0 opacity-0 focus-visible:opacity-100 group-hover:opacity-100 data-[popup-open]:opacity-100",
+              })}
+            >
+              <MoreVertical className="size-3.5" />
+            </Menu.Trigger>
+            <Menu.Portal>
+              <Menu.Positioner sideOffset={4} align="end" className="z-[60]">
+                {/* Rendered through a portal, so it sits outside the row's
+                    own DOM subtree — but React still bubbles its synthetic
+                    events up through the *component* tree the JSX describes,
+                    all the way to the row div's own onMouseDown. Without
+                    this guard, mousing down on an item both starts the row's
+                    drag gesture and (since the mouseup that follows the
+                    click never moves) fires its onClick, reopening the
+                    detail surface right after "Unschedule" runs. */}
+                <Menu.Popup
+                  onMouseDown={(event) => event.stopPropagation()}
+                  className="rounded-shell-md border border-border bg-surface py-1 shadow-elevation-2"
+                >
+                  <Menu.Item
+                    onClick={() => void clearTaskTimeBlock(task.id)}
+                    className={menuItemClasses}
+                  >
+                    Unschedule
+                  </Menu.Item>
+                </Menu.Popup>
+              </Menu.Positioner>
+            </Menu.Portal>
+          </Menu.Root>
         )}
       </div>
       {drag.active && (

@@ -23,6 +23,8 @@ interface TasksState {
   setTaskDeadline: (id: number, due: Date) => Promise<Task>;
   clearTaskDeadline: (id: number) => Promise<Task>;
   setTaskTimeBlock: (id: number, start: Date, durationMinutes: number) => Promise<boolean>;
+  clearTaskTimeBlock: (id: number) => Promise<boolean>;
+  setTaskDeadlineAndClearTimeBlock: (id: number, due: Date) => Promise<boolean>;
   updateTaskPriority: (id: number, priority: number) => Promise<Task>;
   moveTask: (id: number, taskListId: number) => Promise<Task>;
   deleteTask: (id: number) => Promise<void>;
@@ -128,6 +130,53 @@ export const useTasksStore = create<TasksState>((set, get) => ({
         await tasksApi.setTimeBlock(requireAccessToken(), id, start, durationMinutes);
       },
       fallbackMessage: `Couldn't schedule "${current.title}".`,
+    });
+  },
+
+  // clearTaskTimeBlock is the drop table's "back to panel" row and the
+  // Task's own "Unschedule" menu item (#314) — both just want the block
+  // gone. Optimistic for the same reason setTaskTimeBlock is: the grid
+  // itself (the block disappearing) is the feedback.
+  clearTaskTimeBlock: async (id) => {
+    const current = get().tasks.find((t) => t.id === id) ?? get().completedTasks.find((t) => t.id === id);
+    if (!current) return false;
+
+    const updated: Task = { ...current, start: null, durationMinutes: null };
+    return write({
+      apply: () => replaceTask(set, updated),
+      revert: () => replaceTask(set, current),
+      dispatch: async () => {
+        await tasksApi.clearTimeBlock(requireAccessToken(), id);
+      },
+      fallbackMessage: `Couldn't unschedule "${current.title}".`,
+    });
+  },
+
+  // setTaskDeadlineAndClearTimeBlock is the drop table's one row that
+  // touches both axes at once (#314): a Time block dragged into the all-day
+  // lane. Written as a single optimistic step — an in-between state where
+  // the Deadline is set but the old block still shows would have the block
+  // visibly snap back once the second write lands, which is exactly what
+  // this row exists to avoid (ADR-0083). The two API calls behind it aren't
+  // atomic on the server, so they're ordered to fail safe: clearing the
+  // block first means a dropped second call (setDeadline) leaves the server
+  // with the block already gone rather than with the new Deadline set
+  // alongside the stale block precedence would still draw on the grid —
+  // the one outcome this row exists to make unreachable.
+  setTaskDeadlineAndClearTimeBlock: async (id, due) => {
+    const current = get().tasks.find((t) => t.id === id) ?? get().completedTasks.find((t) => t.id === id);
+    if (!current) return false;
+
+    const updated: Task = { ...current, due, start: null, durationMinutes: null };
+    return write({
+      apply: () => replaceTask(set, updated),
+      revert: () => replaceTask(set, current),
+      dispatch: async () => {
+        const accessToken = requireAccessToken();
+        await tasksApi.clearTimeBlock(accessToken, id);
+        await tasksApi.setDeadline(accessToken, id, due);
+      },
+      fallbackMessage: `Couldn't reschedule "${current.title}".`,
     });
   },
 

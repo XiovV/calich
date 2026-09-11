@@ -29,6 +29,10 @@ interface AllDayLaneProps {
   // calendar" and "Show completed", so this lane only has to bucket them by
   // day, the same way it already does for occurrences.
   deadlineTasks: Task[];
+  /** Dragging a Deadline-only chip onto the hourly grid (#314) — the drop
+   * table's all-day-chip row. */
+  onTaskDragStart: (task: Task, clientX: number, clientY: number) => void;
+  draggingTaskId: number | null;
 }
 
 /**
@@ -49,6 +53,8 @@ export function AllDayLane({
   draggingKey,
   dragHoverDateKey,
   deadlineTasks,
+  onTaskDragStart,
+  draggingTaskId,
 }: AllDayLaneProps) {
   const calendars = useCalendarsStore((state) => state.calendars);
   const taskLists = useTaskListsStore((state) => state.taskLists);
@@ -119,6 +125,8 @@ export function AllDayLane({
                   key={task.id}
                   task={task}
                   taskList={taskLists.find((list) => list.id === task.taskListId)}
+                  onDragStart={onTaskDragStart}
+                  isDragging={task.id === draggingTaskId}
                 />
               ))}
           </div>

@@ -64,7 +64,15 @@ export function TasksPanel() {
   const buckets = bucketTasks(visibleTasks, new Date(), viewerZone());
 
   return (
-    <div className="flex h-full flex-col gap-3 overflow-y-auto p-4">
+    <div
+      // Read by TimeGrid's grid-block drag (#314) via `isPointOverTasksPanel`,
+      // the panel's own drop-target counterpart to DayColumn's
+      // `data-grid-day-ms` and AllDayLane's `data-allday-date` — the same
+      // elementFromPoint technique, this time asking only "is the pointer
+      // over the panel at all" rather than resolving a day or a time.
+      data-tasks-panel
+      className="flex h-full flex-col gap-3 overflow-y-auto p-4"
+    >
       <div className="flex items-center justify-between">
         <h2 className="text-heading text-ink">Tasks</h2>
         <div className="flex items-center gap-1">

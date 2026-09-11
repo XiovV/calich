@@ -78,6 +78,12 @@ interface DayColumnProps {
   draggingKey: string | null;
   eventDragPreview: EventDragPreviewData | null;
   isLastColumn: boolean;
+  /** Rescheduling or resizing a Task's own Time block (#314) — the same
+   * `onDragStart` shape `onOccurrenceDragStart` gives EventBlock, just keyed
+   * on the Task rather than the Occurrence. */
+  onTaskDragStart: (task: Task, kind: EventDragKind, clientX: number, clientY: number) => void;
+  draggingTaskId: number | null;
+  taskDragPreview: EventDragPreviewData | null;
 }
 
 export function DayColumn({
@@ -92,6 +98,9 @@ export function DayColumn({
   draggingKey,
   eventDragPreview,
   isLastColumn,
+  onTaskDragStart,
+  draggingTaskId,
+  taskDragPreview,
 }: DayColumnProps) {
   const daySegments = getDaySegments(occurrences, day);
   const taskSegments = getTaskTimeBlockDaySegments(tasks, day);
@@ -158,7 +167,9 @@ export function DayColumn({
   const layouts = allLayouts.filter((layout) => {
     const item = layout.occurrence;
     if (isDraftItem(item)) return false;
-    return !(item.kind === "occurrence" && occurrenceKey(item.occurrence) === draggingKey);
+    if (item.kind === "occurrence" && occurrenceKey(item.occurrence) === draggingKey) return false;
+    if (item.kind === "task" && item.task.id === draggingTaskId) return false;
+    return true;
   });
   const draftLayout = draftBlock
     ? allLayouts.find((layout) => isDraftItem(layout.occurrence))
@@ -261,6 +272,7 @@ export function DayColumn({
             column={layout.column}
             columnCount={layout.columnCount}
             pixelsPerHour={pixelsPerHour}
+            onDragStart={onTaskDragStart}
           />
         );
       })}
@@ -318,6 +330,30 @@ export function DayColumn({
           end={eventDragPreview.end}
           columnWidth={eventDragPreview.columnWidth}
           isLastColumn={eventDragPreview.isLastColumn}
+        />
+      )}
+      {taskDragPreview && (
+        <EventDragPreview
+          top={taskDragPreview.top}
+          height={taskDragPreview.height}
+          left={taskDragPreview.left}
+          width={taskDragPreview.width}
+          title={taskDragPreview.title}
+          start={taskDragPreview.start}
+          end={taskDragPreview.end}
+          blockStyle={taskDragPreview.blockStyle}
+        />
+      )}
+      {taskDragPreview?.showReadout && (
+        <DragReadout
+          top={taskDragPreview.top}
+          height={taskDragPreview.height}
+          left={taskDragPreview.left}
+          width={taskDragPreview.width}
+          start={taskDragPreview.start}
+          end={taskDragPreview.end}
+          columnWidth={taskDragPreview.columnWidth}
+          isLastColumn={taskDragPreview.isLastColumn}
         />
       )}
     </div>
