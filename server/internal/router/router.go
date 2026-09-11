@@ -15,7 +15,7 @@ import (
 	"github.com/XiovV/calich/server/internal/static"
 )
 
-func New(logger *slog.Logger, authHandler *handlers.AuthHandler, calendarHandler *handlers.CalendarHandler, eventHandler *handlers.EventHandler, attachmentHandler *handlers.AttachmentHandler, notificationHandler *handlers.NotificationHandler, appPasswordHandler *handlers.AppPasswordHandler, accountHandler *handlers.AccountHandler, userHandler *handlers.UserHandler, workspaceHandler *handlers.WorkspaceHandler, groupHandler *handlers.GroupHandler, connectionHandler *handlers.ConnectionHandler, calDAVHandler http.Handler, authenticator httpauth.Authenticator, activeUserChecker httpauth.ActiveUserChecker, calDAVAuthenticator httpauth.CalDAVAuthenticator, calDAVRateLimiter httpauth.CalDAVRateLimiter, enabledChecker httpauth.DisabledChecker, workspaceMembershipChecker httpauth.WorkspaceMembershipChecker) (http.Handler, error) {
+func New(logger *slog.Logger, authHandler *handlers.AuthHandler, calendarHandler *handlers.CalendarHandler, eventHandler *handlers.EventHandler, attachmentHandler *handlers.AttachmentHandler, notificationHandler *handlers.NotificationHandler, appPasswordHandler *handlers.AppPasswordHandler, accountHandler *handlers.AccountHandler, userHandler *handlers.UserHandler, workspaceHandler *handlers.WorkspaceHandler, groupHandler *handlers.GroupHandler, calendarSetHandler *handlers.CalendarSetHandler, connectionHandler *handlers.ConnectionHandler, calDAVHandler http.Handler, authenticator httpauth.Authenticator, activeUserChecker httpauth.ActiveUserChecker, calDAVAuthenticator httpauth.CalDAVAuthenticator, calDAVRateLimiter httpauth.CalDAVRateLimiter, enabledChecker httpauth.DisabledChecker, workspaceMembershipChecker httpauth.WorkspaceMembershipChecker) (http.Handler, error) {
 	r := chi.NewRouter()
 	r.Use(requestLogger(logger))
 	r.Use(middleware.Recoverer)
@@ -239,6 +239,24 @@ func New(logger *slog.Logger, authHandler *handlers.AuthHandler, calendarHandler
 			r.Get("/{id}/members", groupHandler.ListMembers)
 			r.Post("/{id}/members", groupHandler.AddMember)
 			r.Delete("/{id}/members/{userId}", groupHandler.RemoveMember)
+		})
+
+		// Calendar Sets (#301, ADR-0082): a named, private selection of the
+		// caller's active Workspace's Calendars, gated the same as Groups.
+		// Private outright — CalendarSetService itself resolves every Set by
+		// (id, caller, active workspace) and refuses with ErrNotFound rather
+		// than any authority check, so no extra middleware gate is needed
+		// beyond RequireWorkspace.
+		r.Route("/calendar-sets", func(r chi.Router) {
+			r.Use(httpauth.RequireAuth(authenticator))
+			r.Use(httpauth.RequireActiveUser(activeUserChecker))
+			r.Use(httpauth.RequireEnabledUser(enabledChecker))
+			r.Use(httpauth.RequireWorkspace(workspaceMembershipChecker))
+
+			r.Get("/", calendarSetHandler.List)
+			r.Post("/", calendarSetHandler.Create)
+			r.Patch("/{id}", calendarSetHandler.Rename)
+			r.Delete("/{id}", calendarSetHandler.Delete)
 		})
 
 		// Connections (#285, ADR-0050, ADR-0051): Callback sits outside

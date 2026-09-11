@@ -65,6 +65,7 @@ type Graph struct {
 	WorkspaceRepo        *repository.WorkspaceRepository
 	WorkspaceInviteRepo  *repository.WorkspaceInviteRepository
 	GroupRepo            *repository.GroupRepository
+	CalendarSetRepo      *repository.CalendarSetRepository
 	NotificationRepo     *repository.NotificationRepository
 	AppPasswordRepo      *repository.AppPasswordRepository
 	FiredReminderRepo    *repository.FiredReminderRepository
@@ -90,6 +91,7 @@ type Graph struct {
 	Calendars     *CalendarService
 	Events        *EventService
 	Groups        *GroupService
+	CalendarSets  *CalendarSetService
 	Imports       *ImportService
 	Notifications *NotificationService
 	Subscriptions *SubscribeService
@@ -216,6 +218,7 @@ func NewGraph(sqlDB *sql.DB, cfg config.Config, opts ...GraphOption) (*Graph, er
 		WorkspaceRepo:        repository.NewWorkspaceRepository(sqlDB),
 		WorkspaceInviteRepo:  repository.NewWorkspaceInviteRepository(sqlDB),
 		GroupRepo:            repository.NewGroupRepository(sqlDB),
+		CalendarSetRepo:      repository.NewCalendarSetRepository(sqlDB),
 		NotificationRepo:     repository.NewNotificationRepository(sqlDB),
 		AppPasswordRepo:      repository.NewAppPasswordRepository(sqlDB),
 		FiredReminderRepo:    repository.NewFiredReminderRepository(sqlDB),
@@ -226,6 +229,7 @@ func NewGraph(sqlDB *sql.DB, cfg config.Config, opts ...GraphOption) (*Graph, er
 	g.RateLimiter = NewAuthRateLimiter(g.RateLimitRepo, cfg.AuthRateLimitPerEmail, cfg.AuthRateLimitPerIP, cfg.RegisterRateLimitPerIP)
 	g.Workspaces = NewWorkspaceService(sqlDB, g.WorkspaceRepo, g.WorkspaceInviteRepo, g.CalendarRepo, g.ShareRepo)
 	g.Groups = NewGroupService(g.GroupRepo, g.WorkspaceRepo)
+	g.CalendarSets = NewCalendarSetService(g.CalendarSetRepo)
 	g.Calendars = NewCalendarService(sqlDB, g.CalendarRepo, g.SourceRepo, g.ShareRepo, g.UserRepo, g.EventReminderRepo, g.DefaultReminderRepo, g.ExplicitReminderRepo, g.ColorOverrideRepo, g.ExposureRepo, g.WorkspaceRepo, g.GroupShareRepo, g.GroupRepo)
 	g.Auth = NewAuthService(sqlDB, g.UserRepo, g.SessionRepo, g.Workspaces, g.WorkspaceInviteRepo, g.Calendars, g.AttendeeRepo, g.JWTSecret, cfg.InitialName, cfg.InitialEmail, cfg.InitialPassword, cfg.EnableSignups)
 	// mailOutbox is nil on a deployment with no SMTP transport configured

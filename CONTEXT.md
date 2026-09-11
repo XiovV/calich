@@ -25,7 +25,7 @@ One of the eight curated colors the web app offers as one-click quick picks when
 _Avoid_: palette color, preset, theme color
 
 **Calendar toggle**:
-The sidebar control that shows or hides a Calendar's Occurrences on the grid, rendered in that Calendar's own resolved color rather than a theme accent: filled with a contrasting check when showing, an unfilled ring in the same color when hidden, so color identity survives hiding a Calendar. A sidebar-specific control, not a mode of the app's generic checkbox — its color is data, not a theme constant, and a Calendar whose color matches no Swatch still needs it to render that color.
+The sidebar control that shows or hides a Calendar's Occurrences on the grid, rendered in that Calendar's own resolved color rather than a theme accent: filled with a contrasting check when showing, an unfilled ring in the same color when hidden, so color identity survives hiding a Calendar. A sidebar-specific control, not a mode of the app's generic checkbox — its color is data, not a theme constant, and a Calendar whose color matches no Swatch still needs it to render that color. Answers a different question from the Active Calendar Set, which decides whether a Calendar has a row here at all: a Calendar outside the Active Calendar Set is absent rather than unhidden, and its toggle keeps whatever value it had when it returns.
 _Avoid_: swatch, checkbox (in prose, for this control specifically), dot (the coloured dot it replaced)
 
 **Event color**:
@@ -138,7 +138,7 @@ The user's chosen appearance — Light, Dark, or System — persisted locally an
 _Avoid_: color scheme, mode, dark-mode toggle
 
 **Settings**:
-The overlay where a User adjusts everything that isn't a Calendar or an Event — their Preferences, their Account, their Reminder delivery, their app passwords, their Connections, import and export, and (for the Workspaces they administer) its Members and Groups. Opens *over* the calendar rather than replacing it: the grid stays where it was, and closing returns the User to exactly the view they left. Divided into a **Personal** group, whose Sections concern the one User, and a **Workspace** group, whose Sections concern the active Workspace and everyone in it. Each Section is individually addressable, so one can be linked to and survives a reload. See ADR-0049.
+The overlay where a User adjusts everything that isn't a Calendar or an Event — their Preferences, their Account, their Reminder delivery, their app passwords, their Connections, their Calendar Sets, import and export, and (for the Workspaces they administer) its Members and Groups. Opens *over* the calendar rather than replacing it: the grid stays where it was, and closing returns the User to exactly the view they left. Divided into a **Personal** group, whose Sections concern the one User, and a **Workspace** group, whose Sections concern the active Workspace and everyone in it. Each Section is individually addressable, so one can be linked to and survives a reload. See ADR-0049.
 _Avoid_: settings page, preferences (that's the narrower concept below), config screen
 
 **Section**:
@@ -346,6 +346,16 @@ _Avoid_: conference link, meeting link, join URL
 **Guest count**:
 On a Linked Calendar's Event, a bare number of the Provider's attendees who are neither the connecting User nor a resource (a meeting room, say) — conferring nothing, never Attendee rows, so a bare time block that is secretly a fourteen-person meeting is never silently misleading. Distinct from an Event's Attendees, which this app writes its own Invitations against. See ADR-0052.
 _Avoid_: attendee count (that's an ordinary Event's own Attendee tally), guests, invitee count
+
+## Calendar sets
+
+**Calendar Set**:
+A named, private selection of a Workspace's Calendars belonging to one User — a saved filter, never a container. A Calendar may be in many Sets or in none, and being in none is the ordinary case; Sets may overlap freely, need not cover every Calendar, and deleting one destroys nothing. Its members are drawn from one Workspace, so Calich-native, Subscribed and Linked Calendars sit side by side in one Set — all three are ordinary Calendars carrying a Workspace, and a Set is indifferent to which kind it holds. Private outright, like a Reminder or an Exposure: it is never shared, never granted, and has no Role, which is what separates it from a Group — a Group is a named set of *Members*, this is a named set of *Calendars*. See ADR-0082.
+_Avoid_: calendar group (Group is a set of Members), collection, folder, profile, view, filter (it is one, but the word is too general to name the entity)
+
+**Active Calendar Set**:
+The Calendar Set a Session is currently looking through, or none — the default, shown as "All calendars". Narrows *what exists* in the UI rather than what is switched on: a Calendar outside it is absent from the sidebar and from the Event modal's Calendar picker, not unchecked. Leaves Calendar toggle alone, which stays one global answer per Calendar, so the grid renders what is both in the Active Calendar Set and toggled on. Session state in the same sense Active view is, but with no Preference seeding it: every load and every Workspace switch returns to "All calendars", deliberately and not as a memory of where the User last was. Invisible below the UI — Exposure still decides CalDAV home-set membership, and Reminders, Notifications and Write-back are all indifferent to what their User happens to be looking through today. See ADR-0082.
+_Avoid_: current set, selected set, set filter, scope
 
 ## Deployment
 

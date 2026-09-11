@@ -5,6 +5,7 @@ import {
   Boxes,
   Cable,
   KeyRound,
+  Layers,
   SlidersHorizontal,
   UserRound,
   UsersRound,
@@ -18,6 +19,7 @@ import { ReminderDeliverySection } from "./ReminderDeliverySection";
 import { ImportExportSection } from "./ImportExportSection";
 import { MembersSection } from "./MembersSection";
 import { GroupsSection } from "./GroupsSection";
+import { CalendarSetsSection } from "./CalendarSetsSection";
 
 export type SettingsGroup = "personal" | "workspace";
 
@@ -47,11 +49,18 @@ export interface SettingsSection {
 // only two people-shaped concepts) never sit adjacent to a third. Connections
 // (#285) sits right after Account, distinctly iconed and labelled, so a
 // third-party Provider grant is never confused with the User's own login.
+// Calendar sets (#301, ADR-0082) is Personal's first workspace-dependent
+// Section — its contents re-render on Workspace switch, unlike every other
+// Personal Section — because privacy, not workspace-independence, is what
+// the Personal grouping communicates: a Set has no sharing mechanism, no
+// Role and no Admin surface, so it sits with Preferences rather than beside
+// Admin-managed Members and Groups.
 export function getSettingsSections(): SettingsSection[] {
   return [
     { path: "preferences", label: "Preferences", group: "personal", icon: SlidersHorizontal, element: <PreferencesSection /> },
     { path: "account", label: "Account", group: "personal", icon: UserRound, element: <AccountSection /> },
     { path: "connections", label: "Connections", group: "personal", icon: Cable, element: <ConnectionsSection /> },
+    { path: "calendar-sets", label: "Calendar sets", group: "personal", icon: Layers, element: <CalendarSetsSection /> },
     { path: "members", label: "Members", group: "workspace", icon: UsersRound, element: <MembersSection /> },
     { path: "groups", label: "Groups", group: "workspace", icon: Boxes, element: <GroupsSection /> },
     { path: "app-passwords", label: "App passwords", group: "personal", icon: KeyRound, element: <AppPasswordsSection /> },
