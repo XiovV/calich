@@ -9,6 +9,10 @@ import { useVisibleOccurrences } from "../hooks/useVisibleOccurrences";
 import { usePointerDrag, type DragState } from "../hooks/usePointerDrag";
 import { CLICK_DISTANCE_THRESHOLD_PX, isDragGesture, type Point } from "../lib/pointerDrag";
 import { occurrenceKey, type Occurrence } from "../lib/occurrence";
+import { viewerZone } from "../lib/floatingTime";
+import { useShellStore } from "../lib/shellStore";
+import { taskDeadlineFallsOnDay, taskPlacement } from "../lib/taskScheduling";
+import { useTasksStore } from "../lib/tasksStore";
 import {
   PIXELS_PER_HOUR,
   computeMoveToDate,
@@ -155,6 +159,10 @@ export function TimeGrid({
   onOccurrenceClick,
 }: TimeGridProps) {
   const calendars = useCalendarsStore((state) => state.calendars);
+  const tasks = useTasksStore((state) => state.tasks);
+  const completedTasks = useTasksStore((state) => state.completedTasks);
+  const showTasksOnCalendar = useShellStore((state) => state.showTasksOnCalendar);
+  const showCompletedTasks = useShellStore((state) => state.showCompletedTasks);
   const dragCommit = useOccurrenceDragCommit();
   const scrollRef = useRef<HTMLDivElement>(null);
   const headerRef = useRef<HTMLDivElement>(null);
@@ -176,6 +184,21 @@ export function TimeGrid({
   // grid (ADR-0017).
   const allDayOccurrences = allOccurrences.filter((occurrence) => occurrence.event.allDay);
   const visibleOccurrences = allOccurrences.filter((occurrence) => !occurrence.event.allDay);
+
+  // Deadline-only Tasks share the all-day lane with all-day Occurrences
+  // (#312, ADR-0083): "Show tasks on calendar" gates the feature outright,
+  // and "Show completed" (mirroring TasksPanel's own visibleTasks) decides
+  // whether a completed Task's chip is among them — completing one never
+  // removes it, only that switch does.
+  const zone = viewerZone();
+  const candidateTasks = showTasksOnCalendar
+    ? [...tasks, ...(showCompletedTasks ? completedTasks : [])]
+    : [];
+  const deadlineTasks = candidateTasks.filter((task) => {
+    if (taskPlacement(task) !== "allDay" || !task.due) return false;
+    const due = task.due;
+    return daysToShow.some((day) => taskDeadlineFallsOnDay(due, day, zone));
+  });
 
   useEffect(() => {
     const interval = setInterval(
@@ -299,6 +322,7 @@ export function TimeGrid({
               allDayDrag.active ? occurrenceKey(allDayDrag.active.occurrence) : null
             }
             dragHoverDateKey={allDayHoverDateKey}
+            deadlineTasks={deadlineTasks}
           />
         </div>
         <div className="flex">

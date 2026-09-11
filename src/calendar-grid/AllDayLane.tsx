@@ -1,10 +1,15 @@
 import { AttachmentIndicator } from "./AttachmentIndicator";
+import { TaskDeadlineChip } from "./TaskDeadlineChip";
 import { WriteBackErrorIndicator } from "./WriteBackErrorIndicator";
 import { canWriteCalendarEvents, getCalendarById } from "../lib/calendar";
 import { getOccurrenceBlockStyle } from "../lib/calendarColors";
 import { useCalendarsStore } from "../lib/calendarsStore";
 import { occurrenceIntersectsDay } from "../lib/occurrenceSegments";
 import { occurrenceKey, type Occurrence } from "../lib/occurrence";
+import { viewerZone } from "../lib/floatingTime";
+import { taskDeadlineFallsOnDay } from "../lib/taskScheduling";
+import { useTaskListsStore } from "../lib/taskListsStore";
+import type { Task } from "../lib/tasksApi";
 
 interface AllDayLaneProps {
   daysToShow: Date[];
@@ -18,6 +23,12 @@ interface AllDayLaneProps {
   ) => void;
   draggingKey: string | null;
   dragHoverDateKey: string | null;
+  // deadlineTasks is every Deadline-only Task (placement precedence's
+  // `allDay` surface, #312, ADR-0083) that should be visible somewhere in
+  // this window — the caller (TimeGrid) has already applied "Show tasks on
+  // calendar" and "Show completed", so this lane only has to bucket them by
+  // day, the same way it already does for occurrences.
+  deadlineTasks: Task[];
 }
 
 /**
@@ -37,10 +48,13 @@ export function AllDayLane({
   onOccurrenceDragStart,
   draggingKey,
   dragHoverDateKey,
+  deadlineTasks,
 }: AllDayLaneProps) {
   const calendars = useCalendarsStore((state) => state.calendars);
+  const taskLists = useTaskListsStore((state) => state.taskLists);
+  const zone = viewerZone();
 
-  if (occurrences.length === 0) return null;
+  if (occurrences.length === 0 && deadlineTasks.length === 0) return null;
 
   return (
     <div className="flex border-t border-border">
@@ -98,6 +112,15 @@ export function AllDayLane({
                 </button>
               );
             })}
+            {deadlineTasks
+              .filter((task) => task.due && taskDeadlineFallsOnDay(task.due, day, zone))
+              .map((task) => (
+                <TaskDeadlineChip
+                  key={task.id}
+                  task={task}
+                  taskList={taskLists.find((list) => list.id === task.taskListId)}
+                />
+              ))}
           </div>
         );
       })}

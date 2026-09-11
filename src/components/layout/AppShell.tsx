@@ -9,6 +9,7 @@ import { EventModal } from "../../calendar-grid/EventModal";
 import { computeDefaultDraft, type DraftBlock } from "../../lib/gridTime";
 import { useEventsStore } from "../../lib/eventsStore";
 import { refetchCalendarsAndReconcile, useShellStore } from "../../lib/shellStore";
+import { useTasksStore } from "../../lib/tasksStore";
 import { useWorkspacesStore } from "../../lib/workspacesStore";
 import { occurrenceKey, type Occurrence } from "../../lib/occurrence";
 
@@ -23,6 +24,7 @@ export function AppShell() {
   const fetchWorkspaces = useWorkspacesStore((state) => state.fetchWorkspaces);
   const activeWorkspaceId = useWorkspacesStore((state) => state.activeWorkspaceId);
   const tasksPanelOpen = useShellStore((state) => state.tasksPanelOpen);
+  const fetchTasks = useTasksStore((state) => state.fetchTasks);
 
   useEffect(() => {
     fetchWorkspaces();
@@ -64,6 +66,11 @@ export function AppShell() {
     function refetch() {
       refetchCalendarsAndReconcile();
       fetchEvents();
+      // Fetched here rather than only inside TasksPanel's own effect: "Show
+      // tasks on calendar" (#312) renders a Deadline-only Task's chip in the
+      // all-day lane whether or not the panel is open, so the grid needs
+      // Tasks in the store regardless.
+      fetchTasks();
     }
 
     if (activeWorkspaceId === null) return;
@@ -75,7 +82,7 @@ export function AppShell() {
     document.addEventListener("visibilitychange", handleVisibilityChange);
     return () =>
       document.removeEventListener("visibilitychange", handleVisibilityChange);
-  }, [fetchEvents, activeWorkspaceId]);
+  }, [fetchEvents, fetchTasks, activeWorkspaceId]);
 
   function handleCreateClick() {
     const draft = computeDefaultDraft(new Date());

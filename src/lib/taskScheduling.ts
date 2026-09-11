@@ -51,6 +51,51 @@ function zonedCalendarDay(instant: Date, zone: string): Date {
 }
 
 /**
+ * The three surfaces placement precedence (#312, ADR-0083) can resolve a
+ * Task to. There is no discriminator field on a Task itself — presence of
+ * `start`/`due` IS the state `taskPlacement` reads.
+ */
+export type TaskPlacement = "grid" | "allDay" | "panel";
+
+/** The fields `taskPlacement` reads — structural, like `SchedulableTask`. */
+export interface PlaceableTask {
+  /** The Time block's start (`DTSTART`) — wins outright when present. */
+  start: Date | null;
+  /** The Deadline (`DUE`) — the fallback surface when there is no Time block. */
+  due: Date | null;
+}
+
+/**
+ * Placement precedence (#312, ADR-0083): a Task renders in exactly one
+ * place. A Time block wins outright and puts it on the hourly grid; failing
+ * that, a Deadline puts it in the all-day lane; failing that, it is
+ * panel-only. Every later grid ticket (Time-blocking, drag) depends on this
+ * holding for all four field combinations.
+ */
+export function taskPlacement(task: PlaceableTask): TaskPlacement {
+  if (task.start) return "grid";
+  if (task.due) return "allDay";
+  return "panel";
+}
+
+/**
+ * Whether `due` — a Task's Deadline — falls on the same calendar date as
+ * `day`, both read through `viewerZone`. The all-day lane's own per-day
+ * filter for a Deadline-only Task (#312), using the same zone handling
+ * `taskBucket` does rather than comparing raw UTC fields, so a Deadline set
+ * near midnight lands on the date it reads as in the Viewer zone, not
+ * whatever date its UTC instant happens to carry.
+ */
+export function taskDeadlineFallsOnDay(due: Date, day: Date, viewerZone: string): boolean {
+  return (
+    differenceInCalendarDays(
+      zonedCalendarDay(due, viewerZone),
+      zonedCalendarDay(day, viewerZone),
+    ) === 0
+  );
+}
+
+/**
  * The Task bucket `task` falls into, derived from its Deadline against
  * today in `viewerZone` — falling back to the Time block's start when there
  * is no Deadline, and `noDate` when neither is present (ADR-0083). A

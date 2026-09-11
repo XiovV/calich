@@ -4,6 +4,9 @@ import {
   compareTasksWithinBucket,
   bucketTasks,
   taskBucket,
+  taskDeadlineFallsOnDay,
+  taskPlacement,
+  type PlaceableTask,
   type SchedulableTask,
 } from "./taskScheduling";
 
@@ -139,6 +142,61 @@ describe("compareTasksWithinBucket", () => {
     const a = makeTask({ due, priority: 5, createdAt });
     const b = makeTask({ due, priority: 5, createdAt });
     expect(compareTasksWithinBucket(a, b)).toBe(0);
+  });
+});
+
+describe("taskPlacement", () => {
+  function placeable(overrides: Partial<PlaceableTask> = {}): PlaceableTask {
+    return { start: null, due: null, ...overrides };
+  }
+
+  it("is panel when neither a Time block nor a Deadline is present", () => {
+    expect(taskPlacement(placeable())).toBe("panel");
+  });
+
+  it("is allDay when a Deadline is present and there is no Time block", () => {
+    expect(taskPlacement(placeable({ due: new Date(2026, 8, 15) }))).toBe("allDay");
+  });
+
+  it("is grid when a Time block is present and there is no Deadline", () => {
+    expect(taskPlacement(placeable({ start: new Date(2026, 8, 15, 14, 0) }))).toBe("grid");
+  });
+
+  // ADR-0083: a Time block wins outright — a Task due Friday but blocked
+  // Tuesday still renders on the grid, never doubled into the all-day lane.
+  it("is grid when both a Time block and a Deadline are present — the Time block wins", () => {
+    expect(
+      taskPlacement(
+        placeable({ start: new Date(2026, 8, 15, 14, 0), due: new Date(2026, 8, 18) }),
+      ),
+    ).toBe("grid");
+  });
+});
+
+describe("taskDeadlineFallsOnDay", () => {
+  it("is true when the Deadline falls on the same calendar day as day, in viewerZone", () => {
+    const due = fromZonedTime(new Date(2026, 8, 15, 22, 0), "America/New_York");
+    const day = fromZonedTime(new Date(2026, 8, 15, 0, 0), "America/New_York");
+    expect(taskDeadlineFallsOnDay(due, day, "America/New_York")).toBe(true);
+  });
+
+  it("is false when the Deadline falls on a different calendar day than day", () => {
+    const due = fromZonedTime(new Date(2026, 8, 15, 22, 0), "America/New_York");
+    const day = fromZonedTime(new Date(2026, 8, 16, 0, 0), "America/New_York");
+    expect(taskDeadlineFallsOnDay(due, day, "America/New_York")).toBe(false);
+  });
+
+  it("re-derives which day the Deadline falls on from viewerZone, not the zone it was set in", () => {
+    // Fixed instants, mirroring taskBucket's own cross-zone test: only the
+    // viewerZone argument varies below. 2026-09-15 23:30 America/New_York is
+    // already 2026-09-16 in Pacific/Auckland, so the same due/day pair reads
+    // as the same calendar day from New York and as different days from
+    // Auckland.
+    const due = fromZonedTime(new Date(2026, 8, 15, 0, 0), "America/New_York");
+    const day = fromZonedTime(new Date(2026, 8, 15, 23, 30), "America/New_York");
+
+    expect(taskDeadlineFallsOnDay(due, day, "America/New_York")).toBe(true);
+    expect(taskDeadlineFallsOnDay(due, day, "Pacific/Auckland")).toBe(false);
   });
 });
 

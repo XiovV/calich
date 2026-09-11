@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import { ChevronDown, ChevronRight, X } from "lucide-react";
+import { Menu } from "@base-ui/react/menu";
+import { Check, ChevronDown, ChevronRight, MoreVertical, X } from "lucide-react";
 import { viewerZone } from "../../lib/floatingTime";
 import { useShellStore } from "../../lib/shellStore";
 import { TASK_BUCKET_LABELS, TASK_BUCKET_ORDER, bucketTasks } from "../../lib/taskScheduling";
@@ -7,6 +8,7 @@ import type { Task } from "../../lib/tasksApi";
 import { useTasksStore } from "../../lib/tasksStore";
 import { useWorkspacesStore } from "../../lib/workspacesStore";
 import { IconButton } from "../ui/IconButton";
+import { iconButtonClasses } from "../ui/iconButtonClasses";
 import { TaskDetailModal } from "./TaskDetailModal";
 import { TaskListsFilter } from "./TaskListsFilter";
 import { TaskQuickAdd } from "./TaskQuickAdd";
@@ -28,6 +30,8 @@ export function TasksPanel() {
   const fetchCompletedTasks = useTasksStore((state) => state.fetchCompletedTasks);
   const showCompletedTasks = useShellStore((state) => state.showCompletedTasks);
   const setShowCompletedTasks = useShellStore((state) => state.setShowCompletedTasks);
+  const showTasksOnCalendar = useShellStore((state) => state.showTasksOnCalendar);
+  const setShowTasksOnCalendar = useShellStore((state) => state.setShowTasksOnCalendar);
   const activeWorkspaceId = useWorkspacesStore((state) => state.activeWorkspaceId);
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
 
@@ -63,13 +67,42 @@ export function TasksPanel() {
     <div className="flex h-full flex-col gap-3 overflow-y-auto p-4">
       <div className="flex items-center justify-between">
         <h2 className="text-heading text-ink">Tasks</h2>
-        <IconButton
-          size="small"
-          onClick={() => setTasksPanelOpen(false)}
-          aria-label="Close Tasks panel"
-        >
-          <X className="size-4" />
-        </IconButton>
+        <div className="flex items-center gap-1">
+          <Menu.Root>
+            <Menu.Trigger
+              aria-label="Tasks panel options"
+              className={iconButtonClasses({ size: "small" })}
+            >
+              <MoreVertical className="size-4" />
+            </Menu.Trigger>
+            <Menu.Portal>
+              <Menu.Positioner sideOffset={4} align="end" className="z-[60]">
+                <Menu.Popup className="min-w-56 rounded-shell-md border border-border bg-surface py-1 shadow-elevation-2">
+                  <Menu.CheckboxItem
+                    checked={showTasksOnCalendar}
+                    onCheckedChange={setShowTasksOnCalendar}
+                    className="flex cursor-default items-center gap-2 px-3 py-1.5 text-body text-ink data-[highlighted]:bg-surface-hover"
+                  >
+                    <Menu.CheckboxItemIndicator
+                      keepMounted
+                      className="flex size-4 shrink-0 items-center justify-center data-[unchecked]:opacity-0"
+                    >
+                      <Check className="size-4 text-accent-ink" />
+                    </Menu.CheckboxItemIndicator>
+                    Show tasks on calendar
+                  </Menu.CheckboxItem>
+                </Menu.Popup>
+              </Menu.Positioner>
+            </Menu.Portal>
+          </Menu.Root>
+          <IconButton
+            size="small"
+            onClick={() => setTasksPanelOpen(false)}
+            aria-label="Close Tasks panel"
+          >
+            <X className="size-4" />
+          </IconButton>
+        </div>
       </div>
       <TaskListsFilter />
       <TaskQuickAdd />

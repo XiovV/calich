@@ -38,6 +38,12 @@ interface ShellState {
   // like tasksPanelOpen, closed (hidden) by default and with no Preference
   // behind it — reopening the panel later starts hidden again.
   showCompletedTasks: boolean;
+  // showTasksOnCalendar is "Show tasks on calendar" (#312, ADR-0083): whether
+  // a Deadline-only Task's all-day-lane chip (and, later, a Time block on
+  // the hourly grid) renders at all — session state like tasksPanelOpen, but
+  // defaulting **on**, since the calendar is meant to show what's due unless
+  // the User asks to look at commitments alone.
+  showTasksOnCalendar: boolean;
   // requestedEventId is set by a click on an invite Notification (the
   // NotificationBell has no reach into AppShell's own eventModalState) and
   // cleared once AppShell has resolved it into an opened EventModal — a
@@ -72,6 +78,7 @@ interface ShellState {
   toggleTaskListChecked: (id: number) => void;
   addCheckedTaskListId: (id: number) => void;
   setShowCompletedTasks: (show: boolean) => void;
+  setShowTasksOnCalendar: (show: boolean) => void;
 }
 
 export const useShellStore = create<ShellState>((set) => ({
@@ -96,6 +103,7 @@ export const useShellStore = create<ShellState>((set) => ({
   checkedTaskListIds: new Set<number>(),
   knownTaskListIds: new Set<number>(),
   showCompletedTasks: false,
+  showTasksOnCalendar: true,
   requestedEventId: null,
   requestEventOpen: (eventId) => set({ requestedEventId: eventId }),
   clearRequestedEventOpen: () => set({ requestedEventId: null }),
@@ -159,6 +167,7 @@ export const useShellStore = create<ShellState>((set) => ({
       knownTaskListIds: new Set(state.knownTaskListIds).add(id),
     })),
   setShowCompletedTasks: (show) => set({ showCompletedTasks: show }),
+  setShowTasksOnCalendar: (show) => set({ showTasksOnCalendar: show }),
 }));
 
 // Shared by every caller that refetches Calendars and needs the checked set

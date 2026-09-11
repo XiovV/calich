@@ -16,6 +16,12 @@ describe("useShellStore", () => {
   it("defaults tasksPanelOpen to false", () => {
     expect(useShellStore.getState().tasksPanelOpen).toBe(false);
   });
+
+  // #312, ADR-0083: unlike tasksPanelOpen and showCompletedTasks, this one
+  // defaults on — the calendar shows what's due unless the User turns it off.
+  it("defaults showTasksOnCalendar to true", () => {
+    expect(useShellStore.getState().showTasksOnCalendar).toBe(true);
+  });
 });
 
 describe("reconcileCheckedCalendarIds", () => {
@@ -176,5 +182,15 @@ describe("setTasksPanelOpen", () => {
 
     useShellStore.getState().setTasksPanelOpen(false);
     expect(useShellStore.getState().tasksPanelOpen).toBe(false);
+  });
+});
+
+describe("setShowTasksOnCalendar", () => {
+  it("sets showTasksOnCalendar", () => {
+    useShellStore.getState().setShowTasksOnCalendar(false);
+    expect(useShellStore.getState().showTasksOnCalendar).toBe(false);
+
+    useShellStore.getState().setShowTasksOnCalendar(true);
+    expect(useShellStore.getState().showTasksOnCalendar).toBe(true);
   });
 });
