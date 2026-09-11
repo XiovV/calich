@@ -117,3 +117,53 @@ func (r *CalendarSetRepository) Delete(ctx context.Context, id, userID, workspac
 	}
 	return requireAffected(res)
 }
+
+// AddCalendar puts calendarID into setID's membership (#302, ADR-0082).
+// INSERT OR IGNORE rather than erroring on a Calendar already in the Set —
+// the endpoint above this is a PUT, so re-adding an existing member is a
+// no-op, not a conflict.
+func (r *CalendarSetRepository) AddCalendar(ctx context.Context, setID int64, calendarID string) error {
+	if _, err := r.db.ExecContext(ctx,
+		`INSERT OR IGNORE INTO calendar_set_members (set_id, calendar_id) VALUES (?, ?)`,
+		setID, calendarID,
+	); err != nil {
+		return fmt.Errorf("insert calendar set member: %w", err)
+	}
+	return nil
+}
+
+// RemoveCalendar takes calendarID out of setID's membership.
+func (r *CalendarSetRepository) RemoveCalendar(ctx context.Context, setID int64, calendarID string) error {
+	res, err := r.db.ExecContext(ctx,
+		`DELETE FROM calendar_set_members WHERE set_id = ? AND calendar_id = ?`,
+		setID, calendarID,
+	)
+	if err != nil {
+		return fmt.Errorf("delete calendar set member: %w", err)
+	}
+	return requireAffected(res)
+}
+
+// ListCalendarIDs returns every Calendar id belonging to setID — the
+// membership dialog's "which Calendars are already in" answer, and the
+// switcher's own eventual read.
+func (r *CalendarSetRepository) ListCalendarIDs(ctx context.Context, setID int64) ([]string, error) {
+	rows, err := r.db.QueryContext(ctx,
+		`SELECT calendar_id FROM calendar_set_members WHERE set_id = ?`,
+		setID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list calendar set members: %w", err)
+	}
+	defer rows.Close()
+
+	ids := []string{}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("scan calendar set member: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}

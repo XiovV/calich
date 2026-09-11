@@ -229,8 +229,10 @@ func NewGraph(sqlDB *sql.DB, cfg config.Config, opts ...GraphOption) (*Graph, er
 	g.RateLimiter = NewAuthRateLimiter(g.RateLimitRepo, cfg.AuthRateLimitPerEmail, cfg.AuthRateLimitPerIP, cfg.RegisterRateLimitPerIP)
 	g.Workspaces = NewWorkspaceService(sqlDB, g.WorkspaceRepo, g.WorkspaceInviteRepo, g.CalendarRepo, g.ShareRepo)
 	g.Groups = NewGroupService(g.GroupRepo, g.WorkspaceRepo)
-	g.CalendarSets = NewCalendarSetService(g.CalendarSetRepo)
 	g.Calendars = NewCalendarService(sqlDB, g.CalendarRepo, g.SourceRepo, g.ShareRepo, g.UserRepo, g.EventReminderRepo, g.DefaultReminderRepo, g.ExplicitReminderRepo, g.ColorOverrideRepo, g.ExposureRepo, g.WorkspaceRepo, g.GroupShareRepo, g.GroupRepo)
+	// CalendarSets needs Calendars for AddCalendar's Access check (#302,
+	// ADR-0082), so it's built after.
+	g.CalendarSets = NewCalendarSetService(g.CalendarSetRepo, g.Calendars)
 	g.Auth = NewAuthService(sqlDB, g.UserRepo, g.SessionRepo, g.Workspaces, g.WorkspaceInviteRepo, g.Calendars, g.AttendeeRepo, g.JWTSecret, cfg.InitialName, cfg.InitialEmail, cfg.InitialPassword, cfg.EnableSignups)
 	// mailOutbox is nil on a deployment with no SMTP transport configured
 	// (ADR-0059, ADR-0060): with nothing able to send an Invitation there is

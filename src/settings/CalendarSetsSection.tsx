@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Check, Pencil, Plus, Trash2, X } from "lucide-react";
+import { Calendar as CalendarIcon, Check, Pencil, Plus, Trash2, X } from "lucide-react";
 import { Button } from "../components/ui/Button";
 import { IconButton } from "../components/ui/IconButton";
 import { Input } from "../components/ui/Input";
@@ -9,6 +9,7 @@ import { useWorkspacesStore } from "../lib/workspacesStore";
 import { useCalendarSetsStore } from "../lib/calendarSetsStore";
 import type { CalendarSet } from "../lib/calendarSetsApi";
 import { DeleteCalendarSetDialog } from "./DeleteCalendarSetDialog";
+import { CalendarSetMembershipDialog } from "./CalendarSetMembershipDialog";
 
 // The Calendar Sets Settings Section (#301, ADR-0082): create, rename and
 // delete the caller's own Calendar Sets — a named, private selection of the
@@ -30,6 +31,7 @@ export function CalendarSetsSection() {
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editingName, setEditingName] = useState("");
   const [deleteTarget, setDeleteTarget] = useState<CalendarSet | null>(null);
+  const [membersTarget, setMembersTarget] = useState<CalendarSet | null>(null);
   const { isSubmitting: isCreating, error: createError, run: runCreate } = useAsyncAction();
   const { isSubmitting: isRenaming, error: renameError, setError: setRenameError, run: runRename } = useAsyncAction();
 
@@ -132,6 +134,12 @@ export function CalendarSetsSection() {
                     </>
                   ) : (
                     <>
+                      <IconButton
+                        onClick={() => setMembersTarget(calendarSet)}
+                        aria-label={`Manage ${calendarSet.name} calendars`}
+                      >
+                        <CalendarIcon className="size-4" />
+                      </IconButton>
                       <IconButton onClick={() => startEditing(calendarSet)} aria-label={`Rename ${calendarSet.name}`}>
                         <Pencil className="size-4" />
                       </IconButton>
@@ -153,6 +161,9 @@ export function CalendarSetsSection() {
       </ul>
 
       {deleteTarget && <DeleteCalendarSetDialog calendarSet={deleteTarget} onClose={() => setDeleteTarget(null)} />}
+      {membersTarget && (
+        <CalendarSetMembershipDialog calendarSet={membersTarget} onClose={() => setMembersTarget(null)} />
+      )}
     </section>
   );
 }

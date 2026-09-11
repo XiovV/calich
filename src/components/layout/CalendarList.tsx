@@ -6,6 +6,7 @@ import { CalendarPickerModal } from "../../settings/CalendarPickerModal";
 import { IconButton } from "../ui/IconButton";
 import { iconButtonClasses } from "../ui/iconButtonClasses";
 import { canManageCalendar, isLinkedCalendar, shareCountTooltip, type Calendar } from "../../lib/calendar";
+import { connectionGroupLabel, groupCalendarsForSidebar, UNRESOLVED_CONNECTION } from "../../lib/calendarGrouping";
 import { resolveCalendarFill } from "../../lib/calendarColors";
 import { useAuthStore } from "../../lib/authStore";
 import { useCalendarsStore } from "../../lib/calendarsStore";
@@ -28,12 +29,9 @@ import { ShareCalendarModal } from "./ShareCalendarModal";
 // The row's action menu items share this shape so every row type — a click
 // away from Edit-only, Edit+Export+Delete, or Edit+Refresh+Unsubscribe — is
 // one list instead of three near-duplicate menus (#189).
-// UNRESOLVED_CONNECTION is the grouping key for a Linked Calendar whose
-// Connection id is missing from the payload — a state the server should never
-// produce, kept so that such a Calendar still renders instead of disappearing.
-// The heading reads "Unknown account" and offers no picker button, since there
-// is no Connection to re-open it with.
-const UNRESOLVED_CONNECTION = Symbol("unresolved connection");
+// UNRESOLVED_CONNECTION's heading (see calendarGrouping.ts) reads "Unknown
+// account" here and offers no picker button, since there is no Connection to
+// re-open it with.
 
 const menuItemClasses =
   "flex cursor-default items-center px-3 py-1.5 text-body text-ink data-[highlighted]:bg-surface-hover data-[disabled]:pointer-events-none data-[disabled]:opacity-50";
@@ -105,65 +103,11 @@ export function CalendarList() {
   } | null>(null);
   const [isConfirmingExport, setIsConfirmingExport] = useState(false);
 
-  // A Calendar shared with the viewer is grouped by whose it is, not by
-  // where its Events come from (#114) — a Subscribed or Linked Calendar
-  // someone else owns groups with the shared ones, since its Subscription/
-  // Connection controls aren't the viewer's in any case.
-  const myCalendars = calendars.filter(
-    (calendar) =>
-      canManageCalendar(calendar) && !calendar.sourceUrl && !isLinkedCalendar(calendar),
-  );
-  const subscribedCalendars = calendars.filter(
-    (calendar) => canManageCalendar(calendar) && Boolean(calendar.sourceUrl),
-  );
-  // Linked Calendars group under one heading per Connection rather than
-  // beside every other owned Calendar (#286) — the sidebar's only way to
-  // show "these came from that Google account".
-  //
-  // Keyed on the Connection's id, never on the account Email. The Email is a
-  // denormalized display field that only the *list* endpoint populates
-  // (attachConnectionEmails); every single-Calendar response omits it. Keying
-  // on it meant that refreshing a Linked Calendar — which replaces its store
-  // row with the single-Calendar GET's response — dropped the Calendar into an
-  // "Unknown account" heading until an unrelated list fetch happened to put
-  // the Email back. The id is on every response that carries a Source at all,
-  // so the grouping no longer depends on which endpoint a Calendar last came
-  // from.
-  // A Linked Calendar with no connectionId should not be reachable — the
-  // server sets it on every response carrying a Connection Source — but it
-  // groups under UNRESOLVED_CONNECTION rather than being dropped. A Calendar
-  // vanishing from the sidebar entirely is a far worse failure than one
-  // sitting under an unnamed heading, and this is the sidebar's last line
-  // against a payload shape changing underneath it.
-  const linkedCalendarsByConnection = new Map<number | typeof UNRESOLVED_CONNECTION, Calendar[]>();
-  for (const calendar of calendars) {
-    if (!canManageCalendar(calendar) || !isLinkedCalendar(calendar)) continue;
-    const key = calendar.connectionId ?? UNRESOLVED_CONNECTION;
-    const group = linkedCalendarsByConnection.get(key) ?? [];
-    group.push(calendar);
-    linkedCalendarsByConnection.set(key, group);
-  }
-
-  // The heading's label, resolved at render rather than carried on the rows.
-  // The Connections store is the durable source; a Calendar's own
-  // connectionAccountEmail stands in while that first fetch is still in
-  // flight, and "Unknown account" is now a genuine unresolved-Connection
-  // state rather than an artefact of which endpoint answered last.
-  function connectionLabel(
-    connectionId: number | typeof UNRESOLVED_CONNECTION,
-    group: Calendar[],
-  ): string {
-    return (
-      (connectionId !== UNRESOLVED_CONNECTION
-        ? connections.find((connection) => connection.id === connectionId)?.accountEmail
-        : undefined) ??
-      group.find((calendar) => calendar.connectionAccountEmail)?.connectionAccountEmail ??
-      "Unknown account"
-    );
-  }
-  const sharedCalendars = calendars.filter(
-    (calendar) => !canManageCalendar(calendar),
-  );
+  // Grouped exactly as the Calendar Set membership dialog groups them
+  // (#302, ADR-0082) — see calendarGrouping.ts, the one place this logic
+  // lives.
+  const { myCalendars, subscribedCalendars, linkedByConnection: linkedCalendarsByConnection, sharedCalendars } =
+    groupCalendarsForSidebar(calendars);
 
   const deletingCalendar = calendars.find(
     (calendar) => calendar.id === deletingCalendarId,
@@ -464,7 +408,7 @@ export function CalendarList() {
           Email (#286) — two connected accounts produce two separate
           headings, since each is its own Map entry. */}
       {Array.from(linkedCalendarsByConnection.entries()).map(([connectionId, group]) => {
-        const accountEmail = connectionLabel(connectionId, group);
+        const accountEmail = connectionGroupLabel(connectionId, group, connections);
         return (
           <div key={connectionId === UNRESOLVED_CONNECTION ? "unresolved-connection" : connectionId}>
             <div className="flex items-center justify-between py-2 ps-5 pe-2">

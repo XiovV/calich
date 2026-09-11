@@ -257,6 +257,14 @@ func New(logger *slog.Logger, authHandler *handlers.AuthHandler, calendarHandler
 			r.Post("/", calendarSetHandler.Create)
 			r.Patch("/{id}", calendarSetHandler.Rename)
 			r.Delete("/{id}", calendarSetHandler.Delete)
+
+			// Membership (#302, ADR-0082): add/remove a Calendar, one at a
+			// time, with immediate effect. CalendarSetService itself
+			// validates the Calendar independently of the Set — Workspace
+			// membership and caller Access — so no extra middleware gate is
+			// needed here either.
+			r.Put("/{id}/calendars/{calendarId}", calendarSetHandler.AddCalendar)
+			r.Delete("/{id}/calendars/{calendarId}", calendarSetHandler.RemoveCalendar)
 		})
 
 		// Connections (#285, ADR-0050, ADR-0051): Callback sits outside
