@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/XiovV/calich/server/internal/repository"
 )
@@ -16,6 +17,11 @@ const completedTaskTail = 50
 // ErrInvalidTaskTitle is returned by TaskService.Create and Update when
 // title is empty.
 var ErrInvalidTaskTitle = errors.New("task title must not be empty")
+
+// ErrInvalidTaskPriority is returned by TaskService.UpdatePriority when
+// priority falls outside VTODO's PRIORITY range (ADR-0083, #311): 0-9, where
+// 0 is None.
+var ErrInvalidTaskPriority = errors.New("task priority must be between 0 and 9")
 
 // TaskService creates, lists, updates, completes/uncompletes and deletes
 // Tasks (#310, ADR-0083). Private outright, like TaskListService — every
@@ -103,6 +109,67 @@ func (s *TaskService) Uncomplete(ctx context.Context, userID, workspaceID, id in
 	task, err := s.tasks.Uncomplete(ctx, id, userID, workspaceID)
 	if err != nil {
 		return repository.Task{}, fmt.Errorf("uncomplete task: %w", err)
+	}
+	return task, nil
+}
+
+// UpdateNotes changes id's notes, scoped to userID and workspaceID.
+func (s *TaskService) UpdateNotes(ctx context.Context, userID, workspaceID, id int64, notes string) (repository.Task, error) {
+	task, err := s.tasks.UpdateNotes(ctx, id, userID, workspaceID, notes)
+	if err != nil {
+		return repository.Task{}, fmt.Errorf("update task notes: %w", err)
+	}
+	return task, nil
+}
+
+// SetDeadline sets id's Deadline, scoped to userID and workspaceID — the
+// detail surface's Deadline field, independent of the Time block
+// (ADR-0083): never touches start/duration_minutes.
+func (s *TaskService) SetDeadline(ctx context.Context, userID, workspaceID, id int64, due time.Time) (repository.Task, error) {
+	task, err := s.tasks.SetDue(ctx, id, userID, workspaceID, due)
+	if err != nil {
+		return repository.Task{}, fmt.Errorf("set task deadline: %w", err)
+	}
+	return task, nil
+}
+
+// ClearDeadline clears id's Deadline, scoped to userID and workspaceID.
+func (s *TaskService) ClearDeadline(ctx context.Context, userID, workspaceID, id int64) (repository.Task, error) {
+	task, err := s.tasks.ClearDue(ctx, id, userID, workspaceID)
+	if err != nil {
+		return repository.Task{}, fmt.Errorf("clear task deadline: %w", err)
+	}
+	return task, nil
+}
+
+// UpdatePriority changes id's raw PRIORITY value, scoped to userID and
+// workspaceID. Stores the raw 0-9 value rather than an app-specific enum
+// (ADR-0083) — None/Low/Medium/High is a presentation mapping the caller
+// applies, not a value this accepts.
+func (s *TaskService) UpdatePriority(ctx context.Context, userID, workspaceID, id int64, priority int) (repository.Task, error) {
+	if priority < 0 || priority > 9 {
+		return repository.Task{}, ErrInvalidTaskPriority
+	}
+
+	task, err := s.tasks.UpdatePriority(ctx, id, userID, workspaceID, priority)
+	if err != nil {
+		return repository.Task{}, fmt.Errorf("update task priority: %w", err)
+	}
+	return task, nil
+}
+
+// Move reparents id onto taskListID, scoped to userID and workspaceID.
+// taskListID must already be the caller's own — the same ownership check
+// Create runs, so a caller can't move a Task into someone else's Task List
+// by naming a different id.
+func (s *TaskService) Move(ctx context.Context, userID, workspaceID, id, taskListID int64) (repository.Task, error) {
+	if _, err := s.taskLists.GetByID(ctx, taskListID, userID, workspaceID); err != nil {
+		return repository.Task{}, fmt.Errorf("get task list: %w", err)
+	}
+
+	task, err := s.tasks.Move(ctx, id, userID, workspaceID, taskListID)
+	if err != nil {
+		return repository.Task{}, fmt.Errorf("move task: %w", err)
 	}
 	return task, nil
 }

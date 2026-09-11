@@ -168,6 +168,88 @@ func (r *TaskRepository) Uncomplete(ctx context.Context, id, userID, workspaceID
 	return r.GetByID(ctx, id, userID, workspaceID)
 }
 
+// UpdateNotes changes id's notes, scoped to userID and workspaceID like
+// GetByID. An empty string clears them.
+func (r *TaskRepository) UpdateNotes(ctx context.Context, id, userID, workspaceID int64, notes string) (Task, error) {
+	res, err := r.db.ExecContext(ctx,
+		`UPDATE tasks SET notes = ? WHERE id = ? AND user_id = ? AND workspace_id = ?`,
+		notes, id, userID, workspaceID,
+	)
+	if err != nil {
+		return Task{}, fmt.Errorf("update task notes: %w", err)
+	}
+	if err := requireAffected(res); err != nil {
+		return Task{}, err
+	}
+	return r.GetByID(ctx, id, userID, workspaceID)
+}
+
+// SetDue sets id's Deadline, scoped to userID and workspaceID like GetByID —
+// the Time block (start/duration_minutes) is untouched, the two axes being
+// independent (ADR-0083).
+func (r *TaskRepository) SetDue(ctx context.Context, id, userID, workspaceID int64, due time.Time) (Task, error) {
+	res, err := r.db.ExecContext(ctx,
+		`UPDATE tasks SET due = ? WHERE id = ? AND user_id = ? AND workspace_id = ?`,
+		due, id, userID, workspaceID,
+	)
+	if err != nil {
+		return Task{}, fmt.Errorf("set task due: %w", err)
+	}
+	if err := requireAffected(res); err != nil {
+		return Task{}, err
+	}
+	return r.GetByID(ctx, id, userID, workspaceID)
+}
+
+// ClearDue clears id's Deadline, scoped to userID and workspaceID like
+// GetByID.
+func (r *TaskRepository) ClearDue(ctx context.Context, id, userID, workspaceID int64) (Task, error) {
+	res, err := r.db.ExecContext(ctx,
+		`UPDATE tasks SET due = NULL WHERE id = ? AND user_id = ? AND workspace_id = ?`,
+		id, userID, workspaceID,
+	)
+	if err != nil {
+		return Task{}, fmt.Errorf("clear task due: %w", err)
+	}
+	if err := requireAffected(res); err != nil {
+		return Task{}, err
+	}
+	return r.GetByID(ctx, id, userID, workspaceID)
+}
+
+// UpdatePriority changes id's raw PRIORITY value (0-9), scoped to userID and
+// workspaceID like GetByID. Range validation is the service's job.
+func (r *TaskRepository) UpdatePriority(ctx context.Context, id, userID, workspaceID int64, priority int) (Task, error) {
+	res, err := r.db.ExecContext(ctx,
+		`UPDATE tasks SET priority = ? WHERE id = ? AND user_id = ? AND workspace_id = ?`,
+		priority, id, userID, workspaceID,
+	)
+	if err != nil {
+		return Task{}, fmt.Errorf("update task priority: %w", err)
+	}
+	if err := requireAffected(res); err != nil {
+		return Task{}, err
+	}
+	return r.GetByID(ctx, id, userID, workspaceID)
+}
+
+// Move reparents id onto taskListID, scoped to userID and workspaceID like
+// GetByID. Whether taskListID actually belongs to the caller is the
+// service's job (mirroring Create) — this only guards the Task itself.
+func (r *TaskRepository) Move(ctx context.Context, id, userID, workspaceID, taskListID int64) (Task, error) {
+	res, err := r.db.ExecContext(ctx,
+		`UPDATE tasks SET task_list_id = ? WHERE id = ? AND user_id = ? AND workspace_id = ?`,
+		taskListID, id, userID, workspaceID,
+	)
+	if err != nil {
+		return Task{}, fmt.Errorf("move task: %w", err)
+	}
+	if err := requireAffected(res); err != nil {
+		return Task{}, err
+	}
+	return r.GetByID(ctx, id, userID, workspaceID)
+}
+
 // Delete removes id outright, scoped to userID and workspaceID like GetByID.
 func (r *TaskRepository) Delete(ctx context.Context, id, userID, workspaceID int64) error {
 	res, err := r.db.ExecContext(ctx,

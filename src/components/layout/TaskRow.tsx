@@ -1,27 +1,38 @@
+import { format } from "date-fns";
 import type { Task } from "../../lib/tasksApi";
 import { useTasksStore } from "../../lib/tasksStore";
 import { TaskCompletionControl } from "./TaskCompletionControl";
 
 interface TaskRowProps {
   task: Task;
+  onOpenDetail: (task: Task) => void;
 }
 
-// TaskRow is one row in the Tasks panel's flat list (#310, ADR-0083). No
-// Deadlines yet, so every Task sits under "No date" with nothing to group
-// by — this ticket's demoable end state is capture, tick off, and show/hide
-// completed, not the bucketed/grouped panel ADR-0083 describes eventually.
-export function TaskRow({ task }: TaskRowProps) {
+// TaskRow is one row inside a Task bucket (#310, #311, ADR-0083): its own
+// Deadline beside the title, so Thursday's work reads differently from
+// Friday's inside the same bucket, and a click anywhere but the completion
+// control opens the detail surface.
+export function TaskRow({ task, onOpenDetail }: TaskRowProps) {
   const setTaskCompleted = useTasksStore((state) => state.setTaskCompleted);
 
   return (
-    <div className="flex items-center gap-2 py-1.5">
-      <TaskCompletionControl
-        checked={task.completed}
-        onCheckedChange={(checked) => {
-          void setTaskCompleted(task.id, checked);
-        }}
-        aria-label={task.completed ? `Mark "${task.title}" incomplete` : `Mark "${task.title}" complete`}
-      />
+    <div
+      onClick={() => onOpenDetail(task)}
+      className="flex cursor-pointer items-center gap-2 rounded-shell-sm py-1.5 hover:bg-surface-hover"
+    >
+      <span
+        // Stops the completion click from also opening the detail surface —
+        // the two are one row's two separate gestures.
+        onClick={(event) => event.stopPropagation()}
+      >
+        <TaskCompletionControl
+          checked={task.completed}
+          onCheckedChange={(checked) => {
+            void setTaskCompleted(task.id, checked);
+          }}
+          aria-label={task.completed ? `Mark "${task.title}" incomplete` : `Mark "${task.title}" complete`}
+        />
+      </span>
       <span
         className={`min-w-0 flex-1 truncate text-body ${
           task.completed ? "text-ink-muted line-through" : "text-ink"
@@ -29,6 +40,9 @@ export function TaskRow({ task }: TaskRowProps) {
       >
         {task.title}
       </span>
+      {task.due && (
+        <span className="shrink-0 text-label-sm text-ink-muted">{format(task.due, "MMM d")}</span>
+      )}
     </div>
   );
 }

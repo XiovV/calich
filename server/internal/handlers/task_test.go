@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strconv"
 	"testing"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -66,6 +67,11 @@ func newTaskHandlerTestServer(t *testing.T) *taskHandlerTestServer {
 		r.Get("/completed", taskHandler.ListCompleted)
 		r.Post("/", taskHandler.Create)
 		r.Patch("/{id}", taskHandler.Update)
+		r.Patch("/{id}/notes", taskHandler.UpdateNotes)
+		r.Put("/{id}/deadline", taskHandler.SetDeadline)
+		r.Delete("/{id}/deadline", taskHandler.ClearDeadline)
+		r.Patch("/{id}/priority", taskHandler.UpdatePriority)
+		r.Put("/{id}/task-list", taskHandler.Move)
 		r.Put("/{id}/complete", taskHandler.Complete)
 		r.Delete("/{id}/complete", taskHandler.Uncomplete)
 		r.Delete("/{id}", taskHandler.Delete)
@@ -460,5 +466,140 @@ func TestTaskHandler_DeletingTaskListReparentsItsTasksToTheDefault(t *testing.T)
 	}
 	if tasks[0].TaskListID != inboxID {
 		t.Fatalf("expected the task to be reparented to the default task list %d, got %d", inboxID, tasks[0].TaskListID)
+	}
+}
+
+// TestTaskHandler_UpdateNotes covers #311: the detail surface's Notes field.
+func TestTaskHandler_UpdateNotes(t *testing.T) {
+	s := newTaskHandlerTestServer(t)
+	token, _, workspaceID := s.register(t, "alice")
+	inboxID := s.defaultTaskListID(t, token, workspaceID)
+	task := s.createTask(t, token, workspaceID, inboxID, "File taxes")
+
+	resp := s.do(t, http.MethodPatch, "/api/tasks/"+strconv.FormatInt(task.ID, 10)+"/notes", token, workspaceID, updateTaskNotesRequest{Notes: "2%, not whole"})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 updating notes, got %d", resp.StatusCode)
+	}
+	var updated taskResponse
+	if err := json.NewDecoder(resp.Body).Decode(&updated); err != nil {
+		t.Fatalf("decode update notes response: %v", err)
+	}
+	if updated.Notes != "2%, not whole" {
+		t.Fatalf("expected notes %q, got %q", "2%, not whole", updated.Notes)
+	}
+}
+
+// TestTaskHandler_SetAndClearDeadline covers #311: the detail surface's
+// Deadline field, set then cleared, independent of the Time block.
+func TestTaskHandler_SetAndClearDeadline(t *testing.T) {
+	s := newTaskHandlerTestServer(t)
+	token, _, workspaceID := s.register(t, "alice")
+	inboxID := s.defaultTaskListID(t, token, workspaceID)
+	task := s.createTask(t, token, workspaceID, inboxID, "File taxes")
+
+	due := time.Date(2026, time.September, 15, 0, 0, 0, 0, time.UTC)
+	setResp := s.do(t, http.MethodPut, "/api/tasks/"+strconv.FormatInt(task.ID, 10)+"/deadline", token, workspaceID, setTaskDeadlineRequest{Due: due})
+	defer setResp.Body.Close()
+	if setResp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 setting deadline, got %d", setResp.StatusCode)
+	}
+	var withDeadline taskResponse
+	if err := json.NewDecoder(setResp.Body).Decode(&withDeadline); err != nil {
+		t.Fatalf("decode set deadline response: %v", err)
+	}
+	if withDeadline.Due == nil || !withDeadline.Due.Equal(due) {
+		t.Fatalf("expected due %v, got %v", due, withDeadline.Due)
+	}
+
+	clearResp := s.do(t, http.MethodDelete, "/api/tasks/"+strconv.FormatInt(task.ID, 10)+"/deadline", token, workspaceID, nil)
+	defer clearResp.Body.Close()
+	if clearResp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 clearing deadline, got %d", clearResp.StatusCode)
+	}
+	var cleared taskResponse
+	if err := json.NewDecoder(clearResp.Body).Decode(&cleared); err != nil {
+		t.Fatalf("decode clear deadline response: %v", err)
+	}
+	if cleared.Due != nil {
+		t.Fatalf("expected due to be cleared, got %v", cleared.Due)
+	}
+}
+
+// TestTaskHandler_UpdatePriority_RoundTripsRawValue covers #311: Priority
+// stores VTODO's raw 0-9 value, not an app-specific enum (ADR-0083) — an
+// arbitrary in-range value survives untranslated.
+func TestTaskHandler_UpdatePriority_RoundTripsRawValue(t *testing.T) {
+	s := newTaskHandlerTestServer(t)
+	token, _, workspaceID := s.register(t, "alice")
+	inboxID := s.defaultTaskListID(t, token, workspaceID)
+	task := s.createTask(t, token, workspaceID, inboxID, "File taxes")
+
+	resp := s.do(t, http.MethodPatch, "/api/tasks/"+strconv.FormatInt(task.ID, 10)+"/priority", token, workspaceID, updateTaskPriorityRequest{Priority: 3})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 updating priority, got %d", resp.StatusCode)
+	}
+	var updated taskResponse
+	if err := json.NewDecoder(resp.Body).Decode(&updated); err != nil {
+		t.Fatalf("decode update priority response: %v", err)
+	}
+	if updated.Priority != 3 {
+		t.Fatalf("expected the raw priority value 3 to round-trip untranslated, got %d", updated.Priority)
+	}
+}
+
+// TestTaskHandler_UpdatePriority_RejectsOutOfRange covers #311's 0-9 bound.
+func TestTaskHandler_UpdatePriority_RejectsOutOfRange(t *testing.T) {
+	s := newTaskHandlerTestServer(t)
+	token, _, workspaceID := s.register(t, "alice")
+	inboxID := s.defaultTaskListID(t, token, workspaceID)
+	task := s.createTask(t, token, workspaceID, inboxID, "File taxes")
+
+	resp := s.do(t, http.MethodPatch, "/api/tasks/"+strconv.FormatInt(task.ID, 10)+"/priority", token, workspaceID, updateTaskPriorityRequest{Priority: 10})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400 for an out-of-range priority, got %d", resp.StatusCode)
+	}
+}
+
+// TestTaskHandler_Move covers #311: moving a Task between Task Lists from
+// the detail surface.
+func TestTaskHandler_Move(t *testing.T) {
+	s := newTaskHandlerTestServer(t)
+	token, _, workspaceID := s.register(t, "alice")
+	inboxID := s.defaultTaskListID(t, token, workspaceID)
+	work := s.createTaskList(t, token, workspaceID, "Work", "#12809CFF")
+	task := s.createTask(t, token, workspaceID, inboxID, "File taxes")
+
+	resp := s.do(t, http.MethodPut, "/api/tasks/"+strconv.FormatInt(task.ID, 10)+"/task-list", token, workspaceID, moveTaskRequest{TaskListID: work.ID})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 moving task, got %d", resp.StatusCode)
+	}
+	var moved taskResponse
+	if err := json.NewDecoder(resp.Body).Decode(&moved); err != nil {
+		t.Fatalf("decode move response: %v", err)
+	}
+	if moved.TaskListID != work.ID {
+		t.Fatalf("expected task list id %d, got %d", work.ID, moved.TaskListID)
+	}
+}
+
+// TestTaskHandler_Move_RejectsAnotherUsersTaskList mirrors Create's own
+// ownership check (#311): naming a Task List id that isn't the caller's own
+// must 404, same as a Task that doesn't exist.
+func TestTaskHandler_Move_RejectsAnotherUsersTaskList(t *testing.T) {
+	s := newTaskHandlerTestServer(t)
+	aliceToken, _, aliceWorkspaceID := s.register(t, "alice")
+	bobToken, _, bobWorkspaceID := s.register(t, "bob")
+	aliceInboxID := s.defaultTaskListID(t, aliceToken, aliceWorkspaceID)
+	bobInboxID := s.defaultTaskListID(t, bobToken, bobWorkspaceID)
+	task := s.createTask(t, aliceToken, aliceWorkspaceID, aliceInboxID, "File taxes")
+
+	resp := s.do(t, http.MethodPut, "/api/tasks/"+strconv.FormatInt(task.ID, 10)+"/task-list", aliceToken, aliceWorkspaceID, moveTaskRequest{TaskListID: bobInboxID})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("expected 404 moving into another user's task list, got %d", resp.StatusCode)
 	}
 }

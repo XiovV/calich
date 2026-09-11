@@ -4,24 +4,27 @@ import { makeOptimisticWrite } from "./optimisticWrite";
 import { type Task, tasksApi } from "./tasksApi";
 import type { TaskList } from "./taskListsApi";
 
-// The Tasks panel's own data source (#310, ADR-0083): every incomplete Task
-// the caller owns in the active Workspace, plus a bounded tail of completed
-// ones fetched only when "Show completed" asks. fetchTasks/fetchCompletedTasks/
-// createTask mirror taskListsStore's server-first discipline (ADR-0067): the
-// surface showing the result is a dialog-less list, and each of those writes
-// already knows nothing more than what the server hands back. Completion is
+// The Tasks panel's own data source (#310, #311, ADR-0083): every
+// incomplete Task the caller owns in the active Workspace, plus a bounded
+// tail of completed ones fetched only when "Show completed" asks.
+// fetchTasks/fetchCompletedTasks/createTask and the detail surface's own
+// writes (notes, Deadline, Priority, Task List) all mirror taskListsStore's
+// server-first discipline (ADR-0067): the dialog is open to receive a
+// failure, so there's nothing to paint ahead of the server. Completion is
 // the one write that IS optimistic — the click is the feedback, and the
 // client already knows the result before asking (ADR-0067, ADR-0068).
-// update and delete exist on the server (/api/tasks supports both) but
-// nothing in this ticket's UI calls either yet — no rename or delete
-// affordance on a Task row — so this store exposes only what quick-add and
-// the completion control actually use.
 interface TasksState {
   tasks: Task[];
   completedTasks: Task[];
   fetchTasks: () => Promise<void>;
   fetchCompletedTasks: () => Promise<void>;
   createTask: (title: string, taskListId: number) => Promise<Task>;
+  updateTaskNotes: (id: number, notes: string) => Promise<Task>;
+  setTaskDeadline: (id: number, due: Date) => Promise<Task>;
+  clearTaskDeadline: (id: number) => Promise<Task>;
+  updateTaskPriority: (id: number, priority: number) => Promise<Task>;
+  moveTask: (id: number, taskListId: number) => Promise<Task>;
+  deleteTask: (id: number) => Promise<void>;
   setTaskCompleted: (id: number, completed: boolean) => Promise<boolean>;
 }
 
@@ -49,6 +52,16 @@ function requireAccessToken(): string {
   return accessToken;
 }
 
+// replaceTask swaps `updated` in for its own id, in whichever of `tasks`/
+// `completedTasks` currently holds it — a detail-surface write never knows
+// ahead of time which list its Task lives in.
+function replaceTask(set: (fn: (state: TasksState) => Partial<TasksState>) => void, updated: Task) {
+  set((state) => ({
+    tasks: state.tasks.map((t) => (t.id === updated.id ? updated : t)),
+    completedTasks: state.completedTasks.map((t) => (t.id === updated.id ? updated : t)),
+  }));
+}
+
 // Binds no Access-change policy (ADR-0067): a Task has no Calendar to name,
 // and is private outright — there is no Share whose revocation could change
 // what the caller can reach.
@@ -72,6 +85,48 @@ export const useTasksStore = create<TasksState>((set, get) => ({
     const created = await tasksApi.create(requireAccessToken(), title, taskListId);
     set({ tasks: [...get().tasks, created] });
     return created;
+  },
+
+  // The detail surface's own fields (#311): a Task may be sitting in either
+  // `tasks` or `completedTasks` depending on whether it's done, so each
+  // write replaces it in whichever of the two actually holds it, leaving
+  // the other untouched.
+  updateTaskNotes: async (id, notes) => {
+    const updated = await tasksApi.updateNotes(requireAccessToken(), id, notes);
+    replaceTask(set, updated);
+    return updated;
+  },
+
+  setTaskDeadline: async (id, due) => {
+    const updated = await tasksApi.setDeadline(requireAccessToken(), id, due);
+    replaceTask(set, updated);
+    return updated;
+  },
+
+  clearTaskDeadline: async (id) => {
+    const updated = await tasksApi.clearDeadline(requireAccessToken(), id);
+    replaceTask(set, updated);
+    return updated;
+  },
+
+  updateTaskPriority: async (id, priority) => {
+    const updated = await tasksApi.updatePriority(requireAccessToken(), id, priority);
+    replaceTask(set, updated);
+    return updated;
+  },
+
+  moveTask: async (id, taskListId) => {
+    const updated = await tasksApi.move(requireAccessToken(), id, taskListId);
+    replaceTask(set, updated);
+    return updated;
+  },
+
+  deleteTask: async (id) => {
+    await tasksApi.remove(requireAccessToken(), id);
+    set((state) => ({
+      tasks: state.tasks.filter((t) => t.id !== id),
+      completedTasks: state.completedTasks.filter((t) => t.id !== id),
+    }));
   },
 
   // setTaskCompleted paints the toggle immediately and puts it back on

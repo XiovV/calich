@@ -5,7 +5,11 @@ vi.mock("./tasksApi", () => ({
     list: vi.fn(),
     listCompleted: vi.fn(),
     create: vi.fn(),
-    update: vi.fn(),
+    updateNotes: vi.fn(),
+    setDeadline: vi.fn(),
+    clearDeadline: vi.fn(),
+    updatePriority: vi.fn(),
+    move: vi.fn(),
     complete: vi.fn(),
     uncomplete: vi.fn(),
     remove: vi.fn(),
@@ -25,7 +29,18 @@ const inbox = { id: 1, name: "Inbox", color: "#12809CFF", isDefault: true };
 const work = { id: 2, name: "Work", color: "#E2483DFF", isDefault: false };
 const personal = { id: 3, name: "Personal", color: "#4A90D9FF", isDefault: false };
 
-const buyMilk = { id: 10, taskListId: inbox.id, title: "Buy milk", completed: false };
+const buyMilk = {
+  id: 10,
+  taskListId: inbox.id,
+  title: "Buy milk",
+  notes: "",
+  due: null,
+  start: null,
+  durationMinutes: null,
+  priority: 0,
+  completed: false,
+  createdAt: new Date(2026, 0, 1),
+};
 
 function resetStore() {
   useTasksStore.setState({ tasks: [], completedTasks: [] });
@@ -76,6 +91,63 @@ describe("createTask", () => {
     expect(created).toEqual(buyMilk);
     expect(useTasksStore.getState().tasks).toEqual([buyMilk]);
     expect(tasksApi.create).toHaveBeenCalledWith("token-123", "Buy milk", inbox.id);
+  });
+});
+
+describe("detail surface writes", () => {
+  it("updateTaskNotes replaces a completed task in place, in completedTasks", async () => {
+    const completed = { ...buyMilk, completed: true };
+    useTasksStore.setState({ tasks: [], completedTasks: [completed] });
+    const withNotes = { ...completed, notes: "2%, not whole" };
+    vi.mocked(tasksApi.updateNotes).mockResolvedValue(withNotes);
+
+    await useTasksStore.getState().updateTaskNotes(buyMilk.id, "2%, not whole");
+
+    expect(useTasksStore.getState().completedTasks).toEqual([withNotes]);
+    expect(useTasksStore.getState().tasks).toEqual([]);
+  });
+
+  it("setTaskDeadline and clearTaskDeadline replace the task with the server's response", async () => {
+    useTasksStore.setState({ tasks: [buyMilk], completedTasks: [] });
+    const due = new Date(2026, 8, 15);
+    const withDeadline = { ...buyMilk, due };
+    vi.mocked(tasksApi.setDeadline).mockResolvedValue(withDeadline);
+
+    await useTasksStore.getState().setTaskDeadline(buyMilk.id, due);
+    expect(useTasksStore.getState().tasks).toEqual([withDeadline]);
+
+    vi.mocked(tasksApi.clearDeadline).mockResolvedValue(buyMilk);
+    await useTasksStore.getState().clearTaskDeadline(buyMilk.id);
+    expect(useTasksStore.getState().tasks).toEqual([buyMilk]);
+  });
+
+  it("updateTaskPriority replaces the task with the server's raw value", async () => {
+    useTasksStore.setState({ tasks: [buyMilk], completedTasks: [] });
+    const prioritized = { ...buyMilk, priority: 1 };
+    vi.mocked(tasksApi.updatePriority).mockResolvedValue(prioritized);
+
+    await useTasksStore.getState().updateTaskPriority(buyMilk.id, 1);
+
+    expect(useTasksStore.getState().tasks).toEqual([prioritized]);
+  });
+
+  it("moveTask replaces the task's taskListId", async () => {
+    useTasksStore.setState({ tasks: [buyMilk], completedTasks: [] });
+    const moved = { ...buyMilk, taskListId: work.id };
+    vi.mocked(tasksApi.move).mockResolvedValue(moved);
+
+    await useTasksStore.getState().moveTask(buyMilk.id, work.id);
+
+    expect(useTasksStore.getState().tasks).toEqual([moved]);
+  });
+
+  it("deleteTask removes the task from whichever list holds it", async () => {
+    useTasksStore.setState({ tasks: [buyMilk], completedTasks: [] });
+    vi.mocked(tasksApi.remove).mockResolvedValue(undefined);
+
+    await useTasksStore.getState().deleteTask(buyMilk.id);
+
+    expect(useTasksStore.getState().tasks).toEqual([]);
   });
 });
 

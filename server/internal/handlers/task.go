@@ -8,6 +8,7 @@ package handlers
 
 import (
 	"net/http"
+	"time"
 
 	"github.com/XiovV/calich/server/internal/httpauth"
 	"github.com/XiovV/calich/server/internal/httpresponse"
@@ -24,27 +25,41 @@ func NewTaskHandler(tasks *service.TaskService) *TaskHandler {
 }
 
 type taskResponse struct {
-	ID         int64  `json:"id"`
-	TaskListID int64  `json:"taskListId"`
-	Title      string `json:"title"`
-	Completed  bool   `json:"completed"`
+	ID              int64      `json:"id"`
+	TaskListID      int64      `json:"taskListId"`
+	Title           string     `json:"title"`
+	Notes           string     `json:"notes"`
+	Due             *time.Time `json:"due"`
+	Start           *time.Time `json:"start"`
+	DurationMinutes *int       `json:"durationMinutes"`
+	Priority        int        `json:"priority"`
+	Completed       bool       `json:"completed"`
+	CreatedAt       time.Time  `json:"createdAt"`
 }
 
 func toTaskResponse(t repository.Task) taskResponse {
 	return taskResponse{
-		ID:         t.ID,
-		TaskListID: t.TaskListID,
-		Title:      t.Title,
-		Completed:  t.CompletedAt != nil,
+		ID:              t.ID,
+		TaskListID:      t.TaskListID,
+		Title:           t.Title,
+		Notes:           t.Notes,
+		Due:             t.Due,
+		Start:           t.Start,
+		DurationMinutes: t.DurationMinutes,
+		Priority:        t.Priority,
+		Completed:       t.CompletedAt != nil,
+		CreatedAt:       t.CreatedAt,
 	}
 }
 
 // taskErrors renders the sentinels every TaskService call can return: an
-// empty title, and repository.ErrNotFound for a Task (or, on Create, a Task
-// List) that doesn't exist, belongs to another User, or belongs to another
-// Workspace — indistinguishable by design.
+// empty title, an out-of-range Priority, and repository.ErrNotFound for a
+// Task (or, on Create/Move, a Task List) that doesn't exist, belongs to
+// another User, or belongs to another Workspace — indistinguishable by
+// design.
 var taskErrors = []errorCase{
 	{service.ErrInvalidTaskTitle, badRequest(service.ErrInvalidTaskTitle.Error())},
+	{service.ErrInvalidTaskPriority, badRequest(service.ErrInvalidTaskPriority.Error())},
 	{repository.ErrNotFound, notFound("task not found")},
 }
 
@@ -166,6 +181,132 @@ func (h *TaskHandler) Uncomplete(w http.ResponseWriter, r *http.Request) {
 
 	task, err := h.tasks.Uncomplete(r.Context(), userID, workspaceID, id)
 	if respondError(w, err, taskErrors, "failed to uncomplete task") {
+		return
+	}
+
+	httpresponse.JSON(w, http.StatusOK, toTaskResponse(task))
+}
+
+type updateTaskNotesRequest struct {
+	Notes string `json:"notes"`
+}
+
+// UpdateNotes changes a Task's notes.
+func (h *TaskHandler) UpdateNotes(w http.ResponseWriter, r *http.Request) {
+	userID := httpauth.MustUserID(r.Context())
+	workspaceID := httpauth.MustWorkspaceID(r.Context())
+	id, ok := parseInt64Param(w, r, "id")
+	if !ok {
+		return
+	}
+
+	req, ok := decodeJSON[updateTaskNotesRequest](w, r)
+	if !ok {
+		return
+	}
+
+	task, err := h.tasks.UpdateNotes(r.Context(), userID, workspaceID, id, req.Notes)
+	if respondError(w, err, taskErrors, "failed to update task notes") {
+		return
+	}
+
+	httpresponse.JSON(w, http.StatusOK, toTaskResponse(task))
+}
+
+type setTaskDeadlineRequest struct {
+	Due time.Time `json:"due"`
+}
+
+// SetDeadline serves PUT /api/tasks/{id}/deadline: the detail surface's
+// Deadline field.
+func (h *TaskHandler) SetDeadline(w http.ResponseWriter, r *http.Request) {
+	userID := httpauth.MustUserID(r.Context())
+	workspaceID := httpauth.MustWorkspaceID(r.Context())
+	id, ok := parseInt64Param(w, r, "id")
+	if !ok {
+		return
+	}
+
+	req, ok := decodeJSON[setTaskDeadlineRequest](w, r)
+	if !ok {
+		return
+	}
+
+	task, err := h.tasks.SetDeadline(r.Context(), userID, workspaceID, id, req.Due)
+	if respondError(w, err, taskErrors, "failed to set task deadline") {
+		return
+	}
+
+	httpresponse.JSON(w, http.StatusOK, toTaskResponse(task))
+}
+
+// ClearDeadline serves DELETE /api/tasks/{id}/deadline: the detail surface's
+// Deadline field, cleared.
+func (h *TaskHandler) ClearDeadline(w http.ResponseWriter, r *http.Request) {
+	userID := httpauth.MustUserID(r.Context())
+	workspaceID := httpauth.MustWorkspaceID(r.Context())
+	id, ok := parseInt64Param(w, r, "id")
+	if !ok {
+		return
+	}
+
+	task, err := h.tasks.ClearDeadline(r.Context(), userID, workspaceID, id)
+	if respondError(w, err, taskErrors, "failed to clear task deadline") {
+		return
+	}
+
+	httpresponse.JSON(w, http.StatusOK, toTaskResponse(task))
+}
+
+type updateTaskPriorityRequest struct {
+	Priority int `json:"priority"`
+}
+
+// UpdatePriority serves PATCH /api/tasks/{id}/priority: the raw 0-9 VTODO
+// PRIORITY value (ADR-0083) — None/Low/Medium/High is a presentation
+// mapping the caller applies, not a value this endpoint accepts.
+func (h *TaskHandler) UpdatePriority(w http.ResponseWriter, r *http.Request) {
+	userID := httpauth.MustUserID(r.Context())
+	workspaceID := httpauth.MustWorkspaceID(r.Context())
+	id, ok := parseInt64Param(w, r, "id")
+	if !ok {
+		return
+	}
+
+	req, ok := decodeJSON[updateTaskPriorityRequest](w, r)
+	if !ok {
+		return
+	}
+
+	task, err := h.tasks.UpdatePriority(r.Context(), userID, workspaceID, id, req.Priority)
+	if respondError(w, err, taskErrors, "failed to update task priority") {
+		return
+	}
+
+	httpresponse.JSON(w, http.StatusOK, toTaskResponse(task))
+}
+
+type moveTaskRequest struct {
+	TaskListID int64 `json:"taskListId"`
+}
+
+// Move serves PUT /api/tasks/{id}/task-list: moves a Task into another Task
+// List, refusing (404) a TaskListID that isn't the caller's own.
+func (h *TaskHandler) Move(w http.ResponseWriter, r *http.Request) {
+	userID := httpauth.MustUserID(r.Context())
+	workspaceID := httpauth.MustWorkspaceID(r.Context())
+	id, ok := parseInt64Param(w, r, "id")
+	if !ok {
+		return
+	}
+
+	req, ok := decodeJSON[moveTaskRequest](w, r)
+	if !ok {
+		return
+	}
+
+	task, err := h.tasks.Move(r.Context(), userID, workspaceID, id, req.TaskListID)
+	if respondError(w, err, taskErrors, "failed to move task") {
 		return
 	}
 

@@ -1,19 +1,25 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { ChevronDown, ChevronRight, X } from "lucide-react";
+import { viewerZone } from "../../lib/floatingTime";
 import { useShellStore } from "../../lib/shellStore";
+import { TASK_BUCKET_LABELS, TASK_BUCKET_ORDER, bucketTasks } from "../../lib/taskScheduling";
+import type { Task } from "../../lib/tasksApi";
 import { useTasksStore } from "../../lib/tasksStore";
 import { useWorkspacesStore } from "../../lib/workspacesStore";
 import { IconButton } from "../ui/IconButton";
+import { TaskDetailModal } from "./TaskDetailModal";
 import { TaskListsFilter } from "./TaskListsFilter";
 import { TaskQuickAdd } from "./TaskQuickAdd";
 import { TaskRow } from "./TaskRow";
 
-// TasksPanel is the right-hand panel holding a User's Tasks (#310, #317,
-// ADR-0083): toggled from the top bar's Tasks button, closed by default,
-// squeezing the grid rather than overlaying it. No Deadlines yet, so every
-// Task renders in one flat list — the demoable end state is capture, tick
-// off, and show/hide completed (#310); the bucketed/grouped panel ADR-0083
-// describes is a later ticket.
+// TasksPanel is the right-hand panel holding a User's Tasks (#310, #311,
+// #317, ADR-0083): toggled from the top bar's Tasks button, closed by
+// default, squeezing the grid rather than overlaying it. Splits into the
+// four Task buckets — derived at render, never stored (ADR-0083) — each
+// with its own count and each row showing its own Deadline. A completed
+// Task, once "Show completed" is on, rejoins its own bucket rather than
+// sitting in a separate pile: one finished late still reads as Overdue,
+// struck through, because it was (CONTEXT.md's Completed entry).
 export function TasksPanel() {
   const setTasksPanelOpen = useShellStore((state) => state.setTasksPanelOpen);
   const tasks = useTasksStore((state) => state.tasks);
@@ -23,6 +29,7 @@ export function TasksPanel() {
   const showCompletedTasks = useShellStore((state) => state.showCompletedTasks);
   const setShowCompletedTasks = useShellStore((state) => state.setShowCompletedTasks);
   const activeWorkspaceId = useWorkspacesStore((state) => state.activeWorkspaceId);
+  const [selectedTask, setSelectedTask] = useState<Task | null>(null);
 
   useEffect(() => {
     // Refetches on mount and whenever the active Workspace changes, same
@@ -39,6 +46,19 @@ export function TasksPanel() {
     fetchCompletedTasks().catch(() => {});
   }, [showCompletedTasks, activeWorkspaceId, fetchCompletedTasks]);
 
+  // selectedTask is looked up by id off the store on every render rather
+  // than held as the object itself, so an edit made inside TaskDetailModal
+  // (which replaces the Task in the store) is reflected back into the
+  // still-open modal instead of showing a stale snapshot.
+  const openTask = selectedTask
+    ? (tasks.find((t) => t.id === selectedTask.id) ??
+      completedTasks.find((t) => t.id === selectedTask.id) ??
+      null)
+    : null;
+
+  const visibleTasks = showCompletedTasks ? [...tasks, ...completedTasks] : tasks;
+  const buckets = bucketTasks(visibleTasks, new Date(), viewerZone());
+
   return (
     <div className="flex h-full flex-col gap-3 overflow-y-auto p-4">
       <div className="flex items-center justify-between">
@@ -53,13 +73,22 @@ export function TasksPanel() {
       </div>
       <TaskListsFilter />
       <TaskQuickAdd />
-      <div className="flex flex-col">
-        {tasks.length === 0 ? (
-          <p className="text-body text-ink-muted">No tasks yet.</p>
-        ) : (
-          tasks.map((task) => <TaskRow key={task.id} task={task} />)
-        )}
-      </div>
+      {visibleTasks.length === 0 ? (
+        <p className="text-body text-ink-muted">No tasks yet.</p>
+      ) : (
+        <div className="flex flex-col gap-4">
+          {TASK_BUCKET_ORDER.map((bucket) => (
+            <div key={bucket} className="flex flex-col">
+              <h3 className="text-label-sm font-medium text-ink-muted">
+                {TASK_BUCKET_LABELS[bucket]} ({buckets[bucket].length})
+              </h3>
+              {buckets[bucket].map((task) => (
+                <TaskRow key={task.id} task={task} onOpenDetail={setSelectedTask} />
+              ))}
+            </div>
+          ))}
+        </div>
+      )}
       <button
         type="button"
         onClick={() => setShowCompletedTasks(!showCompletedTasks)}
@@ -72,12 +101,8 @@ export function TasksPanel() {
         )}
         Show completed
       </button>
-      {showCompletedTasks && (
-        <div className="flex flex-col">
-          {completedTasks.map((task) => (
-            <TaskRow key={task.id} task={task} />
-          ))}
-        </div>
+      {openTask && (
+        <TaskDetailModal key={openTask.id} task={openTask} onClose={() => setSelectedTask(null)} />
       )}
     </div>
   );
