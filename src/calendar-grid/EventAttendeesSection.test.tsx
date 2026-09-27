@@ -60,6 +60,7 @@ beforeEach(() => {
       timeFormat: "24h",
       workingHoursStart: null,
       workingHoursEnd: null,
+      handle: null,
     },
     pendingEmail: null,
   });

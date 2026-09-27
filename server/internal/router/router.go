@@ -61,6 +61,12 @@ func New(logger *slog.Logger, authHandler *handlers.AuthHandler, calendarHandler
 				r.Get("/me", authHandler.Me)
 				r.Put("/email", authHandler.UpdateEmail)
 				r.Put("/name", authHandler.UpdateName)
+				// Handle (#321, ADR-0084): a User's public name, claimed and
+				// changed in Settings → Account. Suggest is read-only and
+				// side-effect-free, so it needs no more gating than any other
+				// authenticated GET.
+				r.Get("/handle-suggestion", authHandler.SuggestHandle)
+				r.Put("/handle", authHandler.UpdateHandle)
 				r.Put("/synced-device-reminders", authHandler.UpdateSyncedDeviceReminders)
 				r.Patch("/preferences", authHandler.UpdatePreferences)
 			})

@@ -1,5 +1,6 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useAuthStore } from "../lib/authStore";
+import { authApi } from "../lib/authApi";
 import { appPasswordsApi } from "../lib/appPasswordsApi";
 import { useAsyncAction } from "../hooks/useAsyncAction";
 import { useSyncedField } from "../hooks/useSyncedField";
@@ -23,6 +24,7 @@ export function AccountSection() {
   const accessToken = useAuthStore((state) => state.accessToken);
   const updateName = useAuthStore((state) => state.updateName);
   const updateEmail = useAuthStore((state) => state.updateEmail);
+  const updateHandle = useAuthStore((state) => state.updateHandle);
   const changePassword = useAuthStore((state) => state.changePassword);
   const disableAccount = useAuthStore((state) => state.disableAccount);
 
@@ -41,6 +43,32 @@ export function AccountSection() {
   const email = useSyncedField(user?.email ?? "", () => setEmailSaved(false));
   const emailAction = useAsyncAction();
 
+  const [handleSaved, setHandleSaved] = useState(false);
+  const handle = useSyncedField(user?.handle ?? "", () => setHandleSaved(false));
+  const handleAction = useAsyncAction();
+
+  // A Handle suggestion (#321, ADR-0084), fetched once for a User who
+  // hasn't claimed one yet — pre-filling the field rather than only showing
+  // it as a placeholder, so accepting it is a single Save click. Only
+  // applied if the field is still empty by the time it arrives, so a User
+  // who starts typing before the round trip resolves is never overwritten.
+  useEffect(() => {
+    if (user?.handle || !accessToken) return;
+    authApi
+      .getHandleSuggestion(accessToken)
+      .then((suggestion) => {
+        handle.setValue((current) => (current === "" ? suggestion : current));
+      })
+      .catch(() => {
+        // A failed suggestion just leaves the field empty — claiming a
+        // Handle by typing one in directly still works.
+      });
+    // Runs once, right after this Section mounts with no Handle yet;
+    // handle.setValue's identity isn't stable across renders and re-running
+    // this on every render would refetch on every keystroke.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
@@ -53,6 +81,7 @@ export function AccountSection() {
 
   const isNameUnchanged = name.value === (user?.name ?? "");
   const isEmailUnchanged = email.value === (user?.email ?? "");
+  const isHandleUnchanged = handle.value === (user?.handle ?? "");
 
   // Both sides of the mismatch check share the same non-empty rule
   // canSubmitPassword applies, so there's no whitespace-only value that
@@ -102,6 +131,30 @@ export function AccountSection() {
       const updatedUser = await updateEmail(email.value);
       email.markSaved(updatedUser.email);
       setEmailSaved(true);
+    });
+  }
+
+  async function handleSubmitHandle(domEvent: React.FormEvent) {
+    domEvent.preventDefault();
+    if (isHandleUnchanged || !handle.value.trim()) return;
+
+    await handleAction.run(async () => {
+      setHandleSaved(false);
+
+      // Renaming (as opposed to a first claim) breaks every URL published
+      // under the old Handle, with nothing forwarding (ADR-0084) — only
+      // worth interrupting for when there's an old Handle to lose.
+      if (user?.handle) {
+        const proceed = window.confirm(
+          `Changing your handle breaks every URL published under "${user.handle}" — nothing ` +
+            `forwards, and this cannot be undone.`,
+        );
+        if (!proceed) return;
+      }
+
+      const updatedUser = await updateHandle(handle.value);
+      handle.markSaved(updatedUser.handle ?? "");
+      setHandleSaved(true);
     });
   }
 
@@ -189,6 +242,34 @@ export function AccountSection() {
       </form>
       {emailAction.error && <p className="mt-2 text-label-sm text-danger">{emailAction.error}</p>}
       {emailSaved && !emailAction.error && (
+        <p className="mt-2 text-label-sm text-ink-muted">Saved.</p>
+      )}
+
+      <p className="mt-6 text-body text-ink-muted">
+        Your public name — unique, lowercase, and safe to show a stranger. Absent until you claim
+        one.
+      </p>
+      <form onSubmit={handleSubmitHandle} className="mt-2 flex items-end gap-2">
+        <Input
+          label="Handle"
+          value={handle.value}
+          onChange={(domEvent) => {
+            handle.setValue(domEvent.target.value);
+            setHandleSaved(false);
+          }}
+          disabled={handleAction.isSubmitting}
+          className="w-72"
+        />
+        <Button
+          type="submit"
+          disabled={isHandleUnchanged || !handle.value.trim()}
+          loading={handleAction.isSubmitting}
+        >
+          Save
+        </Button>
+      </form>
+      {handleAction.error && <p className="mt-2 text-label-sm text-danger">{handleAction.error}</p>}
+      {handleSaved && !handleAction.error && (
         <p className="mt-2 text-label-sm text-ink-muted">Saved.</p>
       )}
 

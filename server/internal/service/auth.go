@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 
 	"golang.org/x/crypto/bcrypt"
 
@@ -83,6 +84,16 @@ var (
 	// succeeds regardless, since it's how a fresh instance without
 	// INITIAL_EMAIL/INITIAL_PASSWORD set gets bootstrapped.
 	ErrSignupsDisabled = errors.New("self-registration is disabled on this instance")
+	// ErrInvalidHandle is returned by UpdateHandle when handle fails
+	// validateHandle — empty, over maxHandleLength, or outside handlePattern's
+	// charset (#321, ADR-0084).
+	ErrInvalidHandle = errors.New("handle must be 1-39 characters, lowercase letters, digits and single hyphens only, and may not start or end with a hyphen")
+	// ErrHandleReserved is returned by UpdateHandle when handle matches a
+	// word ReservedHandles reserves for the app's own routes (#321, ADR-0084).
+	ErrHandleReserved = errors.New("handle is reserved and cannot be claimed")
+	// ErrHandleTaken mirrors repository.ErrHandleTaken so handlers only
+	// import the service package's sentinels.
+	ErrHandleTaken = repository.ErrHandleTaken
 )
 
 // validDefaultViews are the Active views a Default view may seed (ADR-0039).
@@ -383,6 +394,61 @@ func (s *AuthService) UpdateName(ctx context.Context, userID int64, name string)
 		return repository.User{}, fmt.Errorf("update name: %w", err)
 	}
 	return user, nil
+}
+
+// UpdateHandle claims or changes the caller's own Handle — a User's public
+// name (#321, ADR-0084). Validated the same way regardless of whether this
+// is a first claim or a rename; the caller is responsible for warning that
+// a rename breaks every URL published under the old one, since nothing is
+// published under one yet in this codebase (that's #322/#324's job).
+func (s *AuthService) UpdateHandle(ctx context.Context, userID int64, handle string) (repository.User, error) {
+	normalized, err := validateHandle(handle)
+	if err != nil {
+		return repository.User{}, err
+	}
+
+	user, err := s.users.UpdateHandle(ctx, userID, normalized)
+	if err != nil {
+		if errors.Is(err, repository.ErrHandleTaken) {
+			return repository.User{}, ErrHandleTaken
+		}
+		return repository.User{}, fmt.Errorf("update handle: %w", err)
+	}
+	return user, nil
+}
+
+// SuggestHandle derives a Handle suggestion for userID from their own
+// Email's local part (#321, ADR-0084) — sanitized to handlePattern's own
+// character set, and disambiguated with a numeric suffix against both
+// ReservedHandles and every Handle already claimed, until a free one is
+// found. Read-only: claiming the suggestion is a separate UpdateHandle call,
+// so two callers racing for the same suggestion can never both "succeed" at
+// this step — only one of them wins UpdateHandle's own uniqueness check.
+func (s *AuthService) SuggestHandle(ctx context.Context, userID int64) (string, error) {
+	user, err := s.users.GetByID(ctx, userID)
+	if err != nil {
+		return "", fmt.Errorf("get user: %w", err)
+	}
+
+	localPart, _, _ := strings.Cut(user.Email, "@")
+	base := sanitizeHandleBase(localPart)
+	if base == "" {
+		base = "user"
+	}
+
+	candidate := base
+	for suffix := 2; ; suffix++ {
+		if !IsReservedHandle(candidate) {
+			_, err := s.users.GetByHandle(ctx, candidate)
+			if errors.Is(err, repository.ErrNotFound) {
+				return candidate, nil
+			}
+			if err != nil {
+				return "", fmt.Errorf("check handle availability: %w", err)
+			}
+		}
+		candidate = appendHandleSuffix(base, suffix)
+	}
 }
 
 // UpdateSyncedDeviceReminders sets userID's "let my synced devices show

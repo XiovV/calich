@@ -57,13 +57,18 @@ type User struct {
 	// Nil means no shading (ADR-0039).
 	WorkingHoursStart *int
 	WorkingHoursEnd   *int
+
+	// Handle is a User's public name (#321, ADR-0084) — nullable, unique
+	// instance-wide, COLLATE NOCASE like Email. Absent until claimed in
+	// Settings → Account; a User who never publishes anything has none.
+	Handle *string
 }
 
 // userColumns is the column list every SELECT against users shares, in the
 // exact order scanUserFields expects — kept as one constant so the two never
 // drift apart across GetByID, GetByIDs, GetByEmail, ListEnabledExcluding,
 // and First.
-const userColumns = `id, name, password_hash, must_change_password, email, synced_device_reminders_enabled, is_disabled, created_at, week_start, default_view, time_format, working_hours_start, working_hours_end, token_version`
+const userColumns = `id, name, password_hash, must_change_password, email, synced_device_reminders_enabled, is_disabled, created_at, week_start, default_view, time_format, working_hours_start, working_hours_end, token_version, handle`
 
 type UserRepository struct {
 	db DBTX
@@ -84,6 +89,11 @@ func (r *UserRepository) WithTx(tx *sql.Tx) *UserRepository {
 // ErrEmailTaken is returned by Create and UpdateEmail when the email is
 // already in use — email is unique instance-wide (ADR-0047).
 var ErrEmailTaken = errors.New("email already taken")
+
+// ErrHandleTaken is returned by UpdateHandle when the Handle is already
+// claimed — a Handle is unique instance-wide, compared case-insensitively
+// like Email (#321, ADR-0084).
+var ErrHandleTaken = errors.New("handle already taken")
 
 func (r *UserRepository) Create(ctx context.Context, name, email, passwordHash string, mustChangePassword bool) (User, error) {
 	res, err := r.db.ExecContext(ctx,
@@ -152,6 +162,17 @@ func (r *UserRepository) GetByEmail(ctx context.Context, email string) (User, er
 	))
 }
 
+// GetByHandle resolves the User identified by handle (#321, ADR-0084) — an
+// exact-match lookup relying on the column's own COLLATE NOCASE for
+// case-insensitivity, the same as GetByEmail. Used by
+// AuthService.SuggestHandle to check a candidate's availability, and later
+// by the public router resolving `/:handle`.
+func (r *UserRepository) GetByHandle(ctx context.Context, handle string) (User, error) {
+	return r.scanUser(r.db.QueryRowContext(ctx,
+		`SELECT `+userColumns+` FROM users WHERE handle = ?`, handle,
+	))
+}
+
 // ListEnabledExcluding returns every enabled User except excludeID, ordered
 // by name — the User directory (#113): any authenticated caller may see
 // who else has an account, so they can pick a Share recipient, but a
@@ -188,6 +209,21 @@ func (r *UserRepository) UpdateEmail(ctx context.Context, userID int64, email st
 func (r *UserRepository) UpdateName(ctx context.Context, userID int64, name string) (User, error) {
 	if _, err := r.db.ExecContext(ctx, `UPDATE users SET name = ? WHERE id = ?`, name, userID); err != nil {
 		return User{}, fmt.Errorf("update name: %w", err)
+	}
+	return r.GetByID(ctx, userID)
+}
+
+// UpdateHandle claims or changes userID's public name (#321, ADR-0084). A
+// unique-constraint violation is surfaced as ErrHandleTaken, mirroring
+// UpdateEmail against the same idx_users_handle index. Unlike Email, this
+// never clears back to no Handle — nothing in this codebase asks for that
+// yet, and ADR-0084 only ever describes claiming or renaming one.
+func (r *UserRepository) UpdateHandle(ctx context.Context, userID int64, handle string) (User, error) {
+	if _, err := r.db.ExecContext(ctx, `UPDATE users SET handle = ? WHERE id = ?`, handle, userID); err != nil {
+		if strings.Contains(err.Error(), "UNIQUE constraint failed") {
+			return User{}, ErrHandleTaken
+		}
+		return User{}, fmt.Errorf("update handle: %w", err)
 	}
 	return r.GetByID(ctx, userID)
 }
@@ -351,11 +387,12 @@ func (r *UserRepository) scanUserRow(row rowScanner) (User, error) {
 func scanUserFields(scan func(dest ...any) error) (User, error) {
 	var u User
 	var workingHoursStart, workingHoursEnd sql.NullInt64
+	var handle sql.NullString
 	// modernc.org/sqlite converts the TIMESTAMP column straight into time.Time
 	// based on the declared column type — no manual parsing needed here.
 	err := scan(
 		&u.ID, &u.Name, &u.PasswordHash, &u.MustChangePassword, &u.Email, &u.SyncedDeviceRemindersEnabled, &u.IsDisabled, &u.CreatedAt,
-		&u.WeekStart, &u.DefaultView, &u.TimeFormat, &workingHoursStart, &workingHoursEnd, &u.TokenVersion,
+		&u.WeekStart, &u.DefaultView, &u.TimeFormat, &workingHoursStart, &workingHoursEnd, &u.TokenVersion, &handle,
 	)
 	if err != nil {
 		return User{}, err
@@ -367,6 +404,9 @@ func scanUserFields(scan func(dest ...any) error) (User, error) {
 	if workingHoursEnd.Valid {
 		v := int(workingHoursEnd.Int64)
 		u.WorkingHoursEnd = &v
+	}
+	if handle.Valid {
+		u.Handle = &handle.String
 	}
 	return u, nil
 }

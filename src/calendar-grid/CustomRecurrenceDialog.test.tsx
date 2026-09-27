@@ -23,6 +23,7 @@ const baseUser: User = {
   timeFormat: "24h",
   workingHoursStart: null,
   workingHoursEnd: null,
+  handle: null,
 };
 
 function seedWeekStart(weekStart: number) {

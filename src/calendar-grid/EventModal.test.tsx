@@ -93,6 +93,7 @@ const user: User = {
   timeFormat: "24h",
   workingHoursStart: null,
   workingHoursEnd: null,
+  handle: null,
 };
 
 const DAY = new Date(2026, 7, 3);
