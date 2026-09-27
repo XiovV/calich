@@ -48,6 +48,11 @@ func Config(t *testing.T) config.Config {
 		AuthRateLimitPerEmail:  1000,
 		AuthRateLimitPerIP:     1000,
 		RegisterRateLimitPerIP: 1000,
+		// Well above defaultPublicBookingRateLimitPerIP (#324, ADR-0087), so
+		// only a test that lowers it deliberately ever sees the cap — every
+		// public booking handler test in this repo hits it repeatedly from
+		// the same loopback address.
+		PublicBookingRateLimitPerIP: 1000,
 		// No cadence of its own: a test that refreshes a Subscription does so
 		// explicitly rather than waiting for one to come due (ADR-0033).
 		SubscriptionRefreshInterval: 0,

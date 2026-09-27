@@ -15,7 +15,7 @@ import (
 	"github.com/XiovV/calich/server/internal/static"
 )
 
-func New(logger *slog.Logger, authHandler *handlers.AuthHandler, calendarHandler *handlers.CalendarHandler, eventHandler *handlers.EventHandler, attachmentHandler *handlers.AttachmentHandler, notificationHandler *handlers.NotificationHandler, appPasswordHandler *handlers.AppPasswordHandler, accountHandler *handlers.AccountHandler, userHandler *handlers.UserHandler, workspaceHandler *handlers.WorkspaceHandler, groupHandler *handlers.GroupHandler, calendarSetHandler *handlers.CalendarSetHandler, taskListHandler *handlers.TaskListHandler, taskHandler *handlers.TaskHandler, connectionHandler *handlers.ConnectionHandler, availabilityScheduleHandler *handlers.AvailabilityScheduleHandler, bookingLinkHandler *handlers.BookingLinkHandler, calDAVHandler http.Handler, authenticator httpauth.Authenticator, activeUserChecker httpauth.ActiveUserChecker, calDAVAuthenticator httpauth.CalDAVAuthenticator, calDAVRateLimiter httpauth.CalDAVRateLimiter, enabledChecker httpauth.DisabledChecker, workspaceMembershipChecker httpauth.WorkspaceMembershipChecker) (http.Handler, error) {
+func New(logger *slog.Logger, authHandler *handlers.AuthHandler, calendarHandler *handlers.CalendarHandler, eventHandler *handlers.EventHandler, attachmentHandler *handlers.AttachmentHandler, notificationHandler *handlers.NotificationHandler, appPasswordHandler *handlers.AppPasswordHandler, accountHandler *handlers.AccountHandler, userHandler *handlers.UserHandler, workspaceHandler *handlers.WorkspaceHandler, groupHandler *handlers.GroupHandler, calendarSetHandler *handlers.CalendarSetHandler, taskListHandler *handlers.TaskListHandler, taskHandler *handlers.TaskHandler, connectionHandler *handlers.ConnectionHandler, availabilityScheduleHandler *handlers.AvailabilityScheduleHandler, bookingLinkHandler *handlers.BookingLinkHandler, publicBookingHandler *handlers.PublicBookingHandler, calDAVHandler http.Handler, authenticator httpauth.Authenticator, activeUserChecker httpauth.ActiveUserChecker, calDAVAuthenticator httpauth.CalDAVAuthenticator, calDAVRateLimiter httpauth.CalDAVRateLimiter, enabledChecker httpauth.DisabledChecker, workspaceMembershipChecker httpauth.WorkspaceMembershipChecker) (http.Handler, error) {
 	r := chi.NewRouter()
 	r.Use(requestLogger(logger))
 	r.Use(middleware.Recoverer)
@@ -408,6 +408,19 @@ func New(logger *slog.Logger, authHandler *handlers.AuthHandler, calendarHandler
 			r.Put("/disabled", accountHandler.SetDisabled)
 			r.With(httpauth.RequireEnabledUser(enabledChecker)).Get("/delete-impact", accountHandler.DeleteImpact)
 			r.With(httpauth.RequireEnabledUser(enabledChecker)).Delete("/", accountHandler.Delete)
+		})
+
+		// The public Booking Link page (#324, ADR-0084, ADR-0087): the
+		// stranger-facing surface with no Session at all — no RequireAuth, no
+		// RequireWorkspace, nothing but rate limiting, enforced inside
+		// PublicBookingHandler itself rather than as middleware here, since
+		// its ceiling is IP-only and shares no shape with httpauth's
+		// Authenticator-based gates. handle/slug resolution (reserved words,
+		// Visibility, SMTP, Access) all happen inside PublicBookingService;
+		// this router only needs to know the path shape.
+		r.Route("/public", func(r chi.Router) {
+			r.Get("/{handle}/{slug}", publicBookingHandler.Get)
+			r.Get("/{handle}/{slug}/slots", publicBookingHandler.Slots)
 		})
 	})
 

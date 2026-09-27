@@ -100,6 +100,10 @@ type Graph struct {
 	Tasks                 *TaskService
 	AvailabilitySchedules *AvailabilityScheduleService
 	BookingLinks          *BookingLinkService
+	// PublicBookings serves the public Booking Link page (#324, ADR-0084,
+	// ADR-0087) — the app's first unauthenticated surface, resolving
+	// (Handle, Slug) rather than any authenticated scope.
+	PublicBookings *PublicBookingService
 	Imports               *ImportService
 	Notifications         *NotificationService
 	Subscriptions         *SubscribeService
@@ -112,6 +116,10 @@ type Graph struct {
 	// (AuthHandler, httpauth.RequireCalDAVAuth) rather than from inside
 	// either service.
 	RateLimiter *AuthRateLimiter
+	// PublicBookingRateLimiter throttles the public Booking Link page
+	// (#324, ADR-0087), enforced from PublicBookingHandler the same way
+	// RateLimiter is enforced from AuthHandler.
+	PublicBookingRateLimiter *PublicBookingRateLimiter
 }
 
 // GraphOption is a build input that isn't part of config.Config, because it
@@ -239,6 +247,7 @@ func NewGraph(sqlDB *sql.DB, cfg config.Config, opts ...GraphOption) (*Graph, er
 	g.RateLimitRepo = repository.NewRateLimitAttemptRepository(sqlDB)
 
 	g.RateLimiter = NewAuthRateLimiter(g.RateLimitRepo, cfg.AuthRateLimitPerEmail, cfg.AuthRateLimitPerIP, cfg.RegisterRateLimitPerIP)
+	g.PublicBookingRateLimiter = NewPublicBookingRateLimiter(g.RateLimitRepo, cfg.PublicBookingRateLimitPerIP)
 	g.Workspaces = NewWorkspaceService(sqlDB, g.WorkspaceRepo, g.WorkspaceInviteRepo, g.CalendarRepo, g.ShareRepo, g.TaskListRepo)
 	g.TaskLists = NewTaskListService(sqlDB, g.TaskListRepo, g.TaskRepo)
 	g.Tasks = NewTaskService(g.TaskRepo, g.TaskListRepo)
@@ -252,6 +261,7 @@ func NewGraph(sqlDB *sql.DB, cfg config.Config, opts ...GraphOption) (*Graph, er
 	// BookingLinks needs Calendars for its own Access checks and Auth for the
 	// Handle auto-claim (#322, ADR-0084), so it's built after both.
 	g.BookingLinks = NewBookingLinkService(sqlDB, g.BookingLinkRepo, g.CalendarRepo, g.Calendars, g.AvailabilityScheduleRepo, g.EventRepo, g.TaskRepo, g.Auth)
+	g.PublicBookings = NewPublicBookingService(g.UserRepo, g.BookingLinkRepo, g.AvailabilityScheduleRepo, g.Calendars, g.BookingLinks, cfg.SMTPConfigured())
 	// mailOutbox is nil on a deployment with no SMTP transport configured
 	// (ADR-0059, ADR-0060): with nothing able to send an Invitation there is
 	// nothing to queue one into, and EventService's mail-enqueue call sites

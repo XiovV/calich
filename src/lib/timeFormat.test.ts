@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { formatDateTime, timePattern } from "./timeFormat";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { detectBrowserTimeFormat, formatDateTime, timePattern } from "./timeFormat";
 
 describe("timePattern", () => {
   it("returns the 12-hour date-fns pattern for 12h", () => {
@@ -23,5 +23,38 @@ describe("formatDateTime", () => {
 
   it("renders a 24-hour time with the app's short date, no seconds", () => {
     expect(formatDateTime(moment, "24h")).toBe("Aug 20, 2026, 18:47");
+  });
+});
+
+// #324: the public Booking Link page has no Session and so no Preference to
+// read a Time format from — it seeds from the browser's own locale instead,
+// the same way timezones.ts' detectBrowserTimeZone seeds the viewer zone.
+describe("detectBrowserTimeFormat", () => {
+  const originalDateTimeFormat = Intl.DateTimeFormat;
+  afterEach(() => {
+    Intl.DateTimeFormat = originalDateTimeFormat;
+  });
+
+  function mockHourCycle(hourCycle: string) {
+    vi.spyOn(Intl, "DateTimeFormat").mockImplementation(function () {
+      return { resolvedOptions: () => ({ hourCycle }) } as unknown as Intl.DateTimeFormat;
+    });
+  }
+
+  it("returns 24h when the locale's resolved hourCycle is h23", () => {
+    mockHourCycle("h23");
+    expect(detectBrowserTimeFormat()).toBe("24h");
+  });
+
+  it("returns 12h when the locale's resolved hourCycle is h12", () => {
+    mockHourCycle("h12");
+    expect(detectBrowserTimeFormat()).toBe("12h");
+  });
+
+  it("falls back to 12h when Intl throws", () => {
+    vi.spyOn(Intl, "DateTimeFormat").mockImplementation(() => {
+      throw new Error("unsupported");
+    });
+    expect(detectBrowserTimeFormat()).toBe("12h");
   });
 });

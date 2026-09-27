@@ -52,6 +52,16 @@ const (
 	defaultRegisterRateLimitPerIP = 20
 )
 
+// defaultPublicBookingRateLimitPerIP is the public Booking Link page's
+// (#324, ADR-0087) per-IP ceiling within a rolling 1-minute window, when
+// PUBLIC_BOOKING_RATE_LIMIT_PER_IP is unset — this is the first
+// unauthenticated surface that reads calendar data, so it needs a ceiling of
+// its own rather than reusing AuthRateLimiter's, which is about guessing a
+// credential rather than browsing a month grid. High enough that paging
+// through a few months and switching timezone/12h-24h a few times never
+// trips it, low enough to bound a scraping script.
+const defaultPublicBookingRateLimitPerIP = 60
+
 type Config struct {
 	Port        string
 	DataDir     string
@@ -76,6 +86,9 @@ type Config struct {
 	AuthRateLimitPerEmail  int
 	AuthRateLimitPerIP     int
 	RegisterRateLimitPerIP int
+	// PublicBookingRateLimitPerIP is the public Booking Link page's own
+	// per-IP ceiling within a rolling 1-minute window (#324, ADR-0087).
+	PublicBookingRateLimitPerIP int
 	// SMTP transport for Email-Channel Reminders (ADR-0021). Email delivery
 	// is only wired up when every one of these is set.
 	SMTPHost string
@@ -164,6 +177,7 @@ func Load() Config {
 		AuthRateLimitPerEmail:       getEnvInt("AUTH_RATE_LIMIT_PER_EMAIL", defaultAuthRateLimitPerEmail),
 		AuthRateLimitPerIP:          getEnvInt("AUTH_RATE_LIMIT_PER_IP", defaultAuthRateLimitPerIP),
 		RegisterRateLimitPerIP:      getEnvInt("REGISTER_RATE_LIMIT_PER_IP", defaultRegisterRateLimitPerIP),
+		PublicBookingRateLimitPerIP: getEnvInt("PUBLIC_BOOKING_RATE_LIMIT_PER_IP", defaultPublicBookingRateLimitPerIP),
 		EnableSignups:               getEnvBool("ENABLE_SIGNUPS", false),
 		CookieSecure:                getEnvBool("COOKIE_SECURE", false),
 	}

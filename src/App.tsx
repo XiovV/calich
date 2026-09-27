@@ -5,6 +5,7 @@ import { AcceptWorkspaceInvitePage } from "./auth/AcceptWorkspaceInvitePage";
 import { LoginPage } from "./auth/LoginPage";
 import { RegisterPage } from "./auth/RegisterPage";
 import { ProtectedRoute } from "./auth/ProtectedRoute";
+import { PublicBookingPage } from "./booking/PublicBookingPage";
 import { SettingsModal } from "./settings/SettingsModal";
 import { getSettingsSections } from "./settings/settingsSections";
 import { Toaster } from "./components/ui/Toaster";
@@ -24,6 +25,14 @@ function App() {
         <Route path="/login" element={<LoginPage />} />
         <Route path="/register" element={<RegisterPage />} />
         <Route path="/accept-workspace-invite" element={<AcceptWorkspaceInvitePage />} />
+        {/* The public Booking Link page (#324, ADR-0084, ADR-0087): a
+            stranger with no Session opens /:handle/:slug — sibling to the
+            routes above, deliberately outside ProtectedRoute below. A
+            claimed Handle can never collide with a literal route (the
+            reserved-word registry the backend enforces at claim time), and
+            React Router itself ranks a static segment above a dynamic one at
+            the same depth, so "/settings/account" et al. are never shadowed. */}
+        <Route path="/:handle/:slug" element={<PublicBookingPage />} />
         <Route
           path="/"
           element={

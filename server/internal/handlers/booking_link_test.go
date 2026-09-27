@@ -12,6 +12,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/XiovV/calich/server/internal/apptest"
+	"github.com/XiovV/calich/server/internal/config"
 	"github.com/XiovV/calich/server/internal/httpauth"
 	"github.com/XiovV/calich/server/internal/service"
 )
@@ -34,6 +35,17 @@ func newBookingLinkHandlerTestServer(t *testing.T) *bookingLinkHandlerTestServer
 	cfg := apptest.Config(t)
 	cfg.InitialName, cfg.InitialEmail, cfg.InitialPassword = "", "", ""
 	cfg.EnableSignups = true
+	return newBookingLinkHandlerTestServerWithConfig(t, cfg)
+}
+
+// newBookingLinkHandlerTestServerWithConfig is newBookingLinkHandlerTestServer
+// for a test that needs a setting other than its defaults — the public
+// booking handler tests (#324) need an SMTP-configured graph to ever see a
+// link that isn't Paused, since ADR-0087 clamps every link to Paused on a
+// deployment with no SMTP transport at all.
+func newBookingLinkHandlerTestServerWithConfig(t *testing.T, cfg config.Config) *bookingLinkHandlerTestServer {
+	t.Helper()
+
 	g := newTestGraphWithConfig(t, cfg)
 
 	workspaces := g.Workspaces
@@ -43,6 +55,7 @@ func newBookingLinkHandlerTestServer(t *testing.T) *bookingLinkHandlerTestServer
 	calendarHandler := NewCalendarHandler(g.Calendars, g.Events, g.Imports, g.Subscriptions, g.Connections, g.AttachmentStore)
 	scheduleHandler := NewAvailabilityScheduleHandler(g.AvailabilitySchedules)
 	linkHandler := NewBookingLinkHandler(g.BookingLinks)
+	publicHandler := NewPublicBookingHandler(g.PublicBookings, g.PublicBookingRateLimiter)
 
 	r := chi.NewRouter()
 	r.Post("/api/auth/register", authHandler.Register)
@@ -77,6 +90,11 @@ func newBookingLinkHandlerTestServer(t *testing.T) *bookingLinkHandlerTestServer
 		r.Get("/{id}/slots", linkHandler.Slots)
 		r.Put("/{id}/conflict-set/calendars/{calendarId}", linkHandler.AddConflictCalendar)
 		r.Delete("/{id}/conflict-set/calendars/{calendarId}", linkHandler.RemoveConflictCalendar)
+	})
+
+	r.Route("/api/public", func(r chi.Router) {
+		r.Get("/{handle}/{slug}", publicHandler.Get)
+		r.Get("/{handle}/{slug}/slots", publicHandler.Slots)
 	})
 
 	srv := httptest.NewServer(r)

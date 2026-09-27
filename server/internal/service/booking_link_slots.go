@@ -24,6 +24,10 @@ var ErrInvalidMonth = fmt.Errorf("month must be between 1 and 12")
 // the eventual public handler) controls what "now" means for minimum
 // notice and the booking horizon.
 func (s *BookingLinkService) DeriveSlotsForMonth(ctx context.Context, userID, workspaceID, id int64, year int, month time.Month, now time.Time) ([]time.Time, error) {
+	// Validated before the repository lookup below, not after: this
+	// preserves DeriveSlotsForMonth's original priority (a malformed month
+	// is rejected before ever costing a query) now that the lookup and the
+	// derivation it feeds live in two separate functions.
 	if month < 1 || month > 12 {
 		return nil, ErrInvalidMonth
 	}
@@ -33,7 +37,20 @@ func (s *BookingLinkService) DeriveSlotsForMonth(ctx context.Context, userID, wo
 		return nil, fmt.Errorf("get booking link: %w", err)
 	}
 
-	schedule, err := s.schedules.GetByID(ctx, link.AvailabilityScheduleID, userID)
+	return s.DeriveSlotsForLinkAndMonth(ctx, link, year, month, now)
+}
+
+// DeriveSlotsForLinkAndMonth is DeriveSlotsForMonth's own body, split out so
+// a caller that has already resolved a Booking Link some other way — the
+// public page (#324), which resolves one by (Handle, Slug) rather than by
+// (id, userID, workspaceID) — can reuse the exact same derivation instead of
+// a second implementation that could drift from this one.
+func (s *BookingLinkService) DeriveSlotsForLinkAndMonth(ctx context.Context, link repository.BookingLink, year int, month time.Month, now time.Time) ([]time.Time, error) {
+	if month < 1 || month > 12 {
+		return nil, ErrInvalidMonth
+	}
+
+	schedule, err := s.schedules.GetByID(ctx, link.AvailabilityScheduleID, link.UserID)
 	if err != nil {
 		return nil, fmt.Errorf("get availability schedule: %w", err)
 	}
