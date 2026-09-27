@@ -104,12 +104,16 @@ type Graph struct {
 	// ADR-0087) — the app's first unauthenticated surface, resolving
 	// (Handle, Slug) rather than any authenticated scope.
 	PublicBookings *PublicBookingService
-	Imports               *ImportService
-	Notifications         *NotificationService
-	Subscriptions         *SubscribeService
-	Connections           *ConnectionService
-	Users                 *UserService
-	Workspaces            *WorkspaceService
+	// PublicIndex serves the public index page (#325, ADR-0084) — a
+	// derived rendering of PublicBookings' own owner, built on top of it
+	// rather than beside it so the two share one Paused rule.
+	PublicIndex   *PublicIndexService
+	Imports       *ImportService
+	Notifications *NotificationService
+	Subscriptions *SubscribeService
+	Connections   *ConnectionService
+	Users         *UserService
+	Workspaces    *WorkspaceService
 	// RateLimiter throttles Login, Register, and CalDAV Basic auth (#240,
 	// ADR-0070) — held by the Graph rather than by AuthService/
 	// AppPasswordService, since it's enforced from the HTTP layer
@@ -262,6 +266,7 @@ func NewGraph(sqlDB *sql.DB, cfg config.Config, opts ...GraphOption) (*Graph, er
 	// Handle auto-claim (#322, ADR-0084), so it's built after both.
 	g.BookingLinks = NewBookingLinkService(sqlDB, g.BookingLinkRepo, g.CalendarRepo, g.Calendars, g.AvailabilityScheduleRepo, g.EventRepo, g.TaskRepo, g.Auth)
 	g.PublicBookings = NewPublicBookingService(g.UserRepo, g.BookingLinkRepo, g.AvailabilityScheduleRepo, g.Calendars, g.BookingLinks, cfg.SMTPConfigured())
+	g.PublicIndex = NewPublicIndexService(g.UserRepo, g.BookingLinkRepo, g.PublicBookings)
 	// mailOutbox is nil on a deployment with no SMTP transport configured
 	// (ADR-0059, ADR-0060): with nothing able to send an Invitation there is
 	// nothing to queue one into, and EventService's mail-enqueue call sites

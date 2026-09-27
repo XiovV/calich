@@ -130,7 +130,7 @@ func newFromGraph(graph *service.Graph, cfg config.Config) *App {
 	a.ConnectionHandler = handlers.NewConnectionHandler(a.Connections)
 	a.AvailabilityScheduleHandler = handlers.NewAvailabilityScheduleHandler(a.AvailabilitySchedules)
 	a.BookingLinkHandler = handlers.NewBookingLinkHandler(a.BookingLinks)
-	a.PublicBookingHandler = handlers.NewPublicBookingHandler(a.PublicBookings, a.PublicBookingRateLimiter)
+	a.PublicBookingHandler = handlers.NewPublicBookingHandler(a.PublicBookings, a.PublicIndex, a.PublicBookingRateLimiter)
 
 	a.CalDAVBackend = caldavserver.NewBackend(a.Calendars, a.Events, a.Attachments, cfg.MaxAttachmentSize, cfg.MaxAttachmentsPerEvent)
 	a.CalDAVHandler = caldavserver.NewHTTPHandler(a.CalDAVBackend)

@@ -20,11 +20,12 @@ import (
 
 type PublicBookingHandler struct {
 	public      *service.PublicBookingService
+	index       *service.PublicIndexService
 	rateLimiter *service.PublicBookingRateLimiter
 }
 
-func NewPublicBookingHandler(public *service.PublicBookingService, rateLimiter *service.PublicBookingRateLimiter) *PublicBookingHandler {
-	return &PublicBookingHandler{public: public, rateLimiter: rateLimiter}
+func NewPublicBookingHandler(public *service.PublicBookingService, index *service.PublicIndexService, rateLimiter *service.PublicBookingRateLimiter) *PublicBookingHandler {
+	return &PublicBookingHandler{public: public, index: index, rateLimiter: rateLimiter}
 }
 
 type publicBookingLinkResponse struct {
@@ -102,6 +103,47 @@ func (h *PublicBookingHandler) Get(w http.ResponseWriter, r *http.Request) {
 	}
 
 	httpresponse.JSON(w, http.StatusOK, toPublicBookingLinkResponse(link))
+}
+
+type publicIndexLinkResponse struct {
+	Slug            string `json:"slug"`
+	Title           string `json:"title"`
+	DurationMinutes int    `json:"durationMinutes"`
+}
+
+type publicIndexResponse struct {
+	HostName string                    `json:"hostName"`
+	Links    []publicIndexLinkResponse `json:"links"`
+}
+
+func toPublicIndexResponse(index service.PublicIndex) publicIndexResponse {
+	links := make([]publicIndexLinkResponse, len(index.Links))
+	for i, l := range index.Links {
+		links[i] = publicIndexLinkResponse{Slug: l.Slug, Title: l.Title, DurationMinutes: l.DurationMinutes}
+	}
+	return publicIndexResponse{HostName: index.HostName, Links: links}
+}
+
+// Index serves GET /api/public/{handle}: the derived index of an owner's
+// Public Booking Links (#325, ADR-0084) — always 200. An unknown Handle, a
+// reserved-word Handle, and a Handle whose links are all Private, Paused,
+// or filtered out by PublicIndexService's reuse of ADR-0087's Paused rule
+// all render the identical empty-HostName, empty-Links shape, so this route
+// cannot become a second User-enumeration door beside the one Get/Slots
+// above already close.
+func (h *PublicBookingHandler) Index(w http.ResponseWriter, r *http.Request) {
+	if h.checkRateLimit(w, r) {
+		return
+	}
+
+	handle := chi.URLParam(r, "handle")
+
+	index, err := h.index.Get(r.Context(), handle)
+	if respondError(w, err, nil, "failed to get public index") {
+		return
+	}
+
+	httpresponse.JSON(w, http.StatusOK, toPublicIndexResponse(index))
 }
 
 type publicSlotsResponse struct {

@@ -55,7 +55,7 @@ func newBookingLinkHandlerTestServerWithConfig(t *testing.T, cfg config.Config) 
 	calendarHandler := NewCalendarHandler(g.Calendars, g.Events, g.Imports, g.Subscriptions, g.Connections, g.AttachmentStore)
 	scheduleHandler := NewAvailabilityScheduleHandler(g.AvailabilitySchedules)
 	linkHandler := NewBookingLinkHandler(g.BookingLinks)
-	publicHandler := NewPublicBookingHandler(g.PublicBookings, g.PublicBookingRateLimiter)
+	publicHandler := NewPublicBookingHandler(g.PublicBookings, g.PublicIndex, g.PublicBookingRateLimiter)
 
 	r := chi.NewRouter()
 	r.Post("/api/auth/register", authHandler.Register)
@@ -95,6 +95,7 @@ func newBookingLinkHandlerTestServerWithConfig(t *testing.T, cfg config.Config) 
 	r.Route("/api/public", func(r chi.Router) {
 		r.Get("/{handle}/{slug}", publicHandler.Get)
 		r.Get("/{handle}/{slug}/slots", publicHandler.Slots)
+		r.Get("/{handle}", publicHandler.Index)
 	})
 
 	srv := httptest.NewServer(r)

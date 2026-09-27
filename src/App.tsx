@@ -6,6 +6,7 @@ import { LoginPage } from "./auth/LoginPage";
 import { RegisterPage } from "./auth/RegisterPage";
 import { ProtectedRoute } from "./auth/ProtectedRoute";
 import { PublicBookingPage } from "./booking/PublicBookingPage";
+import { PublicIndexPage } from "./booking/PublicIndexPage";
 import { SettingsModal } from "./settings/SettingsModal";
 import { getSettingsSections } from "./settings/settingsSections";
 import { Toaster } from "./components/ui/Toaster";
@@ -33,6 +34,12 @@ function App() {
             React Router itself ranks a static segment above a dynamic one at
             the same depth, so "/settings/account" et al. are never shadowed. */}
         <Route path="/:handle/:slug" element={<PublicBookingPage />} />
+        {/* The public index page (#325, ADR-0084, ADR-0087): the derived
+            rendering of an owner's Public Booking Links at /:handle, one
+            path segment shallower than the route above — React Router
+            ranks it as a distinct, less-specific match, so the two never
+            shadow each other. */}
+        <Route path="/:handle" element={<PublicIndexPage />} />
         <Route
           path="/"
           element={

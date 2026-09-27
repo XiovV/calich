@@ -50,6 +50,11 @@ func (s *bookingLinkHandlerTestServer) getPublicSlots(t *testing.T, handle, slug
 	return s.doNoWorkspace(t, http.MethodGet, path, "", nil)
 }
 
+func (s *bookingLinkHandlerTestServer) getPublicIndex(t *testing.T, handle string) *http.Response {
+	t.Helper()
+	return s.doNoWorkspace(t, http.MethodGet, "/api/public/"+url.PathEscape(handle), "", nil)
+}
+
 // setUpPublicLinkFixture registers alice on an SMTP-configured graph, gives
 // her a book-into Calendar, a Mon-Fri 09:00-17:00 Schedule in Etc/UTC, and a
 // Public Booking Link, returning her claimed Handle alongside the link.

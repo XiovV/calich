@@ -421,6 +421,12 @@ func New(logger *slog.Logger, authHandler *handlers.AuthHandler, calendarHandler
 		r.Route("/public", func(r chi.Router) {
 			r.Get("/{handle}/{slug}", publicBookingHandler.Get)
 			r.Get("/{handle}/{slug}/slots", publicBookingHandler.Slots)
+
+			// The public index page (#325, ADR-0084): the derived rendering
+			// of an owner's Public Booking Links at /:handle, one path
+			// segment shallower than the link routes above — no ambiguity
+			// with them, since chi dispatches on segment count.
+			r.Get("/{handle}", publicBookingHandler.Index)
 		})
 	})
 

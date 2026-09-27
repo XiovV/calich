@@ -204,6 +204,23 @@ func (r *BookingLinkRepository) ListForUser(ctx context.Context, userID, workspa
 	return links, nil
 }
 
+// ListPublicForUser returns every Public Booking Link userID owns, across
+// every Workspace — the public index page's own union (#325, ADR-0084),
+// scoped the same User-wide way CountForUser already is rather than by one
+// Workspace, since a visitor has no Session and therefore no single
+// Workspace to scope by. Carries no Conflict set: the index shows only
+// Title, Slug and Duration.
+func (r *BookingLinkRepository) ListPublicForUser(ctx context.Context, userID int64) ([]BookingLink, error) {
+	rows, err := r.db.QueryContext(ctx,
+		`SELECT `+bookingLinkColumns+` FROM booking_links WHERE user_id = ? AND visibility = 'public' ORDER BY created_at, id`,
+		userID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list public booking links: %w", err)
+	}
+	return collectRows(rows, scanBookingLinkRow)
+}
+
 // CountForUser returns how many Booking Links userID owns across every
 // Workspace — deliberately not scoped to one Workspace, since "a User's
 // first Booking Link" (the Handle auto-claim trigger, ADR-0084) is a
