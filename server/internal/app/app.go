@@ -46,20 +46,21 @@ type App struct {
 	// no Invitation is ever queued.
 	Mailer *mailer.SMTPMailer
 
-	AuthHandler         *handlers.AuthHandler
-	CalendarHandler     *handlers.CalendarHandler
-	EventHandler        *handlers.EventHandler
-	AttachmentHandler   *handlers.AttachmentHandler
-	NotificationHandler *handlers.NotificationHandler
-	AppPasswordHandler  *handlers.AppPasswordHandler
-	AccountHandler      *handlers.AccountHandler
-	UserHandler         *handlers.UserHandler
-	WorkspaceHandler    *handlers.WorkspaceHandler
-	GroupHandler        *handlers.GroupHandler
-	CalendarSetHandler  *handlers.CalendarSetHandler
-	TaskListHandler     *handlers.TaskListHandler
-	TaskHandler         *handlers.TaskHandler
-	ConnectionHandler   *handlers.ConnectionHandler
+	AuthHandler                 *handlers.AuthHandler
+	CalendarHandler             *handlers.CalendarHandler
+	EventHandler                *handlers.EventHandler
+	AttachmentHandler           *handlers.AttachmentHandler
+	NotificationHandler         *handlers.NotificationHandler
+	AppPasswordHandler          *handlers.AppPasswordHandler
+	AccountHandler              *handlers.AccountHandler
+	UserHandler                 *handlers.UserHandler
+	WorkspaceHandler            *handlers.WorkspaceHandler
+	GroupHandler                *handlers.GroupHandler
+	CalendarSetHandler          *handlers.CalendarSetHandler
+	TaskListHandler             *handlers.TaskListHandler
+	TaskHandler                 *handlers.TaskHandler
+	ConnectionHandler           *handlers.ConnectionHandler
+	AvailabilityScheduleHandler *handlers.AvailabilityScheduleHandler
 
 	CalDAVBackend *caldavserver.Backend
 	CalDAVHandler http.Handler
@@ -125,6 +126,7 @@ func newFromGraph(graph *service.Graph, cfg config.Config) *App {
 	a.TaskListHandler = handlers.NewTaskListHandler(a.TaskLists)
 	a.TaskHandler = handlers.NewTaskHandler(a.Tasks)
 	a.ConnectionHandler = handlers.NewConnectionHandler(a.Connections)
+	a.AvailabilityScheduleHandler = handlers.NewAvailabilityScheduleHandler(a.AvailabilitySchedules)
 
 	a.CalDAVBackend = caldavserver.NewBackend(a.Calendars, a.Events, a.Attachments, cfg.MaxAttachmentSize, cfg.MaxAttachmentsPerEvent)
 	a.CalDAVHandler = caldavserver.NewHTTPHandler(a.CalDAVBackend)

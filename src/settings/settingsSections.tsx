@@ -4,6 +4,7 @@ import {
   Bell,
   Boxes,
   Cable,
+  Clock,
   KeyRound,
   Layers,
   SlidersHorizontal,
@@ -20,6 +21,7 @@ import { ImportExportSection } from "./ImportExportSection";
 import { MembersSection } from "./MembersSection";
 import { GroupsSection } from "./GroupsSection";
 import { CalendarSetsSection } from "./CalendarSetsSection";
+import { AvailabilitySchedulesSection } from "./AvailabilitySchedulesSection";
 
 export type SettingsGroup = "personal" | "workspace";
 
@@ -61,6 +63,13 @@ export function getSettingsSections(): SettingsSection[] {
     { path: "account", label: "Account", group: "personal", icon: UserRound, element: <AccountSection /> },
     { path: "connections", label: "Connections", group: "personal", icon: Cable, element: <ConnectionsSection /> },
     { path: "calendar-sets", label: "Calendar sets", group: "personal", icon: Layers, element: <CalendarSetsSection /> },
+    {
+      path: "availability-schedules",
+      label: "Availability schedules",
+      group: "personal",
+      icon: Clock,
+      element: <AvailabilitySchedulesSection />,
+    },
     { path: "members", label: "Members", group: "workspace", icon: UsersRound, element: <MembersSection /> },
     { path: "groups", label: "Groups", group: "workspace", icon: Boxes, element: <GroupsSection /> },
     { path: "app-passwords", label: "App passwords", group: "personal", icon: KeyRound, element: <AppPasswordsSection /> },

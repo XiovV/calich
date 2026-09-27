@@ -45,32 +45,33 @@ type Graph struct {
 	JWTSecret       []byte
 	AttachmentStore *attachmentstore.Store
 
-	UserRepo             *repository.UserRepository
-	SessionRepo          *repository.SessionRepository
-	CalendarRepo         *repository.CalendarRepository
-	SourceRepo           *repository.SourceRepository
-	ConnectionRepo       *repository.ConnectionRepository
-	ShareRepo            *repository.CalendarShareRepository
-	GroupShareRepo       *repository.CalendarGroupShareRepository
-	ColorOverrideRepo    *repository.CalendarUserColorRepository
-	ExposureRepo         *repository.CalendarExposureRepository
-	DefaultReminderRepo  *repository.CalendarDefaultReminderRepository
-	EventRepo            *repository.EventRepository
-	EventExceptionRepo   *repository.EventExceptionRepository
-	EventReminderRepo    *repository.EventReminderRepository
-	ExplicitReminderRepo *repository.EventReminderExplicitRepository
-	SyncRepo             *repository.SyncRepository
-	AttachmentRepo       *repository.AttachmentRepository
-	AttendeeRepo         *repository.AttendeeRepository
-	WorkspaceRepo        *repository.WorkspaceRepository
-	WorkspaceInviteRepo  *repository.WorkspaceInviteRepository
-	GroupRepo            *repository.GroupRepository
-	CalendarSetRepo      *repository.CalendarSetRepository
-	TaskListRepo         *repository.TaskListRepository
-	TaskRepo             *repository.TaskRepository
-	NotificationRepo     *repository.NotificationRepository
-	AppPasswordRepo      *repository.AppPasswordRepository
-	FiredReminderRepo    *repository.FiredReminderRepository
+	UserRepo                 *repository.UserRepository
+	SessionRepo              *repository.SessionRepository
+	CalendarRepo             *repository.CalendarRepository
+	SourceRepo               *repository.SourceRepository
+	ConnectionRepo           *repository.ConnectionRepository
+	ShareRepo                *repository.CalendarShareRepository
+	GroupShareRepo           *repository.CalendarGroupShareRepository
+	ColorOverrideRepo        *repository.CalendarUserColorRepository
+	ExposureRepo             *repository.CalendarExposureRepository
+	DefaultReminderRepo      *repository.CalendarDefaultReminderRepository
+	EventRepo                *repository.EventRepository
+	EventExceptionRepo       *repository.EventExceptionRepository
+	EventReminderRepo        *repository.EventReminderRepository
+	ExplicitReminderRepo     *repository.EventReminderExplicitRepository
+	SyncRepo                 *repository.SyncRepository
+	AttachmentRepo           *repository.AttachmentRepository
+	AttendeeRepo             *repository.AttendeeRepository
+	WorkspaceRepo            *repository.WorkspaceRepository
+	WorkspaceInviteRepo      *repository.WorkspaceInviteRepository
+	GroupRepo                *repository.GroupRepository
+	CalendarSetRepo          *repository.CalendarSetRepository
+	TaskListRepo             *repository.TaskListRepository
+	TaskRepo                 *repository.TaskRepository
+	AvailabilityScheduleRepo *repository.AvailabilityScheduleRepository
+	NotificationRepo         *repository.NotificationRepository
+	AppPasswordRepo          *repository.AppPasswordRepository
+	FiredReminderRepo        *repository.FiredReminderRepository
 	// OutboxRepo is built unconditionally (#290, ADR-0075): a Write-back push
 	// needs somewhere to queue into regardless of whether this deployment has
 	// SMTP configured, since it has nothing to do with mail. What varies by
@@ -86,22 +87,23 @@ type Graph struct {
 	// having.
 	RateLimitRepo *repository.RateLimitAttemptRepository
 
-	Auth          *AuthService
-	Accounts      *AccountService
-	AppPasswords  *AppPasswordService
-	Attachments   *AttachmentService
-	Calendars     *CalendarService
-	Events        *EventService
-	Groups        *GroupService
-	CalendarSets  *CalendarSetService
-	TaskLists     *TaskListService
-	Tasks         *TaskService
-	Imports       *ImportService
-	Notifications *NotificationService
-	Subscriptions *SubscribeService
-	Connections   *ConnectionService
-	Users         *UserService
-	Workspaces    *WorkspaceService
+	Auth                  *AuthService
+	Accounts              *AccountService
+	AppPasswords          *AppPasswordService
+	Attachments           *AttachmentService
+	Calendars             *CalendarService
+	Events                *EventService
+	Groups                *GroupService
+	CalendarSets          *CalendarSetService
+	TaskLists             *TaskListService
+	Tasks                 *TaskService
+	AvailabilitySchedules *AvailabilityScheduleService
+	Imports               *ImportService
+	Notifications         *NotificationService
+	Subscriptions         *SubscribeService
+	Connections           *ConnectionService
+	Users                 *UserService
+	Workspaces            *WorkspaceService
 	// RateLimiter throttles Login, Register, and CalDAV Basic auth (#240,
 	// ADR-0070) — held by the Graph rather than by AuthService/
 	// AppPasswordService, since it's enforced from the HTTP layer
@@ -202,32 +204,33 @@ func NewGraph(sqlDB *sql.DB, cfg config.Config, opts ...GraphOption) (*Graph, er
 		JWTSecret:       built.jwtSecret,
 		AttachmentStore: attachmentstore.New(cfg.DataDir),
 
-		UserRepo:             repository.NewUserRepository(sqlDB),
-		SessionRepo:          repository.NewSessionRepository(sqlDB),
-		CalendarRepo:         repository.NewCalendarRepository(sqlDB),
-		SourceRepo:           repository.NewSourceRepository(sqlDB),
-		ConnectionRepo:       repository.NewConnectionRepository(sqlDB),
-		ShareRepo:            repository.NewCalendarShareRepository(sqlDB),
-		GroupShareRepo:       repository.NewCalendarGroupShareRepository(sqlDB),
-		ColorOverrideRepo:    repository.NewCalendarUserColorRepository(sqlDB),
-		ExposureRepo:         repository.NewCalendarExposureRepository(sqlDB),
-		DefaultReminderRepo:  repository.NewCalendarDefaultReminderRepository(sqlDB),
-		EventRepo:            repository.NewEventRepository(sqlDB),
-		EventExceptionRepo:   repository.NewEventExceptionRepository(sqlDB),
-		EventReminderRepo:    repository.NewEventReminderRepository(sqlDB),
-		ExplicitReminderRepo: repository.NewEventReminderExplicitRepository(sqlDB),
-		SyncRepo:             repository.NewSyncRepository(sqlDB),
-		AttachmentRepo:       repository.NewAttachmentRepository(sqlDB),
-		AttendeeRepo:         repository.NewAttendeeRepository(sqlDB),
-		WorkspaceRepo:        repository.NewWorkspaceRepository(sqlDB),
-		WorkspaceInviteRepo:  repository.NewWorkspaceInviteRepository(sqlDB),
-		GroupRepo:            repository.NewGroupRepository(sqlDB),
-		CalendarSetRepo:      repository.NewCalendarSetRepository(sqlDB),
-		TaskListRepo:         repository.NewTaskListRepository(sqlDB),
-		TaskRepo:             repository.NewTaskRepository(sqlDB),
-		NotificationRepo:     repository.NewNotificationRepository(sqlDB),
-		AppPasswordRepo:      repository.NewAppPasswordRepository(sqlDB),
-		FiredReminderRepo:    repository.NewFiredReminderRepository(sqlDB),
+		UserRepo:                 repository.NewUserRepository(sqlDB),
+		SessionRepo:              repository.NewSessionRepository(sqlDB),
+		CalendarRepo:             repository.NewCalendarRepository(sqlDB),
+		SourceRepo:               repository.NewSourceRepository(sqlDB),
+		ConnectionRepo:           repository.NewConnectionRepository(sqlDB),
+		ShareRepo:                repository.NewCalendarShareRepository(sqlDB),
+		GroupShareRepo:           repository.NewCalendarGroupShareRepository(sqlDB),
+		ColorOverrideRepo:        repository.NewCalendarUserColorRepository(sqlDB),
+		ExposureRepo:             repository.NewCalendarExposureRepository(sqlDB),
+		DefaultReminderRepo:      repository.NewCalendarDefaultReminderRepository(sqlDB),
+		EventRepo:                repository.NewEventRepository(sqlDB),
+		EventExceptionRepo:       repository.NewEventExceptionRepository(sqlDB),
+		EventReminderRepo:        repository.NewEventReminderRepository(sqlDB),
+		ExplicitReminderRepo:     repository.NewEventReminderExplicitRepository(sqlDB),
+		SyncRepo:                 repository.NewSyncRepository(sqlDB),
+		AttachmentRepo:           repository.NewAttachmentRepository(sqlDB),
+		AttendeeRepo:             repository.NewAttendeeRepository(sqlDB),
+		WorkspaceRepo:            repository.NewWorkspaceRepository(sqlDB),
+		WorkspaceInviteRepo:      repository.NewWorkspaceInviteRepository(sqlDB),
+		GroupRepo:                repository.NewGroupRepository(sqlDB),
+		CalendarSetRepo:          repository.NewCalendarSetRepository(sqlDB),
+		TaskListRepo:             repository.NewTaskListRepository(sqlDB),
+		TaskRepo:                 repository.NewTaskRepository(sqlDB),
+		AvailabilityScheduleRepo: repository.NewAvailabilityScheduleRepository(sqlDB),
+		NotificationRepo:         repository.NewNotificationRepository(sqlDB),
+		AppPasswordRepo:          repository.NewAppPasswordRepository(sqlDB),
+		FiredReminderRepo:        repository.NewFiredReminderRepository(sqlDB),
 	}
 	g.OutboxRepo = repository.NewOutboxRepository(sqlDB)
 	g.RateLimitRepo = repository.NewRateLimitAttemptRepository(sqlDB)
@@ -236,6 +239,7 @@ func NewGraph(sqlDB *sql.DB, cfg config.Config, opts ...GraphOption) (*Graph, er
 	g.Workspaces = NewWorkspaceService(sqlDB, g.WorkspaceRepo, g.WorkspaceInviteRepo, g.CalendarRepo, g.ShareRepo, g.TaskListRepo)
 	g.TaskLists = NewTaskListService(sqlDB, g.TaskListRepo, g.TaskRepo)
 	g.Tasks = NewTaskService(g.TaskRepo, g.TaskListRepo)
+	g.AvailabilitySchedules = NewAvailabilityScheduleService(sqlDB, g.AvailabilityScheduleRepo, g.UserRepo)
 	g.Groups = NewGroupService(g.GroupRepo, g.WorkspaceRepo)
 	g.Calendars = NewCalendarService(sqlDB, g.CalendarRepo, g.SourceRepo, g.ShareRepo, g.UserRepo, g.EventReminderRepo, g.DefaultReminderRepo, g.ExplicitReminderRepo, g.ColorOverrideRepo, g.ExposureRepo, g.WorkspaceRepo, g.GroupShareRepo, g.GroupRepo)
 	// CalendarSets needs Calendars for AddCalendar's Access check (#302,

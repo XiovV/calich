@@ -15,7 +15,7 @@ import (
 	"github.com/XiovV/calich/server/internal/static"
 )
 
-func New(logger *slog.Logger, authHandler *handlers.AuthHandler, calendarHandler *handlers.CalendarHandler, eventHandler *handlers.EventHandler, attachmentHandler *handlers.AttachmentHandler, notificationHandler *handlers.NotificationHandler, appPasswordHandler *handlers.AppPasswordHandler, accountHandler *handlers.AccountHandler, userHandler *handlers.UserHandler, workspaceHandler *handlers.WorkspaceHandler, groupHandler *handlers.GroupHandler, calendarSetHandler *handlers.CalendarSetHandler, taskListHandler *handlers.TaskListHandler, taskHandler *handlers.TaskHandler, connectionHandler *handlers.ConnectionHandler, calDAVHandler http.Handler, authenticator httpauth.Authenticator, activeUserChecker httpauth.ActiveUserChecker, calDAVAuthenticator httpauth.CalDAVAuthenticator, calDAVRateLimiter httpauth.CalDAVRateLimiter, enabledChecker httpauth.DisabledChecker, workspaceMembershipChecker httpauth.WorkspaceMembershipChecker) (http.Handler, error) {
+func New(logger *slog.Logger, authHandler *handlers.AuthHandler, calendarHandler *handlers.CalendarHandler, eventHandler *handlers.EventHandler, attachmentHandler *handlers.AttachmentHandler, notificationHandler *handlers.NotificationHandler, appPasswordHandler *handlers.AppPasswordHandler, accountHandler *handlers.AccountHandler, userHandler *handlers.UserHandler, workspaceHandler *handlers.WorkspaceHandler, groupHandler *handlers.GroupHandler, calendarSetHandler *handlers.CalendarSetHandler, taskListHandler *handlers.TaskListHandler, taskHandler *handlers.TaskHandler, connectionHandler *handlers.ConnectionHandler, availabilityScheduleHandler *handlers.AvailabilityScheduleHandler, calDAVHandler http.Handler, authenticator httpauth.Authenticator, activeUserChecker httpauth.ActiveUserChecker, calDAVAuthenticator httpauth.CalDAVAuthenticator, calDAVRateLimiter httpauth.CalDAVRateLimiter, enabledChecker httpauth.DisabledChecker, workspaceMembershipChecker httpauth.WorkspaceMembershipChecker) (http.Handler, error) {
 	r := chi.NewRouter()
 	r.Use(requestLogger(logger))
 	r.Use(middleware.Recoverer)
@@ -311,6 +311,24 @@ func New(logger *slog.Logger, authHandler *handlers.AuthHandler, calendarHandler
 			r.Put("/{id}/complete", taskHandler.Complete)
 			r.Delete("/{id}/complete", taskHandler.Uncomplete)
 			r.Delete("/{id}", taskHandler.Delete)
+		})
+
+		// Availability Schedules (#320, ADR-0085): a named weekly pattern of
+		// time ranges belonging to one User, private outright and carrying no
+		// Workspace of its own — gated by RequireAuth alone, unlike Calendar
+		// Sets and Task Lists, since there is no Workspace to require.
+		// AvailabilityScheduleService itself resolves every Schedule by (id,
+		// caller) and refuses with ErrNotFound rather than any authority
+		// check, so no extra middleware gate is needed.
+		r.Route("/availability-schedules", func(r chi.Router) {
+			r.Use(httpauth.RequireAuth(authenticator))
+			r.Use(httpauth.RequireActiveUser(activeUserChecker))
+			r.Use(httpauth.RequireEnabledUser(enabledChecker))
+
+			r.Get("/", availabilityScheduleHandler.List)
+			r.Post("/", availabilityScheduleHandler.Create)
+			r.Patch("/{id}", availabilityScheduleHandler.Update)
+			r.Delete("/{id}", availabilityScheduleHandler.Delete)
 		})
 
 		// Connections (#285, ADR-0050, ADR-0051): Callback sits outside
