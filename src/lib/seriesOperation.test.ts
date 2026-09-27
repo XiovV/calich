@@ -142,6 +142,58 @@ describe("planEditOccurrence", () => {
     expect(ops[0]).toMatchObject({ fields: { color: "#12809CFF" } });
   });
 
+  it('scope "this": a fresh override inherits the master\'s Busy when untouched (ADR-0086)', () => {
+    const freeMaster = { ...recurringMaster, busy: false };
+    const occurrenceStart = new Date("2026-01-03T09:00:00Z");
+    const { ops } = planEditOccurrence(
+      {
+        master: freeMaster,
+        occurrence: occurrenceOf(freeMaster, occurrenceStart),
+        isOverride: false,
+        originalStart: occurrenceStart,
+        scope: "this",
+        changes: {
+          calendarId: "cal-1",
+          title: "Standup (moved)",
+          start: new Date("2026-01-03T10:00:00Z"),
+          end: new Date("2026-01-03T10:30:00Z"),
+        },
+      },
+      nextId,
+    );
+
+    expect(ops[0]).toMatchObject({ fields: { busy: false } });
+  });
+
+  it('scope "this": an existing override keeps its own Busy when untouched (ADR-0086)', () => {
+    const override = {
+      id: "override-1",
+      calendarId: "cal-1",
+      title: "Standup (moved)",
+      start: new Date("2026-01-03T10:00:00Z"),
+      end: new Date("2026-01-03T10:30:00Z"),
+      parentId: "master-1",
+      recurrenceId: new Date("2026-01-03T09:00:00Z"),
+      busy: false,
+    };
+
+    const { ops } = planEditOccurrence({
+      master: recurringMaster,
+      occurrence: occurrenceOf(override as never, override.start),
+      isOverride: true,
+      originalStart: override.recurrenceId,
+      scope: "this",
+      changes: {
+        calendarId: "cal-1",
+        title: "Renamed again",
+        start: override.start,
+        end: override.end,
+      },
+    });
+
+    expect(ops[0]).toMatchObject({ fields: { busy: false } });
+  });
+
   it('scope "all": keeps the rule and does not discard children when the rule is unchanged', () => {
     const { ops } = planEditOccurrence({
       master: recurringMaster,
@@ -371,6 +423,25 @@ describe("planEditOccurrence", () => {
     });
 
     expect(ops[0]).toMatchObject({ fields: { color: undefined } });
+  });
+
+  it('scope "all": preserves the master\'s Busy when the edit doesn\'t touch it (ADR-0086)', () => {
+    const freeMaster = { ...recurringMaster, busy: false };
+    const { ops } = planEditOccurrence({
+      master: freeMaster,
+      occurrence: occurrenceOf(freeMaster, freeMaster.start),
+      isOverride: false,
+      originalStart: freeMaster.start,
+      scope: "all",
+      changes: {
+        calendarId: "cal-1",
+        title: "Renamed",
+        start: freeMaster.start,
+        end: freeMaster.end,
+      },
+    });
+
+    expect(ops[0]).toMatchObject({ fields: { busy: false } });
   });
 
   it('scope "following": plans a truncated old master, a new master, and the reparent boundary', () => {

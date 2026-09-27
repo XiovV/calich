@@ -40,7 +40,11 @@ import {
   resolveMaster,
   type Occurrence,
 } from "../lib/occurrence";
-import { resolveColor, type EditScope } from "../lib/recurrenceScope";
+import {
+  defaultBusyForAllDay,
+  resolveColor,
+  type EditScope,
+} from "../lib/recurrenceScope";
 import type { MasterFieldChanges } from "../lib/seriesOperation";
 import {
   planEventSave,
@@ -136,6 +140,9 @@ interface InitialFormState {
   /** The stored rule when `repeat` is "custom"; undefined otherwise. */
   customRule: string | undefined;
   allDay: boolean;
+  /** Whether this Event consumes the time it occupies (ADR-0086) — a timed
+   * Event defaults to Busy, an all-day one to Free. */
+  busy: boolean;
   reminders: Reminder[];
   description: string;
   location: string;
@@ -194,6 +201,8 @@ function deriveInitialFormState(
       repeat,
       customRule: repeat === "custom" ? rrule : undefined,
       allDay: Boolean(event.allDay),
+      // Absent means Busy, matching RFC 5545's own default (ADR-0086).
+      busy: event.busy ?? true,
       reminders: event.reminders ?? [],
       description: event.description ?? "",
       location: event.location ?? "",
@@ -212,6 +221,11 @@ function deriveInitialFormState(
     repeat: "none",
     customRule: undefined,
     allDay: false,
+    // A brand-new draft always opens timed (see `allDay: false` above), so
+    // its own default is Busy; the all-day-defaults-Free departure
+    // (ADR-0086) takes effect the moment the User checks "All day" — see
+    // handleAllDayChange below.
+    busy: defaultBusyForAllDay(false),
     reminders: [],
     description: "",
     location: "",
@@ -431,6 +445,9 @@ export function EventModal(props: EventModalProps) {
         reminderCount: initial.reminders.length,
         attachmentCount: master?.attachments?.length ?? 0,
         attendeeCount: master?.attendeeCount ?? 0,
+        // The all-day-based default is Busy for timed, Free for all-day
+        // (ADR-0086) — an Event that departs from it is worth surfacing.
+        busyDiffersFromDefault: initial.busy !== defaultBusyForAllDay(initial.allDay),
       }),
   );
 
@@ -494,6 +511,12 @@ export function EventModal(props: EventModalProps) {
     ? calendarId
     : "";
   const [allDay, setAllDay] = useState(initial.allDay);
+  const [busy, setBusy] = useState(initial.busy);
+  // Whether the acting User has explicitly touched Busy in this create
+  // session — once true, toggling All day no longer overrides their choice.
+  // Never consulted in edit mode, where an existing Event's Busy is never
+  // silently flipped by retoggling All day (ADR-0086).
+  const busyTouchedRef = useRef(false);
   const [repeat, setRepeat] = useState<RepeatChoice>(initial.repeat);
   const [customRule, setCustomRule] = useState<string | undefined>(
     initial.customRule,
@@ -559,6 +582,22 @@ export function EventModal(props: EventModalProps) {
         : "Custom…",
     },
   ];
+
+  // A fresh create's own Busy follows All day live, until the User touches
+  // Busy directly in More options — the all-day-defaults-Free departure
+  // (ADR-0086) applied as the form is filled in, not just at open. An
+  // edit's existing Busy is never silently flipped by retoggling All day.
+  function handleAllDayChange(checked: boolean) {
+    setAllDay(checked);
+    if (mode === "create" && !busyTouchedRef.current) {
+      setBusy(defaultBusyForAllDay(checked));
+    }
+  }
+
+  function handleBusyChange(checked: boolean) {
+    busyTouchedRef.current = true;
+    setBusy(checked);
+  }
 
   function handleRepeatChange(value: RepeatChoice) {
     // Selecting "Custom…" opens the dialog rather than committing immediately;
@@ -753,6 +792,7 @@ export function EventModal(props: EventModalProps) {
     start: startForRule,
     end: allDay ? addDays(startOfDay(day), 1) : timeStringToDate(endDay, endTime),
     allDay,
+    busy,
     rrule: repeat === "custom" ? customRule : buildRule(repeat, startForRule),
     description: description.trim(),
     location: location.trim(),
@@ -786,6 +826,7 @@ export function EventModal(props: EventModalProps) {
           start: props.occurrence.start,
           end: props.occurrence.end,
           allDay: initial.allDay,
+          busy: initial.busy,
           rrule: master?.rrule,
           description: initial.description,
           location: initial.location,
@@ -1152,7 +1193,7 @@ export function EventModal(props: EventModalProps) {
               <label className="mt-4 inline-flex cursor-pointer items-center gap-2 text-label-sm text-ink">
                 <Checkbox
                   checked={allDay}
-                  onCheckedChange={setAllDay}
+                  onCheckedChange={handleAllDayChange}
                   aria-label="All day"
                   disabled={isReadOnlyEvent}
                 />
@@ -1349,6 +1390,16 @@ export function EventModal(props: EventModalProps) {
 
               {isExpanded && (
                 <>
+                  <label className="mt-4 inline-flex cursor-pointer items-center gap-2 text-label-sm text-ink">
+                    <Checkbox
+                      checked={busy}
+                      onCheckedChange={handleBusyChange}
+                      aria-label="Show as busy"
+                      disabled={isReadOnlyEvent}
+                    />
+                    Show as busy
+                  </label>
+
                   <IconFieldRow icon={<MapPin className="size-4" />}>
                     <Input
                       aria-label="Location"

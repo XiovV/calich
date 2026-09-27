@@ -34,6 +34,11 @@ type Event struct {
 	// range. Start/end still hold the half-open date range (start = the date,
 	// end = the exclusive next day). See ADR-0017.
 	AllDay bool
+	// Busy is iCalendar's own TRANSP (OPAQUE/TRANSPARENT): whether this Event
+	// consumes the time it occupies. A timed Event defaults to Busy, matching
+	// RFC 5545; an all-day Event defaults to Free — see ADR-0086. Only a
+	// Busy Event will later close a Booking Link's slot.
+	Busy bool
 	// Tzid is the IANA zone the Event's wall-clock is anchored to (the
 	// Anchor zone): a named zone is a zoned Event, "Etc/UTC" is an absolute
 	// instant, and nil is a Floating Event that renders/expands in the
@@ -184,6 +189,8 @@ type EventFields struct {
 	Title        string
 	Start, End   time.Time
 	AllDay       bool
+	// Busy mirrors Event.Busy — iCalendar's own TRANSP (ADR-0086).
+	Busy         bool
 	Rrule        string
 	ParentID     *string
 	RecurrenceID *time.Time
@@ -215,10 +222,34 @@ type EventFields struct {
 	ProviderColor *string
 }
 
+// transpOpaque and transpTransparent are the two values iCalendar's TRANSP
+// property carries (ADR-0086) — the wire vocabulary busyToTransp/transpToBusy
+// translate Event.Busy through, so the column stores the domain's own term
+// rather than a bare 0/1 that would mean nothing on a raw SQL browse.
+const (
+	transpOpaque      = "OPAQUE"
+	transpTransparent = "TRANSPARENT"
+)
+
+// busyToTransp renders busy as TRANSP's own text vocabulary (ADR-0086).
+func busyToTransp(busy bool) string {
+	if busy {
+		return transpOpaque
+	}
+	return transpTransparent
+}
+
+// transpToBusy is busyToTransp's inverse. Anything other than the literal
+// "TRANSPARENT" reads as Busy — RFC 5545's own default for a VEVENT whose
+// TRANSP is absent or unrecognized.
+func transpToBusy(transp string) bool {
+	return transp != transpTransparent
+}
+
 func (r *EventRepository) Create(ctx context.Context, id string, createdBy *int64, f EventFields, changeSeq int64) (Event, error) {
 	if _, err := r.db.ExecContext(ctx,
-		`INSERT INTO events (id, calendar_id, title, "start", "end", all_day, rrule, parent_id, recurrence_id, tzid, description, location, url, color, external_uid, created_by, change_seq, provider_etag, rsvp_status, conference_url, guest_count, provider_color) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		id, f.CalendarID, f.Title, f.Start.UTC(), f.End.UTC(), f.AllDay, f.Rrule, f.ParentID, utcPtr(f.RecurrenceID), f.Tzid, f.Description, f.Location, f.URL, f.Color, f.ExternalUID, createdBy, changeSeq, f.ProviderEtag, f.RSVPStatus, f.ConferenceURL, f.GuestCount, f.ProviderColor,
+		`INSERT INTO events (id, calendar_id, title, "start", "end", all_day, transp, rrule, parent_id, recurrence_id, tzid, description, location, url, color, external_uid, created_by, change_seq, provider_etag, rsvp_status, conference_url, guest_count, provider_color) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		id, f.CalendarID, f.Title, f.Start.UTC(), f.End.UTC(), f.AllDay, busyToTransp(f.Busy), f.Rrule, f.ParentID, utcPtr(f.RecurrenceID), f.Tzid, f.Description, f.Location, f.URL, f.Color, f.ExternalUID, createdBy, changeSeq, f.ProviderEtag, f.RSVPStatus, f.ConferenceURL, f.GuestCount, f.ProviderColor,
 	); err != nil {
 		return Event{}, fmt.Errorf("insert event: %w", err)
 	}
@@ -226,7 +257,7 @@ func (r *EventRepository) Create(ctx context.Context, id string, createdBy *int6
 	return r.GetByID(ctx, id)
 }
 
-const eventColumns = `id, calendar_id, title, "start", "end", all_day, rrule, parent_id, recurrence_id, tzid, description, location, url, color, external_uid, created_by, created_at, change_seq, sequence, provider_etag, rsvp_status, conference_url, guest_count, provider_color, write_back_error`
+const eventColumns = `id, calendar_id, title, "start", "end", all_day, transp, rrule, parent_id, recurrence_id, tzid, description, location, url, color, external_uid, created_by, created_at, change_seq, sequence, provider_etag, rsvp_status, conference_url, guest_count, provider_color, write_back_error`
 
 func (r *EventRepository) GetByID(ctx context.Context, id string) (Event, error) {
 	return scanEvent(r.db.QueryRowContext(ctx,
@@ -385,8 +416,8 @@ func (r *EventRepository) ListAllWithAnyReminder(ctx context.Context) ([]Event, 
 // differs from the row being replaced.
 func (r *EventRepository) Update(ctx context.Context, id string, f EventFields, changeSeq, sequence int64) (Event, error) {
 	res, err := r.db.ExecContext(ctx,
-		`UPDATE events SET calendar_id = ?, title = ?, "start" = ?, "end" = ?, all_day = ?, rrule = ?, tzid = ?, description = ?, location = ?, url = ?, color = ?, change_seq = ?, sequence = ? WHERE id = ?`,
-		f.CalendarID, f.Title, f.Start.UTC(), f.End.UTC(), f.AllDay, f.Rrule, f.Tzid, f.Description, f.Location, f.URL, f.Color, changeSeq, sequence, id,
+		`UPDATE events SET calendar_id = ?, title = ?, "start" = ?, "end" = ?, all_day = ?, transp = ?, rrule = ?, tzid = ?, description = ?, location = ?, url = ?, color = ?, change_seq = ?, sequence = ? WHERE id = ?`,
+		f.CalendarID, f.Title, f.Start.UTC(), f.End.UTC(), f.AllDay, busyToTransp(f.Busy), f.Rrule, f.Tzid, f.Description, f.Location, f.URL, f.Color, changeSeq, sequence, id,
 	)
 	if err != nil {
 		return Event{}, fmt.Errorf("update event: %w", err)
@@ -673,9 +704,11 @@ func scanEventRow(row rowScanner, e *Event) error {
 	var conferenceURL sql.NullString
 	var providerColor sql.NullString
 	var writeBackError sql.NullString
-	if err := row.Scan(&e.ID, &e.CalendarID, &e.Title, &e.Start, &e.End, &e.AllDay, &e.Rrule, &parentID, &recurrenceID, &tzid, &description, &location, &url, &color, &externalUID, &createdBy, &e.CreatedAt, &e.ChangeSeq, &e.Sequence, &providerEtag, &rsvpStatus, &conferenceURL, &e.GuestCount, &providerColor, &writeBackError); err != nil {
+	var transp string
+	if err := row.Scan(&e.ID, &e.CalendarID, &e.Title, &e.Start, &e.End, &e.AllDay, &transp, &e.Rrule, &parentID, &recurrenceID, &tzid, &description, &location, &url, &color, &externalUID, &createdBy, &e.CreatedAt, &e.ChangeSeq, &e.Sequence, &providerEtag, &rsvpStatus, &conferenceURL, &e.GuestCount, &providerColor, &writeBackError); err != nil {
 		return err
 	}
+	e.Busy = transpToBusy(transp)
 	if externalUID.Valid {
 		e.ExternalUID = &externalUID.String
 	}

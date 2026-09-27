@@ -27,6 +27,12 @@ type ParsedEvent struct {
 	Title, Description, Location, URL string
 	Start, End                        time.Time
 	AllDay                            bool
+	// Busy decodes TRANSP (ADR-0086): true unless the property is present
+	// and literally TRANSPARENT — RFC 5545's own default (OPAQUE) for a
+	// VEVENT carrying no TRANSP at all, honoured verbatim rather than
+	// re-derived from AllDay. An imported or CalDAV-written all-day Event
+	// marked OPAQUE stays Busy.
+	Busy                              bool
 	Tzid                              *string
 	Reminders                         []repository.Reminder
 	// Color is the exact hex this VEVENT's COLOR keyword decodes to, nil if
@@ -184,10 +190,25 @@ func parseVEvent(v ical.Event, isOverride bool) (ParsedEvent, string, error) {
 		Start:       start,
 		End:         end,
 		AllDay:      allDay,
+		Busy:        parseEventBusy(v),
 		Tzid:        tzid,
 		Reminders:   reminders,
 		Color:       parseEventColor(v),
 	}, rrule, nil
+}
+
+// parseEventBusy decodes v's TRANSP property (ADR-0086): Free only when it is
+// present and literally "TRANSPARENT" — anything else, including its
+// absence, is Busy, matching RFC 5545's own OPAQUE default. Never re-derived
+// from AllDay: the all-day-defaults-Free departure is this app's own create
+// path, not something an imported or CalDAV-written Event's stated value is
+// ever overridden by.
+func parseEventBusy(v ical.Event) bool {
+	prop := v.Props.Get(ical.PropTransparency)
+	if prop == nil {
+		return true
+	}
+	return prop.Value != "TRANSPARENT"
 }
 
 // parseEventEnd resolves when v ends, in RFC 5545's own order of

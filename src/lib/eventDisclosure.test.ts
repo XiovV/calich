@@ -10,6 +10,7 @@ function signals(overrides: Partial<EventDisclosureSignals> = {}): EventDisclosu
     reminderCount: 0,
     attachmentCount: 0,
     attendeeCount: 0,
+    busyDiffersFromDefault: false,
     ...overrides,
   };
 }
@@ -51,5 +52,9 @@ describe("hasSecondaryEventFields", () => {
 
   it("is true when there is at least one attendee", () => {
     expect(hasSecondaryEventFields(signals({ attendeeCount: 1 }))).toBe(true);
+  });
+
+  it("is true when Busy differs from its all-day-based default (ADR-0086)", () => {
+    expect(hasSecondaryEventFields(signals({ busyDiffersFromDefault: true }))).toBe(true);
   });
 });

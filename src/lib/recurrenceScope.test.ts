@@ -4,10 +4,12 @@ import { describe, expect, it } from "vitest";
 import type { Event } from "./event";
 import { toFloating, viewerZone } from "./floatingTime";
 import {
+  defaultBusyForAllDay,
   hasFieldChanges,
   makeException,
   makeOverride,
   remindersEqual,
+  resolveBusy,
   resolveColor,
   shouldDiscardChildren,
   splitFollowing,
@@ -49,6 +51,33 @@ describe("makeOverride", () => {
     };
 
     expect(makeOverride(coloredMaster, occurrenceStart, changes).color).toBe("#12809CFF");
+  });
+
+  it("starts a fresh Override's Busy as a copy of the master's, independent once set (ADR-0086)", () => {
+    const freeMaster: Event = { ...master, busy: false };
+    const occurrenceStart = new Date(2026, 0, 3, 9, 0);
+    const changes = {
+      calendarId: "cal-1",
+      title: "Standup",
+      start: occurrenceStart,
+      end: new Date(2026, 0, 3, 9, 30),
+    };
+
+    expect(makeOverride(freeMaster, occurrenceStart, changes).busy).toBe(false);
+  });
+
+  it("uses an explicit Busy override rather than the master's own", () => {
+    const busyMaster: Event = { ...master, busy: true };
+    const occurrenceStart = new Date(2026, 0, 3, 9, 0);
+    const changes = {
+      calendarId: "cal-1",
+      title: "Standup",
+      start: occurrenceStart,
+      end: new Date(2026, 0, 3, 9, 30),
+      busy: false,
+    };
+
+    expect(makeOverride(busyMaster, occurrenceStart, changes).busy).toBe(false);
   });
 
   it("starts a fresh Override's URL as a copy of the master's, independent once set (ADR-0063)", () => {
@@ -253,6 +282,21 @@ describe("splitFollowing", () => {
     expect(result.newMaster.rrule).toBe("FREQ=WEEKLY;BYDAY=TU,TH");
   });
 
+  it("carries the old master's Busy into the new master when the edit doesn't touch it (ADR-0086)", () => {
+    const freeMaster: Event = { ...master, busy: false };
+    const splitStart = new Date(2026, 0, 3, 9, 0);
+    const changes = {
+      calendarId: "cal-1",
+      title: "Standup",
+      start: splitStart,
+      end: new Date(2026, 0, 3, 9, 30),
+    };
+
+    const result = splitFollowing(freeMaster, splitStart, changes);
+
+    expect(result.newMaster.busy).toBe(false);
+  });
+
   // The new Master's Reminders are copied from the old Master server-side
   // (ADR-0064, via copyRemindersFrom) — splitFollowing itself never touches
   // them.
@@ -319,6 +363,28 @@ describe("resolveColor", () => {
 
   it("clears to absent on an explicit reset (null), rather than copying the reference's color (ADR-0043)", () => {
     expect(resolveColor({ color: null }, coloredMaster)).toBeUndefined();
+  });
+});
+
+describe("defaultBusyForAllDay", () => {
+  it("is Busy for a timed Event", () => {
+    expect(defaultBusyForAllDay(false)).toBe(true);
+  });
+
+  it("is Free for an all-day Event (ADR-0086)", () => {
+    expect(defaultBusyForAllDay(true)).toBe(false);
+  });
+});
+
+describe("resolveBusy", () => {
+  const freeMaster: Event = { ...master, busy: false };
+
+  it("falls back to the reference's own Busy when the edit didn't touch it (ADR-0086)", () => {
+    expect(resolveBusy({}, freeMaster)).toBe(false);
+  });
+
+  it("sets Busy when the edit provides one", () => {
+    expect(resolveBusy({ busy: true }, freeMaster)).toBe(true);
   });
 });
 
@@ -446,6 +512,17 @@ describe("hasFieldChanges", () => {
     expect(hasFieldChanges({ ...original }, original, originalReminders, originalReminders)).toBe(
       false,
     );
+  });
+
+  it("is true when Busy differs (ADR-0086)", () => {
+    expect(
+      hasFieldChanges(
+        { ...original, busy: true },
+        { ...original, busy: false },
+        originalReminders,
+        originalReminders,
+      ),
+    ).toBe(true);
   });
 });
 

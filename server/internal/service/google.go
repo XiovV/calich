@@ -557,6 +557,9 @@ type googleEventJSON struct {
 	Description       string                    `json:"description"`
 	Location          string                    `json:"location"`
 	ColorID           string                    `json:"colorId"`
+	// Transparency is Google's own free/busy field (ADR-0086) — "opaque",
+	// "transparent", or empty (Google's own default, "opaque").
+	Transparency      string                    `json:"transparency"`
 	Start             googleEventDateTimeJSON   `json:"start"`
 	End               googleEventDateTimeJSON   `json:"end"`
 	RecurringEventID  string                    `json:"recurringEventId"`
@@ -600,6 +603,7 @@ func toGoogleEvent(j googleEventJSON) googleEvent {
 		Description:      j.Description,
 		Location:         j.Location,
 		ColorID:          j.ColorID,
+		Transparency:     j.Transparency,
 		Start:            toGoogleEventDateTime(j.Start),
 		End:              toGoogleEventDateTime(j.End),
 		RecurringEventID: j.RecurringEventID,
@@ -726,16 +730,16 @@ type googleEventPatchSourceJSON struct {
 // googleEventPatchBody is the wire shape of a Write-back PATCH request body
 // (#290, ADR-0075) — and the load-bearing type this ticket exists to build:
 // it has a field for exactly title, description, location, start, end,
-// recurrence and Event URL, and no field for attendees, conferenceData,
-// visibility, or anything else this app doesn't model. There is no
-// constructor that takes a whole repository.Event and no method that lets a
-// caller set a field this struct doesn't declare — buildGooglePatch is the
-// only function that produces one, and it reads a fixed, named set of
-// arguments, never an Event value it could forward wholesale. That is what
-// makes "a whole-Event replace is impossible to express at the Provider
-// seam" true by construction rather than by convention: there is no
-// events.update call in this file, and this type could not serialize one if
-// there were.
+// recurrence, transparency (ADR-0086) and Event URL, and no field for
+// attendees, conferenceData, visibility, or anything else this app doesn't
+// model. There is no constructor that takes a whole repository.Event and no
+// method that lets a caller set a field this struct doesn't declare —
+// buildGooglePatch is the only function that produces one, and it reads a
+// fixed, named set of arguments, never an Event value it could forward
+// wholesale. That is what makes "a whole-Event replace is impossible to
+// express at the Provider seam" true by construction rather than by
+// convention: there is no events.update call in this file, and this type
+// could not serialize one if there were.
 type googleEventPatchBody struct {
 	// ID is set only on an events.insert (#292, ADR-0077) — a client-supplied
 	// id derived from the local Event's id, so a retry after Google has
@@ -752,6 +756,11 @@ type googleEventPatchBody struct {
 	Start       googleEventDateTimePatchJSON `json:"start"`
 	End         googleEventDateTimePatchJSON `json:"end"`
 	Recurrence  []string                     `json:"recurrence,omitempty"`
+	// Transparency is Google's own free/busy field (ADR-0086), always sent
+	// explicitly ("opaque" or "transparent") — no omitempty, since "opaque"
+	// (Busy) is the common case and must never be confused with "leave
+	// whatever's there alone".
+	Transparency string                      `json:"transparency"`
 	// Source is deliberately not ",omitempty": a nil pointer must marshal to
 	// an explicit "source":null, the PATCH request that clears Event URL at
 	// Google, rather than an absent key, which Google reads as "leave
@@ -881,27 +890,37 @@ func googlePatchSource(eventTitle, eventURL string) *googleEventPatchSourceJSON 
 	return &googleEventPatchSourceJSON{Title: title, URL: eventURL}
 }
 
+// googleTransparency renders busy as Google's own free/busy vocabulary
+// (ADR-0086) — the outbound counterpart to googleBusy.
+func googleTransparency(busy bool) string {
+	if busy {
+		return "opaque"
+	}
+	return "transparent"
+}
+
 // buildGooglePatch is the one function that produces a googleEventPatchBody
 // (#290, ADR-0075) — the field-scoped patch compiler ADR-0075 requires be
 // enforced at the Provider seam, not by convention at each call site. Its
 // argument list is exactly ADR-0075's allow-list (title, start, end,
-// all-day, Anchor zone, recurrence rule, description, location, Event URL) and
-// nothing a caller could use to smuggle an Attendee, conferenceData, or a
-// visibility change through: those fields don't exist on this function's
-// signature, so there is nothing to pass even by mistake. An empty rrule (a
-// plain Master, or a recurring instance's own PATCH, which never carries a
-// rule of its own) omits the recurrence key entirely. Cancelled Occurrences
-// are never in scope here — they are `status: cancelled` instances, pushed by
-// CANCEL_INSTANCE (#293, ADR-0078).
-func buildGooglePatch(title string, start, end time.Time, allDay bool, tzid *string, rrule string, description, location, eventURL string) googleEventPatchBody {
+// all-day, busy, Anchor zone, recurrence rule, description, location, Event
+// URL — busy added by ADR-0086) and nothing a caller could use to smuggle an
+// Attendee, conferenceData, or a visibility change through: those fields
+// don't exist on this function's signature, so there is nothing to pass even
+// by mistake. An empty rrule (a plain Master, or a recurring instance's own
+// PATCH, which never carries a rule of its own) omits the recurrence key
+// entirely. Cancelled Occurrences are never in scope here — they are
+// `status: cancelled` instances, pushed by CANCEL_INSTANCE (#293, ADR-0078).
+func buildGooglePatch(title string, start, end time.Time, allDay bool, tzid *string, rrule string, description, location, eventURL string, busy bool) googleEventPatchBody {
 	return googleEventPatchBody{
-		Summary:     title,
-		Description: description,
-		Location:    location,
-		Start:       encodeGoogleEventDateTime(start, allDay, tzid),
-		End:         encodeGoogleEventDateTime(end, allDay, tzid),
-		Recurrence:  encodeGoogleRecurrence(rrule),
-		Source:      googlePatchSource(title, eventURL),
+		Summary:      title,
+		Description:  description,
+		Location:     location,
+		Start:        encodeGoogleEventDateTime(start, allDay, tzid),
+		End:          encodeGoogleEventDateTime(end, allDay, tzid),
+		Recurrence:   encodeGoogleRecurrence(rrule),
+		Transparency: googleTransparency(busy),
+		Source:       googlePatchSource(title, eventURL),
 	}
 }
 

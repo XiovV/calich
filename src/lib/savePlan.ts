@@ -264,6 +264,9 @@ export function planEventSave(
       start: input.changes.start,
       end: input.changes.end,
       allDay: input.changes.allDay,
+      // The form always supplies a concrete value; the RFC-matching default
+      // (Busy) only guards a caller that somehow doesn't (ADR-0086).
+      busy: input.changes.busy ?? true,
       rrule: input.changes.rrule,
       tzid: input.changes.allDay ? undefined : resolveViewerZone(),
       description: input.changes.description,

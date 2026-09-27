@@ -308,6 +308,13 @@ type SeriesWrite struct {
 	Title, Description, Location, URL string
 	Start, End                        time.Time
 	AllDay                            bool
+	// Busy mirrors EventWrite.Busy — iCalendar's own TRANSP (ADR-0086),
+	// decoded verbatim from the incoming source (a CalDAV PUT, an ICS
+	// import, or the Google mapper) rather than re-derived from AllDay: the
+	// all-day-defaults-Free departure applies only to a brand-new Event this
+	// app itself creates, never to one whose own transparency a source
+	// already stated.
+	Busy                              bool
 	Tzid                              *string
 	Rrule                             string
 	Reminders                         []repository.Reminder
@@ -363,6 +370,9 @@ type OverrideWrite struct {
 	Title, Description, Location, URL string
 	Start, End                        time.Time
 	AllDay                            bool
+	// Busy mirrors SeriesWrite.Busy, scoped to this Override alone (ADR-0086)
+	// — settable independently of its Master's, like Color.
+	Busy                              bool
 	Tzid                              *string
 	Reminders                         []repository.Reminder
 	// ExternalUID mirrors SeriesWrite.ExternalUID — an Override shares its
@@ -399,6 +409,7 @@ func (w SeriesWrite) fields(calendarID string) repository.EventFields {
 		Start:         w.Start,
 		End:           w.End,
 		AllDay:        w.AllDay,
+		Busy:          w.Busy,
 		Rrule:         w.Rrule,
 		Tzid:          w.Tzid,
 		Description:   w.Description,
@@ -428,6 +439,7 @@ func (o OverrideWrite) fields(calendarID, masterID string) repository.EventField
 		Start:         o.Start,
 		End:           o.End,
 		AllDay:        o.AllDay,
+		Busy:          o.Busy,
 		Tzid:          o.Tzid,
 		Description:   o.Description,
 		Location:      o.Location,
@@ -894,10 +906,11 @@ func tzidEqual(a, b *string) bool {
 }
 
 // masterFieldsDiffer reports whether any field Write-back actually pushes to
-// Google (ADR-0075's PATCH-only list: title, start, end, allDay, tzid, rrule,
-// description, location, url) differs between existing and write. Deliberately
-// excludes Color and Reminders — neither is ever pushed (ADR-0075) — so a PUT
-// that only recolours an Event or edits a Reminder queues nothing.
+// Google (ADR-0075's PATCH-only list: title, start, end, allDay, busy, tzid,
+// rrule, description, location, url — busy added by ADR-0086) differs between
+// existing and write. Deliberately excludes Color and Reminders — neither is
+// ever pushed (ADR-0075) — so a PUT that only recolours an Event or edits a
+// Reminder queues nothing.
 func masterFieldsDiffer(existing repository.Event, write SeriesWrite) bool {
 	return existing.Title != write.Title ||
 		existing.Description != write.Description ||
@@ -906,6 +919,7 @@ func masterFieldsDiffer(existing repository.Event, write SeriesWrite) bool {
 		!existing.Start.Equal(write.Start) ||
 		!existing.End.Equal(write.End) ||
 		existing.AllDay != write.AllDay ||
+		existing.Busy != write.Busy ||
 		!tzidEqual(existing.Tzid, write.Tzid) ||
 		existing.Rrule != write.Rrule
 }
@@ -920,6 +934,7 @@ func overrideFieldsDiffer(existing repository.Event, write OverrideWrite) bool {
 		!existing.Start.Equal(write.Start) ||
 		!existing.End.Equal(write.End) ||
 		existing.AllDay != write.AllDay ||
+		existing.Busy != write.Busy ||
 		!tzidEqual(existing.Tzid, write.Tzid)
 }
 

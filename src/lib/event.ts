@@ -33,6 +33,11 @@ export interface Event {
   // the exclusive next day) and are wall-clock dates, never
   // timezone-converted. See ADR-0017 and CONTEXT.md's All-day Event.
   allDay?: boolean;
+  // Whether this Event consumes the time it occupies — iCalendar's own
+  // TRANSP. Absent means Busy, matching RFC 5545's own default; a timed
+  // Event is created Busy, an all-day one Free (ADR-0086). Only a Busy
+  // Event will later close a Booking Link's slot.
+  busy?: boolean;
   // The iCalendar RRULE (RFC 5545) describing how this Event repeats, or
   // undefined when it does not recur. The Event's start/end define the first
   // Occurrence and the duration every Occurrence inherits. See ADR-0016.

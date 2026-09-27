@@ -6,6 +6,7 @@ import {
   makeException,
   makeOverride,
   resolveAllDay,
+  resolveBusy,
   resolveColor,
   resolveDescription,
   resolveLocation,
@@ -47,6 +48,7 @@ type MasterCoreFields = Pick<
   | "location"
   | "url"
   | "color"
+  | "busy"
 >;
 
 /**
@@ -204,6 +206,7 @@ export function planEditOccurrence(
             start: seriesChanges.start,
             end: seriesChanges.end,
             allDay: resolveAllDay(changes, master),
+            busy: resolveBusy(changes, master),
             rrule,
             // Preserved unchanged — no picker exists to change it (ADR-0019).
             tzid: master.tzid,
@@ -243,6 +246,7 @@ export function planEditOccurrence(
         location: master.location,
         url: master.url,
         color: master.color,
+        busy: master.busy,
       },
       truncatedRrule: truncatedMaster.rrule,
       keptExdates,
@@ -274,6 +278,7 @@ export function planEditOccurrence(
             start: changes.start,
             end: changes.end,
             allDay: resolveAllDay(changes, master),
+            busy: resolveBusy(changes, occurrence.event),
             tzid: occurrence.event.tzid,
             description: resolveDescription(changes, occurrence.event),
             location: resolveLocation(changes, occurrence.event),
@@ -304,6 +309,7 @@ export function planEditOccurrence(
             start: changes.start,
             end: changes.end,
             allDay: resolveAllDay(changes, master),
+            busy: resolveBusy(changes, occurrence.event),
             // Preserved unchanged — no picker exists to change it (ADR-0019).
             tzid: occurrence.event.tzid,
             description: resolveDescription(changes, occurrence.event),
@@ -333,6 +339,7 @@ export function planEditOccurrence(
           start: override.start,
           end: override.end,
           allDay: override.allDay,
+          busy: override.busy,
           tzid: override.tzid,
           description: override.description,
           location: override.location,
@@ -402,6 +409,7 @@ export function planDeleteOccurrence({
           location: master.location,
           url: master.url,
           color: master.color,
+          busy: master.busy,
         },
         truncatedRrule,
         keptExdates,

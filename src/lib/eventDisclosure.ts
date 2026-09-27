@@ -19,6 +19,11 @@ export interface EventDisclosureSignals {
   reminderCount: number;
   attachmentCount: number;
   attendeeCount: number;
+  // Whether the Event being opened carries a Busy value other than its
+  // all-day-ness' own default (Busy for timed, Free for all-day) —
+  // ADR-0086's control lives behind More options, so it should only pull
+  // the modal open when it's worth looking at.
+  busyDiffersFromDefault: boolean;
 }
 
 export function hasSecondaryEventFields(signals: EventDisclosureSignals): boolean {
@@ -29,6 +34,7 @@ export function hasSecondaryEventFields(signals: EventDisclosureSignals): boolea
     signals.hasRrule ||
     signals.reminderCount > 0 ||
     signals.attachmentCount > 0 ||
-    signals.attendeeCount > 0
+    signals.attendeeCount > 0 ||
+    signals.busyDiffersFromDefault
   );
 }

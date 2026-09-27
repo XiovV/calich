@@ -57,6 +57,10 @@ type googleEvent struct {
 	// event carries no colour. Mapped to a hex inbound (#289, ADR-0075) and
 	// shadow-tracked; never sent back.
 	ColorID           string
+	// Transparency is Google's own free/busy field ("opaque" or
+	// "transparent", empty meaning Google's own default of "opaque") — the
+	// Provider's counterpart to iCalendar's TRANSP (ADR-0086).
+	Transparency      string
 	Start, End        googleEventDateTime
 	RecurringEventID  string
 	OriginalStartTime *googleEventDateTime
@@ -297,6 +301,7 @@ func mapGoogleMaster(master googleEvent, instances []googleEvent) (SeriesWrite, 
 		Start:         start,
 		End:           firstOf(decodeGoogleTime(master.End)),
 		AllDay:        allDay,
+		Busy:          googleBusy(master.Transparency),
 		Tzid:          tzid,
 		Rrule:         rrule,
 		Exdates:       exdates,
@@ -345,6 +350,7 @@ func mapGoogleInstances(instances []googleEvent, externalUID string) (overrides 
 			Start:         iStart,
 			End:           firstOf(decodeGoogleTime(instance.End)),
 			AllDay:        iAllDay,
+			Busy:          googleBusy(instance.Transparency),
 			Tzid:          iTzid,
 			ExternalUID:   externalUID,
 			Color:         iProviderColor,
@@ -495,6 +501,14 @@ func parseGoogleExdateValue(params map[string]string, value string, fallbackTzid
 		out = append(out, t.UTC())
 	}
 	return out, nil
+}
+
+// googleBusy decodes Google's own transparency field ("opaque"/"transparent",
+// case-sensitive, empty meaning Google's own default of "opaque") into Busy
+// (ADR-0086) — Free only when it is literally "transparent", mirroring
+// icalendar.parseEventBusy's own TRANSP rule so the two never drift apart.
+func googleBusy(transparency string) bool {
+	return transparency != "transparent"
 }
 
 // googleEtag strips the double-quote wrapping Google's own etag values

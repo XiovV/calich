@@ -32,6 +32,7 @@ type decodedEvent struct {
 	Start         time.Time
 	End           time.Time
 	AllDay        bool
+	Busy          bool
 	Rrule         string
 	ParentID      *string
 	RecurrenceID  *time.Time
@@ -66,6 +67,7 @@ func (d *decodedEvent) UnmarshalJSON(data []byte) error {
 		Start:         start,
 		End:           end,
 		AllDay:        wire.AllDay,
+		Busy:          wire.Busy,
 		Rrule:         wire.Rrule,
 		ParentID:      wire.ParentID,
 		RecurrenceID:  wire.RecurrenceID,
@@ -233,6 +235,86 @@ func TestEventHandler_Create_RoundTripsAllDayAsDateOnly(t *testing.T) {
 	}
 	if !created.End.Equal(time.Date(2026, 8, 5, 0, 0, 0, 0, time.UTC)) {
 		t.Fatalf("expected end 2026-08-05, got %v", created.End)
+	}
+}
+
+// TestEventHandler_Create_RoundTripsBusy covers ADR-0086's wire contract:
+// busy is never omitted, so a Free create must round-trip as an explicit
+// false, not something indistinguishable from Busy's absence.
+func TestEventHandler_Create_RoundTripsBusy(t *testing.T) {
+	baseURL, accessToken, calendarID := newEventTestServer(t)
+
+	rawBody := `{"id":"22222222-2222-2222-2222-222222222222","calendarId":"` + calendarID + `","title":"Holiday","start":"2026-08-04","end":"2026-08-05","allDay":true,"busy":false}`
+	req, _ := http.NewRequest(http.MethodPost, baseURL+"/api/events/", bytes.NewReader([]byte(rawBody)))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("expected 201, got %d", resp.StatusCode)
+	}
+
+	rawResponse, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+
+	var wire map[string]any
+	if err := json.Unmarshal(rawResponse, &wire); err != nil {
+		t.Fatalf("decode raw: %v", err)
+	}
+	busy, ok := wire["busy"]
+	if !ok {
+		t.Fatalf("expected an explicit busy key, never an absent one, got %+v", wire)
+	}
+	if busy != false {
+		t.Fatalf("expected busy:false to round-trip, got %v", busy)
+	}
+
+	getResp, err := authenticatedGet(baseURL+"/api/events/"+wire["id"].(string), accessToken)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	defer getResp.Body.Close()
+	var fetched decodedEvent
+	if err := json.NewDecoder(getResp.Body).Decode(&fetched); err != nil {
+		t.Fatalf("decode fetched: %v", err)
+	}
+	if fetched.Busy {
+		t.Fatalf("expected the fetched Event to stay Free, got %+v", fetched)
+	}
+}
+
+// TestEventHandler_Create_OmittedBusyDefaultsToBusy covers a caller other
+// than this app's own frontend (which always sends busy explicitly): a
+// create body with no busy key at all must still land Busy, RFC 5545's own
+// default (ADR-0086) — never Go's zero-value false a bare bool field would
+// silently apply.
+func TestEventHandler_Create_OmittedBusyDefaultsToBusy(t *testing.T) {
+	baseURL, accessToken, calendarID := newEventTestServer(t)
+
+	rawBody := `{"id":"22222222-2222-2222-2222-222222222222","calendarId":"` + calendarID + `","title":"Standup","start":"2026-01-01T09:00:00Z","end":"2026-01-01T10:00:00Z"}`
+	req, _ := http.NewRequest(http.MethodPost, baseURL+"/api/events/", bytes.NewReader([]byte(rawBody)))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("expected 201, got %d", resp.StatusCode)
+	}
+
+	var created decodedEvent
+	if err := json.NewDecoder(resp.Body).Decode(&created); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !created.Busy {
+		t.Fatalf("expected an omitted busy key to default to Busy, got Free: %+v", created)
 	}
 }
 
@@ -625,6 +707,32 @@ func TestEventHandler_UpdateAndGet(t *testing.T) {
 	defer getResp.Body.Close()
 	if getResp.StatusCode != http.StatusOK {
 		t.Fatalf("expected 200, got %d", getResp.StatusCode)
+	}
+}
+
+// TestEventHandler_Update_OmittedBusyDefaultsToBusy mirrors
+// TestEventHandler_Create_OmittedBusyDefaultsToBusy for PATCH: a caller that
+// never mentions busy at all still gets RFC 5545's own default (ADR-0086),
+// not Go's zero-value false a bare bool field would silently apply. The
+// helper (patchEvent) never sets busy, which is exactly the case this guards.
+func TestEventHandler_Update_OmittedBusyDefaultsToBusy(t *testing.T) {
+	baseURL, accessToken, calendarID := newEventTestServer(t)
+
+	createResp := createEvent(t, baseURL, accessToken, "22222222-2222-2222-2222-222222222222", calendarID, "Standup", "2026-01-01T09:00:00Z", "2026-01-01T10:00:00Z")
+	var created decodedEvent
+	json.NewDecoder(createResp.Body).Decode(&created)
+
+	updateResp := patchEvent(t, baseURL, accessToken, created.ID, calendarID, "Renamed", "2026-01-01T11:00:00Z", "2026-01-01T12:00:00Z")
+	if updateResp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", updateResp.StatusCode)
+	}
+
+	var updated decodedEvent
+	if err := json.NewDecoder(updateResp.Body).Decode(&updated); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !updated.Busy {
+		t.Fatalf("expected an omitted busy key to default to Busy, got Free: %+v", updated)
 	}
 }
 

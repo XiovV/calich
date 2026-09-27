@@ -110,7 +110,7 @@ func TestBuildGooglePatch_TitleOnlyChangeCarriesExactlyTheAllowedFields(t *testi
 	start := time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC)
 	end := time.Date(2026, 1, 1, 9, 30, 0, 0, time.UTC)
 
-	patch := buildGooglePatch("Standup (renamed)", start, end, false, nil, "", "", "", "")
+	patch := buildGooglePatch("Standup (renamed)", start, end, false, nil, "", "", "", "", true)
 
 	raw, err := json.Marshal(patch)
 	if err != nil {
@@ -121,7 +121,7 @@ func TestBuildGooglePatch_TitleOnlyChangeCarriesExactlyTheAllowedFields(t *testi
 		t.Fatalf("unmarshal patch: %v", err)
 	}
 
-	wantKeys := map[string]bool{"summary": true, "description": true, "location": true, "start": true, "end": true, "source": true}
+	wantKeys := map[string]bool{"summary": true, "description": true, "location": true, "start": true, "end": true, "transparency": true, "source": true}
 	for key := range m {
 		if !wantKeys[key] {
 			t.Fatalf("patch carried unexpected key %q (full body: %s)", key, raw)
@@ -134,8 +134,9 @@ func TestBuildGooglePatch_TitleOnlyChangeCarriesExactlyTheAllowedFields(t *testi
 	// The load-bearing negative assertions: never present, whatever the
 	// caller passed, because googleEventPatchBody has no field for any of
 	// them at all (ADR-0075's "no guest list, no conference data, no
-	// visibility").
-	for _, forbidden := range []string{"attendees", "conferenceData", "visibility", "guestsCanModify", "transparency", "extendedProperties"} {
+	// visibility"). transparency is no longer among them — ADR-0086 adds it
+	// to the allow-list above.
+	for _, forbidden := range []string{"attendees", "conferenceData", "visibility", "guestsCanModify", "extendedProperties"} {
 		if _, ok := m[forbidden]; ok {
 			t.Fatalf("patch must never carry %q — a whole-Event replace must be impossible to express here", forbidden)
 		}
@@ -151,7 +152,7 @@ func TestBuildGooglePatch_OmitsRecurrenceForANonRecurringEvent(t *testing.T) {
 	start := time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC)
 	end := time.Date(2026, 1, 1, 9, 30, 0, 0, time.UTC)
 
-	patch := buildGooglePatch("Standup", start, end, false, nil, "", "", "", "")
+	patch := buildGooglePatch("Standup", start, end, false, nil, "", "", "", "", true)
 	raw, _ := json.Marshal(patch)
 	var m map[string]any
 	_ = json.Unmarshal(raw, &m)
@@ -171,7 +172,7 @@ func TestBuildGooglePatch_RecurrenceCarriesRruleAndNeverAnExdate(t *testing.T) {
 	end := time.Date(2026, 1, 1, 9, 30, 0, 0, time.UTC)
 	tzid := "America/New_York"
 
-	patch := buildGooglePatch("Standup", start, end, false, &tzid, "FREQ=WEEKLY", "", "", "")
+	patch := buildGooglePatch("Standup", start, end, false, &tzid, "FREQ=WEEKLY", "", "", "", true)
 
 	if len(patch.Recurrence) != 1 {
 		t.Fatalf("expected exactly the RRULE line, got %v", patch.Recurrence)
@@ -194,7 +195,7 @@ func TestBuildGooglePatch_ClearedURLSendsExplicitNullSource(t *testing.T) {
 	start := time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC)
 	end := time.Date(2026, 1, 1, 9, 30, 0, 0, time.UTC)
 
-	patch := buildGooglePatch("Standup", start, end, false, nil, "", "", "", "")
+	patch := buildGooglePatch("Standup", start, end, false, nil, "", "", "", "", true)
 	raw, err := json.Marshal(patch)
 	if err != nil {
 		t.Fatalf("marshal patch: %v", err)
@@ -221,7 +222,7 @@ func TestBuildGooglePatch_NonHTTPEventURLIsNeverSent(t *testing.T) {
 	start := time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC)
 	end := time.Date(2026, 1, 1, 9, 30, 0, 0, time.UTC)
 
-	patch := buildGooglePatch("Standup", start, end, false, nil, "", "", "", "message://abc")
+	patch := buildGooglePatch("Standup", start, end, false, nil, "", "", "", "message://abc", true)
 	if patch.Source != nil {
 		t.Fatalf("expected no source for a non-http Event URL, got %+v", patch.Source)
 	}
@@ -256,40 +257,40 @@ func TestBuildGooglePatch_GoldenWireBodies(t *testing.T) {
 	}{
 		{
 			name:  "timed with an Anchor zone sends dateTime and timeZone, date explicitly null",
-			patch: buildGooglePatch("Standup", start, end, false, &sarajevo, "", "", "", ""),
-			want:  `{"summary":"Standup","description":"","location":"","start":{"date":null,"dateTime":"2026-09-10T16:00:00+02:00","timeZone":"Europe/Sarajevo"},"end":{"date":null,"dateTime":"2026-09-10T17:00:00+02:00","timeZone":"Europe/Sarajevo"},"source":null}`,
+			patch: buildGooglePatch("Standup", start, end, false, &sarajevo, "", "", "", "", true),
+			want:  `{"summary":"Standup","description":"","location":"","start":{"date":null,"dateTime":"2026-09-10T16:00:00+02:00","timeZone":"Europe/Sarajevo"},"end":{"date":null,"dateTime":"2026-09-10T17:00:00+02:00","timeZone":"Europe/Sarajevo"},"transparency":"opaque","source":null}`,
 		},
 		{
 			name:  "all-day sends a bare date, dateTime explicitly null and no zone at all",
-			patch: buildGooglePatch("Holiday", start, end, true, &sarajevo, "", "", "", ""),
-			want:  `{"summary":"Holiday","description":"","location":"","start":{"date":"2026-09-10","dateTime":null},"end":{"date":"2026-09-10","dateTime":null},"source":null}`,
+			patch: buildGooglePatch("Holiday", start, end, true, &sarajevo, "", "", "", "", true),
+			want:  `{"summary":"Holiday","description":"","location":"","start":{"date":"2026-09-10","dateTime":null},"end":{"date":"2026-09-10","dateTime":null},"transparency":"opaque","source":null}`,
 		},
 		{
 			// A Floating Event (ADR-0019) has no zone to round-trip through, so
 			// it travels as a "Z" instant with timeZone omitted entirely.
 			name:  "floating sends a Z instant with no timeZone key",
-			patch: buildGooglePatch("Floats", start, end, false, nil, "", "", "", ""),
-			want:  `{"summary":"Floats","description":"","location":"","start":{"date":null,"dateTime":"2026-09-10T14:00:00Z"},"end":{"date":null,"dateTime":"2026-09-10T15:00:00Z"},"source":null}`,
+			patch: buildGooglePatch("Floats", start, end, false, nil, "", "", "", "", true),
+			want:  `{"summary":"Floats","description":"","location":"","start":{"date":null,"dateTime":"2026-09-10T14:00:00Z"},"end":{"date":null,"dateTime":"2026-09-10T15:00:00Z"},"transparency":"opaque","source":null}`,
 		},
 		{
 			// The recurrence array is exactly the one RRULE line — never an
 			// EXDATE, which ADR-0078 forbids as a second representation of a
 			// cancellation Google already models as a cancelled instance.
 			name:  "recurring adds exactly one RRULE line",
-			patch: buildGooglePatch("Weekly", start, end, false, &sarajevo, "FREQ=WEEKLY", "", "", ""),
-			want:  `{"summary":"Weekly","description":"","location":"","start":{"date":null,"dateTime":"2026-09-10T16:00:00+02:00","timeZone":"Europe/Sarajevo"},"end":{"date":null,"dateTime":"2026-09-10T17:00:00+02:00","timeZone":"Europe/Sarajevo"},"recurrence":["RRULE:FREQ=WEEKLY"],"source":null}`,
+			patch: buildGooglePatch("Weekly", start, end, false, &sarajevo, "FREQ=WEEKLY", "", "", "", true),
+			want:  `{"summary":"Weekly","description":"","location":"","start":{"date":null,"dateTime":"2026-09-10T16:00:00+02:00","timeZone":"Europe/Sarajevo"},"end":{"date":null,"dateTime":"2026-09-10T17:00:00+02:00","timeZone":"Europe/Sarajevo"},"recurrence":["RRULE:FREQ=WEEKLY"],"transparency":"opaque","source":null}`,
 		},
 		{
 			name:  "an Event URL becomes a source object",
-			patch: buildGooglePatch("Linked", start, end, false, &sarajevo, "", "", "", "https://example.com/x"),
-			want:  `{"summary":"Linked","description":"","location":"","start":{"date":null,"dateTime":"2026-09-10T16:00:00+02:00","timeZone":"Europe/Sarajevo"},"end":{"date":null,"dateTime":"2026-09-10T17:00:00+02:00","timeZone":"Europe/Sarajevo"},"source":{"title":"Linked","url":"https://example.com/x"}}`,
+			patch: buildGooglePatch("Linked", start, end, false, &sarajevo, "", "", "", "https://example.com/x", true),
+			want:  `{"summary":"Linked","description":"","location":"","start":{"date":null,"dateTime":"2026-09-10T16:00:00+02:00","timeZone":"Europe/Sarajevo"},"end":{"date":null,"dateTime":"2026-09-10T17:00:00+02:00","timeZone":"Europe/Sarajevo"},"transparency":"opaque","source":{"title":"Linked","url":"https://example.com/x"}}`,
 		},
 		{
 			// Clearing Event URL is why Source is not omitempty: an absent key
 			// would read to Google as "leave whatever is there alone".
 			name:  "no Event URL sends source as an explicit null, not an absent key",
-			patch: buildGooglePatch("Bare", start, end, false, nil, "", "some notes", "a room", ""),
-			want:  `{"summary":"Bare","description":"some notes","location":"a room","start":{"date":null,"dateTime":"2026-09-10T14:00:00Z"},"end":{"date":null,"dateTime":"2026-09-10T15:00:00Z"},"source":null}`,
+			patch: buildGooglePatch("Bare", start, end, false, nil, "", "some notes", "a room", "", true),
+			want:  `{"summary":"Bare","description":"some notes","location":"a room","start":{"date":null,"dateTime":"2026-09-10T14:00:00Z"},"end":{"date":null,"dateTime":"2026-09-10T15:00:00Z"},"transparency":"opaque","source":null}`,
 		},
 	}
 

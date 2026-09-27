@@ -191,6 +191,71 @@ describe("EventModal — create", () => {
   });
 });
 
+// #319, ADR-0086: a timed create defaults to Busy, an all-day one to Free —
+// applied live as the form is filled in, until the User overrides it
+// directly in More options.
+describe("EventModal — Busy defaults on create (ADR-0086)", () => {
+  it("defaults a fresh timed create to Busy", async () => {
+    renderCreate();
+
+    await userEvent.type(screen.getByLabelText("Title"), "Standup");
+    await userEvent.click(saveButton());
+
+    expect(eventsApi.create).toHaveBeenCalledWith(
+      "token-123",
+      expect.objectContaining({ allDay: false, busy: true }),
+    );
+  });
+
+  it("defaults a fresh all-day create to Free", async () => {
+    renderCreate();
+
+    await userEvent.type(screen.getByLabelText("Title"), "Holiday");
+    await userEvent.click(screen.getByRole("checkbox", { name: /All day/ }));
+    await userEvent.click(saveButton());
+
+    expect(eventsApi.create).toHaveBeenCalledWith(
+      "token-123",
+      expect.objectContaining({ allDay: true, busy: false }),
+    );
+  });
+
+  it("flips the live default back to Busy when All day is unchecked again", async () => {
+    renderCreate();
+
+    await userEvent.type(screen.getByLabelText("Title"), "Holiday");
+    await userEvent.click(screen.getByRole("checkbox", { name: /All day/ }));
+    await userEvent.click(screen.getByRole("checkbox", { name: /All day/ }));
+    await userEvent.click(saveButton());
+
+    expect(eventsApi.create).toHaveBeenCalledWith(
+      "token-123",
+      expect.objectContaining({ allDay: false, busy: true }),
+    );
+  });
+
+  it("keeps an explicit Busy choice once the User touches it, even after All day is toggled again", async () => {
+    renderCreate();
+
+    await userEvent.type(screen.getByLabelText("Title"), "Holiday");
+    // Checking All day live-syncs Busy to Free.
+    await userEvent.click(screen.getByRole("checkbox", { name: /All day/ }));
+    await userEvent.click(screen.getByRole("button", { name: "More options" }));
+    // The User overrides it back to Busy directly.
+    await userEvent.click(screen.getByRole("checkbox", { name: /Show as busy/ }));
+    // Toggling All day off and back on again must not re-derive Busy now
+    // that the User has touched it.
+    await userEvent.click(screen.getByRole("checkbox", { name: /All day/ }));
+    await userEvent.click(screen.getByRole("checkbox", { name: /All day/ }));
+    await userEvent.click(saveButton());
+
+    expect(eventsApi.create).toHaveBeenCalledWith(
+      "token-123",
+      expect.objectContaining({ allDay: true, busy: true }),
+    );
+  });
+});
+
 describe("EventModal — creating a calendar from the empty state (#233)", () => {
   it("explains why Save is disabled while no Calendar is selected", async () => {
     seed([], []);
@@ -596,6 +661,58 @@ describe("EventModal — an Event crossing midnight (#231)", () => {
       }),
     );
     expect(onClose).toHaveBeenCalled();
+  });
+});
+
+// #319, ADR-0086
+describe("EventModal — editing Busy", () => {
+  it("preserves an existing Free Event's Busy on an unrelated edit", async () => {
+    const event = makeEvent({ busy: false });
+    renderEdit(event);
+
+    await userEvent.clear(screen.getByLabelText("Title"));
+    await userEvent.type(screen.getByLabelText("Title"), "Standup (renamed)");
+    await userEvent.click(saveButton());
+
+    expect(eventsApi.update).toHaveBeenCalledWith(
+      "token-123",
+      "evt-1",
+      expect.objectContaining({ busy: false }),
+    );
+  });
+
+  it("auto-expands More options when Busy departs from its all-day default (ADR-0056)", () => {
+    const event = makeEvent({ busy: false });
+    renderEdit(event);
+
+    expect(
+      screen.getByRole("checkbox", { name: /Show as busy/ }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "More options" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("does not auto-expand a timed Event that's already Busy, its own default", () => {
+    renderEdit(makeEvent({ busy: true }));
+
+    expect(
+      screen.queryByRole("checkbox", { name: /Show as busy/ }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("toggling Show as busy off and saving writes Free", async () => {
+    renderEdit(makeEvent({ busy: true }));
+
+    await userEvent.click(screen.getByRole("button", { name: "More options" }));
+    await userEvent.click(screen.getByRole("checkbox", { name: /Show as busy/ }));
+    await userEvent.click(saveButton());
+
+    expect(eventsApi.update).toHaveBeenCalledWith(
+      "token-123",
+      "evt-1",
+      expect.objectContaining({ busy: false }),
+    );
   });
 });
 

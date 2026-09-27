@@ -307,7 +307,7 @@ func (s *ConnectionService) sendWriteBackUpsert(ctx context.Context, msg reposit
 	// instance at Google (CANCEL_INSTANCE), and folding the same cancellations
 	// in here as EXDATE lines would double-represent them until the series
 	// drifts. buildGooglePatch's recurrence is the bare RRULE.
-	patch := buildGooglePatch(event.Title, event.Start, event.End, event.AllDay, event.Tzid, event.Rrule, event.Description, event.Location, event.URL)
+	patch := buildGooglePatch(event.Title, event.Start, event.End, event.AllDay, event.Tzid, event.Rrule, event.Description, event.Location, event.URL, event.Busy)
 	accessToken := wc.accessToken()
 
 	if isCreate {
@@ -487,7 +487,7 @@ func (s *ConnectionService) sendWriteBackInstance(ctx context.Context, msg repos
 
 	instanceID := instance.ID
 	etag := googleEtag(instance.ETag)
-	patch := buildGooglePatch(override.Title, override.Start, override.End, override.AllDay, override.Tzid, "", override.Description, override.Location, override.URL)
+	patch := buildGooglePatch(override.Title, override.Start, override.End, override.AllDay, override.Tzid, "", override.Description, override.Location, override.URL, override.Busy)
 
 	var updated googleEventJSON
 	for attempt := 1; ; attempt++ {

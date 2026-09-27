@@ -230,7 +230,7 @@ func classifyUpdate(existing repository.Event, write EventWrite) updateEffects {
 	if material {
 		newSequence++
 	}
-	contentChanged := material || existing.Title != write.Title || existing.Description != write.Description || existing.Location != write.Location || existing.URL != write.URL || !colorEqual(existing.Color, write.Color)
+	contentChanged := material || existing.Title != write.Title || existing.Description != write.Description || existing.Location != write.Location || existing.URL != write.URL || !colorEqual(existing.Color, write.Color) || existing.Busy != write.Busy
 
 	return updateEffects{
 		discardChildren: discardChildren,
@@ -495,6 +495,12 @@ type EventWrite struct {
 	Title        string
 	Start, End   time.Time
 	AllDay       bool
+	// Busy mirrors repository.Event.Busy — iCalendar's own TRANSP (ADR-0086).
+	// A newly created timed Event is Busy, an all-day one Free; the caller
+	// (the frontend's Event modal, or a decoded import/CalDAV/Google write)
+	// always supplies a concrete value — this service never re-derives it
+	// from AllDay itself.
+	Busy         bool
 	Rrule        string
 	ParentID     *string
 	RecurrenceID *time.Time
@@ -541,6 +547,7 @@ func (w EventWrite) fields() repository.EventFields {
 		Start:        w.Start,
 		End:          w.End,
 		AllDay:       w.AllDay,
+		Busy:         w.Busy,
 		Rrule:        w.Rrule,
 		ParentID:     w.ParentID,
 		RecurrenceID: w.RecurrenceID,

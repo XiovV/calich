@@ -134,7 +134,12 @@ type eventResponse struct {
 	// AllDay flags this Event as occupying whole dates rather than a time
 	// range — see ADR-0017 and CONTEXT.md's All-day Event.
 	AllDay bool   `json:"allDay,omitempty"`
-	Rrule  string `json:"rrule,omitempty"`
+	// Busy is iCalendar's own TRANSP (ADR-0086): whether this Event consumes
+	// the time it occupies. No omitempty — Free (false) is a meaningful,
+	// common value on an all-day Event, and omitting it would be
+	// indistinguishable from "absent".
+	Busy  bool   `json:"busy"`
+	Rrule string `json:"rrule,omitempty"`
 	// ParentID and RecurrenceID are present only on an Override — a standalone
 	// Event that replaces one Occurrence of its parent's series (ADR-0016).
 	ParentID     *string    `json:"parentId,omitempty"`
@@ -203,6 +208,7 @@ func toEventResponse(e repository.Event) eventResponse {
 		Start:          formatEventTime(e.Start, e.AllDay),
 		End:            formatEventTime(e.End, e.AllDay),
 		AllDay:         e.AllDay,
+		Busy:           e.Busy,
 		Rrule:          e.Rrule,
 		ParentID:       e.ParentID,
 		RecurrenceID:   e.RecurrenceID,
@@ -362,6 +368,14 @@ type createEventRequest struct {
 	Start        string     `json:"start"`
 	End          string     `json:"end"`
 	AllDay       bool       `json:"allDay,omitempty"`
+	// Busy mirrors eventResponse.Busy (ADR-0086) — the frontend always sends
+	// it explicitly, deciding the create-time default (Busy for a timed
+	// Event, Free for an all-day one) itself. A pointer so a caller that
+	// omits it entirely still gets RFC 5545's own OPAQUE default (resolved
+	// by resolveBusyRequest) rather than Go's zero-value false (Free) —
+	// unlike AllDay/Rrule, false is Busy's less common state, so it cannot
+	// double as "absent".
+	Busy         *bool      `json:"busy,omitempty"`
 	Rrule        string     `json:"rrule"`
 	ParentID     *string    `json:"parentId,omitempty"`
 	RecurrenceID *time.Time `json:"recurrenceId,omitempty"`
@@ -389,6 +403,17 @@ type createEventRequest struct {
 	AttendeeUserIds  []int64  `json:"attendeeUserIds,omitempty"`
 	AttendeeGroupIds []int64  `json:"attendeeGroupIds,omitempty"`
 	AttendeeEmails   []string `json:"attendeeEmails,omitempty"`
+}
+
+// resolveBusyRequest resolves a create/update request's optional Busy
+// pointer to a concrete value, defaulting to Busy — RFC 5545's own OPAQUE
+// default — when the caller omits it entirely (ADR-0086). Shared by Create
+// and Update, which carry the same field.
+func resolveBusyRequest(busy *bool) bool {
+	if busy != nil {
+		return *busy
+	}
+	return true
 }
 
 // parseEventTimes converts a decoded body's start/end strings into instants,
@@ -433,6 +458,7 @@ func (h *EventHandler) Create(w http.ResponseWriter, r *http.Request) {
 		Start:             start,
 		End:               end,
 		AllDay:            req.AllDay,
+		Busy:              resolveBusyRequest(req.Busy),
 		Rrule:             req.Rrule,
 		ParentID:          req.ParentID,
 		RecurrenceID:      req.RecurrenceID,
@@ -477,6 +503,8 @@ type updateEventRequest struct {
 	Start       string  `json:"start"`
 	End         string  `json:"end"`
 	AllDay      bool    `json:"allDay,omitempty"`
+	// Busy mirrors createEventRequest.Busy (ADR-0086).
+	Busy        *bool   `json:"busy,omitempty"`
 	Rrule       string  `json:"rrule"`
 	Tzid        *string `json:"tzid,omitempty"`
 	Description string  `json:"description,omitempty"`
@@ -511,6 +539,7 @@ func (h *EventHandler) Update(w http.ResponseWriter, r *http.Request) {
 		Start:       start,
 		End:         end,
 		AllDay:      req.AllDay,
+		Busy:        resolveBusyRequest(req.Busy),
 		Rrule:       req.Rrule,
 		Tzid:        req.Tzid,
 		Description: req.Description,

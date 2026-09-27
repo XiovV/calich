@@ -171,8 +171,10 @@ func TestSeriesToICal_CalDAVTarget_UnaffectedByInlineAmendment(t *testing.T) {
 // Attachments) CalDAV ETag to a literal hash: ADR-0041 explicitly promises
 // "CalDAV output is unchanged by this ADR — no ETags churn", unlike
 // ADR-0031's own VTIMEZONE rollout, which changed every ETag once on
-// purpose. If this test ever needs its literal updated, that is this
-// promise breaking and should be treated as a bug, not a rebase.
+// purpose. If this test ever needs its literal updated for a reason other
+// than a deliberate codec change to a *new* feature's own ADR — like
+// ADR-0086's TRANSP, which this literal was last bumped for — that is
+// ADR-0041's promise breaking and should be treated as a bug, not a rebase.
 func TestSeriesToICal_CalDAVTarget_ETagPinned(t *testing.T) {
 	master := repository.Event{
 		ID:        "evt-1",
@@ -191,7 +193,7 @@ func TestSeriesToICal_CalDAVTarget_ETagPinned(t *testing.T) {
 		t.Fatalf("CalendarETag: %v", err)
 	}
 
-	const wantETag = "e0eeb8bd28478e5cd2bbf3371973a746f3f017ad9b63453f764d2fa19696da82"
+	const wantETag = "1e985d8b7d5065192c408d12600f91dd6e4e66fa8f9d9d0d8bc059f9afdbe6a1"
 	if etag != wantETag {
 		t.Fatalf("ETag changed: got %s, want %s (ADR-0041 promises CalDAV output is unchanged)", etag, wantETag)
 	}

@@ -178,6 +178,7 @@ export const useEventsStore = create<EventsState>((set, get) => ({
           start: updated.start,
           end: updated.end,
           allDay: updated.allDay,
+          busy: updated.busy,
           rrule: updated.rrule,
           tzid: updated.tzid,
           description: updated.description,

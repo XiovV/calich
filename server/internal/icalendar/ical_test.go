@@ -301,6 +301,64 @@ func TestSeriesToICal_ColorOnOverrideOnly(t *testing.T) {
 	}
 }
 
+// TestSeriesToICal_Busy_EmitsTransp covers ADR-0086: TRANSP is emitted
+// unconditionally, OPAQUE for a Busy Event and TRANSPARENT for a Free one —
+// unlike COLOR, which is omitted when inherited, TRANSP always has a
+// concrete value to state.
+func TestSeriesToICal_Busy_EmitsTransp(t *testing.T) {
+	busy := repository.Event{
+		ID:        "evt-1",
+		Title:     "Standup",
+		Busy:      true,
+		Start:     time.Date(2026, 7, 1, 15, 0, 0, 0, time.UTC),
+		End:       time.Date(2026, 7, 1, 16, 0, 0, 0, time.UTC),
+		CreatedAt: time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC),
+	}
+	if !strings.Contains(mustEncode(t, busy, nil), "TRANSP:OPAQUE") {
+		t.Fatalf("expected TRANSP:OPAQUE for a Busy Event, got:\n%s", mustEncode(t, busy, nil))
+	}
+
+	free := busy
+	free.Busy = false
+	if !strings.Contains(mustEncode(t, free, nil), "TRANSP:TRANSPARENT") {
+		t.Fatalf("expected TRANSP:TRANSPARENT for a Free Event, got:\n%s", mustEncode(t, free, nil))
+	}
+}
+
+// TestSeriesToICal_Busy_IndependentOnOverride covers ADR-0086's "settable
+// independently on an Override" — a Free Override under a Busy Master emits
+// its own TRANSP:TRANSPARENT alongside the Master's TRANSP:OPAQUE.
+func TestSeriesToICal_Busy_IndependentOnOverride(t *testing.T) {
+	recurrenceID := time.Date(2026, 7, 8, 15, 0, 0, 0, time.UTC)
+	master := repository.Event{
+		ID:        "evt-1",
+		Title:     "Meeting",
+		Busy:      true,
+		Rrule:     "FREQ=WEEKLY",
+		Start:     time.Date(2026, 7, 1, 15, 0, 0, 0, time.UTC),
+		End:       time.Date(2026, 7, 1, 16, 0, 0, 0, time.UTC),
+		CreatedAt: time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC),
+	}
+	override := repository.Event{
+		ID:           "evt-1-override",
+		Title:        "Meeting",
+		Busy:         false,
+		RecurrenceID: &recurrenceID,
+		Start:        recurrenceID,
+		End:          recurrenceID.Add(time.Hour),
+		CreatedAt:    time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC),
+	}
+
+	body := mustEncode(t, master, []repository.Event{override})
+
+	if strings.Count(body, "TRANSP:OPAQUE") != 1 {
+		t.Fatalf("expected exactly one TRANSP:OPAQUE (the Master), got:\n%s", body)
+	}
+	if strings.Count(body, "TRANSP:TRANSPARENT") != 1 {
+		t.Fatalf("expected exactly one TRANSP:TRANSPARENT (the Override), got:\n%s", body)
+	}
+}
+
 func TestSeriesToICal_Reminders_SerializeAsValarm(t *testing.T) {
 	master := repository.Event{
 		ID:        "evt-1",
