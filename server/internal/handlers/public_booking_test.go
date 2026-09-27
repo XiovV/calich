@@ -361,3 +361,149 @@ func TestPublicBookingHandler_RateLimited(t *testing.T) {
 		t.Fatalf("expected the request past the ceiling to be rate limited, got %d", resp.StatusCode)
 	}
 }
+
+func (s *bookingLinkHandlerTestServer) postBook(t *testing.T, handle, slug string, body bookRequest) *http.Response {
+	t.Helper()
+	path := "/api/public/" + url.PathEscape(handle) + "/" + url.PathEscape(slug) + "/book"
+	return s.doNoWorkspace(t, http.MethodPost, path, "", body)
+}
+
+// firstBookableSlotHTTP reads a slot straight off the public Slots route —
+// exercising the same read path a real visitor's browser would, rather than
+// reaching into the service layer.
+func (s *bookingLinkHandlerTestServer) firstBookableSlotHTTP(t *testing.T, handle, slug string) time.Time {
+	t.Helper()
+
+	monday := nextWeekday(time.Now().UTC().AddDate(0, 0, 14), time.Monday)
+	resp := s.getPublicSlots(t, handle, slug, monday.Year(), int(monday.Month()))
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 fetching slots, got %d", resp.StatusCode)
+	}
+	var body publicSlotsResponse
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode slots response: %v", err)
+	}
+	if len(body.Slots) == 0 {
+		t.Fatalf("expected at least one bookable slot")
+	}
+	return body.Slots[0]
+}
+
+func TestPublicBookingHandler_Book_CreatesEventAndReturnsConfirmedTime(t *testing.T) {
+	s, _, handle, hostID, _, link := setUpPublicLinkFixture(t)
+	slot := s.firstBookableSlotHTTP(t, handle, link.Slug)
+
+	resp := s.postBook(t, handle, link.Slug, bookRequest{Start: slot, VisitorName: "Bob Visitor", VisitorEmail: "bob@example.com"})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("expected 201, got %d", resp.StatusCode)
+	}
+	var body bookingResponse
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode booking response: %v", err)
+	}
+	if !body.Start.Equal(slot) {
+		t.Fatalf("expected the confirmed start to match the requested slot %v, got %v", slot, body.Start)
+	}
+	if !body.End.Equal(slot.Add(time.Duration(link.DurationMinutes) * time.Minute)) {
+		t.Fatalf("expected the confirmed end to be start+duration, got %v", body.End)
+	}
+
+	events, err := s.graph.Events.List(t.Context(), hostID, nil, nil)
+	if err != nil {
+		t.Fatalf("list events: %v", err)
+	}
+	found := false
+	for _, e := range events {
+		if e.Start.Equal(slot) && e.Busy && e.Title == link.Title+" — Bob Visitor" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected a Busy event titled %q at %v, got %+v", link.Title+" — Bob Visitor", slot, events)
+	}
+}
+
+func TestPublicBookingHandler_Book_SecondRequestForSameSlotIsRefused(t *testing.T) {
+	s, _, handle, _, _, link := setUpPublicLinkFixture(t)
+	slot := s.firstBookableSlotHTTP(t, handle, link.Slug)
+
+	first := s.postBook(t, handle, link.Slug, bookRequest{Start: slot, VisitorName: "First Visitor", VisitorEmail: "first@example.com"})
+	first.Body.Close()
+	if first.StatusCode != http.StatusCreated {
+		t.Fatalf("expected the first booking to succeed with 201, got %d", first.StatusCode)
+	}
+
+	second := s.postBook(t, handle, link.Slug, bookRequest{Start: slot, VisitorName: "Second Visitor", VisitorEmail: "second@example.com"})
+	defer second.Body.Close()
+	if second.StatusCode != http.StatusConflict {
+		t.Fatalf("expected the raced second booking to be refused with 409, got %d", second.StatusCode)
+	}
+	var body map[string]any
+	if err := json.NewDecoder(second.Body).Decode(&body); err != nil {
+		t.Fatalf("decode error response: %v", err)
+	}
+	errBody, _ := body["error"].(map[string]any)
+	if errBody["code"] != "slot_taken" {
+		t.Fatalf("expected error code %q, got %v", "slot_taken", errBody["code"])
+	}
+}
+
+func TestPublicBookingHandler_Book_RequiresNameAndEmail(t *testing.T) {
+	s, _, handle, _, _, link := setUpPublicLinkFixture(t)
+	slot := s.firstBookableSlotHTTP(t, handle, link.Slug)
+
+	noName := s.postBook(t, handle, link.Slug, bookRequest{Start: slot, VisitorEmail: "bob@example.com"})
+	defer noName.Body.Close()
+	if noName.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400 for a missing name, got %d", noName.StatusCode)
+	}
+
+	badEmail := s.postBook(t, handle, link.Slug, bookRequest{Start: slot, VisitorName: "Bob", VisitorEmail: "not-an-email"})
+	defer badEmail.Body.Close()
+	if badEmail.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400 for a malformed email, got %d", badEmail.StatusCode)
+	}
+}
+
+func TestPublicBookingHandler_Book_RefusedWhenPaused(t *testing.T) {
+	s, token, handle, _, workspaceID, link := setUpPublicLinkFixture(t)
+	slot := s.firstBookableSlotHTTP(t, handle, link.Slug)
+
+	updateReq := bookingLinkWriteRequest{
+		Title: link.Title, Slug: link.Slug, DurationMinutes: link.DurationMinutes,
+		Visibility: "paused", AvailabilityScheduleID: link.AvailabilityScheduleID,
+		BookIntoCalendarID: link.BookIntoCalendarID, MinimumNoticeMinutes: 0, BookingHorizonDays: 90,
+		TasksInConflictSet: link.TasksInConflictSet,
+	}
+	updateResp := s.do(t, http.MethodPatch, "/api/booking-links/"+strconv.FormatInt(link.ID, 10), token, workspaceID, updateReq)
+	updateResp.Body.Close()
+	if updateResp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 pausing, got %d", updateResp.StatusCode)
+	}
+
+	resp := s.postBook(t, handle, link.Slug, bookRequest{Start: slot, VisitorName: "Bob", VisitorEmail: "bob@example.com"})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("expected 409 booking a Paused link, got %d", resp.StatusCode)
+	}
+	var body map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode error response: %v", err)
+	}
+	errBody, _ := body["error"].(map[string]any)
+	if errBody["code"] != "booking_link_paused" {
+		t.Fatalf("expected error code %q, got %v", "booking_link_paused", errBody["code"])
+	}
+}
+
+func TestPublicBookingHandler_Book_UnknownSlugReturns404(t *testing.T) {
+	s, _, handle, _, _, _ := setUpPublicLinkFixture(t)
+
+	resp := s.postBook(t, handle, "no-such-slug", bookRequest{Start: time.Now().Add(48 * time.Hour), VisitorName: "Bob", VisitorEmail: "bob@example.com"})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d", resp.StatusCode)
+	}
+}

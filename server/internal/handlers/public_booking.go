@@ -62,6 +62,22 @@ var publicBookingErrors = []errorCase{
 	{repository.ErrNotFound, notFound("booking link not found")},
 }
 
+// bookErrors is publicBookingErrors widened with Book's own sentinels
+// (#326, ADR-0087): a Paused link (in any of its three senses, ADR-0087),
+// a missing/malformed name or email (ErrEmailRequired/ErrEmailTooLong/
+// ErrInvalidEmail are service.validateEmail's own, shared with every other
+// login-identifier-shaped input in this app), and the slot race itself,
+// rendered as a 409 so the frontend can tell it apart from a plain 400 and
+// re-fetch slots rather than just re-showing the form.
+var bookErrors = alsoHandling(publicBookingErrors,
+	errorCase{service.ErrBookingLinkPaused, conflict("booking_link_paused", service.ErrBookingLinkPaused.Error())},
+	errorCase{service.ErrInvalidVisitorName, badRequest(service.ErrInvalidVisitorName.Error())},
+	errorCase{service.ErrEmailRequired, badRequest(service.ErrEmailRequired.Error())},
+	errorCase{service.ErrEmailTooLong, badRequest(service.ErrEmailTooLong.Error())},
+	errorCase{service.ErrInvalidEmail, badRequest(service.ErrInvalidEmail.Error())},
+	errorCase{service.ErrSlotTaken, conflict("slot_taken", service.ErrSlotTaken.Error())},
+)
+
 // checkRateLimit reports whether it already wrote a response (a 429),
 // mirroring respondError's own bool-return convention. Every route on this
 // handler calls it first, before doing any real work.
@@ -178,4 +194,49 @@ func (h *PublicBookingHandler) Slots(w http.ResponseWriter, r *http.Request) {
 	}
 
 	httpresponse.JSON(w, http.StatusOK, publicSlotsResponse{Slots: slots})
+}
+
+// bookRequest is Book's own body — the booking form's two required fields
+// (ADR-0087), plus the slot start the visitor picked from Slots' own
+// answer.
+type bookRequest struct {
+	Start        time.Time `json:"start"`
+	VisitorName  string    `json:"visitorName"`
+	VisitorEmail string    `json:"visitorEmail"`
+}
+
+type bookingResponse struct {
+	Start time.Time `json:"start"`
+	End   time.Time `json:"end"`
+}
+
+// Book serves POST /api/public/{handle}/{slug}/book: confirms req.Start
+// into a Busy Event on the Book-into Calendar (#326, ADR-0087). A slot
+// already taken by the time this commits — either by another visitor
+// racing the same one, or because it was never really bookable — answers
+// 409 slot_taken; the frontend re-fetches Slots and asks the visitor to
+// pick again.
+func (h *PublicBookingHandler) Book(w http.ResponseWriter, r *http.Request) {
+	if h.checkRateLimit(w, r) {
+		return
+	}
+
+	handle := chi.URLParam(r, "handle")
+	slug := chi.URLParam(r, "slug")
+
+	req, ok := decodeJSON[bookRequest](w, r)
+	if !ok {
+		return
+	}
+
+	event, err := h.public.Book(r.Context(), handle, slug, service.BookingRequest{
+		Start:        req.Start,
+		VisitorName:  req.VisitorName,
+		VisitorEmail: req.VisitorEmail,
+	}, time.Now())
+	if respondError(w, err, bookErrors, "failed to create booking") {
+		return
+	}
+
+	httpresponse.JSON(w, http.StatusCreated, bookingResponse{Start: event.Start, End: event.End})
 }

@@ -421,6 +421,11 @@ func New(logger *slog.Logger, authHandler *handlers.AuthHandler, calendarHandler
 		r.Route("/public", func(r chi.Router) {
 			r.Get("/{handle}/{slug}", publicBookingHandler.Get)
 			r.Get("/{handle}/{slug}/slots", publicBookingHandler.Slots)
+			// Book (#326, ADR-0087): the first public *write* — creates an
+			// Event, invites the visitor as an Attendee, and (SMTP permitting)
+			// queues their Invitation. Gated the same as the reads above:
+			// rate limiting only, enforced inside PublicBookingHandler itself.
+			r.Post("/{handle}/{slug}/book", publicBookingHandler.Book)
 
 			// The public index page (#325, ADR-0084): the derived rendering
 			// of an owner's Public Booking Links at /:handle, one path

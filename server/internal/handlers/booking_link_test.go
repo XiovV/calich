@@ -95,6 +95,7 @@ func newBookingLinkHandlerTestServerWithConfig(t *testing.T, cfg config.Config) 
 	r.Route("/api/public", func(r chi.Router) {
 		r.Get("/{handle}/{slug}", publicHandler.Get)
 		r.Get("/{handle}/{slug}/slots", publicHandler.Slots)
+		r.Post("/{handle}/{slug}/book", publicHandler.Book)
 		r.Get("/{handle}", publicHandler.Index)
 	})
 

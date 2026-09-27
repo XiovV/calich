@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"time"
 
@@ -46,13 +47,58 @@ func (s *BookingLinkService) DeriveSlotsForMonth(ctx context.Context, userID, wo
 // (id, userID, workspaceID) — can reuse the exact same derivation instead of
 // a second implementation that could drift from this one.
 func (s *BookingLinkService) DeriveSlotsForLinkAndMonth(ctx context.Context, link repository.BookingLink, year int, month time.Month, now time.Time) ([]time.Time, error) {
-	if month < 1 || month > 12 {
-		return nil, ErrInvalidMonth
-	}
-
 	schedule, err := s.schedules.GetByID(ctx, link.AvailabilityScheduleID, link.UserID)
 	if err != nil {
 		return nil, fmt.Errorf("get availability schedule: %w", err)
+	}
+	return s.deriveSlotsWith(ctx, s.eventRepo, s.taskRepo, schedule, link, year, month, now)
+}
+
+// SlotAvailable reports whether start is still exactly one of link's
+// bookable slots for the calendar month it falls in (in schedule's own
+// zone), re-derived through events/tasks rather than trusted from an
+// earlier read (#326, ADR-0087). tx, when non-nil, re-derives against that
+// transaction's own tx-bound Event/Task repositories — built here, from
+// BookingLinkService's own eventRepo/taskRepo fields, rather than handed in
+// by the caller — so Booking's write path (the one caller that passes one)
+// can run this check and the insert it guards against the same snapshot,
+// inside the very transaction its insert is about to run in, without
+// reaching into this service's internals to do it. Nil reuses the pooled
+// repositories instead, same as DeriveSlotsForLinkAndMonth. Reuses
+// deriveSlotsWith wholesale, the exact derivation /slots itself answers
+// with, so a booking can never be accepted by a rule its own listing
+// wouldn't have offered.
+func (s *BookingLinkService) SlotAvailable(ctx context.Context, tx *sql.Tx, schedule repository.AvailabilitySchedule, link repository.BookingLink, start, now time.Time) (bool, error) {
+	loc, err := time.LoadLocation(schedule.Tzid)
+	if err != nil {
+		return false, fmt.Errorf("load location %q: %w", schedule.Tzid, err)
+	}
+	local := start.In(loc)
+
+	events, tasks := s.eventRepo, s.taskRepo
+	if tx != nil {
+		events, tasks = events.WithTx(tx), tasks.WithTx(tx)
+	}
+
+	slots, err := s.deriveSlotsWith(ctx, events, tasks, schedule, link, local.Year(), local.Month(), now)
+	if err != nil {
+		return false, err
+	}
+	for _, slot := range slots {
+		if slot.Equal(start) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// deriveSlotsWith is DeriveSlotsForLinkAndMonth's and SlotAvailable's shared
+// body, taking the Event/Task repositories explicitly rather than reading
+// s.eventRepo/s.taskRepo directly — the seam that lets SlotAvailable hand it
+// tx-bound repositories instead of BookingLinkService's own pooled ones.
+func (s *BookingLinkService) deriveSlotsWith(ctx context.Context, events *repository.EventRepository, tasks *repository.TaskRepository, schedule repository.AvailabilitySchedule, link repository.BookingLink, year int, month time.Month, now time.Time) ([]time.Time, error) {
+	if month < 1 || month > 12 {
+		return nil, ErrInvalidMonth
 	}
 
 	loc, err := time.LoadLocation(schedule.Tzid)
@@ -71,7 +117,7 @@ func (s *BookingLinkService) DeriveSlotsForLinkAndMonth(ctx context.Context, lin
 	// — querying any narrower window could silently miss a Busy Occurrence
 	// derivation would otherwise have found.
 	horizonCutoff := now.AddDate(0, 0, link.BookingHorizonDays)
-	busy, err := s.buildBusyIntervals(ctx, link, now, horizonCutoff)
+	busy, err := s.buildBusyIntervals(ctx, events, tasks, link, now, horizonCutoff)
 	if err != nil {
 		return nil, err
 	}
@@ -108,16 +154,17 @@ func (s *BookingLinkService) DeriveSlotsForLinkAndMonth(ctx context.Context, lin
 // itself — neither ever closes a slot. All-day Events need no special case:
 // their Busy is read the same way a timed Event's is, and an all-day Event
 // simply defaults to Free (ADR-0086), so only an explicitly Busy one ever
-// contributes.
-func (s *BookingLinkService) buildBusyIntervals(ctx context.Context, link repository.BookingLink, from, to time.Time) ([]availability.BusyInterval, error) {
-	events, err := s.eventRepo.ListByCalendarIDs(ctx, link.ConflictCalendarIDs, &from, &to)
+// contributes. Takes events/tasks explicitly — deriveSlotsWith's own reason
+// for taking them, one layer up.
+func (s *BookingLinkService) buildBusyIntervals(ctx context.Context, events *repository.EventRepository, tasks *repository.TaskRepository, link repository.BookingLink, from, to time.Time) ([]availability.BusyInterval, error) {
+	rows, err := events.ListByCalendarIDs(ctx, link.ConflictCalendarIDs, &from, &to)
 	if err != nil {
 		return nil, fmt.Errorf("list conflict set events: %w", err)
 	}
 
 	overridesByParent := make(map[string][]repository.Event)
 	var masters []repository.Event
-	for _, e := range events {
+	for _, e := range rows {
 		if e.ParentID != nil {
 			overridesByParent[*e.ParentID] = append(overridesByParent[*e.ParentID], e)
 			continue
@@ -135,11 +182,11 @@ func (s *BookingLinkService) buildBusyIntervals(ctx context.Context, link reposi
 	}
 
 	if link.TasksInConflictSet {
-		tasks, err := s.taskRepo.ListIncomplete(ctx, link.UserID, link.WorkspaceID)
+		incomplete, err := tasks.ListIncomplete(ctx, link.UserID, link.WorkspaceID)
 		if err != nil {
 			return nil, fmt.Errorf("list incomplete tasks: %w", err)
 		}
-		for _, task := range tasks {
+		for _, task := range incomplete {
 			if task.Start == nil || task.DurationMinutes == nil {
 				continue
 			}

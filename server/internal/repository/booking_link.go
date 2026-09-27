@@ -156,9 +156,12 @@ func (r *BookingLinkRepository) GetByID(ctx context.Context, id, userID, workspa
 // GetBySlug resolves the Booking Link identified by (userID, slug) — an
 // exact-match lookup relying on the column's own COLLATE NOCASE for
 // case-insensitivity, the same as UserRepository.GetByHandle. Used by
-// BookingLinkService's slug-disambiguation loops (Duplicate); the public
-// router (#324) will use it too, scoped instead by (handle-resolved userID,
-// slug).
+// BookingLinkService's slug-disambiguation loops (Duplicate) and by the
+// public router (#324, #326), which resolves a Booking Link this way
+// instead of by id. ConflictCalendarIDs is attached the same way GetByID
+// attaches it — the public page's own slot derivation (#323) and Book's own
+// re-derivation (#326, ADR-0087) both depend on it being populated here,
+// not just on the authenticated GetByID/ListForUser paths.
 func (r *BookingLinkRepository) GetBySlug(ctx context.Context, userID int64, slug string) (BookingLink, error) {
 	row := r.db.QueryRowContext(ctx,
 		`SELECT `+bookingLinkColumns+` FROM booking_links WHERE user_id = ? AND slug = ?`,
@@ -171,6 +174,13 @@ func (r *BookingLinkRepository) GetBySlug(ctx context.Context, userID int64, slu
 		}
 		return BookingLink{}, fmt.Errorf("scan booking link: %w", err)
 	}
+
+	ids, err := r.listConflictCalendarIDs(ctx, []int64{link.ID})
+	if err != nil {
+		return BookingLink{}, err
+	}
+	link.ConflictCalendarIDs = ids[link.ID]
+
 	return link, nil
 }
 

@@ -2,11 +2,35 @@ package service
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/XiovV/calich/server/internal/repository"
+)
+
+var (
+	// ErrBookingLinkPaused is returned by Book when the link isn't accepting
+	// bookings right now — explicitly Paused, no SMTP configured, or the
+	// host has lost Owner/Editor Access to the Book-into Calendar since the
+	// link was last saved (ADR-0087) — collapsed into the one answer isPaused
+	// already renders for Get/Slots, so a stranger never learns which.
+	ErrBookingLinkPaused = errors.New("this booking link is not accepting bookings")
+	// ErrInvalidVisitorName is returned by Book when the visitor's name is
+	// empty — the booking form's only other required field besides email
+	// (ADR-0087).
+	ErrInvalidVisitorName = errors.New("name is required")
+	// ErrSlotTaken is returned by Book when start no longer names a
+	// bookable slot once re-derived inside the write transaction — either
+	// another visitor just took it, or it was never a real slot to begin
+	// with (stale client state, a slot past the booking horizon, ...). The
+	// caller re-fetches slots and tries again (ADR-0087's "the loser is
+	// told the time was just taken and shown fresh slots").
+	ErrSlotTaken = errors.New("that time was just taken")
 )
 
 // PublicBookingLink is what a stranger holding a Booking Link's URL is told
@@ -43,19 +67,27 @@ type PublicBookingService struct {
 	schedules    *repository.AvailabilityScheduleRepository
 	calendars    *CalendarService
 	bookingLinks *BookingLinkService
+	// events is Book's own write path (#326, ADR-0087) — EventService.Create
+	// already does everything a booking needs: an Access-checked write onto
+	// the Book-into Calendar, an email-shaped Attendee invite (and its
+	// Invitation, when outbox is configured), and — for a writable Linked
+	// Calendar — a queued Write-back push. Get and Slots above never touch
+	// it.
+	events *EventService
 	// smtpConfigured mirrors config.Config.SMTPConfigured() — publishing a
 	// Booking Link requires SMTP (ADR-0087), so every link behaves as
 	// Paused when this instance has none, regardless of what it's set to.
 	smtpConfigured bool
 }
 
-func NewPublicBookingService(users *repository.UserRepository, links *repository.BookingLinkRepository, schedules *repository.AvailabilityScheduleRepository, calendars *CalendarService, bookingLinks *BookingLinkService, smtpConfigured bool) *PublicBookingService {
+func NewPublicBookingService(users *repository.UserRepository, links *repository.BookingLinkRepository, schedules *repository.AvailabilityScheduleRepository, calendars *CalendarService, bookingLinks *BookingLinkService, events *EventService, smtpConfigured bool) *PublicBookingService {
 	return &PublicBookingService{
 		users:          users,
 		links:          links,
 		schedules:      schedules,
 		calendars:      calendars,
 		bookingLinks:   bookingLinks,
+		events:         events,
 		smtpConfigured: smtpConfigured,
 	}
 }
@@ -116,6 +148,115 @@ func (s *PublicBookingService) Slots(ctx context.Context, handle, slug string, y
 	}
 
 	return s.bookingLinks.DeriveSlotsForLinkAndMonth(ctx, link, year, month, now)
+}
+
+// BookingRequest is Book's input: the booking form's only two fields, both
+// required (ADR-0087), plus the slot the visitor picked from Slots' own
+// answer.
+type BookingRequest struct {
+	Start        time.Time
+	VisitorName  string
+	VisitorEmail string
+}
+
+// Book resolves (handle, slug) and confirms req.Start into a Busy Event on
+// the Book-into Calendar (#326, ADR-0087): the visitor becomes an
+// email-shaped Attendee (ADR-0058) and, once the write commits, receives the
+// ordinary Invitation (ADR-0059) — EventService.Create's own attendee-invite
+// path does both, unchanged. Access to the Book-into Calendar and SMTP are
+// re-checked here via isPaused, exactly as Get and Slots already do, rather
+// than trusted from whenever the link was last saved. The slot itself is
+// re-derived a second time, inside Create's own write transaction
+// (EventWrite.PreCommitCheck) — so a slot that was free when isPaused ran a
+// moment ago but is taken by the time this transaction actually opens is
+// still caught, and two visitors racing the same slot can never both win.
+func (s *PublicBookingService) Book(ctx context.Context, handle, slug string, req BookingRequest, now time.Time) (repository.Event, error) {
+	link, _, err := s.resolve(ctx, handle, slug)
+	if err != nil {
+		return repository.Event{}, err
+	}
+
+	paused, err := s.isPaused(ctx, link)
+	if err != nil {
+		return repository.Event{}, err
+	}
+	if paused {
+		return repository.Event{}, ErrBookingLinkPaused
+	}
+
+	name := strings.TrimSpace(req.VisitorName)
+	if name == "" {
+		return repository.Event{}, ErrInvalidVisitorName
+	}
+	email, err := validateEmail(req.VisitorEmail)
+	if err != nil {
+		return repository.Event{}, err
+	}
+
+	schedule, err := s.schedules.GetByID(ctx, link.AvailabilityScheduleID, link.UserID)
+	if err != nil {
+		return repository.Event{}, fmt.Errorf("get availability schedule: %w", err)
+	}
+
+	start := req.Start
+	end := start.Add(time.Duration(link.DurationMinutes) * time.Minute)
+	tzid := schedule.Tzid
+
+	write := EventWrite{
+		CalendarID:     link.BookIntoCalendarID,
+		Title:          bookingEventTitle(link.Title, name),
+		Start:          start,
+		End:            end,
+		Busy:           true,
+		Tzid:           &tzid,
+		Description:    link.Description,
+		Location:       link.Location,
+		AttendeeEmails: []string{email},
+		// A Linked Calendar is a legal Book-into target (ADR-0087) — Create's
+		// own guard otherwise refuses any Attendee on a Connection Source
+		// (ADR-0052); this is the one caller that opts back in, since the
+		// visitor's row stays local-only regardless (EventWrite's own doc
+		// comment on this field explains why that's still consistent with
+		// ADR-0052's reasoning).
+		AllowAttendeesOnConnectionSource: true,
+		// The slot re-derivation this method's own doc comment describes,
+		// run through BookingLinkService.SlotAvailable against tx-bound
+		// Event/Task repositories built from this very transaction's *sql.Tx
+		// — never s.bookingLinks' own pooled ones, which would read outside
+		// it and reopen the race this exists to close.
+		PreCommitCheck: func(ctx context.Context, tx *sql.Tx) error {
+			available, err := s.bookingLinks.SlotAvailable(ctx, tx, schedule, link, start, now)
+			if err != nil {
+				return fmt.Errorf("re-derive slot: %w", err)
+			}
+			if !available {
+				return ErrSlotTaken
+			}
+			return nil
+		},
+	}
+
+	event, err := s.events.Create(ctx, link.UserID, uuid.NewString(), write)
+	if err != nil {
+		if errors.Is(err, ErrSlotTaken) {
+			return repository.Event{}, ErrSlotTaken
+		}
+		if errors.Is(err, ErrCalendarNotFound) || errors.Is(err, ErrCalendarReadOnly) {
+			// The host lost Access to the Book-into Calendar (or it stopped
+			// resolving) between isPaused's own check above and this write
+			// landing — rare, but answered exactly as isPaused already
+			// would have (ADR-0087).
+			return repository.Event{}, ErrBookingLinkPaused
+		}
+		return repository.Event{}, fmt.Errorf("create booking event: %w", err)
+	}
+	return event, nil
+}
+
+// bookingEventTitle is a booking's Event title (ADR-0087's Decision:
+// `title = "<link title> — <visitor name>"`).
+func bookingEventTitle(linkTitle, visitorName string) string {
+	return linkTitle + " — " + visitorName
 }
 
 // resolve looks up the Booking Link identified by (handle, slug), collapsing

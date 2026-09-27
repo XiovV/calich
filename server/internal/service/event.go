@@ -462,7 +462,20 @@ type txRepos struct {
 // commits or rolls back atomically. Reads and validation belong outside fn,
 // before withTx is called (ADR-0018).
 func (s *EventService) withTx(ctx context.Context, fn func(repos txRepos) error) error {
+	return s.withTxChecked(ctx, nil, fn)
+}
+
+// withTxChecked is withTx's own body, widened with an optional preCheck that
+// runs first, inside the transaction, before fn (and before repos are even
+// built) — Create's EventWrite.PreCommitCheck's seam. withTx above is just
+// this with preCheck nil, which every caller but Create is.
+func (s *EventService) withTxChecked(ctx context.Context, preCheck func(ctx context.Context, tx *sql.Tx) error, fn func(repos txRepos) error) error {
 	return repository.WithTx(ctx, s.db, func(tx *sql.Tx) error {
+		if preCheck != nil {
+			if err := preCheck(ctx, tx); err != nil {
+				return err
+			}
+		}
 		repos := txRepos{
 			events:            s.events.WithTx(tx),
 			exceptions:        s.exceptions.WithTx(tx),
@@ -529,6 +542,17 @@ type EventWrite struct {
 	AttendeeUserIDs  []int64
 	AttendeeGroupIDs []int64
 	AttendeeEmails   []string
+	// AllowAttendeesOnConnectionSource narrows Create's own "no Attendees on
+	// a Connection Source" guard (ADR-0052) for exactly one caller: a
+	// Booking Link's write (#326, ADR-0087), whose Book-into Calendar is a
+	// legal Book-into target even when it's a writable Linked Calendar. The
+	// visitor's Attendee row stays local-only, same as ADR-0052 already
+	// requires — nothing here mirrors it to the Provider — so it doesn't
+	// reopen the guard's own reasoning (a Linked Calendar's Events carry no
+	// Attendees this app pushes upstream); it only lets that local row and
+	// the Event's own ordinary Write-back coexist, which the guard's blanket
+	// refusal had no way to express. False (refused) on every other Create.
+	AllowAttendeesOnConnectionSource bool
 	// CopyRemindersFrom, when set, copies every User's Reminder rows from
 	// that Event onto the one Create mints, inside the same transaction
 	// (ADR-0064): ParentID for a fresh Override (its Master's Reminder set),
@@ -536,6 +560,14 @@ type EventWrite struct {
 	// so a User whose Reminder applied to the old row's future Occurrences
 	// doesn't silently lose it. Nil on every other Create.
 	CopyRemindersFrom *string
+	// PreCommitCheck, when set, runs first inside Create's own write
+	// transaction — before the Event row is even inserted — and aborts the
+	// whole write (rolling back cleanly) if it returns an error. A Booking
+	// Link's public write (#326, ADR-0087) is the only caller: it re-derives
+	// its slot here, against tx-bound repositories it builds from the *sql.Tx
+	// itself, so two visitors racing the same slot can never both win — the
+	// loser's transaction simply never inserts. Nil on every other Create.
+	PreCommitCheck func(ctx context.Context, tx *sql.Tx) error
 }
 
 // fields projects the write onto the columns the repository stores, dropping
@@ -599,15 +631,17 @@ func (s *EventService) Create(ctx context.Context, userID int64, id string, writ
 	// Creating an Event on a writable Linked Calendar is allowed (#292,
 	// ADR-0077): a plain Master queues an events.insert (POST), an Override —
 	// "This event" editing an as-yet-unmodified Occurrence (#293, ADR-0078) —
-	// queues an instance PATCH keyed on the Master's local id. Only an
-	// Attendee is still refused: a Linked Calendar's Events carry none this
-	// app mirrors to the Provider (ADR-0052). A read-only Connection Source is
-	// already refused above (requireWritableCalendar's Access clamp), same as
-	// a Subscription's.
+	// queues an instance PATCH keyed on the Master's local id. An Attendee is
+	// otherwise still refused: a Linked Calendar's Events carry none this app
+	// mirrors to the Provider (ADR-0052) — except a Booking Link's own write,
+	// which sets AllowAttendeesOnConnectionSource (#326, ADR-0087). A
+	// read-only Connection Source is already refused above
+	// (requireWritableCalendar's Access clamp), same as a Subscription's.
 	enqueueCreateWriteBack := false
 	enqueueInstanceWriteBack := false
 	if isConnectionSource(calendar) {
-		if len(write.AttendeeUserIDs) > 0 || len(write.AttendeeGroupIDs) > 0 || len(write.AttendeeEmails) > 0 {
+		hasAttendees := len(write.AttendeeUserIDs) > 0 || len(write.AttendeeGroupIDs) > 0 || len(write.AttendeeEmails) > 0
+		if hasAttendees && !write.AllowAttendeesOnConnectionSource {
 			return repository.Event{}, ErrLinkedCalendarWriteUnsupported
 		}
 		if err := s.requireLiveConnection(ctx, calendar); err != nil {
@@ -636,7 +670,7 @@ func (s *EventService) Create(ctx context.Context, userID int64, id string, writ
 	workspaceID := calendar.WorkspaceID
 
 	var event repository.Event
-	err = s.withTx(ctx, func(repos txRepos) error {
+	err = s.withTxChecked(ctx, write.PreCommitCheck, func(repos txRepos) error {
 		seq, err := repos.sync.NextChangeSeq(ctx)
 		if err != nil {
 			return err

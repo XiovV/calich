@@ -262,11 +262,6 @@ func NewGraph(sqlDB *sql.DB, cfg config.Config, opts ...GraphOption) (*Graph, er
 	// ADR-0082), so it's built after.
 	g.CalendarSets = NewCalendarSetService(g.CalendarSetRepo, g.Calendars)
 	g.Auth = NewAuthService(sqlDB, g.UserRepo, g.SessionRepo, g.Workspaces, g.WorkspaceInviteRepo, g.Calendars, g.AttendeeRepo, g.JWTSecret, cfg.InitialName, cfg.InitialEmail, cfg.InitialPassword, cfg.EnableSignups)
-	// BookingLinks needs Calendars for its own Access checks and Auth for the
-	// Handle auto-claim (#322, ADR-0084), so it's built after both.
-	g.BookingLinks = NewBookingLinkService(sqlDB, g.BookingLinkRepo, g.CalendarRepo, g.Calendars, g.AvailabilityScheduleRepo, g.EventRepo, g.TaskRepo, g.Auth)
-	g.PublicBookings = NewPublicBookingService(g.UserRepo, g.BookingLinkRepo, g.AvailabilityScheduleRepo, g.Calendars, g.BookingLinks, cfg.SMTPConfigured())
-	g.PublicIndex = NewPublicIndexService(g.UserRepo, g.BookingLinkRepo, g.PublicBookings)
 	// mailOutbox is nil on a deployment with no SMTP transport configured
 	// (ADR-0059, ADR-0060): with nothing able to send an Invitation there is
 	// nothing to queue one into, and EventService's mail-enqueue call sites
@@ -278,6 +273,13 @@ func NewGraph(sqlDB *sql.DB, cfg config.Config, opts ...GraphOption) (*Graph, er
 		mailOutbox = g.OutboxRepo
 	}
 	g.Events = NewEventService(sqlDB, g.EventRepo, g.EventExceptionRepo, g.EventReminderRepo, g.DefaultReminderRepo, g.ExplicitReminderRepo, g.SyncRepo, g.Calendars, g.UserRepo, g.AttachmentRepo, g.AttendeeRepo, g.WorkspaceRepo, g.GroupRepo, g.NotificationRepo, mailOutbox, g.OutboxRepo, g.ConnectionRepo, cfg.InviteRateLimitPerHour)
+	// BookingLinks needs Calendars for its own Access checks and Auth for the
+	// Handle auto-claim (#322, ADR-0084), so it's built after both.
+	g.BookingLinks = NewBookingLinkService(sqlDB, g.BookingLinkRepo, g.CalendarRepo, g.Calendars, g.AvailabilityScheduleRepo, g.EventRepo, g.TaskRepo, g.Auth)
+	// PublicBookings' own write path (Book, #326) needs Events built first —
+	// EventService.Create is where a confirmed booking is actually written.
+	g.PublicBookings = NewPublicBookingService(g.UserRepo, g.BookingLinkRepo, g.AvailabilityScheduleRepo, g.Calendars, g.BookingLinks, g.Events, cfg.SMTPConfigured())
+	g.PublicIndex = NewPublicIndexService(g.UserRepo, g.BookingLinkRepo, g.PublicBookings)
 	g.Attachments = NewAttachmentService(g.AttachmentRepo, g.EventRepo, g.Calendars, g.Events, g.AttachmentStore, cfg.MaxAttachmentsPerEvent)
 	g.Accounts = NewAccountService(sqlDB, g.UserRepo, g.SessionRepo, g.CalendarRepo, g.ShareRepo, g.WorkspaceRepo, g.BookingLinkRepo, g.Workspaces)
 	g.AppPasswords = NewAppPasswordService(g.AppPasswordRepo, g.UserRepo)
