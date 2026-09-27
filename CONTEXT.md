@@ -37,7 +37,7 @@ The single optional link on an Event pointing at more information about it — a
 _Avoid_: link, event link, web link, conference link (that is a different thing this app does not have), attachment URL
 
 **Event**:
-The stored, saved unit — a titled time block belonging to a single Calendar, with a start, an end, an optional Recurrence rule, and an optional Event color. Carries no Reminders of its own: those belong to each User who can see it, not to it. Its start/end define the first occurrence and the duration every Occurrence inherits. A non-recurring Event is a series of one. Distinct from the Occurrences it produces on the grid.
+The stored, saved unit — a titled time block belonging to a single Calendar, with a start, an end, a Busy value, an optional Recurrence rule, and an optional Event color. Carries no Reminders of its own: those belong to each User who can see it, not to it. Its start/end define the first occurrence and the duration every Occurrence inherits. A non-recurring Event is a series of one. Distinct from the Occurrences it produces on the grid.
 _Avoid_: appointment, meeting, entry
 
 **Recurrence rule**:
@@ -164,7 +164,7 @@ Whether times are rendered as 12-hour or 24-hour, applied wherever this app form
 _Avoid_: clock format, hour format, locale (this is one axis of a locale, not a locale)
 
 **Working hours**:
-The daily time range (minute-of-day precision) a User treats as their working day, shading the time outside it in Day and Week view. A visual hint only: every hour of the day stays rendered, live, and clickable, and no Occurrence is ever hidden, clipped, or scrolled out of reach by it. Absent by default, in which case nothing is shaded. Carries no availability meaning — it does not affect free/busy, scheduling, or Reminders. See ADR-0039.
+The daily time range (minute-of-day precision) a User treats as their working day, shading the time outside it in Day and Week view. A visual hint only: every hour of the day stays rendered, live, and clickable, and no Occurrence is ever hidden, clipped, or scrolled out of reach by it. Absent by default, in which case nothing is shaded. Carries no availability meaning — it does not affect free/busy, scheduling, or Reminders. Still carries none now that Booking Links exist: an Availability Schedule is seeded from it once, at that User's first one, and is a separate object from that moment on (ADR-0085). See ADR-0039.
 _Avoid_: business hours, office hours, availability, day bounds
 
 ## Authentication
@@ -244,7 +244,7 @@ The User who created an Event — its iCalendar `ORGANIZER` counterpart to `ATTE
 _Avoid_: creator, owner (that's the Calendar's), host, chair
 
 **Attendee**:
-A party invited to one specific Event, independent of any Calendar Access — the invite itself is the visibility grant, scoped to that Event alone. Identified either by a User or, when no account here matches, by a bare email address. There is deliberately **no separate term for the second kind**: the Invitation, the Response set and the `ATTENDEE` line are identical either way, and all that differs is whether this instance happens to hold an account for them. An address is resolved against the Members of the Event's own Workspace when the invite is written, and an outstanding email-shaped Attendee converts to its User if that address later joins the Workspace — a fallback we wrote because we couldn't find their account has no reason to outlive the account appearing. May be invited individually, by typing an address, or via a Group (expanded to its current members at invite time into individual Attendee rows, since a response has to survive later Group membership changes rather than tracking membership dynamically the way a Group Share does); a Group never contains an outside address. Only a User-backed Attendee receives Notifications and may set Reminders here — an emailed one is reminded by their own calendar client, which holds the Invitation. Still not mirrored onto a Linked Calendar, now because a Refresh-written Attendee must be provably incapable of generating an Invitation and that guarantee isn't built. See ADR-0046, ADR-0052, ADR-0058, ADR-0059.
+A party invited to one specific Event, independent of any Calendar Access — the invite itself is the visibility grant, scoped to that Event alone. Identified either by a User or, when no account here matches, by a bare email address. There is deliberately **no separate term for the second kind**: the Invitation, the Response set and the `ATTENDEE` line are identical either way, and all that differs is whether this instance happens to hold an account for them. An address is resolved against the Members of the Event's own Workspace when the invite is written, and an outstanding email-shaped Attendee converts to its User if that address later joins the Workspace — a fallback we wrote because we couldn't find their account has no reason to outlive the account appearing. May be invited individually, by typing an address, or via a Group (expanded to its current members at invite time into individual Attendee rows, since a response has to survive later Group membership changes rather than tracking membership dynamically the way a Group Share does); a Group never contains an outside address. Only a User-backed Attendee receives Notifications and may set Reminders here — an emailed one is reminded by their own calendar client, which holds the Invitation. Still not mirrored onto a Linked Calendar, now because a Refresh-written Attendee must be provably incapable of generating an Invitation and that guarantee isn't built. A visitor who books a Booking Link becomes one of the email-shaped kind, with no account here and no Access to anything (ADR-0087). See ADR-0046, ADR-0052, ADR-0058, ADR-0059.
 _Avoid_: invitee, guest, external attendee (as a term — say "an Attendee who isn't a Member" in prose), participant
 
 **Response**:
@@ -368,7 +368,7 @@ When a Task is due, held as its `VTODO` `DUE`. Absent by default. The *only* thi
 _Avoid_: due date (it may carry a time), due, target date
 
 **Time block**:
-The window a User has scheduled to work on a Task, held as its `VTODO` `DTSTART` plus a duration — never as `DUE`, which RFC 5545 makes mutually exclusive with `DURATION` and which means a deadline rather than an end. What a Task dragged onto the grid acquires, and what it renders as there, drawn in its Task List's color. Absent by default, and absent again if the block is dragged back off. Not an Event and not backed by one, but shares the grid with Occurrences and so competes with them for horizontal space in overlap layout (ADR-0004). See ADR-0083.
+The window a User has scheduled to work on a Task, held as its `VTODO` `DTSTART` plus a duration — never as `DUE`, which RFC 5545 makes mutually exclusive with `DURATION` and which means a deadline rather than an end. What a Task dragged onto the grid acquires, and what it renders as there, drawn in its Task List's color. Absent by default, and absent again if the block is dragged back off. Not an Event and not backed by one, but shares the grid with Occurrences and so competes with them for horizontal space in overlap layout (ADR-0004). The one place a Task reaches a stranger: while it is incomplete and its owner's Booking Link has Tasks in its Conflict set, a Time block removes that window from the link's slots exactly as a Busy Event does, revealing when its owner is unavailable but never what the Task is (ADR-0087). See ADR-0083.
 _Avoid_: scheduled time, work block, task event, block (too general)
 
 **Task bucket**:
@@ -394,6 +394,42 @@ The right-hand panel holding a User's Tasks, toggled from the top bar and closed
 _Avoid_: task sidebar (Sidebar is the left one), todo panel, right sidebar, drawer
 
 There is deliberately **no Reminder on a Task.** A Reminder belongs to one User on one Event, is resolved server-side against per-Calendar Default reminders, and is served per-principal over CalDAV (ADR-0020, ADR-0064) — extending all of that to a second entity is a feature rather than a field, and a second parallel reminder path would have to be merged back into the first. A Deadline therefore notifies nobody in this cut. Subtasks (`RELATED-TO`), tags (`CATEGORIES`), Attachments and Location are unmodelled on the same terms: cheap to add later, not free to add badly now.
+
+## Booking
+
+**Booking Link**:
+A published way to be booked — one named, slug-addressed offer belonging to one User within one Workspace, carrying a Duration, a Visibility, an Availability Schedule, a Conflict set, a Book-into Calendar, a Location, a Description, a minimum notice and a booking horizon. The only stored entity in this section: everything a visitor sees is derived from one, and nothing else in the feature has a row of its own. Scoped `(User, Workspace)` on the same terms as a Task List, so it appears in the sidebar only while that Workspace is active and dies with the membership that gave it a Calendar to write into. Its Duration is also its slot increment — slots tile from the start of each of its Schedule's ranges, and there is deliberately no second increment to configure. See ADR-0084, ADR-0087.
+_Avoid_: booking type, event type (Calendly's word, and it is not an Event), meeting type, booking page (that is the derived index), link (too general)
+
+**Handle**:
+The public name one User is addressed by — unique instance-wide and case-insensitive on the same terms as Email, but unlike Email safe to show a stranger, which is the whole reason it exists. Absent until that User creates their first Booking Link, at which point they claim one, suggested from their Email's local part. Occupies the URL root: `/:handle` is that User's index and `/:handle/:slug` is one Booking Link, so a Handle may not be any word the app already routes on. Changing it breaks every URL published under the old one, deliberately and with nothing forwarding. See ADR-0084.
+_Avoid_: username (it authenticates nothing), slug (that is the Booking Link's), vanity URL, profile name
+
+**Slug**:
+The path segment naming one Booking Link under its owner's Handle, unique per User rather than instance-wide, so two people may both publish `intro-call`. Editable after publishing, carrying the same consequence a Handle change does: the old URL dies and nothing forwards, because keeping it alive means keeping a history of every slug either ever had. See ADR-0084.
+_Avoid_: path, permalink, alias, handle (that is the User's)
+
+**Visibility**:
+Whether and how a Booking Link can be reached — **Public** (listed on its owner's index and bookable), **Private** (absent from the index but bookable by anyone holding the URL), or **Paused** (absent from the index and refusing bookings, its URL saying so). One field of three values rather than a listed flag beside an enabled flag, because listed-but-refusing is a state nobody wants and would have to be explained every time it rendered. Answers a different question from Access, which governs the host's own Calendars and has no bearing on a stranger. A link behaves as Paused whatever its Visibility says when this instance has no SMTP configured, or when its owner has lost Owner or Editor Access to its Book-into Calendar. See ADR-0087.
+_Avoid_: status, state, published, privacy, listed
+
+**Availability Schedule**:
+A named weekly pattern of time ranges belonging to one User, carrying its own IANA timezone, from which a Booking Link's slots are derived before anything is subtracted from them. Reusable — several Booking Links may share one. Its zone is an Anchor zone in everything but name: "9–17 Europe/Sarajevo" means those hours across a DST change and does not move when its owner opens a laptop in another country. Exactly one is auto-created per User, named **Default** and seeded once from that User's Working hours Preference; the two are separate objects from that moment on, and editing the Preference never reaches the Schedule. Deliberately not the Preference itself, which stays a visual hint carrying no availability meaning. See ADR-0085.
+_Avoid_: working hours (that is the Preference, and confusing the two is the mistake this term exists to prevent), availability, hours, schedule (too general)
+
+**Busy**:
+Whether an Event consumes the time it occupies — **Busy** or **Free**, held as iCalendar's `TRANSP` (`OPAQUE` / `TRANSPARENT`) so it round-trips CalDAV and a Provider unchanged. Only a Busy Event removes a slot from a Booking Link. A timed Event defaults to Busy, matching RFC 5545; an **all-day Event defaults to Free**, deliberately departing from it, because holidays, birthdays and "launch week" are all all-day, and one subscribed holiday feed would otherwise close whole days its User never considered. Set on a Master and independently on an Override, so one Occurrence of a series may differ from the rest without becoming an Exception. Lives behind More options in the Event modal (ADR-0056). Means nothing for a Task, which has no Calendar and is never shown to a stranger. See ADR-0086.
+_Avoid_: transparency, free/busy (that is the derivation, not this field), availability, opaque, blocking
+
+**Conflict set**:
+The Calendars one Booking Link consults when deriving its availability, plus a single row standing for its owner's Tasks. Stored per Booking Link and seeded from every Calendar that User owns in that Workspace, with the Book-into Calendar permanently in it and unremovable — a link that did not check what it writes into would double-book on its second visitor. Deliberately independent of Calendar toggle, the Active Calendar Set and Exposure: what a stranger may book must never depend on what the host happens to be looking at today. With its Tasks row checked, an incomplete Task's Time block removes a slot exactly as a Busy Event does; a Deadline never does, and neither does a completed Task. See ADR-0087.
+_Avoid_: check set, calendars, sources, busy calendars, filter
+
+There is deliberately **no term for a Booking Page.** The index at `/:handle` is a rendering of one User's Public Booking Links and nothing else — no row, no title, no description, no settings, nothing to create or delete — computed in exactly the sense an Occurrence and a Task bucket are. It unions across every Workspace its owner belongs to, because a visitor has no Session and therefore no Active Workspace, and because the page is about the person rather than any organization they happen to be in. UI copy may still read "booking page"; that is a label, not a term.
+
+There is deliberately **no term for a Booking.** A confirmed booking produces an ordinary Event on the Book-into Calendar — Busy, Organizer the host, with the visitor as an email-shaped Attendee (ADR-0058) receiving the ordinary Invitation (ADR-0059). No second entity records it, so cancelling one is deleting an Event and there is nothing to keep reconciled against anything. The visitor cancels through a signed link in their confirmation mail, which deletes that Event, emits the `METHOD:CANCEL` the Attendee machinery already sends, and emails the host — it raises no Notification, the three producers in that entry staying three. See ADR-0087.
+
+Deliberately unmodelled, on the same terms as recurring Tasks: buffers before and after a booking, daily caps, reschedule (cancel and rebook says the same thing with half the surface), round-robin and group links, custom questions on the booking form, and recurring bookings. A Booking Link also derives against whatever a Linked Calendar's last Refresh brought in, so a conflict created at a Provider minutes ago may go unseen — accepted knowingly rather than putting a Provider's latency and outages on a stranger's critical path.
 
 ## Deployment
 

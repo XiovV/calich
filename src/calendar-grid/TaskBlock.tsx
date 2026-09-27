@@ -1,3 +1,4 @@
+import { format } from "date-fns";
 import { getCalendarBlockStyle } from "../lib/calendarColors";
 import { columnLayoutToBox } from "../lib/eventBlockGeometry";
 import { durationToHeight, timeToY } from "../lib/gridTime";
@@ -5,6 +6,7 @@ import { taskTimeBlockEnd } from "../lib/taskTimeBlockSegments";
 import type { TaskList } from "../lib/taskListsApi";
 import type { Task } from "../lib/tasksApi";
 import { useTasksStore } from "../lib/tasksStore";
+import { useTimePattern } from "../hooks/useTimePattern";
 import { TaskCompletionControl } from "../components/layout/TaskCompletionControl";
 import type { EventDragKind } from "./EventBlock";
 import { GRID_Z_OCCURRENCE_EDGE } from "./gridStacking";
@@ -49,16 +51,18 @@ export function TaskBlock({
 }: TaskBlockProps) {
   const setTaskCompleted = useTasksStore((state) => state.setTaskCompleted);
   const blockStyle = getCalendarBlockStyle(taskList);
+  const timePattern = useTimePattern();
   const top = timeToY(segmentStart, pixelsPerHour);
   const height = durationToHeight(segmentStart, segmentEnd, pixelsPerHour);
   const { left, width } = columnLayoutToBox(column, columnCount);
+  const taskEnd = taskTimeBlockEnd(task);
 
   // A Task's block is never expected to cross midnight in practice, but the
   // guard costs nothing and keeps this exactly in step with EventBlock's own
   // rule: only the segment that actually carries the block's true start (or
   // end) gets that edge's resize handle.
   const showResizeStart = segmentStart.getTime() === (task.start as Date).getTime();
-  const showResizeEnd = segmentEnd.getTime() === taskTimeBlockEnd(task).getTime();
+  const showResizeEnd = segmentEnd.getTime() === taskEnd.getTime();
 
   function handleEdgeMouseDown(domEvent: React.MouseEvent, kind: "resize-start" | "resize-end") {
     domEvent.stopPropagation();
@@ -76,9 +80,8 @@ export function TaskBlock({
         height: `${height}px`,
         left: `${left}%`,
         width: `calc(${width}% - 2px)`,
-        ...blockStyle,
       }}
-      className="absolute flex cursor-pointer items-center gap-1 overflow-hidden rounded-shell-sm px-1 text-label-sm"
+      className="absolute cursor-pointer overflow-hidden rounded-shell-sm"
     >
       {showResizeStart && (
         <div
@@ -87,25 +90,37 @@ export function TaskBlock({
           style={{ zIndex: GRID_Z_OCCURRENCE_EDGE }}
         />
       )}
-      <span
-        // Stops the completion control's own mousedown/click from bubbling
-        // into the block's own drag-to-move gesture — the same guard
-        // EventBlock's resize handles use to keep two gestures on one block
-        // from colliding.
-        onMouseDown={(event) => event.stopPropagation()}
-        onClick={(event) => event.stopPropagation()}
-      >
-        <TaskCompletionControl
-          checked={task.completed}
-          onCheckedChange={(checked) => {
-            void setTaskCompleted(task.id, checked);
-          }}
-          aria-label={task.completed ? `Mark "${task.title}" incomplete` : `Mark "${task.title}" complete`}
-        />
-      </span>
-      <span className={`truncate ${task.completed ? "line-through opacity-70" : ""}`}>
-        {task.title}
-      </span>
+      <div style={blockStyle} className="h-full w-full px-1.5 py-1 text-left text-label-sm">
+        <div className="flex items-center gap-1">
+          <span
+            // Stops the completion control's own mousedown/click from bubbling
+            // into the block's own drag-to-move gesture — the same guard
+            // EventBlock's resize handles use to keep two gestures on one block
+            // from colliding.
+            onMouseDown={(event) => event.stopPropagation()}
+            onClick={(event) => event.stopPropagation()}
+            className="shrink-0"
+          >
+            <TaskCompletionControl
+              checked={task.completed}
+              onCheckedChange={(checked) => {
+                void setTaskCompleted(task.id, checked);
+              }}
+              aria-label={
+                task.completed ? `Mark "${task.title}" incomplete` : `Mark "${task.title}" complete`
+              }
+            />
+          </span>
+          <p
+            className={`truncate font-medium ${task.completed ? "line-through opacity-70" : ""}`}
+          >
+            {task.title}
+          </p>
+        </div>
+        <p className="truncate opacity-90">
+          {format(task.start as Date, timePattern)} – {format(taskEnd, timePattern)}
+        </p>
+      </div>
       {showResizeEnd && (
         <div
           onMouseDown={(domEvent) => handleEdgeMouseDown(domEvent, "resize-end")}
