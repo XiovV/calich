@@ -15,7 +15,7 @@ import (
 	"github.com/XiovV/calich/server/internal/static"
 )
 
-func New(logger *slog.Logger, authHandler *handlers.AuthHandler, calendarHandler *handlers.CalendarHandler, eventHandler *handlers.EventHandler, attachmentHandler *handlers.AttachmentHandler, notificationHandler *handlers.NotificationHandler, appPasswordHandler *handlers.AppPasswordHandler, accountHandler *handlers.AccountHandler, userHandler *handlers.UserHandler, workspaceHandler *handlers.WorkspaceHandler, groupHandler *handlers.GroupHandler, calendarSetHandler *handlers.CalendarSetHandler, taskListHandler *handlers.TaskListHandler, taskHandler *handlers.TaskHandler, connectionHandler *handlers.ConnectionHandler, availabilityScheduleHandler *handlers.AvailabilityScheduleHandler, calDAVHandler http.Handler, authenticator httpauth.Authenticator, activeUserChecker httpauth.ActiveUserChecker, calDAVAuthenticator httpauth.CalDAVAuthenticator, calDAVRateLimiter httpauth.CalDAVRateLimiter, enabledChecker httpauth.DisabledChecker, workspaceMembershipChecker httpauth.WorkspaceMembershipChecker) (http.Handler, error) {
+func New(logger *slog.Logger, authHandler *handlers.AuthHandler, calendarHandler *handlers.CalendarHandler, eventHandler *handlers.EventHandler, attachmentHandler *handlers.AttachmentHandler, notificationHandler *handlers.NotificationHandler, appPasswordHandler *handlers.AppPasswordHandler, accountHandler *handlers.AccountHandler, userHandler *handlers.UserHandler, workspaceHandler *handlers.WorkspaceHandler, groupHandler *handlers.GroupHandler, calendarSetHandler *handlers.CalendarSetHandler, taskListHandler *handlers.TaskListHandler, taskHandler *handlers.TaskHandler, connectionHandler *handlers.ConnectionHandler, availabilityScheduleHandler *handlers.AvailabilityScheduleHandler, bookingLinkHandler *handlers.BookingLinkHandler, calDAVHandler http.Handler, authenticator httpauth.Authenticator, activeUserChecker httpauth.ActiveUserChecker, calDAVAuthenticator httpauth.CalDAVAuthenticator, calDAVRateLimiter httpauth.CalDAVRateLimiter, enabledChecker httpauth.DisabledChecker, workspaceMembershipChecker httpauth.WorkspaceMembershipChecker) (http.Handler, error) {
 	r := chi.NewRouter()
 	r.Use(requestLogger(logger))
 	r.Use(middleware.Recoverer)
@@ -335,6 +335,31 @@ func New(logger *slog.Logger, authHandler *handlers.AuthHandler, calendarHandler
 			r.Post("/", availabilityScheduleHandler.Create)
 			r.Patch("/{id}", availabilityScheduleHandler.Update)
 			r.Delete("/{id}", availabilityScheduleHandler.Delete)
+		})
+
+		// Booking Links (#322, ADR-0084, ADR-0087): a named, slug-addressed
+		// offer to be booked, scoped to (caller, active workspace) like Task
+		// Lists — BookingLinkService itself resolves every Booking Link by
+		// (id, caller, active workspace) and refuses with ErrNotFound rather
+		// than any authority check, so no extra middleware gate is needed
+		// beyond RequireWorkspace.
+		r.Route("/booking-links", func(r chi.Router) {
+			r.Use(httpauth.RequireAuth(authenticator))
+			r.Use(httpauth.RequireActiveUser(activeUserChecker))
+			r.Use(httpauth.RequireEnabledUser(enabledChecker))
+			r.Use(httpauth.RequireWorkspace(workspaceMembershipChecker))
+
+			r.Get("/", bookingLinkHandler.List)
+			r.Post("/", bookingLinkHandler.Create)
+			r.Patch("/{id}", bookingLinkHandler.Update)
+			r.Delete("/{id}", bookingLinkHandler.Delete)
+			r.Post("/{id}/duplicate", bookingLinkHandler.Duplicate)
+
+			// Conflict set (ADR-0087): add/remove a Calendar, one at a time,
+			// with immediate effect — the same shape Calendar Sets' own
+			// membership routes take.
+			r.Put("/{id}/conflict-set/calendars/{calendarId}", bookingLinkHandler.AddConflictCalendar)
+			r.Delete("/{id}/conflict-set/calendars/{calendarId}", bookingLinkHandler.RemoveConflictCalendar)
 		})
 
 		// Connections (#285, ADR-0050, ADR-0051): Callback sits outside

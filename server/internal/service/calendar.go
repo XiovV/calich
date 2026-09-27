@@ -60,6 +60,9 @@ var (
 	// instead lands as their own colour override (ADR-0038), never the
 	// Calendar's own stored colour.
 	ErrCalendarFieldForbidden = errors.New("only the calendar's owner may change its name, subscription url, or feed alarms setting")
+	// ErrCalendarReferenced mirrors repository.ErrCalendarReferenced so
+	// handlers only import the service package's sentinels (#322, ADR-0087).
+	ErrCalendarReferenced = repository.ErrCalendarReferenced
 )
 
 type CalendarService struct {

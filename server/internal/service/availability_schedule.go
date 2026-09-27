@@ -25,6 +25,10 @@ var (
 	// range's weekday is outside 0-6, or its start/end minute-of-day pair is
 	// out of bounds or non-increasing.
 	ErrInvalidAvailabilityRange = errors.New("invalid availability schedule range")
+
+	// ErrScheduleReferenced mirrors repository.ErrScheduleReferenced so
+	// handlers only import the service package's sentinels (#322, ADR-0085).
+	ErrScheduleReferenced = repository.ErrScheduleReferenced
 )
 
 const (
@@ -212,6 +216,9 @@ func (s *AvailabilityScheduleService) Update(ctx context.Context, userID, id int
 // Delete removes id outright, scoped to userID.
 func (s *AvailabilityScheduleService) Delete(ctx context.Context, userID, id int64) error {
 	if err := s.schedules.Delete(ctx, id, userID); err != nil {
+		if errors.Is(err, repository.ErrScheduleReferenced) {
+			return ErrScheduleReferenced
+		}
 		return fmt.Errorf("delete availability schedule: %w", err)
 	}
 	return nil

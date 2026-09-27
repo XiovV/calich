@@ -61,6 +61,7 @@ type App struct {
 	TaskHandler                 *handlers.TaskHandler
 	ConnectionHandler           *handlers.ConnectionHandler
 	AvailabilityScheduleHandler *handlers.AvailabilityScheduleHandler
+	BookingLinkHandler          *handlers.BookingLinkHandler
 
 	CalDAVBackend *caldavserver.Backend
 	CalDAVHandler http.Handler
@@ -127,6 +128,7 @@ func newFromGraph(graph *service.Graph, cfg config.Config) *App {
 	a.TaskHandler = handlers.NewTaskHandler(a.Tasks)
 	a.ConnectionHandler = handlers.NewConnectionHandler(a.Connections)
 	a.AvailabilityScheduleHandler = handlers.NewAvailabilityScheduleHandler(a.AvailabilitySchedules)
+	a.BookingLinkHandler = handlers.NewBookingLinkHandler(a.BookingLinks)
 
 	a.CalDAVBackend = caldavserver.NewBackend(a.Calendars, a.Events, a.Attachments, cfg.MaxAttachmentSize, cfg.MaxAttachmentsPerEvent)
 	a.CalDAVHandler = caldavserver.NewHTTPHandler(a.CalDAVBackend)

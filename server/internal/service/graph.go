@@ -69,6 +69,7 @@ type Graph struct {
 	TaskListRepo             *repository.TaskListRepository
 	TaskRepo                 *repository.TaskRepository
 	AvailabilityScheduleRepo *repository.AvailabilityScheduleRepository
+	BookingLinkRepo          *repository.BookingLinkRepository
 	NotificationRepo         *repository.NotificationRepository
 	AppPasswordRepo          *repository.AppPasswordRepository
 	FiredReminderRepo        *repository.FiredReminderRepository
@@ -98,6 +99,7 @@ type Graph struct {
 	TaskLists             *TaskListService
 	Tasks                 *TaskService
 	AvailabilitySchedules *AvailabilityScheduleService
+	BookingLinks          *BookingLinkService
 	Imports               *ImportService
 	Notifications         *NotificationService
 	Subscriptions         *SubscribeService
@@ -228,6 +230,7 @@ func NewGraph(sqlDB *sql.DB, cfg config.Config, opts ...GraphOption) (*Graph, er
 		TaskListRepo:             repository.NewTaskListRepository(sqlDB),
 		TaskRepo:                 repository.NewTaskRepository(sqlDB),
 		AvailabilityScheduleRepo: repository.NewAvailabilityScheduleRepository(sqlDB),
+		BookingLinkRepo:          repository.NewBookingLinkRepository(sqlDB),
 		NotificationRepo:         repository.NewNotificationRepository(sqlDB),
 		AppPasswordRepo:          repository.NewAppPasswordRepository(sqlDB),
 		FiredReminderRepo:        repository.NewFiredReminderRepository(sqlDB),
@@ -246,6 +249,9 @@ func NewGraph(sqlDB *sql.DB, cfg config.Config, opts ...GraphOption) (*Graph, er
 	// ADR-0082), so it's built after.
 	g.CalendarSets = NewCalendarSetService(g.CalendarSetRepo, g.Calendars)
 	g.Auth = NewAuthService(sqlDB, g.UserRepo, g.SessionRepo, g.Workspaces, g.WorkspaceInviteRepo, g.Calendars, g.AttendeeRepo, g.JWTSecret, cfg.InitialName, cfg.InitialEmail, cfg.InitialPassword, cfg.EnableSignups)
+	// BookingLinks needs Calendars for its own Access checks and Auth for the
+	// Handle auto-claim (#322, ADR-0084), so it's built after both.
+	g.BookingLinks = NewBookingLinkService(sqlDB, g.BookingLinkRepo, g.CalendarRepo, g.Calendars, g.AvailabilityScheduleRepo, g.Auth)
 	// mailOutbox is nil on a deployment with no SMTP transport configured
 	// (ADR-0059, ADR-0060): with nothing able to send an Invitation there is
 	// nothing to queue one into, and EventService's mail-enqueue call sites
@@ -258,7 +264,7 @@ func NewGraph(sqlDB *sql.DB, cfg config.Config, opts ...GraphOption) (*Graph, er
 	}
 	g.Events = NewEventService(sqlDB, g.EventRepo, g.EventExceptionRepo, g.EventReminderRepo, g.DefaultReminderRepo, g.ExplicitReminderRepo, g.SyncRepo, g.Calendars, g.UserRepo, g.AttachmentRepo, g.AttendeeRepo, g.WorkspaceRepo, g.GroupRepo, g.NotificationRepo, mailOutbox, g.OutboxRepo, g.ConnectionRepo, cfg.InviteRateLimitPerHour)
 	g.Attachments = NewAttachmentService(g.AttachmentRepo, g.EventRepo, g.Calendars, g.Events, g.AttachmentStore, cfg.MaxAttachmentsPerEvent)
-	g.Accounts = NewAccountService(sqlDB, g.UserRepo, g.SessionRepo, g.CalendarRepo, g.ShareRepo, g.WorkspaceRepo, g.Workspaces)
+	g.Accounts = NewAccountService(sqlDB, g.UserRepo, g.SessionRepo, g.CalendarRepo, g.ShareRepo, g.WorkspaceRepo, g.BookingLinkRepo, g.Workspaces)
 	g.AppPasswords = NewAppPasswordService(g.AppPasswordRepo, g.UserRepo)
 	g.Notifications = NewNotificationService(g.NotificationRepo)
 	g.Users = NewUserService(g.UserRepo)

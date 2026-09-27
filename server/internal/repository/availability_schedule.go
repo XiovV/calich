@@ -5,8 +5,15 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 )
+
+// ErrScheduleReferenced is returned by Delete when id is still the
+// AvailabilityScheduleID of some Booking Link (#322, ADR-0085) — deleting a
+// Schedule still in use is refused, and the caller must repoint or delete
+// that Booking Link first.
+var ErrScheduleReferenced = errors.New("availability schedule still referenced by a booking link")
 
 // AvailabilityRange is one weekly time range on an Availability Schedule
 // (ADR-0085): a weekday (0-6, Sunday-Saturday, matching users.week_start's
@@ -182,6 +189,15 @@ func (r *AvailabilityScheduleRepository) CountForUser(ctx context.Context, userI
 func (r *AvailabilityScheduleRepository) Delete(ctx context.Context, id, userID int64) error {
 	res, err := r.db.ExecContext(ctx, `DELETE FROM availability_schedules WHERE id = ? AND user_id = ?`, id, userID)
 	if err != nil {
+		// A Booking Link's availability_schedule_id carries no ON DELETE
+		// clause (00015_booking_links.sql), so SQLite's own FK enforcement
+		// refuses this exactly as ADR-0085 requires ("deleting a Schedule
+		// still referenced is refused") — translated into a typed sentinel
+		// here rather than left as a raw SQL error, the same as every other
+		// constraint violation this package catches.
+		if strings.Contains(err.Error(), "FOREIGN KEY constraint failed") {
+			return ErrScheduleReferenced
+		}
 		return fmt.Errorf("delete availability schedule: %w", err)
 	}
 	return requireAffected(res)

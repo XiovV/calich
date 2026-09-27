@@ -61,6 +61,7 @@ var availabilityScheduleErrors = []errorCase{
 	{service.ErrInvalidScheduleName, badRequest(service.ErrInvalidScheduleName.Error())},
 	{service.ErrInvalidTimezone, badRequest(service.ErrInvalidTimezone.Error())},
 	{service.ErrInvalidAvailabilityRange, badRequest(service.ErrInvalidAvailabilityRange.Error())},
+	{service.ErrScheduleReferenced, conflict("schedule_referenced", service.ErrScheduleReferenced.Error())},
 	{repository.ErrNotFound, notFound("availability schedule not found")},
 }
 

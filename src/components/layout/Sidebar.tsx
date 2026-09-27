@@ -1,6 +1,7 @@
 import { Plus } from "lucide-react";
 import { MiniCalendar } from "./MiniCalendar";
 import { CalendarList } from "./CalendarList";
+import { BookingLinksSection } from "./BookingLinksSection";
 import { Button } from "../ui/Button";
 
 interface SidebarProps {
@@ -19,6 +20,7 @@ export function Sidebar({ onCreateClick }: SidebarProps) {
       </Button>
       <MiniCalendar />
       <CalendarList />
+      <BookingLinksSection />
     </div>
   );
 }

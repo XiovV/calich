@@ -5,8 +5,16 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 )
+
+// ErrCalendarReferenced is returned by Delete when id is still the
+// BookIntoCalendarID of some Booking Link (#322, ADR-0087) — deleting a
+// Calendar a Booking Link writes into is refused, the same "still
+// referenced" posture ErrScheduleReferenced already takes toward an
+// Availability Schedule.
+var ErrCalendarReferenced = errors.New("calendar still referenced by a booking link")
 
 type Calendar struct {
 	ID     string
@@ -266,6 +274,14 @@ func (r *CalendarRepository) UpdateName(ctx context.Context, userID int64, id, n
 func (r *CalendarRepository) Delete(ctx context.Context, userID int64, id string) error {
 	res, err := r.db.ExecContext(ctx, `DELETE FROM calendars WHERE user_id = ? AND id = ?`, userID, id)
 	if err != nil {
+		// A Booking Link's book_into_calendar_id carries no ON DELETE clause
+		// (00015_booking_links.sql), so SQLite's own FK enforcement refuses
+		// this exactly as ADR-0087 requires — translated into a typed
+		// sentinel here rather than left as a raw SQL error, mirroring
+		// AvailabilityScheduleRepository.Delete's ErrScheduleReferenced.
+		if strings.Contains(err.Error(), "FOREIGN KEY constraint failed") {
+			return ErrCalendarReferenced
+		}
 		return fmt.Errorf("delete calendar: %w", err)
 	}
 

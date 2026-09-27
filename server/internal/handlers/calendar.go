@@ -168,6 +168,11 @@ var calendarNotFoundErrors = []errorCase{
 	{repository.ErrNotFound, notFound("calendar not found")},
 }
 
+// calendarDeleteErrors is Delete's own rendering: calendarNotFoundErrors
+// plus ErrCalendarReferenced (#322, ADR-0087) — refusing to delete a
+// Calendar a live Booking Link still writes into.
+var calendarDeleteErrors = alsoHandling(calendarNotFoundErrors, errorCase{service.ErrCalendarReferenced, conflict("calendar_referenced", service.ErrCalendarReferenced.Error())})
+
 // workspaceMembershipErrors renders service.ErrNotWorkspaceMember as a 403 —
 // the caller's active Workspace, resolved from the X-Workspace-Id header,
 // named a Workspace they don't belong to (#155, ADR-0045).
@@ -452,7 +457,7 @@ func (h *CalendarHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 
 	err := h.calendars.Delete(r.Context(), userID, id)
-	if respondError(w, err, calendarNotFoundErrors, "failed to delete calendar") {
+	if respondError(w, err, calendarDeleteErrors, "failed to delete calendar") {
 		return
 	}
 

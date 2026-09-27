@@ -67,11 +67,12 @@ type AccountService struct {
 	calendarRepo  *repository.CalendarRepository
 	shareRepo     *repository.CalendarShareRepository
 	workspaceRepo *repository.WorkspaceRepository
+	bookingLinks  *repository.BookingLinkRepository
 	workspaces    *WorkspaceService
 }
 
-func NewAccountService(db *sql.DB, users *repository.UserRepository, sessions *repository.SessionRepository, calendarRepo *repository.CalendarRepository, shareRepo *repository.CalendarShareRepository, workspaceRepo *repository.WorkspaceRepository, workspaces *WorkspaceService) *AccountService {
-	return &AccountService{db: db, users: users, sessions: sessions, calendarRepo: calendarRepo, shareRepo: shareRepo, workspaceRepo: workspaceRepo, workspaces: workspaces}
+func NewAccountService(db *sql.DB, users *repository.UserRepository, sessions *repository.SessionRepository, calendarRepo *repository.CalendarRepository, shareRepo *repository.CalendarShareRepository, workspaceRepo *repository.WorkspaceRepository, bookingLinks *repository.BookingLinkRepository, workspaces *WorkspaceService) *AccountService {
+	return &AccountService{db: db, users: users, sessions: sessions, calendarRepo: calendarRepo, shareRepo: shareRepo, workspaceRepo: workspaceRepo, bookingLinks: bookingLinks, workspaces: workspaces}
 }
 
 // SetDisabled disables or re-activates the caller's own account (ADR-0044).
@@ -203,6 +204,18 @@ func (s *AccountService) Delete(ctx context.Context, userID int64, dispositions 
 	}
 
 	return repository.WithTx(ctx, s.db, func(tx *sql.Tx) error {
+		// A Booking Link has no transfer disposition of its own (#322,
+		// ADR-0084) — it simply dies with its owner, and must go before
+		// applyDispositions below: a DispositionDelete on a Calendar this
+		// User's own link still points at would otherwise trip
+		// book_into_calendar_id's FK guard (ErrCalendarReferenced), since
+		// deleting the users row itself — the moment that FK would clear on
+		// its own via cascade — hasn't happened yet at this point in the
+		// transaction.
+		if err := s.bookingLinks.WithTx(tx).DeleteAllForUser(ctx, userID); err != nil {
+			return fmt.Errorf("delete booking links: %w", err)
+		}
+
 		if err := applyDispositions(ctx, tx, s.calendarRepo, userID, dispositions); err != nil {
 			return err
 		}
