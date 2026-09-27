@@ -304,12 +304,17 @@ func TestEventService_LoadInvitation_NotOKWhenAttendeeWasRemoved(t *testing.T) {
 type fakeInvitationMailer struct {
 	calls       []fakeInvitationCall
 	cancelCalls []fakeInvitationCall
+	noticeCalls []fakeNoticeCall
 	err         error
 }
 
 type fakeInvitationCall struct {
 	to, fromName, replyTo, subject string
 	ics                            []byte
+}
+
+type fakeNoticeCall struct {
+	to, subject, body string
 }
 
 func (f *fakeInvitationMailer) SendInvitation(to, fromName, replyTo, subject string, ics []byte) error {
@@ -319,6 +324,11 @@ func (f *fakeInvitationMailer) SendInvitation(to, fromName, replyTo, subject str
 
 func (f *fakeInvitationMailer) SendCancellation(to, fromName, replyTo, subject string, ics []byte) error {
 	f.cancelCalls = append(f.cancelCalls, fakeInvitationCall{to, fromName, replyTo, subject, ics})
+	return f.err
+}
+
+func (f *fakeInvitationMailer) Send(to, subject, body string) error {
+	f.noticeCalls = append(f.noticeCalls, fakeNoticeCall{to, subject, body})
 	return f.err
 }
 

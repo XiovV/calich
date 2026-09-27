@@ -427,6 +427,15 @@ func New(logger *slog.Logger, authHandler *handlers.AuthHandler, calendarHandler
 			// rate limiting only, enforced inside PublicBookingHandler itself.
 			r.Post("/{handle}/{slug}/book", publicBookingHandler.Book)
 
+			// Cancel (#327, ADR-0087): the signed cancel link's own
+			// destination, a top-level path rather than nested under a
+			// (handle, slug) — a cancel token names the Event directly, so
+			// there is no handle/slug to resolve through. chi ranks a
+			// static segment ahead of the dynamic {handle} route below it,
+			// so this can never be shadowed by a Handle claim (also refused
+			// outright at claim time — ReservedHandles).
+			r.Post("/cancel-booking", publicBookingHandler.Cancel)
+
 			// The public index page (#325, ADR-0084): the derived rendering
 			// of an owner's Public Booking Links at /:handle, one path
 			// segment shallower than the link routes above — no ambiguity

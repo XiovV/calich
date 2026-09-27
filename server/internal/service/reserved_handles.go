@@ -21,10 +21,13 @@ var ReservedHandles = map[string]bool{
 	"assets":                  true,
 	"static":                  true,
 	"accept-workspace-invite": true,
-	"admin":                   true,
-	"help":                    true,
-	"about":                   true,
-	"new":                     true,
+	// cancel-booking (#327, ADR-0087): the frontend page a booking's signed
+	// cancel link opens, sibling to accept-workspace-invite above.
+	"cancel-booking": true,
+	"admin":          true,
+	"help":           true,
+	"about":          true,
+	"new":            true,
 }
 
 // IsReservedHandle reports whether handle collides with a path the app

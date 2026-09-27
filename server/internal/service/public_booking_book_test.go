@@ -96,7 +96,7 @@ func TestPublicBookingService_Book_CreatesBusyEventWithAttendee(t *testing.T) {
 
 	event, err := g.PublicBookings.Book(ctx, handle, link[0].Slug, BookingRequest{
 		Start: slot, VisitorName: "Bob Visitor", VisitorEmail: "bob@example.com",
-	}, time.Now())
+	}, time.Now(), "https://example.com")
 	if err != nil {
 		t.Fatalf("book: %v", err)
 	}
@@ -157,13 +157,13 @@ func TestPublicBookingService_Book_RefusesWhenSlotAlreadyTaken(t *testing.T) {
 
 	if _, err := g.PublicBookings.Book(ctx, handle, links[0].Slug, BookingRequest{
 		Start: slot, VisitorName: "First Visitor", VisitorEmail: "first@example.com",
-	}, time.Now()); err != nil {
+	}, time.Now(), "https://example.com"); err != nil {
 		t.Fatalf("first booking: %v", err)
 	}
 
 	_, err = g.PublicBookings.Book(ctx, handle, links[0].Slug, BookingRequest{
 		Start: slot, VisitorName: "Second Visitor", VisitorEmail: "second@example.com",
-	}, time.Now())
+	}, time.Now(), "https://example.com")
 	if !errors.Is(err, ErrSlotTaken) {
 		t.Fatalf("expected ErrSlotTaken for a slot already booked, got %v", err)
 	}
@@ -197,7 +197,7 @@ func TestPublicBookingService_Book_RefusesUnavailableSlot(t *testing.T) {
 
 	_, err = g.PublicBookings.Book(ctx, handle, links[0].Slug, BookingRequest{
 		Start: sunday, VisitorName: "Bob", VisitorEmail: "bob@example.com",
-	}, time.Now())
+	}, time.Now(), "https://example.com")
 	if !errors.Is(err, ErrSlotTaken) {
 		t.Fatalf("expected ErrSlotTaken for a slot outside the Schedule, got %v", err)
 	}
@@ -214,7 +214,7 @@ func TestPublicBookingService_Book_RefusesWhenNoSMTPConfigured(t *testing.T) {
 
 	_, err = g.PublicBookings.Book(ctx, handle, links[0].Slug, BookingRequest{
 		Start: slot, VisitorName: "Bob", VisitorEmail: "bob@example.com",
-	}, time.Now())
+	}, time.Now(), "https://example.com")
 	if !errors.Is(err, ErrBookingLinkPaused) {
 		t.Fatalf("expected ErrBookingLinkPaused with no SMTP configured, got %v", err)
 	}
@@ -231,13 +231,13 @@ func TestPublicBookingService_Book_RequiresNameAndEmail(t *testing.T) {
 
 	if _, err := g.PublicBookings.Book(ctx, handle, links[0].Slug, BookingRequest{
 		Start: slot, VisitorName: "  ", VisitorEmail: "bob@example.com",
-	}, time.Now()); !errors.Is(err, ErrInvalidVisitorName) {
+	}, time.Now(), "https://example.com"); !errors.Is(err, ErrInvalidVisitorName) {
 		t.Fatalf("expected ErrInvalidVisitorName for a blank name, got %v", err)
 	}
 
 	if _, err := g.PublicBookings.Book(ctx, handle, links[0].Slug, BookingRequest{
 		Start: slot, VisitorName: "Bob", VisitorEmail: "not-an-email",
-	}, time.Now()); !errors.Is(err, ErrInvalidEmail) {
+	}, time.Now(), "https://example.com"); !errors.Is(err, ErrInvalidEmail) {
 		t.Fatalf("expected ErrInvalidEmail for a malformed email, got %v", err)
 	}
 }
@@ -296,7 +296,7 @@ func TestPublicBookingService_Book_LinkedCalendarQueuesWriteBack(t *testing.T) {
 
 	event, err := g.PublicBookings.Book(ctx, *user.Handle, link.Slug, BookingRequest{
 		Start: slot, VisitorName: "Bob Visitor", VisitorEmail: "bob@example.com",
-	}, time.Now())
+	}, time.Now(), "https://example.com")
 	if err != nil {
 		t.Fatalf("expected booking onto a writable Linked Calendar to succeed, got: %v", err)
 	}
@@ -348,7 +348,7 @@ func TestPublicBookingService_Book_RefusesWhenBookIntoCalendarAccessLost(t *test
 
 	_, err = g.PublicBookings.Book(ctx, handle, links[0].Slug, BookingRequest{
 		Start: slot, VisitorName: "Bob", VisitorEmail: "visitor@example.com",
-	}, time.Now())
+	}, time.Now(), "https://example.com")
 	if !errors.Is(err, ErrBookingLinkPaused) {
 		t.Fatalf("expected ErrBookingLinkPaused once the Book-into Calendar sits outside the link's Workspace, got %v", err)
 	}

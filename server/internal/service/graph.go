@@ -278,7 +278,10 @@ func NewGraph(sqlDB *sql.DB, cfg config.Config, opts ...GraphOption) (*Graph, er
 	g.BookingLinks = NewBookingLinkService(sqlDB, g.BookingLinkRepo, g.CalendarRepo, g.Calendars, g.AvailabilityScheduleRepo, g.EventRepo, g.TaskRepo, g.Auth)
 	// PublicBookings' own write path (Book, #326) needs Events built first —
 	// EventService.Create is where a confirmed booking is actually written.
-	g.PublicBookings = NewPublicBookingService(g.UserRepo, g.BookingLinkRepo, g.AvailabilityScheduleRepo, g.Calendars, g.BookingLinks, g.Events, cfg.SMTPConfigured())
+	// g.Auth doubles as Cancel's own signed cancel-token codec (#327,
+	// ADR-0087), mirroring ConnectionService's reuse of it for connect
+	// state.
+	g.PublicBookings = NewPublicBookingService(g.UserRepo, g.BookingLinkRepo, g.AvailabilityScheduleRepo, g.Calendars, g.BookingLinks, g.Events, g.EventRepo, g.OutboxRepo, g.Auth, cfg.SMTPConfigured())
 	g.PublicIndex = NewPublicIndexService(g.UserRepo, g.BookingLinkRepo, g.PublicBookings)
 	g.Attachments = NewAttachmentService(g.AttachmentRepo, g.EventRepo, g.Calendars, g.Events, g.AttachmentStore, cfg.MaxAttachmentsPerEvent)
 	g.Accounts = NewAccountService(sqlDB, g.UserRepo, g.SessionRepo, g.CalendarRepo, g.ShareRepo, g.WorkspaceRepo, g.BookingLinkRepo, g.Workspaces)

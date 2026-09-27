@@ -14,6 +14,9 @@ import (
 type InvitationMailer interface {
 	SendInvitation(to, fromName, replyTo, subject string, ics []byte) error
 	SendCancellation(to, fromName, replyTo, subject string, ics []byte) error
+	// Send delivers a plain-text email — a BOOKING_NOTICE row's own delivery
+	// (#327, ADR-0087), which carries no iCalendar part to render.
+	Send(to, subject, body string) error
 }
 
 // InvitationSender turns one queued outbox.Message into an Invitation and
@@ -42,19 +45,24 @@ func NewInvitationSender(events *EventService, mailer InvitationMailer, from str
 // process instead of just failing this one message.
 var ErrNoMailTransportConfigured = errors.New("no SMTP transport configured on this instance")
 
-// Send dispatches msg to sendInvitation or sendCancellation by its Method
-// (ADR-0059, #201). s.mailer is nil exactly when this instance has no SMTP
-// transport configured — never a *mailer.SMTPMailer holding a nil pointer,
-// which app.go's own construction guarantees by passing a bare nil
-// InvitationMailer rather than a nil-valued concrete one.
+// Send dispatches msg to sendInvitation, sendCancellation, or
+// sendBookingNotice by its Method (ADR-0059, #201, #327). s.mailer is nil
+// exactly when this instance has no SMTP transport configured — never a
+// *mailer.SMTPMailer holding a nil pointer, which app.go's own construction
+// guarantees by passing a bare nil InvitationMailer rather than a
+// nil-valued concrete one.
 func (s *InvitationSender) Send(ctx context.Context, msg repository.OutboxMessage) error {
 	if s.mailer == nil {
 		return ErrNoMailTransportConfigured
 	}
-	if msg.Method == repository.OutboxMethodCancel {
+	switch msg.Method {
+	case repository.OutboxMethodCancel:
 		return s.sendCancellation(msg)
+	case repository.OutboxMethodBookingNotice:
+		return s.sendBookingNotice(msg)
+	default:
+		return s.sendInvitation(ctx, msg)
 	}
-	return s.sendInvitation(ctx, msg)
 }
 
 // sendInvitation builds msg's Invitation from the Event and Attendee state
@@ -134,6 +142,20 @@ func (s *InvitationSender) sendCancellation(msg repository.OutboxMessage) error 
 	subject := fmt.Sprintf("Cancelled: %s", msg.Snapshot.Title)
 	if err := s.mailer.SendCancellation(msg.Snapshot.RecipientEmail, msg.Snapshot.OrganizerName, msg.Snapshot.OrganizerEmail, subject, ics); err != nil {
 		return fmt.Errorf("send cancellation: %w", err)
+	}
+	return nil
+}
+
+// sendBookingNotice delivers msg's BOOKING_NOTICE verbatim (#327,
+// ADR-0087): a plain email whose subject/body were already rendered by
+// PublicBookingService at enqueue time, so — like sendCancellation, unlike
+// sendInvitation — nothing here is re-read from live Event state.
+func (s *InvitationSender) sendBookingNotice(msg repository.OutboxMessage) error {
+	if msg.BookingNotice == nil || msg.RecipientEmail == nil {
+		return fmt.Errorf("booking notice outbox message %d carries no snapshot", msg.ID)
+	}
+	if err := s.mailer.Send(*msg.RecipientEmail, msg.BookingNotice.Subject, msg.BookingNotice.Body); err != nil {
+		return fmt.Errorf("send booking notice: %w", err)
 	}
 	return nil
 }

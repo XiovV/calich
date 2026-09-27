@@ -12,6 +12,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/XiovV/calich/server/internal/caldavserver"
 	"github.com/XiovV/calich/server/internal/clientip"
 	"github.com/XiovV/calich/server/internal/httpresponse"
 	"github.com/XiovV/calich/server/internal/repository"
@@ -233,10 +234,51 @@ func (h *PublicBookingHandler) Book(w http.ResponseWriter, r *http.Request) {
 		Start:        req.Start,
 		VisitorName:  req.VisitorName,
 		VisitorEmail: req.VisitorEmail,
-	}, time.Now())
+	}, time.Now(), caldavserver.RequestBaseURL(r))
 	if respondError(w, err, bookErrors, "failed to create booking") {
 		return
 	}
 
 	httpresponse.JSON(w, http.StatusCreated, bookingResponse{Start: event.Start, End: event.End})
+}
+
+// cancelBookingErrors is publicBookingErrors' own sibling for Cancel: unlike
+// every other route on this handler, Cancel resolves no (handle, slug), so
+// it never renders repository.ErrNotFound — an unresolvable or expired
+// token is its own distinct 400, never confused with "booking link not
+// found".
+var cancelBookingErrors = []errorCase{
+	{service.ErrPublicBookingRateLimitExceeded, rateLimited("too many requests, please try again later")},
+	{service.ErrInvalidCancelToken, badRequest(service.ErrInvalidCancelToken.Error())},
+	{service.ErrBookingAlreadyStarted, conflict("booking_already_started", service.ErrBookingAlreadyStarted.Error())},
+}
+
+// cancelBookingRequest is Cancel's own body: the signed link's token, read
+// from the query string on the page it opens and posted here rather than
+// acted on by a bare GET (#327, ADR-0087) — a mail client or link scanner
+// prefetching the GET page never triggers the cancellation itself.
+type cancelBookingRequest struct {
+	Token string `json:"token"`
+}
+
+// Cancel serves POST /api/public/cancel-booking: the signed cancel link's
+// own destination (#327, ADR-0087). Deletes the booking's Event, which
+// emits the METHOD:CANCEL the Attendee machinery already sends and frees
+// the slot immediately, and queues the host's own cancellation notice.
+// Idempotent — following the link twice never errors on the second attempt.
+func (h *PublicBookingHandler) Cancel(w http.ResponseWriter, r *http.Request) {
+	if h.checkRateLimit(w, r) {
+		return
+	}
+
+	req, ok := decodeJSON[cancelBookingRequest](w, r)
+	if !ok {
+		return
+	}
+
+	if err := h.public.Cancel(r.Context(), req.Token, time.Now()); respondError(w, err, cancelBookingErrors, "failed to cancel booking") {
+		return
+	}
+
+	httpresponse.JSON(w, http.StatusOK, struct{}{})
 }

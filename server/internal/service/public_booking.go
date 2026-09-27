@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"net/url"
 	"strings"
 	"time"
 
@@ -31,7 +32,24 @@ var (
 	// caller re-fetches slots and tries again (ADR-0087's "the loser is
 	// told the time was just taken and shown fresh slots").
 	ErrSlotTaken = errors.New("that time was just taken")
+	// ErrInvalidCancelToken is returned by Cancel when token doesn't parse
+	// or verify against a signature this instance minted — a forged,
+	// truncated, or otherwise tampered cancel link (#327, ADR-0087).
+	ErrInvalidCancelToken = errors.New("invalid or expired cancel link")
+	// ErrBookingAlreadyStarted is returned by Cancel when the booked Event's
+	// own start is no longer in the future — a stale link cannot delete
+	// something that already happened (#327, ADR-0087).
+	ErrBookingAlreadyStarted = errors.New("this booking has already started and can no longer be cancelled")
 )
+
+// bookingCancelCodec is AuthService's own signed-token pair
+// (IssueBookingCancelToken/ParseBookingCancelToken, #327, ADR-0087) —
+// PublicBookingService's own narrow seam onto it, mirroring
+// connectStateCodec's relationship to ConnectionService.
+type bookingCancelCodec interface {
+	IssueBookingCancelToken(eventID string) (string, error)
+	ParseBookingCancelToken(token string) (string, error)
+}
 
 // PublicBookingLink is what a stranger holding a Booking Link's URL is told
 // (#324, ADR-0084, ADR-0087) — deliberately narrower than repository.
@@ -74,13 +92,25 @@ type PublicBookingService struct {
 	// Calendar — a queued Write-back push. Get and Slots above never touch
 	// it.
 	events *EventService
+	// eventsRepo is Cancel's own read of the booked Event (#327, ADR-0087):
+	// a signed cancel link names an Event, not a (handle, slug), so there is
+	// no host Session to resolve it through the way every other method on
+	// this service does — this is a direct, unauthorized-by-design lookup,
+	// with the token's own signature the only gate.
+	eventsRepo *repository.EventRepository
+	// outbox queues the visitor's booking confirmation (carrying the signed
+	// cancel link) and the host's cancellation notice (#327, ADR-0087) —
+	// both a BOOKING_NOTICE row, never sent inline (ADR-0060).
+	outbox *repository.OutboxRepository
+	// cancelTokens mints and verifies Cancel's own signed link.
+	cancelTokens bookingCancelCodec
 	// smtpConfigured mirrors config.Config.SMTPConfigured() — publishing a
 	// Booking Link requires SMTP (ADR-0087), so every link behaves as
 	// Paused when this instance has none, regardless of what it's set to.
 	smtpConfigured bool
 }
 
-func NewPublicBookingService(users *repository.UserRepository, links *repository.BookingLinkRepository, schedules *repository.AvailabilityScheduleRepository, calendars *CalendarService, bookingLinks *BookingLinkService, events *EventService, smtpConfigured bool) *PublicBookingService {
+func NewPublicBookingService(users *repository.UserRepository, links *repository.BookingLinkRepository, schedules *repository.AvailabilityScheduleRepository, calendars *CalendarService, bookingLinks *BookingLinkService, events *EventService, eventsRepo *repository.EventRepository, outbox *repository.OutboxRepository, cancelTokens bookingCancelCodec, smtpConfigured bool) *PublicBookingService {
 	return &PublicBookingService{
 		users:          users,
 		links:          links,
@@ -88,6 +118,9 @@ func NewPublicBookingService(users *repository.UserRepository, links *repository
 		calendars:      calendars,
 		bookingLinks:   bookingLinks,
 		events:         events,
+		eventsRepo:     eventsRepo,
+		outbox:         outbox,
+		cancelTokens:   cancelTokens,
 		smtpConfigured: smtpConfigured,
 	}
 }
@@ -170,8 +203,8 @@ type BookingRequest struct {
 // (EventWrite.PreCommitCheck) — so a slot that was free when isPaused ran a
 // moment ago but is taken by the time this transaction actually opens is
 // still caught, and two visitors racing the same slot can never both win.
-func (s *PublicBookingService) Book(ctx context.Context, handle, slug string, req BookingRequest, now time.Time) (repository.Event, error) {
-	link, _, err := s.resolve(ctx, handle, slug)
+func (s *PublicBookingService) Book(ctx context.Context, handle, slug string, req BookingRequest, now time.Time, baseURL string) (repository.Event, error) {
+	link, host, err := s.resolve(ctx, handle, slug)
 	if err != nil {
 		return repository.Event{}, err
 	}
@@ -250,7 +283,130 @@ func (s *PublicBookingService) Book(ctx context.Context, handle, slug string, re
 		}
 		return repository.Event{}, fmt.Errorf("create booking event: %w", err)
 	}
+
+	// The confirmation mail carrying the signed cancel link (#327,
+	// ADR-0087) — queued through the outbox (ADR-0060) rather than sent
+	// inline, alongside (never instead of) the ordinary Invitation
+	// EventService.Create's own attendee-invite path already queued above.
+	// The Event already committed by this point, so a failure here (an
+	// unexpected DB error, not a delivery failure — the outbox Worker's own
+	// retry/backoff owns those) surfaces as a 500 to the visitor even though
+	// the booking itself stands; a rare gap accepted rather than adding a
+	// second transaction spanning two independent writes.
+	token, err := s.cancelTokens.IssueBookingCancelToken(event.ID)
+	if err != nil {
+		return repository.Event{}, fmt.Errorf("issue booking cancel token: %w", err)
+	}
+	cancelURL := baseURL + "/cancel-booking?token=" + url.QueryEscape(token)
+	subject, body := bookingConfirmationNotice(host.Name, link.Title, link.Location, start, end, tzid, cancelURL)
+	if _, err := s.outbox.EnqueueBookingNotice(ctx, event.ID, email, subject, body); err != nil {
+		return repository.Event{}, fmt.Errorf("enqueue booking confirmation: %w", err)
+	}
+
 	return event, nil
+}
+
+// bookingConfirmationNotice renders the visitor's booking confirmation
+// (#327, ADR-0087): what carries the signed cancel link.
+func bookingConfirmationNotice(hostName, title, location string, start, end time.Time, tzid, cancelURL string) (subject, body string) {
+	subject = fmt.Sprintf("Booking confirmed: %s", title)
+	body = fmt.Sprintf("Your booking with %s is confirmed.\n\n%s\n%s\n", hostName, title, formatBookingWindow(start, end, tzid))
+	if location != "" {
+		body += location + "\n"
+	}
+	body += fmt.Sprintf("\nNeed to cancel? %s\n", cancelURL)
+	return subject, body
+}
+
+// bookingCancelledNotice renders the host's cancellation notice (#327,
+// ADR-0087) — no Notification is raised for it (CONTEXT.md's three
+// producers stay three); this mail is the only trace the host gets.
+func bookingCancelledNotice(visitorName, visitorEmail, title string, start, end time.Time, tzid string) (subject, body string) {
+	subject = fmt.Sprintf("Cancelled: %s", title)
+	body = fmt.Sprintf("%s (%s) cancelled their booking.\n\n%s\n%s\n", visitorName, visitorEmail, title, formatBookingWindow(start, end, tzid))
+	return subject, body
+}
+
+// formatBookingWindow renders start-end in tzid's own wall-clock, falling
+// back to UTC for an unparseable zone rather than failing the whole notice
+// over a formatting detail.
+func formatBookingWindow(start, end time.Time, tzid string) string {
+	loc, err := time.LoadLocation(tzid)
+	if err != nil {
+		loc = time.UTC
+	}
+	const layout = "Mon, Jan 2, 2006 15:04"
+	return fmt.Sprintf("%s - %s (%s)", start.In(loc).Format(layout), end.In(loc).Format("15:04"), tzid)
+}
+
+// Cancel verifies token, refuses a booking that has already started, and
+// deletes its Event (#327, ADR-0087) — the visitor's own signed link is the
+// only gate here, since a visitor holds no Session to authorize this
+// through any other way. Deletion reuses EventService.Delete wholesale
+// (keyed on the Event's own CreatedBy as the host): the METHOD:CANCEL to
+// the visitor's Attendee row, the write-back delete on a Linked Calendar,
+// and the tombstone are all its existing, tested behavior. Idempotent: an
+// already-cancelled (or never-existed) Event answers nil, not an error, so
+// following the link twice never surfaces one.
+func (s *PublicBookingService) Cancel(ctx context.Context, token string, now time.Time) error {
+	eventID, err := s.cancelTokens.ParseBookingCancelToken(token)
+	if err != nil {
+		return ErrInvalidCancelToken
+	}
+
+	event, err := s.eventsRepo.GetByID(ctx, eventID)
+	if err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			return nil
+		}
+		return fmt.Errorf("get booked event for cancellation: %w", err)
+	}
+	if event.CreatedBy == nil {
+		return ErrInvalidCancelToken
+	}
+	hostID := *event.CreatedBy
+
+	if !event.Start.After(now) {
+		return ErrBookingAlreadyStarted
+	}
+
+	host, err := s.users.GetByID(ctx, hostID)
+	if err != nil {
+		return fmt.Errorf("get host for cancellation notice: %w", err)
+	}
+
+	// Captured before Delete, which removes the Attendee row along with the
+	// Event itself.
+	var visitorName, visitorEmail string
+	if attendees, err := s.events.ListAttendees(ctx, hostID, event.ID); err == nil && len(attendees) > 0 {
+		visitorName, visitorEmail = attendees[0].Name, attendees[0].Email
+	}
+
+	if err := s.events.Delete(ctx, hostID, event.ID); err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			// Raced with another cancel following the same link — already
+			// gone, which is exactly what this call wanted.
+			return nil
+		}
+		return fmt.Errorf("delete cancelled booking event: %w", err)
+	}
+
+	subject, body := bookingCancelledNotice(visitorName, visitorEmail, event.Title, event.Start, event.End, hostTzid(event))
+	if _, err := s.outbox.EnqueueBookingNotice(ctx, event.ID, host.Email, subject, body); err != nil {
+		return fmt.Errorf("enqueue booking cancelled notice: %w", err)
+	}
+	return nil
+}
+
+// hostTzid is the Anchor zone a cancellation notice renders event.Start/End
+// in, falling back to UTC for a Floating booking Event — never actually nil
+// in practice, since Book always sets one from the Schedule, but formatBookingWindow's
+// own fallback would otherwise have to guess at an empty string instead.
+func hostTzid(event repository.Event) string {
+	if event.Tzid != nil {
+		return *event.Tzid
+	}
+	return "Etc/UTC"
 }
 
 // bookingEventTitle is a booking's Event title (ADR-0087's Decision:

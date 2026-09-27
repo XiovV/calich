@@ -96,6 +96,7 @@ func newBookingLinkHandlerTestServerWithConfig(t *testing.T, cfg config.Config) 
 		r.Get("/{handle}/{slug}", publicHandler.Get)
 		r.Get("/{handle}/{slug}/slots", publicHandler.Slots)
 		r.Post("/{handle}/{slug}/book", publicHandler.Book)
+		r.Post("/cancel-booking", publicHandler.Cancel)
 		r.Get("/{handle}", publicHandler.Index)
 	})
 

@@ -66,6 +66,19 @@ export const publicBookingApi = {
     const body = (await response.json()) as { start: string; end: string };
     return { start: new Date(body.start), end: new Date(body.end) };
   },
+
+  // POST /api/public/cancel-booking: the signed cancel link's own
+  // destination (#327, ADR-0087). Deletes the booking's Event and frees the
+  // slot immediately; idempotent, so following the link twice never errors
+  // on the second attempt.
+  async cancel(token: string): Promise<void> {
+    const response = await fetch(`/api/public/cancel-booking`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token }),
+    });
+    if (!response.ok) throw await errorFromResponse(response);
+  },
 };
 
 export function isNotFoundError(error: unknown): boolean {
@@ -77,4 +90,19 @@ export function isNotFoundError(error: unknown): boolean {
 // simply isn't bookable any more (#326, ADR-0087).
 export function isSlotTakenError(error: unknown): boolean {
   return error instanceof ApiError && error.code === "slot_taken";
+}
+
+// isBookingAlreadyStartedError reports whether error is cancel's own 409
+// for a booking whose own start has already passed (#327, ADR-0087) — a
+// stale link cannot delete something that already happened.
+export function isBookingAlreadyStartedError(error: unknown): boolean {
+  return error instanceof ApiError && error.code === "booking_already_started";
+}
+
+// isInvalidCancelTokenError reports whether error is cancel's own 400 for a
+// token that doesn't parse or verify (#327, ADR-0087) — the only other
+// client error cancel() can answer besides isBookingAlreadyStartedError
+// above, so a plain status check is unambiguous here.
+export function isInvalidCancelTokenError(error: unknown): boolean {
+  return error instanceof ApiError && error.status === 400;
 }
