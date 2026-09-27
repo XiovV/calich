@@ -74,6 +74,7 @@ func newBookingLinkHandlerTestServer(t *testing.T) *bookingLinkHandlerTestServer
 		r.Patch("/{id}", linkHandler.Update)
 		r.Delete("/{id}", linkHandler.Delete)
 		r.Post("/{id}/duplicate", linkHandler.Duplicate)
+		r.Get("/{id}/slots", linkHandler.Slots)
 		r.Put("/{id}/conflict-set/calendars/{calendarId}", linkHandler.AddConflictCalendar)
 		r.Delete("/{id}/conflict-set/calendars/{calendarId}", linkHandler.RemoveConflictCalendar)
 	})

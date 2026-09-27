@@ -88,11 +88,13 @@ type BookingLinkService struct {
 	calendarRepo *repository.CalendarRepository
 	calendars    *CalendarService
 	schedules    *repository.AvailabilityScheduleRepository
+	eventRepo    *repository.EventRepository
+	taskRepo     *repository.TaskRepository
 	auth         *AuthService
 }
 
-func NewBookingLinkService(db *sql.DB, links *repository.BookingLinkRepository, calendarRepo *repository.CalendarRepository, calendars *CalendarService, schedules *repository.AvailabilityScheduleRepository, auth *AuthService) *BookingLinkService {
-	return &BookingLinkService{db: db, links: links, calendarRepo: calendarRepo, calendars: calendars, schedules: schedules, auth: auth}
+func NewBookingLinkService(db *sql.DB, links *repository.BookingLinkRepository, calendarRepo *repository.CalendarRepository, calendars *CalendarService, schedules *repository.AvailabilityScheduleRepository, eventRepo *repository.EventRepository, taskRepo *repository.TaskRepository, auth *AuthService) *BookingLinkService {
+	return &BookingLinkService{db: db, links: links, calendarRepo: calendarRepo, calendars: calendars, schedules: schedules, eventRepo: eventRepo, taskRepo: taskRepo, auth: auth}
 }
 
 // ListForUser returns every Booking Link userID owns inside workspaceID.

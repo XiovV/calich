@@ -9,6 +9,8 @@ package handlers
 
 import (
 	"net/http"
+	"strconv"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -113,6 +115,7 @@ var bookingLinkErrors = []errorCase{
 	{service.ErrBookIntoCalendarNotFound, badRequest(service.ErrBookIntoCalendarNotFound.Error())},
 	{service.ErrCannotRemoveBookIntoCalendar, badRequest(service.ErrCannotRemoveBookIntoCalendar.Error())},
 	{service.ErrSlugTaken, conflict("slug_taken", "slug is already taken")},
+	{service.ErrInvalidMonth, badRequest(service.ErrInvalidMonth.Error())},
 	{repository.ErrNotFound, notFound("booking link not found")},
 }
 
@@ -247,4 +250,48 @@ func (h *BookingLinkHandler) RemoveConflictCalendar(w http.ResponseWriter, r *ht
 	}
 
 	w.WriteHeader(http.StatusNoContent)
+}
+
+type slotsResponse struct {
+	Slots []time.Time `json:"slots"`
+}
+
+// Slots serves GET /api/booking-links/{id}/slots?year=&month=: every
+// bookable slot start for id within the given calendar month (#323),
+// derived server-side so the eventual public page (#324) — which has no
+// Session — can be told the same answer this route computes. year and
+// month are required query params; month is 1-12.
+func (h *BookingLinkHandler) Slots(w http.ResponseWriter, r *http.Request) {
+	userID := httpauth.MustUserID(r.Context())
+	workspaceID := httpauth.MustWorkspaceID(r.Context())
+	id, ok := parseInt64Param(w, r, "id")
+	if !ok {
+		return
+	}
+
+	year, ok := parseRequiredIntQuery(w, r, "year")
+	if !ok {
+		return
+	}
+	month, ok := parseRequiredIntQuery(w, r, "month")
+	if !ok {
+		return
+	}
+
+	slots, err := h.links.DeriveSlotsForMonth(r.Context(), userID, workspaceID, id, year, time.Month(month), time.Now())
+	if respondError(w, err, bookingLinkErrors, "failed to derive slots") {
+		return
+	}
+
+	httpresponse.JSON(w, http.StatusOK, slotsResponse{Slots: slots})
+}
+
+func parseRequiredIntQuery(w http.ResponseWriter, r *http.Request, name string) (int, bool) {
+	raw := r.URL.Query().Get(name)
+	value, err := strconv.Atoi(raw)
+	if err != nil {
+		httpresponse.Error(w, http.StatusBadRequest, "invalid_request", name+" must be an integer")
+		return 0, false
+	}
+	return value, true
 }

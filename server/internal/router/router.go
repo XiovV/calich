@@ -355,6 +355,12 @@ func New(logger *slog.Logger, authHandler *handlers.AuthHandler, calendarHandler
 			r.Delete("/{id}", bookingLinkHandler.Delete)
 			r.Post("/{id}/duplicate", bookingLinkHandler.Duplicate)
 
+			// Slots (#323, ADR-0087): derived server-side even though this
+			// route itself is still authenticated — nothing is public yet
+			// (#322), the public page (#324) is what will eventually reach
+			// this same derivation with no Session at all.
+			r.Get("/{id}/slots", bookingLinkHandler.Slots)
+
 			// Conflict set (ADR-0087): add/remove a Calendar, one at a time,
 			// with immediate effect — the same shape Calendar Sets' own
 			// membership routes take.
