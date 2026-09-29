@@ -102,7 +102,7 @@ func (s *EventService) writeSeries(ctx context.Context, userID int64, calendarID
 		}
 
 		for _, w := range writes {
-			if err := s.upsertSeries(ctx, repos, calendarID, uuid.NewString(), userID, reminderUserID, seq, w, false); err != nil {
+			if err := s.upsertSeries(ctx, repos, calendarID, uuid.NewString(), userID, reminderUserID, seq, w, false, false, nil); err != nil {
 				return err
 			}
 		}
@@ -217,7 +217,7 @@ func (s *EventService) createSubscribedSeries(ctx context.Context, repos txRepos
 	if err != nil {
 		return err
 	}
-	return s.upsertSeries(ctx, repos, calendarID, uuid.NewString(), userID, ownerID, seq, write, false)
+	return s.upsertSeries(ctx, repos, calendarID, uuid.NewString(), userID, ownerID, seq, write, false, true, nil)
 }
 
 // updateSubscribedSeries updates masterID's row and its Overrides in place
@@ -235,7 +235,7 @@ func (s *EventService) updateSubscribedSeries(ctx context.Context, repos txRepos
 	if err != nil {
 		return err
 	}
-	return s.upsertSeries(ctx, repos, calendarID, masterID, userID, ownerID, seq, write, false)
+	return s.upsertSeries(ctx, repos, calendarID, masterID, userID, ownerID, seq, write, false, true, nil)
 }
 
 // tombstoneSubscribedSeries deletes masterID outright (cascading to its
@@ -308,6 +308,13 @@ type SeriesWrite struct {
 	Title, Description, Location, URL string
 	Start, End                        time.Time
 	AllDay                            bool
+	// Busy mirrors EventWrite.Busy — iCalendar's own TRANSP (ADR-0086),
+	// decoded verbatim from the incoming source (a CalDAV PUT, an ICS
+	// import, or the Google mapper) rather than re-derived from AllDay: the
+	// all-day-defaults-Free departure applies only to a brand-new Event this
+	// app itself creates, never to one whose own transparency a source
+	// already stated.
+	Busy                              bool
 	Tzid                              *string
 	Rrule                             string
 	Reminders                         []repository.Reminder
@@ -363,6 +370,9 @@ type OverrideWrite struct {
 	Title, Description, Location, URL string
 	Start, End                        time.Time
 	AllDay                            bool
+	// Busy mirrors SeriesWrite.Busy, scoped to this Override alone (ADR-0086)
+	// — settable independently of its Master's, like Color.
+	Busy                              bool
 	Tzid                              *string
 	Reminders                         []repository.Reminder
 	// ExternalUID mirrors SeriesWrite.ExternalUID — an Override shares its
@@ -399,6 +409,7 @@ func (w SeriesWrite) fields(calendarID string) repository.EventFields {
 		Start:         w.Start,
 		End:           w.End,
 		AllDay:        w.AllDay,
+		Busy:          w.Busy,
 		Rrule:         w.Rrule,
 		Tzid:          w.Tzid,
 		Description:   w.Description,
@@ -428,6 +439,7 @@ func (o OverrideWrite) fields(calendarID, masterID string) repository.EventField
 		Start:         o.Start,
 		End:           o.End,
 		AllDay:        o.AllDay,
+		Busy:          o.Busy,
 		Tzid:          o.Tzid,
 		Description:   o.Description,
 		Location:      o.Location,
@@ -550,7 +562,29 @@ func validateSeriesWrite(write *SeriesWrite) error {
 // User's Calendar default must stay free to keep applying wherever the
 // import or feed didn't itself specify one — writeSeries,
 // createSubscribedSeries, and updateSubscribedSeries all pass false.
-func (s *EventService) upsertSeries(ctx context.Context, repos txRepos, calendarID, masterID string, userID, reminderUserID, seq int64, write SeriesWrite, markExplicit bool) error {
+//
+// providerOwned decides whether an existing Master/Override's update also
+// moves ProviderEtag/RSVPStatus/ConferenceURL/GuestCount/ProviderColor
+// forward, via ApplyProviderOwnedFields and UpdateProviderEtag (#298,
+// ADR-0075) — repository.EventRepository.Update's SQL no longer has a
+// column for any of the five, so skipping this for a caller that doesn't
+// own fresh Provider data (writeSeries, PutSeries) is what makes their zero
+// values structurally unable to blank a Linked Calendar's stored ones,
+// rather than relying on write.fields() happening to leave them zero today.
+// createSubscribedSeries and updateSubscribedSeries pass true: their write
+// comes from ReconcileSeries' own diff against a fresh Provider fetch (or,
+// for a plain ICS Subscription, from a source that never sets these fields
+// at all, so moving its zero values forward is a no-op). Never needed on a
+// Create branch — repository.EventRepository.Create's SQL still writes
+// these columns directly from f, correctly, since a freshly-minted row has
+// no prior value to protect.
+// wb is PutSeries' own Write-back plan (#299, ADR-0081), threading each Push
+// a CalDAV PUT's diff decided into the same write that produces it: nil for
+// every other caller (writeSeries, createSubscribedSeries,
+// updateSubscribedSeries), none of which ever targets a writable Linked
+// Calendar. See buildPutSeriesWriteBack's own doc comment for how it's
+// computed.
+func (s *EventService) upsertSeries(ctx context.Context, repos txRepos, calendarID, masterID string, userID, reminderUserID, seq int64, write SeriesWrite, markExplicit, providerOwned bool, wb *putSeriesWriteBack) error {
 	// masterID missing is create-vs-update's only signal, deliberately —
 	// including for updateSubscribedSeries's caller (ReconcileSubscribedSeries),
 	// which believes masterID already exists: recreating a row unexpectedly
@@ -574,11 +608,43 @@ func (s *EventService) upsertSeries(ctx context.Context, repos txRepos, calendar
 		if _, err := repos.events.Update(ctx, masterID, master, seq, existingMaster.Sequence); err != nil {
 			return fmt.Errorf("update master: %w", err)
 		}
+		if providerOwned {
+			if err := repos.events.ApplyProviderOwnedFields(ctx, masterID, master.RSVPStatus, master.ConferenceURL, master.GuestCount, master.ProviderColor); err != nil {
+				return fmt.Errorf("apply master provider-owned fields: %w", err)
+			}
+			if err := repos.events.UpdateProviderEtag(ctx, masterID, master.ProviderEtag); err != nil {
+				return fmt.Errorf("update master provider etag: %w", err)
+			}
+		}
 	} else {
 		if _, err := repos.events.Create(ctx, masterID, &userID, master, seq); err != nil {
 			return fmt.Errorf("create master: %w", err)
 		}
 	}
+
+	// PutSeries' own Master push (#299, ADR-0081): enqueued in the same
+	// transaction as the write it accompanies (ADR-0018). masterExists gates
+	// ClearWriteBackError the same way EventService.Update does — a brand-new
+	// row (Create's own case) has never carried a failure marker, so nothing
+	// to clear.
+	if wb != nil && wb.masterPush != "" {
+		switch wb.masterPush {
+		case repository.OutboxMethodPost:
+			if _, err := repos.writeback.EnqueueWriteBackCreate(ctx, masterID); err != nil {
+				return fmt.Errorf("enqueue write-back create: %w", err)
+			}
+		case repository.OutboxMethodPatch:
+			if _, err := repos.writeback.EnqueueWriteBack(ctx, masterID); err != nil {
+				return fmt.Errorf("enqueue write-back: %w", err)
+			}
+		}
+		if masterExists {
+			if err := repos.events.ClearWriteBackError(ctx, masterID); err != nil {
+				return fmt.Errorf("clear master write-back error: %w", err)
+			}
+		}
+	}
+
 	if err := repos.reminders.ReplaceByEventID(ctx, reminderUserID, masterID, write.Reminders); err != nil {
 		return fmt.Errorf("persist master reminders: %w", err)
 	}
@@ -600,6 +666,22 @@ func (s *EventService) upsertSeries(ctx context.Context, repos txRepos, calendar
 	for _, exdate := range write.Exdates {
 		if err := repos.exceptions.Add(ctx, masterID, exdate); err != nil {
 			return fmt.Errorf("add exdate: %w", err)
+		}
+	}
+
+	// PutSeries' own CANCEL_INSTANCE pushes (#299, ADR-0081): one per newly
+	// added Exdate, already resolved by buildPutSeriesWriteBack against the
+	// series' prior stored state — nothing left to diff here. Needs no
+	// Override row of its own (mirrors EventService.AddException).
+	if wb != nil {
+		for _, exdate := range wb.cancelExdates {
+			if _, err := repos.writeback.EnqueueWriteBackInstanceCancel(ctx, masterID, repository.OutboxWriteBackInstanceSnapshot{
+				CalendarID:    wb.calendarID,
+				MasterEventID: masterID,
+				RecurrenceID:  exdate,
+			}); err != nil {
+				return fmt.Errorf("enqueue write-back instance cancel: %w", err)
+			}
 		}
 	}
 
@@ -628,12 +710,36 @@ func (s *EventService) upsertSeries(ctx context.Context, repos txRepos, calendar
 			if _, err := repos.events.Update(ctx, existing.ID, override, seq, existing.Sequence); err != nil {
 				return fmt.Errorf("update override: %w", err)
 			}
+			if providerOwned {
+				if err := repos.events.ApplyProviderOwnedFields(ctx, existing.ID, override.RSVPStatus, override.ConferenceURL, override.GuestCount, override.ProviderColor); err != nil {
+					return fmt.Errorf("apply override provider-owned fields: %w", err)
+				}
+				if err := repos.events.UpdateProviderEtag(ctx, existing.ID, override.ProviderEtag); err != nil {
+					return fmt.Errorf("update override provider etag: %w", err)
+				}
+			}
 			if err := repos.reminders.ReplaceByEventID(ctx, reminderUserID, existing.ID, o.Reminders); err != nil {
 				return fmt.Errorf("persist override reminders: %w", err)
 			}
 			if markExplicit {
 				if err := repos.explicitReminders.Mark(ctx, reminderUserID, existing.ID); err != nil {
 					return fmt.Errorf("mark override reminders explicit: %w", err)
+				}
+			}
+			// PutSeries' own INSTANCE push for a changed Override (#299,
+			// ADR-0081) — mirrors EventService.Update's own instance-edit
+			// branch, including clearing the row's own failure marker.
+			if wb != nil && wb.instanceRecurrenceIDs[key] {
+				if _, err := repos.writeback.EnqueueWriteBackInstance(ctx, masterID, repository.OutboxWriteBackInstanceSnapshot{
+					CalendarID:      wb.calendarID,
+					MasterEventID:   masterID,
+					RecurrenceID:    o.RecurrenceID,
+					OverrideEventID: existing.ID,
+				}); err != nil {
+					return fmt.Errorf("enqueue write-back instance: %w", err)
+				}
+				if err := repos.events.ClearWriteBackError(ctx, existing.ID); err != nil {
+					return fmt.Errorf("clear override write-back error: %w", err)
 				}
 			}
 			continue
@@ -649,6 +755,20 @@ func (s *EventService) upsertSeries(ctx context.Context, repos txRepos, calendar
 		if markExplicit {
 			if err := repos.explicitReminders.Mark(ctx, reminderUserID, overrideID); err != nil {
 				return fmt.Errorf("mark override reminders explicit: %w", err)
+			}
+		}
+		// PutSeries' own INSTANCE push for a brand-new Override (#299,
+		// ADR-0081) — mirrors EventService.Create's own instance-create
+		// branch. No failure marker to clear on a row that never existed
+		// before this write.
+		if wb != nil && wb.instanceRecurrenceIDs[key] {
+			if _, err := repos.writeback.EnqueueWriteBackInstance(ctx, masterID, repository.OutboxWriteBackInstanceSnapshot{
+				CalendarID:      wb.calendarID,
+				MasterEventID:   masterID,
+				RecurrenceID:    o.RecurrenceID,
+				OverrideEventID: overrideID,
+			}); err != nil {
+				return fmt.Errorf("enqueue write-back instance: %w", err)
 			}
 		}
 	}
@@ -671,6 +791,15 @@ func (s *EventService) upsertSeries(ctx context.Context, repos txRepos, calendar
 // whole write bumps change_seq exactly once, so CTag and sync-collection
 // see one atomic change (ADR-0018). Returns the written series recomposed
 // exactly as GetSeries would.
+//
+// On a writable Linked Calendar (#299, ADR-0081), the PUT is additionally
+// compiled into Write-back pushes: buildPutSeriesWriteBack diffs write
+// against the series' stored state *before* anything is written, and
+// upsertSeries enqueues each resulting push in the same transaction as the
+// row it accompanies (ADR-0018) — a rolled-back write must never leave a
+// push queued. A delta this app cannot express at Google yet (reverting an
+// Override, or un-cancelling an Exception) refuses the whole PUT up front,
+// leaving the stored series untouched — see buildPutSeriesWriteBack.
 func (s *EventService) PutSeries(ctx context.Context, userID int64, calendarID, masterID string, write SeriesWrite) (repository.Event, []repository.Event, error) {
 	if err := validateSeriesWrite(&write); err != nil {
 		return repository.Event{}, nil, err
@@ -680,16 +809,30 @@ func (s *EventService) PutSeries(ctx context.Context, userID int64, calendarID, 
 	if err != nil {
 		return repository.Event{}, nil, err
 	}
-	// ADR-0074 hides every Linked Calendar from CalDAV discovery
-	// unconditionally — caldavserver.GetCalendar 404s one directly, so no
-	// real client ever learns a path into one. This is the same refusal for
-	// a client that already holds (cached, or guessed) a path from before —
-	// repository.ErrNotFound, not ErrLinkedCalendarWriteUnsupported, so a
-	// stale PUT looks exactly like one aimed at a Calendar that never
-	// existed, matching GetCalendar's own posture rather than confirming
-	// the Calendar is there but refusing the write on it (#290).
+
+	var wb *putSeriesWriteBack
 	if isConnectionSource(calendar) {
-		return repository.Event{}, nil, repository.ErrNotFound
+		// A CalDAV PUT reaches a Linked Calendar's Provider only when the
+		// requesting principal has turned Exposure on for it (ADR-0080) —
+		// the collection wasn't in their home-set to PUT into in the first
+		// place, so this answers repository.ErrNotFound exactly like the
+		// direct-path posture GetCalendar/AccessWithExposure already take,
+		// rather than confirming the Calendar exists but refusing the write
+		// on it.
+		isOwner := calendar.UserID == userID
+		exposed, err := s.calendars.ResolveExposure(ctx, userID, calendar, isOwner)
+		if err != nil {
+			return repository.Event{}, nil, err
+		}
+		if !exposed {
+			return repository.Event{}, nil, repository.ErrNotFound
+		}
+		// A Connection whose grant is no longer Live refuses new edits, same
+		// as Create/Update/Delete/AddException (#291, ADR-0075) — queuing a
+		// push against a dead grant only delays the failure.
+		if err := s.requireLiveConnection(ctx, calendar); err != nil {
+			return repository.Event{}, nil, err
+		}
 	}
 
 	existingMaster, err := s.getOwnedEvent(ctx, userID, masterID)
@@ -704,6 +847,13 @@ func (s *EventService) PutSeries(ctx context.Context, userID int64, calendarID, 
 		return repository.Event{}, nil, repository.ErrNotFound
 	}
 
+	if isConnectionSource(calendar) {
+		wb, err = s.buildPutSeriesWriteBack(ctx, calendarID, masterID, existingMaster, masterExists, write)
+		if err != nil {
+			return repository.Event{}, nil, err
+		}
+	}
+
 	err = s.withTx(ctx, func(repos txRepos) error {
 		seq, err := repos.sync.NextChangeSeq(ctx)
 		if err != nil {
@@ -714,11 +864,180 @@ func (s *EventService) PutSeries(ctx context.Context, userID int64, calendarID, 
 		// PUTting User's own Reminders, not the Calendar's Owner's
 		// (ADR-0064) — hence userID for both userID and reminderUserID, and
 		// markExplicit true (see upsertSeries' doc comment).
-		return s.upsertSeries(ctx, repos, calendarID, masterID, userID, userID, seq, write, true)
+		return s.upsertSeries(ctx, repos, calendarID, masterID, userID, userID, seq, write, true, false, wb)
 	})
 	if err != nil {
 		return repository.Event{}, nil, fmt.Errorf("put series: %w", err)
 	}
 
 	return s.GetSeries(ctx, userID, masterID)
+}
+
+// putSeriesWriteBack is PutSeries' own Write-back plan for a writable Linked
+// Calendar (#299, ADR-0081) — what buildPutSeriesWriteBack's diff against
+// stored state decided upsertSeries should enqueue, once per Master write.
+// calendarID rides along since upsertSeries' own txRepos calls address the
+// outbox by it, exactly as OutboxWriteBackInstanceSnapshot's own CalendarID
+// field does.
+type putSeriesWriteBack struct {
+	calendarID string
+	// masterPush is repository.OutboxMethodPost (the Master has never
+	// reached the Provider — a brand-new series, or one whose earlier
+	// events.insert hasn't landed yet), repository.OutboxMethodPatch (an
+	// already-linked Master whose pushed fields changed), or "" (nothing to
+	// push: an already-linked Master whose pushed fields are unchanged).
+	masterPush string
+	// instanceRecurrenceIDs is every Override this PUT adds or changes,
+	// keyed by RecurrenceID.UnixNano() — an INSTANCE push once its row
+	// (existing or freshly created) is written.
+	instanceRecurrenceIDs map[int64]bool
+	// cancelExdates is every Exdate this PUT newly adds — a CANCEL_INSTANCE
+	// push, needing no Override row of its own.
+	cancelExdates []time.Time
+}
+
+// tzidEqual reports whether a and b name the same Anchor zone (ADR-0019),
+// including both being nil (a Floating Event).
+func tzidEqual(a, b *string) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
+}
+
+// masterFieldsDiffer reports whether any field Write-back actually pushes to
+// Google (ADR-0075's PATCH-only list: title, start, end, allDay, busy, tzid,
+// rrule, description, location, url — busy added by ADR-0086) differs between
+// existing and write. Deliberately excludes Color and Reminders — neither is
+// ever pushed (ADR-0075) — so a PUT that only recolours an Event or edits a
+// Reminder queues nothing.
+func masterFieldsDiffer(existing repository.Event, write SeriesWrite) bool {
+	return existing.Title != write.Title ||
+		existing.Description != write.Description ||
+		existing.Location != write.Location ||
+		existing.URL != write.URL ||
+		!existing.Start.Equal(write.Start) ||
+		!existing.End.Equal(write.End) ||
+		existing.AllDay != write.AllDay ||
+		existing.Busy != write.Busy ||
+		!tzidEqual(existing.Tzid, write.Tzid) ||
+		existing.Rrule != write.Rrule
+}
+
+// overrideFieldsDiffer is masterFieldsDiffer for one Override — the same
+// pushed field set, minus Rrule, which an Override never carries (ADR-0016).
+func overrideFieldsDiffer(existing repository.Event, write OverrideWrite) bool {
+	return existing.Title != write.Title ||
+		existing.Description != write.Description ||
+		existing.Location != write.Location ||
+		existing.URL != write.URL ||
+		!existing.Start.Equal(write.Start) ||
+		!existing.End.Equal(write.End) ||
+		existing.AllDay != write.AllDay ||
+		existing.Busy != write.Busy ||
+		!tzidEqual(existing.Tzid, write.Tzid)
+}
+
+// buildPutSeriesWriteBack diffs write against masterID's currently stored
+// state and compiles the result into a putSeriesWriteBack (#299, ADR-0081).
+// Called, and must return cleanly, *before* PutSeries writes anything: a
+// CalDAV PUT resends a recurring series' entire object on every save — the
+// frontend's own scoped Series operations have no CalDAV equivalent — so
+// without a genuine diff a single-Occurrence edit from a phone would also
+// re-push an unchanged Master on every save.
+//
+// Four deltas map onto a push:
+//   - The Master's own pushed fields changed, or it has never reached the
+//     Provider at all (existingMaster.ExternalUID == nil, including the
+//     brand-new-series case where masterExists is false) — a Master push
+//     (POST or PATCH, decided by ExternalUID's presence exactly as
+//     EventService.Update decides it).
+//   - An incoming Override not present in stored state, or present but
+//     changed — an INSTANCE push.
+//   - An incoming Exdate not present in stored state — a CANCEL_INSTANCE
+//     push. Needs no Override row: mirrors AddException.
+//
+// Two are refused outright, before any of the above is even queued, because
+// neither is expressible at Google yet (ADR-0081's known edge — "the two
+// rarest things a phone does"):
+//   - A stored Exdate missing from write.Exdates ("un-cancel this
+//     Occurrence").
+//   - A stored Override missing from write.Overrides whose RecurrenceID is
+//     *not* also a newly-added Exdate ("revert this Occurrence to the
+//     rule"). When it *is* also newly-added, this is not a revert — it's an
+//     ordinary "delete this already-modified Occurrence" (the standard
+//     CalDAV shape for that: the Override VEVENT drops out and an EXDATE
+//     line appears for its RECURRENCE-ID), already expressed above as that
+//     Exdate's own CANCEL_INSTANCE push.
+func (s *EventService) buildPutSeriesWriteBack(ctx context.Context, calendarID, masterID string, existingMaster repository.Event, masterExists bool, write SeriesWrite) (*putSeriesWriteBack, error) {
+	wb := &putSeriesWriteBack{
+		calendarID:            calendarID,
+		instanceRecurrenceIDs: make(map[int64]bool, len(write.Overrides)),
+	}
+
+	switch {
+	case !masterExists, existingMaster.ExternalUID == nil:
+		wb.masterPush = repository.OutboxMethodPost
+	case masterFieldsDiffer(existingMaster, write):
+		wb.masterPush = repository.OutboxMethodPatch
+	}
+
+	var existingOverrides []repository.Event
+	var existingExdates []time.Time
+	if masterExists {
+		overridesByParent, err := s.events.ListChildrenByParentIDs(ctx, []string{masterID})
+		if err != nil {
+			return nil, fmt.Errorf("list existing overrides for write-back diff: %w", err)
+		}
+		existingOverrides = overridesByParent[masterID]
+
+		exdatesByParent, err := s.exceptions.ListByParentIDs(ctx, []string{masterID})
+		if err != nil {
+			return nil, fmt.Errorf("list existing exdates for write-back diff: %w", err)
+		}
+		existingExdates = exdatesByParent[masterID]
+	}
+
+	writeExdateSet := make(map[int64]bool, len(write.Exdates))
+	for _, e := range write.Exdates {
+		writeExdateSet[e.UnixNano()] = true
+	}
+
+	existingOverrideByKey := make(map[int64]repository.Event, len(existingOverrides))
+	for _, o := range existingOverrides {
+		existingOverrideByKey[o.RecurrenceID.UnixNano()] = o
+	}
+	writeOverrideKeys := make(map[int64]bool, len(write.Overrides))
+	for _, o := range write.Overrides {
+		key := o.RecurrenceID.UnixNano()
+		writeOverrideKeys[key] = true
+		if existing, ok := existingOverrideByKey[key]; !ok || overrideFieldsDiffer(existing, o) {
+			wb.instanceRecurrenceIDs[key] = true
+		}
+	}
+	for key := range existingOverrideByKey {
+		if writeOverrideKeys[key] {
+			continue
+		}
+		if !writeExdateSet[key] {
+			return nil, ErrLinkedCalendarWriteBackRevertUnsupported
+		}
+	}
+
+	existingExdateSet := make(map[int64]bool, len(existingExdates))
+	for _, e := range existingExdates {
+		existingExdateSet[e.UnixNano()] = true
+	}
+	for _, e := range write.Exdates {
+		if !existingExdateSet[e.UnixNano()] {
+			wb.cancelExdates = append(wb.cancelExdates, e)
+		}
+	}
+	for _, e := range existingExdates {
+		if !writeExdateSet[e.UnixNano()] {
+			return nil, ErrLinkedCalendarWriteBackRevertUnsupported
+		}
+	}
+
+	return wb, nil
 }

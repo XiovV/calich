@@ -3,6 +3,8 @@ package outbox
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -52,6 +54,13 @@ func (f *fakeStore) MarkSent(_ context.Context, id int64, sentAt time.Time) erro
 	m := f.find(id)
 	m.Status = repository.OutboxStatusSent
 	m.SentAt = &sentAt
+	return nil
+}
+
+func (f *fakeStore) MarkSkipped(_ context.Context, id int64, reason string) error {
+	m := f.find(id)
+	m.Status = repository.OutboxStatusSkipped
+	m.LastError = reason
 	return nil
 }
 
@@ -388,4 +397,92 @@ func TestWorker_Tick_NothingPendingIsANoOp(t *testing.T) {
 	if len(sender.calls) != 0 {
 		t.Fatalf("expected nothing sent, got calls %+v", sender.calls)
 	}
+}
+
+// TestWorker_Tick_SkippedIsTerminalAndClaimsNoDelivery covers ADR-0079's
+// central distinction. A Sender that dispatched nothing returns ErrSkipped, and
+// the row must record that rather than the successful delivery a bare nil once
+// implied: Status skipped, the reason kept, sent_at untouched, and no attempt
+// consumed — there is nothing to retry, because the state that produced the
+// skip does not resolve on its own.
+func TestWorker_Tick_SkippedIsTerminalAndClaimsNoDelivery(t *testing.T) {
+	store := &fakeStore{messages: []repository.OutboxMessage{
+		{ID: 1, EventID: "evt-1", Kind: repository.OutboxKindWriteBack, Method: repository.OutboxMethodPatch, Status: repository.OutboxStatusPending},
+	}}
+	sender := &fakeSender{fail: map[int64]error{
+		1: fmt.Errorf("%w: this linked calendar is no longer writable at google", ErrSkipped),
+	}}
+	w := NewWorker(store, sender, func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) })
+
+	if err := w.Tick(context.Background()); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+
+	msg := store.messages[0]
+	if msg.Status != repository.OutboxStatusSkipped {
+		t.Fatalf("expected the message marked skipped, got %q", msg.Status)
+	}
+	if msg.SentAt != nil {
+		t.Fatalf("expected no sent_at on a message that was never dispatched, got %v", msg.SentAt)
+	}
+	if msg.Attempts != 0 {
+		t.Fatalf("expected a skip to consume no attempt, got %d", msg.Attempts)
+	}
+	if !strings.Contains(msg.LastError, "no longer writable") {
+		t.Fatalf("expected the skip reason recorded, got %q", msg.LastError)
+	}
+
+	// Terminal: a second Tick must not pick it up again.
+	if err := w.Tick(context.Background()); err != nil {
+		t.Fatalf("second tick: %v", err)
+	}
+	if len(sender.calls) != 1 {
+		t.Fatalf("expected a skipped message never retried, got calls %+v", sender.calls)
+	}
+}
+
+// TestWorker_Tick_PermanentFailureSkipsTheBackoffSchedule covers the other half
+// of ADR-0079: a failure the Sender has classified as structural (a Google 4xx —
+// a malformed body, a dead grant, a calendar the account may not write) fails on
+// the first response instead of walking all four backoff entries. The delay
+// mattered because a Write-back has no user-visible marker until its message is
+// terminal, so retrying a hopeless push silently withholds the badge that says
+// an edit never landed.
+func TestWorker_Tick_PermanentFailureSkipsTheBackoffSchedule(t *testing.T) {
+	store := &fakeStore{messages: []repository.OutboxMessage{
+		{ID: 1, EventID: "evt-1", Kind: repository.OutboxKindWriteBack, Method: repository.OutboxMethodPatch, Status: repository.OutboxStatusPending},
+	}}
+	sender := &fakeSender{fail: map[int64]error{
+		1: fmt.Errorf("%w: could not push this event's changes to google: status 400", ErrPermanent),
+	}}
+	terminal := &recordingTerminalSender{fakeSender: sender}
+	w := NewWorker(store, terminal, func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) })
+
+	if err := w.Tick(context.Background()); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+
+	msg := store.messages[0]
+	if msg.Status != repository.OutboxStatusFailed {
+		t.Fatalf("expected the message failed on its first attempt, got %q after %d attempts", msg.Status, msg.Attempts)
+	}
+	if msg.Attempts != 1 {
+		t.Fatalf("expected exactly one attempt spent, got %d", msg.Attempts)
+	}
+	// The marker hook fires here, not thirteen minutes later.
+	if terminal.handled != 1 {
+		t.Fatalf("expected the terminal-failure handler called once, got %d", terminal.handled)
+	}
+}
+
+// recordingTerminalSender is a fakeSender that also implements
+// TerminalFailureHandler, so a test can assert the marker hook fired.
+type recordingTerminalSender struct {
+	*fakeSender
+	handled int
+}
+
+func (r *recordingTerminalSender) HandleTerminalFailure(_ context.Context, _ repository.OutboxMessage, _ error) error {
+	r.handled++
+	return nil
 }

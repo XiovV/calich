@@ -141,6 +141,23 @@ export const calendarsApi = {
     return (await response.json()) as Calendar;
   },
 
+  // setExposure sets the caller's own Exposure choice on id (#297,
+  // ADR-0080): whether id appears in their own CalDAV home-set. Its own
+  // endpoint, unlike updateColor's reuse of the general PATCH: Exposure has
+  // no "the Calendar's own" value for an Owner's write to land on instead,
+  // so every caller — Owner included — always writes their own row here.
+  async setExposure(accessToken: string, id: string, exposed: boolean): Promise<boolean> {
+    const response = await authedFetch(accessToken, `/api/calendars/${id}/exposure`, {
+      method: "PUT",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ exposed }),
+    });
+    if (!response.ok) throw await errorFromResponse(response);
+
+    return ((await response.json()) as { exposed: boolean }).exposed;
+  },
+
   async remove(accessToken: string, id: string): Promise<void> {
     const response = await authedFetch(accessToken, `/api/calendars/${id}`, {
       method: "DELETE",

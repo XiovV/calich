@@ -42,6 +42,7 @@ const user = {
   timeFormat: "24h" as const,
   workingHoursStart: null,
   workingHoursEnd: null,
+  handle: null,
 };
 
 const connectionA = {

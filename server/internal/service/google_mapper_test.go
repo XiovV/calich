@@ -452,6 +452,81 @@ func TestMapGoogleEvents_InstanceColorIDIsIndependentOfMaster(t *testing.T) {
 	}
 }
 
+// TestMapGoogleEvents_NoTransparencyDefaultsToBusy covers ADR-0086: an empty
+// transparency field — Google's own default — maps to Busy, matching RFC
+// 5545's OPAQUE default.
+func TestMapGoogleEvents_NoTransparencyDefaultsToBusy(t *testing.T) {
+	events := []googleEvent{
+		{
+			ID:      "evt-1",
+			Summary: "Dentist",
+			Start:   googleEventDateTime{DateTime: "2026-01-15T10:00:00-05:00", TimeZone: "America/New_York"},
+			End:     googleEventDateTime{DateTime: "2026-01-15T11:00:00-05:00", TimeZone: "America/New_York"},
+		},
+	}
+
+	series, _ := mapGoogleEvents(events)
+	if !series[0].Write.Busy {
+		t.Fatalf("expected an absent transparency to map to Busy, got Free")
+	}
+}
+
+// TestMapGoogleEvents_TransparentMapsToFree covers Google's "transparent"
+// value mapping to Free (ADR-0086).
+func TestMapGoogleEvents_TransparentMapsToFree(t *testing.T) {
+	events := []googleEvent{
+		{
+			ID:           "evt-1",
+			Summary:      "Holiday",
+			Transparency: "transparent",
+			Start:        googleEventDateTime{Date: "2026-01-15"},
+			End:          googleEventDateTime{Date: "2026-01-16"},
+		},
+	}
+
+	series, _ := mapGoogleEvents(events)
+	if series[0].Write.Busy {
+		t.Fatalf("expected transparency \"transparent\" to map to Free, got Busy")
+	}
+}
+
+// TestMapGoogleEvents_InstanceTransparencyIsIndependentOfMaster covers
+// ADR-0086's per-instance Busy, mirroring
+// TestMapGoogleEvents_InstanceColorIDIsIndependentOfMaster.
+func TestMapGoogleEvents_InstanceTransparencyIsIndependentOfMaster(t *testing.T) {
+	events := []googleEvent{
+		{
+			ID:         "series-1",
+			Summary:    "Standup",
+			Start:      googleEventDateTime{DateTime: "2026-01-05T09:00:00-05:00", TimeZone: "America/New_York"},
+			End:        googleEventDateTime{DateTime: "2026-01-05T09:15:00-05:00", TimeZone: "America/New_York"},
+			Recurrence: []string{"RRULE:FREQ=WEEKLY;BYDAY=MO"},
+		},
+		{
+			ID:                "series-1_20260112T140000Z",
+			RecurringEventID:  "series-1",
+			OriginalStartTime: &googleEventDateTime{DateTime: "2026-01-12T09:00:00-05:00", TimeZone: "America/New_York"},
+			Transparency:      "transparent",
+			Summary:           "Standup (optional today)",
+			Start:             googleEventDateTime{DateTime: "2026-01-12T09:00:00-05:00", TimeZone: "America/New_York"},
+			End:               googleEventDateTime{DateTime: "2026-01-12T09:15:00-05:00", TimeZone: "America/New_York"},
+			Status:            "confirmed",
+		},
+	}
+
+	series, _ := mapGoogleEvents(events)
+	write := series[0].Write
+	if !write.Busy {
+		t.Fatalf("expected the Master to stay Busy, got Free")
+	}
+	if len(write.Overrides) != 1 {
+		t.Fatalf("expected 1 override, got %d", len(write.Overrides))
+	}
+	if write.Overrides[0].Busy {
+		t.Fatalf("expected the Override's own transparency, independent of the Master's, got Busy")
+	}
+}
+
 func TestParseGoogleExdateValue_MultipleCommaSeparatedValues(t *testing.T) {
 	parsed, err := parseGoogleExdateValue(map[string]string{"TZID": "America/New_York"}, "20260209T090000,20260216T090000", nil)
 	if err != nil {

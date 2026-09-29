@@ -34,6 +34,11 @@ type Event struct {
 	// range. Start/end still hold the half-open date range (start = the date,
 	// end = the exclusive next day). See ADR-0017.
 	AllDay bool
+	// Busy is iCalendar's own TRANSP (OPAQUE/TRANSPARENT): whether this Event
+	// consumes the time it occupies. A timed Event defaults to Busy, matching
+	// RFC 5545; an all-day Event defaults to Free — see ADR-0086. Only a
+	// Busy Event will later close a Booking Link's slot.
+	Busy bool
 	// Tzid is the IANA zone the Event's wall-clock is anchored to (the
 	// Anchor zone): a named zone is a zoned Event, "Etc/UTC" is an absolute
 	// instant, and nil is a Floating Event that renders/expands in the
@@ -184,6 +189,8 @@ type EventFields struct {
 	Title        string
 	Start, End   time.Time
 	AllDay       bool
+	// Busy mirrors Event.Busy — iCalendar's own TRANSP (ADR-0086).
+	Busy         bool
 	Rrule        string
 	ParentID     *string
 	RecurrenceID *time.Time
@@ -197,19 +204,17 @@ type EventFields struct {
 	// Refresh reconciles by it rather than ever updating it in place.
 	ExternalUID *string
 	// ProviderEtag/RSVPStatus/ConferenceURL/GuestCount/ProviderColor mirror
-	// Event's own fields (#287, #289, ADR-0052, ADR-0075) — unlike
-	// ExternalUID, these are written on every Update too, since a Linked
-	// Calendar's Full Refresh must move them forward when the Provider's own
-	// copy changes. Update writes whatever this EventFields carries
-	// unconditionally, with no merge against the existing row — every caller
-	// today (SeriesWrite/OverrideWrite.fields()) either owns these fields (a
-	// Refresh) or leaves them at zero value (every other write path), and
-	// requireWritableCalendar's read-only clamp keeps the latter off a
-	// Linked Calendar's Events entirely. Write-back (ADR-0075) will change
-	// that: whichever write path it adds must read the existing row's
-	// values forward into its own EventFields first, or a plain field edit
-	// will silently null these out. ProviderColor in particular is never
-	// pushed back to the Provider — colour is one-way inbound (ADR-0075).
+	// Event's own fields (#287, #289, ADR-0052, ADR-0075) — set on Create,
+	// like ExternalUID, but unlike ExternalUID also ignored by Update
+	// (#298): Update's SQL simply doesn't reference these five columns, so
+	// no EventFields passed to it — however it carries these fields — can
+	// touch them. They move only through ApplyProviderOwnedFields,
+	// UpdateProviderEtag, and AdoptProviderIdentity, the three narrow
+	// writers built for exactly this, which makes "only Refresh and
+	// Write-back's own responses move these" true by construction rather
+	// than a carry-forward each caller must remember. ProviderColor in
+	// particular is never pushed back to the Provider — colour is one-way
+	// inbound (ADR-0075).
 	ProviderEtag  *string
 	RSVPStatus    *string
 	ConferenceURL *string
@@ -217,10 +222,34 @@ type EventFields struct {
 	ProviderColor *string
 }
 
+// transpOpaque and transpTransparent are the two values iCalendar's TRANSP
+// property carries (ADR-0086) — the wire vocabulary busyToTransp/transpToBusy
+// translate Event.Busy through, so the column stores the domain's own term
+// rather than a bare 0/1 that would mean nothing on a raw SQL browse.
+const (
+	transpOpaque      = "OPAQUE"
+	transpTransparent = "TRANSPARENT"
+)
+
+// busyToTransp renders busy as TRANSP's own text vocabulary (ADR-0086).
+func busyToTransp(busy bool) string {
+	if busy {
+		return transpOpaque
+	}
+	return transpTransparent
+}
+
+// transpToBusy is busyToTransp's inverse. Anything other than the literal
+// "TRANSPARENT" reads as Busy — RFC 5545's own default for a VEVENT whose
+// TRANSP is absent or unrecognized.
+func transpToBusy(transp string) bool {
+	return transp != transpTransparent
+}
+
 func (r *EventRepository) Create(ctx context.Context, id string, createdBy *int64, f EventFields, changeSeq int64) (Event, error) {
 	if _, err := r.db.ExecContext(ctx,
-		`INSERT INTO events (id, calendar_id, title, "start", "end", all_day, rrule, parent_id, recurrence_id, tzid, description, location, url, color, external_uid, created_by, change_seq, provider_etag, rsvp_status, conference_url, guest_count, provider_color) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		id, f.CalendarID, f.Title, f.Start.UTC(), f.End.UTC(), f.AllDay, f.Rrule, f.ParentID, utcPtr(f.RecurrenceID), f.Tzid, f.Description, f.Location, f.URL, f.Color, f.ExternalUID, createdBy, changeSeq, f.ProviderEtag, f.RSVPStatus, f.ConferenceURL, f.GuestCount, f.ProviderColor,
+		`INSERT INTO events (id, calendar_id, title, "start", "end", all_day, transp, rrule, parent_id, recurrence_id, tzid, description, location, url, color, external_uid, created_by, change_seq, provider_etag, rsvp_status, conference_url, guest_count, provider_color) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		id, f.CalendarID, f.Title, f.Start.UTC(), f.End.UTC(), f.AllDay, busyToTransp(f.Busy), f.Rrule, f.ParentID, utcPtr(f.RecurrenceID), f.Tzid, f.Description, f.Location, f.URL, f.Color, f.ExternalUID, createdBy, changeSeq, f.ProviderEtag, f.RSVPStatus, f.ConferenceURL, f.GuestCount, f.ProviderColor,
 	); err != nil {
 		return Event{}, fmt.Errorf("insert event: %w", err)
 	}
@@ -228,7 +257,7 @@ func (r *EventRepository) Create(ctx context.Context, id string, createdBy *int6
 	return r.GetByID(ctx, id)
 }
 
-const eventColumns = `id, calendar_id, title, "start", "end", all_day, rrule, parent_id, recurrence_id, tzid, description, location, url, color, external_uid, created_by, created_at, change_seq, sequence, provider_etag, rsvp_status, conference_url, guest_count, provider_color, write_back_error`
+const eventColumns = `id, calendar_id, title, "start", "end", all_day, transp, rrule, parent_id, recurrence_id, tzid, description, location, url, color, external_uid, created_by, created_at, change_seq, sequence, provider_etag, rsvp_status, conference_url, guest_count, provider_color, write_back_error`
 
 func (r *EventRepository) GetByID(ctx context.Context, id string) (Event, error) {
 	return scanEvent(r.db.QueryRowContext(ctx,
@@ -377,14 +406,18 @@ func (r *EventRepository) ListAllWithAnyReminder(ctx context.Context) ([]Event, 
 }
 
 // Update rewrites id's columns from f. f.ParentID and f.RecurrenceID are
-// ignored — see EventFields. sequence is the row's new iTIP SEQUENCE
+// ignored — see EventFields. So, also per EventFields' own doc comment, are
+// f.ProviderEtag/RSVPStatus/ConferenceURL/GuestCount/ProviderColor (#298):
+// this SQL simply has no column for them, so no caller of Update — however
+// it populates those fields on f — can zero a Linked Calendar's Provider
+// state with a plain edit. sequence is the row's new iTIP SEQUENCE
 // (ADR-0059, #201) — the caller decides its value (bumped on a material
 // change, left as-is otherwise), since only EventService knows whether f
 // differs from the row being replaced.
 func (r *EventRepository) Update(ctx context.Context, id string, f EventFields, changeSeq, sequence int64) (Event, error) {
 	res, err := r.db.ExecContext(ctx,
-		`UPDATE events SET calendar_id = ?, title = ?, "start" = ?, "end" = ?, all_day = ?, rrule = ?, tzid = ?, description = ?, location = ?, url = ?, color = ?, change_seq = ?, sequence = ?, provider_etag = ?, rsvp_status = ?, conference_url = ?, guest_count = ?, provider_color = ? WHERE id = ?`,
-		f.CalendarID, f.Title, f.Start.UTC(), f.End.UTC(), f.AllDay, f.Rrule, f.Tzid, f.Description, f.Location, f.URL, f.Color, changeSeq, sequence, f.ProviderEtag, f.RSVPStatus, f.ConferenceURL, f.GuestCount, f.ProviderColor, id,
+		`UPDATE events SET calendar_id = ?, title = ?, "start" = ?, "end" = ?, all_day = ?, transp = ?, rrule = ?, tzid = ?, description = ?, location = ?, url = ?, color = ?, change_seq = ?, sequence = ? WHERE id = ?`,
+		f.CalendarID, f.Title, f.Start.UTC(), f.End.UTC(), f.AllDay, busyToTransp(f.Busy), f.Rrule, f.Tzid, f.Description, f.Location, f.URL, f.Color, changeSeq, sequence, id,
 	)
 	if err != nil {
 		return Event{}, fmt.Errorf("update event: %w", err)
@@ -434,16 +467,21 @@ func (r *EventRepository) AdoptProviderIdentity(ctx context.Context, id, externa
 	return requireAffected(res)
 }
 
-// ApplyProviderOwnedFields moves rsvpStatus/conferenceURL/guestCount
-// forward on id's row alone (#291, ADR-0075) — SendWriteBack's own
-// conflict-retry loop, reached after a 412 forces a refetch of the
-// Provider's current copy anyway. Deliberately narrower than Update: no
-// other column moves, and change_seq never bumps — these three are the
-// Provider's own read-only state, not a second edit to the Event.
-func (r *EventRepository) ApplyProviderOwnedFields(ctx context.Context, id string, rsvpStatus, conferenceURL *string, guestCount int) error {
+// ApplyProviderOwnedFields moves rsvpStatus/conferenceURL/guestCount/
+// providerColor forward on id's row alone (#291, #298, ADR-0075) — one of
+// upsertSeries' two narrow writers for a Refresh-reconciled update (the
+// other being UpdateProviderEtag), and also SendWriteBack's own
+// conflict-retry loop (reconcileProviderOwnedFields), reached after a 412
+// forces a refetch of the Provider's current copy anyway; that caller
+// passes the row's own already-stored providerColor back unchanged, since
+// colour there is governed by the until-touched rule the next ordinary
+// Refresh re-applies, not by a conflict retry. Deliberately narrower than
+// Update: no other column moves, and change_seq never bumps — these four
+// are the Provider's own read-only state, not a second edit to the Event.
+func (r *EventRepository) ApplyProviderOwnedFields(ctx context.Context, id string, rsvpStatus, conferenceURL *string, guestCount int, providerColor *string) error {
 	res, err := r.db.ExecContext(ctx,
-		`UPDATE events SET rsvp_status = ?, conference_url = ?, guest_count = ? WHERE id = ?`,
-		rsvpStatus, conferenceURL, guestCount, id,
+		`UPDATE events SET rsvp_status = ?, conference_url = ?, guest_count = ?, provider_color = ? WHERE id = ?`,
+		rsvpStatus, conferenceURL, guestCount, providerColor, id,
 	)
 	if err != nil {
 		return fmt.Errorf("apply provider-owned fields: %w", err)
@@ -522,8 +560,12 @@ func (r *EventRepository) BumpChangeSeqForCalendar(ctx context.Context, calendar
 // Linked Calendar becomes an ordinary owned Calendar with nothing left
 // pointing at an account that is no longer connected. Affects zero rows on
 // an empty Calendar, so it deliberately does not go through requireAffected.
-// change_seq never bumps — a Linked Calendar reaches no CalDAV client
-// (ADR-0074), so there is no sync stream for this to perturb.
+// change_seq never bumps — every column this clears (external_uid,
+// provider_etag, rsvp_status, conference_url, guest_count, provider_color,
+// write_back_error) is Provider-identity bookkeeping the CalDAV object
+// mapping never serializes into an Event's .ics bytes (ADR-0025), so there
+// is no sync stream for clearing them to perturb even now that Exposure
+// (ADR-0080) can put a Linked Calendar in front of a CalDAV client.
 func (r *EventRepository) ClearProviderIdentityByCalendar(ctx context.Context, calendarID string) error {
 	if _, err := r.db.ExecContext(ctx,
 		`UPDATE events SET external_uid = NULL, provider_etag = NULL, rsvp_status = NULL,
@@ -662,9 +704,11 @@ func scanEventRow(row rowScanner, e *Event) error {
 	var conferenceURL sql.NullString
 	var providerColor sql.NullString
 	var writeBackError sql.NullString
-	if err := row.Scan(&e.ID, &e.CalendarID, &e.Title, &e.Start, &e.End, &e.AllDay, &e.Rrule, &parentID, &recurrenceID, &tzid, &description, &location, &url, &color, &externalUID, &createdBy, &e.CreatedAt, &e.ChangeSeq, &e.Sequence, &providerEtag, &rsvpStatus, &conferenceURL, &e.GuestCount, &providerColor, &writeBackError); err != nil {
+	var transp string
+	if err := row.Scan(&e.ID, &e.CalendarID, &e.Title, &e.Start, &e.End, &e.AllDay, &transp, &e.Rrule, &parentID, &recurrenceID, &tzid, &description, &location, &url, &color, &externalUID, &createdBy, &e.CreatedAt, &e.ChangeSeq, &e.Sequence, &providerEtag, &rsvpStatus, &conferenceURL, &e.GuestCount, &providerColor, &writeBackError); err != nil {
 		return err
 	}
+	e.Busy = transpToBusy(transp)
 	if externalUID.Valid {
 		e.ExternalUID = &externalUID.String
 	}

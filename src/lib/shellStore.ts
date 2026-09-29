@@ -1,11 +1,27 @@
 import { create } from "zustand";
 import { useCalendarsStore } from "./calendarsStore";
+import { useTaskListsStore } from "./taskListsStore";
+import { reconcileCheckedIds } from "./reconcileCheckedIds";
 
 export type ActiveView = "day" | "week" | "month" | "year";
+
+// TasksPanelAxis is the Tasks panel's "Group by" choice (#316, ADR-0083):
+// which heading the panel currently arranges its Tasks under. Named around
+// "axis" rather than "group" deliberately — a Group already means a set of
+// Workspace Members in this codebase (CONTEXT.md), and the headings
+// themselves are Task buckets, Task Lists or Priorities, never "groups".
+export type TasksPanelAxis = "taskBucket" | "taskList" | "priority";
 
 interface ShellState {
   selectedDate: Date;
   activeView: ActiveView;
+  // activeCalendarSetId is the Active Calendar Set (#303, ADR-0082): null
+  // means "All calendars", the absence of a Set rather than a row of its
+  // own. Session state like selectedDate and activeView, but with no
+  // reconcile behaviour of its own and no effect on checkedCalendarIds —
+  // narrowing what exists and narrowing what's toggled on are kept
+  // orthogonal. See inScopeCalendars.
+  activeCalendarSetId: number | null;
   checkedCalendarIds: Set<string>;
   // knownCalendarIds is the Calendar ids seen as of the last reconcile — the
   // record that lets it tell "wasn't there last time" (auto-check) apart
@@ -15,6 +31,30 @@ interface ShellState {
   // that disappears (revoked) drops out of it, so a later re-Share is
   // "unseen" again and gets auto-checked rather than staying invisible.
   knownCalendarIds: Set<string>;
+  // tasksPanelOpen is the Tasks panel's own open/closed state (#317,
+  // ADR-0083): closed by default, session state like activeCalendarSetId
+  // with no Preference behind it and nothing persisted between loads.
+  tasksPanelOpen: boolean;
+  // tasksPanelAxis is the panel's chosen Group by axis (#316, ADR-0083):
+  // session state like tasksPanelOpen, resetting to "taskBucket" on load
+  // rather than remembering the caller's last choice.
+  tasksPanelAxis: TasksPanelAxis;
+  // checkedTaskListIds/knownTaskListIds are the Lists filter's own
+  // checked/known pair — the Task List counterpart to
+  // checkedCalendarIds/knownCalendarIds, carrying the identical reconcile
+  // rule via reconcileCheckedIds (#317, ADR-0083).
+  checkedTaskListIds: Set<number>;
+  knownTaskListIds: Set<number>;
+  // showCompletedTasks is "Show completed" (#310, ADR-0083): session state
+  // like tasksPanelOpen, closed (hidden) by default and with no Preference
+  // behind it — reopening the panel later starts hidden again.
+  showCompletedTasks: boolean;
+  // showTasksOnCalendar is "Show tasks on calendar" (#312, ADR-0083): whether
+  // a Deadline-only Task's all-day-lane chip (and, later, a Time block on
+  // the hourly grid) renders at all — session state like tasksPanelOpen, but
+  // defaulting **on**, since the calendar is meant to show what's due unless
+  // the User asks to look at commitments alone.
+  showTasksOnCalendar: boolean;
   // requestedEventId is set by a click on an invite Notification (the
   // NotificationBell has no reach into AppShell's own eventModalState) and
   // cleared once AppShell has resolved it into an opened EventModal — a
@@ -24,6 +64,9 @@ interface ShellState {
   clearRequestedEventOpen: () => void;
   setSelectedDate: (date: Date) => void;
   setActiveView: (view: ActiveView) => void;
+  setActiveCalendarSetId: (id: number | null) => void;
+  setTasksPanelOpen: (open: boolean) => void;
+  setTasksPanelAxis: (axis: TasksPanelAxis) => void;
   setCheckedCalendarIds: (ids: Iterable<string>) => void;
   // reconcileCheckedCalendarIds auto-checks only ids not previously known —
   // e.g. a Calendar shared with the caller while the tab was in the
@@ -40,33 +83,57 @@ interface ShellState {
   // doesn't treat it as unseen and re-check it after a deliberate uncheck
   // (#175).
   addCheckedCalendarId: (id: string) => void;
+  // reconcileCheckedTaskListIds/toggleTaskListChecked/addCheckedTaskListId
+  // are checkedCalendarIds' three counterparts above, over Task List ids
+  // (#317, ADR-0083).
+  reconcileCheckedTaskListIds: (ids: Iterable<number>) => void;
+  toggleTaskListChecked: (id: number) => void;
+  addCheckedTaskListId: (id: number) => void;
+  setShowCompletedTasks: (show: boolean) => void;
+  setShowTasksOnCalendar: (show: boolean) => void;
 }
 
 export const useShellStore = create<ShellState>((set) => ({
   selectedDate: new Date(),
   activeView: "week",
+  activeCalendarSetId: null,
   checkedCalendarIds: new Set(
     useCalendarsStore.getState().calendars.map((calendar) => calendar.id),
   ),
   knownCalendarIds: new Set(
     useCalendarsStore.getState().calendars.map((calendar) => calendar.id),
   ),
+  tasksPanelOpen: false,
+  tasksPanelAxis: "taskBucket",
+  // Unlike checkedCalendarIds/knownCalendarIds above, not seeded from the
+  // store at module-init time: taskListsStore sits downstream of authStore,
+  // which itself imports shellStore, so reading it synchronously here would
+  // close a circular import the wrong way round depending on which module
+  // loads first. Starting empty costs nothing — taskListsStore itself
+  // starts empty until refetchTaskListsAndReconcile below runs — and the
+  // import stays safe because it's only ever touched lazily, inside that
+  // function's body.
+  checkedTaskListIds: new Set<number>(),
+  knownTaskListIds: new Set<number>(),
+  showCompletedTasks: false,
+  showTasksOnCalendar: true,
   requestedEventId: null,
   requestEventOpen: (eventId) => set({ requestedEventId: eventId }),
   clearRequestedEventOpen: () => set({ requestedEventId: null }),
   setSelectedDate: (date) => set({ selectedDate: date }),
   setActiveView: (view) => set({ activeView: view }),
+  setActiveCalendarSetId: (id) => set({ activeCalendarSetId: id }),
+  setTasksPanelOpen: (open) => set({ tasksPanelOpen: open }),
+  setTasksPanelAxis: (axis) => set({ tasksPanelAxis: axis }),
   setCheckedCalendarIds: (ids) => set({ checkedCalendarIds: new Set(ids) }),
   reconcileCheckedCalendarIds: (ids) =>
     set((state) => {
-      const idList = Array.from(ids);
-      const nextChecked = new Set(state.checkedCalendarIds);
-      for (const id of idList) {
-        if (!state.knownCalendarIds.has(id)) {
-          nextChecked.add(id);
-        }
-      }
-      return { checkedCalendarIds: nextChecked, knownCalendarIds: new Set(idList) };
+      const { checkedIds, knownIds } = reconcileCheckedIds(
+        state.knownCalendarIds,
+        state.checkedCalendarIds,
+        ids,
+      );
+      return { checkedCalendarIds: checkedIds, knownCalendarIds: knownIds };
     }),
   toggleCalendarChecked: (id) =>
     set((state) => {
@@ -89,6 +156,32 @@ export const useShellStore = create<ShellState>((set) => ({
       checkedCalendarIds: new Set(state.checkedCalendarIds).add(id),
       knownCalendarIds: new Set(state.knownCalendarIds).add(id),
     })),
+  reconcileCheckedTaskListIds: (ids) =>
+    set((state) => {
+      const { checkedIds, knownIds } = reconcileCheckedIds(
+        state.knownTaskListIds,
+        state.checkedTaskListIds,
+        ids,
+      );
+      return { checkedTaskListIds: checkedIds, knownTaskListIds: knownIds };
+    }),
+  toggleTaskListChecked: (id) =>
+    set((state) => {
+      const next = new Set(state.checkedTaskListIds);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return { checkedTaskListIds: next };
+    }),
+  addCheckedTaskListId: (id) =>
+    set((state) => ({
+      checkedTaskListIds: new Set(state.checkedTaskListIds).add(id),
+      knownTaskListIds: new Set(state.knownTaskListIds).add(id),
+    })),
+  setShowCompletedTasks: (show) => set({ showCompletedTasks: show }),
+  setShowTasksOnCalendar: (show) => set({ showTasksOnCalendar: show }),
 }));
 
 // Shared by every caller that refetches Calendars and needs the checked set
@@ -102,5 +195,16 @@ export async function refetchCalendarsAndReconcile(): Promise<void> {
     .getState()
     .reconcileCheckedCalendarIds(
       useCalendarsStore.getState().calendars.map((calendar) => calendar.id),
+    );
+}
+
+// refetchTaskListsAndReconcile is refetchCalendarsAndReconcile's counterpart
+// for Task Lists (#317, ADR-0083).
+export async function refetchTaskListsAndReconcile(): Promise<void> {
+  await useTaskListsStore.getState().fetchTaskLists();
+  useShellStore
+    .getState()
+    .reconcileCheckedTaskListIds(
+      useTaskListsStore.getState().taskLists.map((taskList) => taskList.id),
     );
 }

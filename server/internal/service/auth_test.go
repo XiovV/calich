@@ -7,6 +7,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/golang-jwt/jwt/v5"
 	"golang.org/x/crypto/bcrypt"
@@ -1032,6 +1033,267 @@ func TestUpdateEmail_DuplicateReturnsErrEmailTaken(t *testing.T) {
 
 	if _, err := svc.UpdateEmail(ctx, user.ID, "bob@example.com"); !errors.Is(err, ErrEmailTaken) {
 		t.Fatalf("expected ErrEmailTaken, got %v", err)
+	}
+}
+
+// TestUpdateHandle_ClaimsAValidHandle covers #321, ADR-0084: a User has no
+// Handle until they claim one.
+func TestUpdateHandle_ClaimsAValidHandle(t *testing.T) {
+	svc := newTestAuthService(t, "admin", "admin")
+	ctx := context.Background()
+	user, _, err := svc.Bootstrap(ctx)
+	if err != nil {
+		t.Fatalf("bootstrap: %v", err)
+	}
+	if user.Handle != nil {
+		t.Fatalf("expected a fresh User to have no Handle, got %v", *user.Handle)
+	}
+
+	updated, err := svc.UpdateHandle(ctx, user.ID, "damir")
+	if err != nil {
+		t.Fatalf("update handle: %v", err)
+	}
+	if updated.Handle == nil || *updated.Handle != "damir" {
+		t.Fatalf("expected handle %q, got %+v", "damir", updated.Handle)
+	}
+}
+
+// TestUpdateHandle_FoldsCase covers ADR-0084's "compared case-insensitively
+// on the same terms as Email" — the app folds case on write, the same
+// belt-and-suspenders normalizeEmail already applies (ADR-0058).
+func TestUpdateHandle_FoldsCase(t *testing.T) {
+	svc := newTestAuthService(t, "admin", "admin")
+	ctx := context.Background()
+	user, _, err := svc.Bootstrap(ctx)
+	if err != nil {
+		t.Fatalf("bootstrap: %v", err)
+	}
+
+	updated, err := svc.UpdateHandle(ctx, user.ID, "  DaMir  ")
+	if err != nil {
+		t.Fatalf("update handle: %v", err)
+	}
+	if updated.Handle == nil || *updated.Handle != "damir" {
+		t.Fatalf("expected handle folded to %q, got %+v", "damir", updated.Handle)
+	}
+}
+
+func TestUpdateHandle_RejectsInvalidCharacters(t *testing.T) {
+	svc := newTestAuthService(t, "admin", "admin")
+	ctx := context.Background()
+	user, _, err := svc.Bootstrap(ctx)
+	if err != nil {
+		t.Fatalf("bootstrap: %v", err)
+	}
+
+	cases := []string{"Damir_H", "-damir", "damir-", "da--mir", "da mir", "", "   "}
+	for _, handle := range cases {
+		if _, err := svc.UpdateHandle(ctx, user.ID, handle); !errors.Is(err, ErrInvalidHandle) {
+			t.Fatalf("handle %q: expected ErrInvalidHandle, got %v", handle, err)
+		}
+	}
+}
+
+func TestUpdateHandle_RejectsTooLong(t *testing.T) {
+	svc := newTestAuthService(t, "admin", "admin")
+	ctx := context.Background()
+	user, _, err := svc.Bootstrap(ctx)
+	if err != nil {
+		t.Fatalf("bootstrap: %v", err)
+	}
+
+	tooLong := strings.Repeat("a", maxHandleLength+1)
+	if _, err := svc.UpdateHandle(ctx, user.ID, tooLong); !errors.Is(err, ErrInvalidHandle) {
+		t.Fatalf("expected ErrInvalidHandle, got %v", err)
+	}
+}
+
+// TestUpdateHandle_RejectsEveryReservedWord covers the AC's exact list.
+func TestUpdateHandle_RejectsEveryReservedWord(t *testing.T) {
+	svc := newTestAuthService(t, "admin", "admin")
+	ctx := context.Background()
+	user, _, err := svc.Bootstrap(ctx)
+	if err != nil {
+		t.Fatalf("bootstrap: %v", err)
+	}
+
+	for word := range ReservedHandles {
+		if _, err := svc.UpdateHandle(ctx, user.ID, word); !errors.Is(err, ErrHandleReserved) {
+			t.Fatalf("word %q: expected ErrHandleReserved, got %v", word, err)
+		}
+	}
+}
+
+func TestUpdateHandle_DuplicateReturnsErrHandleTaken(t *testing.T) {
+	svc := newTestAuthService(t, "admin", "admin")
+	ctx := context.Background()
+	user, _, err := svc.Bootstrap(ctx)
+	if err != nil {
+		t.Fatalf("bootstrap: %v", err)
+	}
+	bob, err := svc.users.Create(ctx, "bob", "bob@example.com", "hash", false)
+	if err != nil {
+		t.Fatalf("create bob: %v", err)
+	}
+	if _, err := svc.UpdateHandle(ctx, bob.ID, "bob"); err != nil {
+		t.Fatalf("bob claims handle: %v", err)
+	}
+
+	if _, err := svc.UpdateHandle(ctx, user.ID, "bob"); !errors.Is(err, ErrHandleTaken) {
+		t.Fatalf("expected ErrHandleTaken, got %v", err)
+	}
+	// Case-insensitively too.
+	if _, err := svc.UpdateHandle(ctx, user.ID, "BOB"); !errors.Is(err, ErrHandleTaken) {
+		t.Fatalf("expected ErrHandleTaken for a differently-cased duplicate, got %v", err)
+	}
+}
+
+// TestUpdateHandle_ReleasedHandleIsImmediatelyClaimable covers ADR-0084's
+// "a released Handle can immediately be claimed by another User" — renaming
+// bob off "bob" frees it up for alice with no cooldown.
+func TestUpdateHandle_ReleasedHandleIsImmediatelyClaimable(t *testing.T) {
+	svc := newTestAuthService(t, "admin", "admin")
+	ctx := context.Background()
+	alice, _, err := svc.Bootstrap(ctx)
+	if err != nil {
+		t.Fatalf("bootstrap: %v", err)
+	}
+	bob, err := svc.users.Create(ctx, "bob", "bob@example.com", "hash", false)
+	if err != nil {
+		t.Fatalf("create bob: %v", err)
+	}
+	if _, err := svc.UpdateHandle(ctx, bob.ID, "bob"); err != nil {
+		t.Fatalf("bob claims handle: %v", err)
+	}
+	if _, err := svc.UpdateHandle(ctx, bob.ID, "bobby"); err != nil {
+		t.Fatalf("bob renames: %v", err)
+	}
+
+	updated, err := svc.UpdateHandle(ctx, alice.ID, "bob")
+	if err != nil {
+		t.Fatalf("expected the released handle to be immediately claimable, got %v", err)
+	}
+	if updated.Handle == nil || *updated.Handle != "bob" {
+		t.Fatalf("expected alice to hold %q, got %+v", "bob", updated.Handle)
+	}
+}
+
+func TestSuggestHandle_DerivesFromEmailLocalPart(t *testing.T) {
+	svc := newTestAuthService(t, "admin", "admin")
+	ctx := context.Background()
+	user, err := svc.users.Create(ctx, "Damir", "damir@example.com", "hash", false)
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+
+	suggestion, err := svc.SuggestHandle(ctx, user.ID)
+	if err != nil {
+		t.Fatalf("suggest handle: %v", err)
+	}
+	if suggestion != "damir" {
+		t.Fatalf("expected suggestion %q, got %q", "damir", suggestion)
+	}
+}
+
+// TestSuggestHandle_SanitizesTheLocalPart covers dots/plusses/underscores an
+// email local part may carry that a Handle's own charset forbids.
+func TestSuggestHandle_SanitizesTheLocalPart(t *testing.T) {
+	svc := newTestAuthService(t, "admin", "admin")
+	ctx := context.Background()
+	user, err := svc.users.Create(ctx, "Damir", "damir.h+work@example.com", "hash", false)
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+
+	suggestion, err := svc.SuggestHandle(ctx, user.ID)
+	if err != nil {
+		t.Fatalf("suggest handle: %v", err)
+	}
+	if suggestion != "damir-h-work" {
+		t.Fatalf("expected suggestion %q, got %q", "damir-h-work", suggestion)
+	}
+}
+
+// TestSuggestHandle_TakenSuggestionGetsANumericSuffix covers the AC line
+// directly: "a taken suggestion is offered with a numeric suffix".
+func TestSuggestHandle_TakenSuggestionGetsANumericSuffix(t *testing.T) {
+	svc := newTestAuthService(t, "admin", "admin")
+	ctx := context.Background()
+	alice, err := svc.users.Create(ctx, "Damir", "damir@example.com", "hash", false)
+	if err != nil {
+		t.Fatalf("create alice: %v", err)
+	}
+	if _, err := svc.UpdateHandle(ctx, alice.ID, "damir"); err != nil {
+		t.Fatalf("alice claims damir: %v", err)
+	}
+	bob, err := svc.users.Create(ctx, "Damir", "damir@another.example.com", "hash", false)
+	if err != nil {
+		t.Fatalf("create bob: %v", err)
+	}
+
+	suggestion, err := svc.SuggestHandle(ctx, bob.ID)
+	if err != nil {
+		t.Fatalf("suggest handle: %v", err)
+	}
+	if suggestion != "damir-2" {
+		t.Fatalf("expected suggestion %q, got %q", "damir-2", suggestion)
+	}
+}
+
+// TestSuggestHandle_NeverExceedsMaxLengthWhenBaseIsAlreadyAtTheLimit covers
+// a real bug caught in review: a sanitized base already at maxHandleLength
+// (39) that turns out to be taken must not produce a numeric-suffixed
+// suggestion over that length, and must not loop forever truncating the
+// suffix straight back off again.
+func TestSuggestHandle_NeverExceedsMaxLengthWhenBaseIsAlreadyAtTheLimit(t *testing.T) {
+	svc := newTestAuthService(t, "admin", "admin")
+	ctx := context.Background()
+
+	maxLengthBase := strings.Repeat("a", maxHandleLength)
+	holder, err := svc.users.Create(ctx, "Holder", "holder@example.com", "hash", false)
+	if err != nil {
+		t.Fatalf("create holder: %v", err)
+	}
+	if _, err := svc.UpdateHandle(ctx, holder.ID, maxLengthBase); err != nil {
+		t.Fatalf("holder claims max-length handle: %v", err)
+	}
+
+	user, err := svc.users.Create(ctx, "Claimant", maxLengthBase+"@example.com", "hash", false)
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+
+	suggestion, err := svc.SuggestHandle(ctx, user.ID)
+	if err != nil {
+		t.Fatalf("suggest handle: %v", err)
+	}
+	if utf8.RuneCountInString(suggestion) > maxHandleLength {
+		t.Fatalf("expected suggestion to respect maxHandleLength (%d), got %q (%d)", maxHandleLength, suggestion, len(suggestion))
+	}
+	if suggestion == maxLengthBase {
+		t.Fatalf("expected a suggestion distinct from the already-taken base, got %q", suggestion)
+	}
+	if _, err := validateHandle(suggestion); err != nil {
+		t.Fatalf("expected the suggestion to pass validateHandle, got %v", err)
+	}
+}
+
+// TestSuggestHandle_SkipsAReservedBase covers a local part that happens to
+// collide with a reserved word, e.g. an admin@ address.
+func TestSuggestHandle_SkipsAReservedBase(t *testing.T) {
+	svc := newTestAuthService(t, "admin", "admin")
+	ctx := context.Background()
+	user, err := svc.users.Create(ctx, "Admin", "admin@another.example.com", "hash", false)
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+
+	suggestion, err := svc.SuggestHandle(ctx, user.ID)
+	if err != nil {
+		t.Fatalf("suggest handle: %v", err)
+	}
+	if suggestion != "admin-2" {
+		t.Fatalf("expected suggestion %q, got %q", "admin-2", suggestion)
 	}
 }
 

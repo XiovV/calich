@@ -39,6 +39,12 @@ interface AuthState {
   changePassword: (currentPassword: string, newPassword: string) => Promise<void>;
   updateEmail: (email: string) => Promise<User>;
   updateName: (name: string) => Promise<User>;
+  updateHandle: (handle: string) => Promise<User>;
+  // Re-fetches the caller's own User record without any field of its own
+  // changing here — for a side effect elsewhere on the server that this
+  // session wouldn't otherwise learn about, e.g. a Booking Link's first
+  // create auto-claiming a Handle (#322, ADR-0084).
+  refreshUser: () => Promise<User>;
   updateSyncedDeviceReminders: (enabled: boolean) => Promise<void>;
   updateWeekStart: (weekStart: number) => Promise<void>;
   updateDefaultView: (defaultView: ActiveView) => Promise<void>;
@@ -239,6 +245,24 @@ export const useAuthStore = create<AuthState>((set, get) => {
       if (!accessToken) throw new Error("Not authenticated.");
 
       const user = await authApi.updateName(accessToken, name);
+      set(authenticated(user, accessToken));
+      return user;
+    },
+
+    updateHandle: async (handle) => {
+      const { accessToken } = get();
+      if (!accessToken) throw new Error("Not authenticated.");
+
+      const user = await authApi.updateHandle(accessToken, handle);
+      set(authenticated(user, accessToken));
+      return user;
+    },
+
+    refreshUser: async () => {
+      const { accessToken } = get();
+      if (!accessToken) throw new Error("Not authenticated.");
+
+      const user = await authApi.me(accessToken);
       set(authenticated(user, accessToken));
       return user;
     },

@@ -119,6 +119,12 @@ var updateNameErrors = []errorCase{
 	{service.ErrInvalidDisplayName, badRequest("name must contain a visible character, must not contain control characters, and must be at most 100 characters")},
 }
 
+var updateHandleErrors = []errorCase{
+	{service.ErrInvalidHandle, badRequest(service.ErrInvalidHandle.Error())},
+	{service.ErrHandleReserved, badRequest(service.ErrHandleReserved.Error())},
+	{service.ErrHandleTaken, conflict("handle_taken", "handle is already taken")},
+}
+
 var updatePreferencesErrors = []errorCase{
 	{service.ErrInvalidWeekStart, badRequest("week_start must be between 0 and 6")},
 	{service.ErrInvalidDefaultView, badRequest("default_view must be one of day, week, month, year")},
@@ -371,6 +377,9 @@ type meResponse struct {
 	TimeFormat        string `json:"time_format"`
 	WorkingHoursStart *int   `json:"working_hours_start"`
 	WorkingHoursEnd   *int   `json:"working_hours_end"`
+	// Handle is a User's public name (#321, ADR-0084) — nil until claimed in
+	// Settings → Account.
+	Handle *string `json:"handle"`
 }
 
 func (h *AuthHandler) toMeResponse(user repository.User) meResponse {
@@ -388,6 +397,7 @@ func (h *AuthHandler) toMeResponse(user repository.User) meResponse {
 		TimeFormat:                    user.TimeFormat,
 		WorkingHoursStart:             user.WorkingHoursStart,
 		WorkingHoursEnd:               user.WorkingHoursEnd,
+		Handle:                        user.Handle,
 	}
 }
 
@@ -444,6 +454,50 @@ func (h *AuthHandler) UpdateName(w http.ResponseWriter, r *http.Request) {
 	}
 
 	httpresponse.JSON(w, http.StatusOK, h.toMeResponse(user))
+}
+
+type updateHandleRequest struct {
+	Handle string `json:"handle"`
+}
+
+// UpdateHandle claims or changes the caller's own Handle — a User's public
+// name (#321, ADR-0084). Warning the caller that a rename breaks every URL
+// published under the old one is the frontend's job (nothing is published
+// under one yet in this codebase); this endpoint just performs the change.
+func (h *AuthHandler) UpdateHandle(w http.ResponseWriter, r *http.Request) {
+	userID := httpauth.MustUserID(r.Context())
+
+	req, ok := decodeJSON[updateHandleRequest](w, r)
+	if !ok {
+		return
+	}
+
+	user, err := h.auth.UpdateHandle(r.Context(), userID, req.Handle)
+	if respondError(w, err, updateHandleErrors, "failed to update handle") {
+		return
+	}
+
+	httpresponse.JSON(w, http.StatusOK, h.toMeResponse(user))
+}
+
+type handleSuggestionResponse struct {
+	Handle string `json:"handle"`
+}
+
+// SuggestHandle serves GET /api/auth/handle-suggestion: a Handle suggestion
+// derived from the caller's own Email local part, disambiguated against
+// every already-claimed Handle and the reserved-word registry (#321,
+// ADR-0084). Read-only — claiming it is a separate UpdateHandle call.
+func (h *AuthHandler) SuggestHandle(w http.ResponseWriter, r *http.Request) {
+	userID := httpauth.MustUserID(r.Context())
+
+	suggestion, err := h.auth.SuggestHandle(r.Context(), userID)
+	if err != nil {
+		httpresponse.Error(w, http.StatusInternalServerError, "internal_error", "failed to suggest handle")
+		return
+	}
+
+	httpresponse.JSON(w, http.StatusOK, handleSuggestionResponse{Handle: suggestion})
 }
 
 type updateSyncedDeviceRemindersRequest struct {

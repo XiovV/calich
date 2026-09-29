@@ -10,6 +10,9 @@ interface EventWire {
   end: string;
   // Absent (omitted by the backend) for a non-recurring event.
   allDay?: boolean;
+  // Never omitted by the backend (ADR-0086) — Free (false) is a meaningful,
+  // common value on an all-day Event.
+  busy: boolean;
   rrule?: string;
   // Present only on an Override (ADR-0016).
   parentId?: string;
@@ -100,6 +103,7 @@ function fromWire(wire: EventWire): Event {
     start: parseEventTime(wire.start, wire.allDay),
     end: parseEventTime(wire.end, wire.allDay),
     allDay: wire.allDay || undefined,
+    busy: wire.busy,
     rrule: wire.rrule || undefined,
     parentId: wire.parentId,
     recurrenceId: wire.recurrenceId ? new Date(wire.recurrenceId) : undefined,
@@ -142,6 +146,11 @@ export const eventsApi = {
       start: Date;
       end: Date;
       allDay?: boolean;
+      // Whether this Event consumes the time it occupies (ADR-0086).
+      // Undefined defaults to Busy on the wire, matching RFC 5545's own
+      // default — the caller (the Event modal) always decides and sends a
+      // concrete value for a fresh create.
+      busy?: boolean;
       rrule?: string;
       parentId?: string;
       recurrenceId?: Date;
@@ -178,6 +187,9 @@ export const eventsApi = {
         start: serializeEventTime(event.start, event.allDay),
         end: serializeEventTime(event.end, event.allDay),
         allDay: event.allDay ?? false,
+        // Defaults to Busy (never Free) when the caller leaves it unset,
+        // matching RFC 5545's own TRANSP default (ADR-0086).
+        busy: event.busy ?? true,
         rrule: event.rrule ?? "",
         parentId: event.parentId,
         recurrenceId: event.recurrenceId?.toISOString(),
@@ -206,6 +218,8 @@ export const eventsApi = {
       start: Date;
       end: Date;
       allDay?: boolean;
+      // Mirrors create's own busy (ADR-0086).
+      busy?: boolean;
       rrule?: string;
       tzid?: string;
       description?: string;
@@ -224,6 +238,7 @@ export const eventsApi = {
         start: serializeEventTime(changes.start, changes.allDay),
         end: serializeEventTime(changes.end, changes.allDay),
         allDay: changes.allDay ?? false,
+        busy: changes.busy ?? true,
         rrule: changes.rrule ?? "",
         tzid: changes.tzid,
         description: changes.description,

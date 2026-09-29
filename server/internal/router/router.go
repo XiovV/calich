@@ -15,7 +15,7 @@ import (
 	"github.com/XiovV/calich/server/internal/static"
 )
 
-func New(logger *slog.Logger, authHandler *handlers.AuthHandler, calendarHandler *handlers.CalendarHandler, eventHandler *handlers.EventHandler, attachmentHandler *handlers.AttachmentHandler, notificationHandler *handlers.NotificationHandler, appPasswordHandler *handlers.AppPasswordHandler, accountHandler *handlers.AccountHandler, userHandler *handlers.UserHandler, workspaceHandler *handlers.WorkspaceHandler, groupHandler *handlers.GroupHandler, connectionHandler *handlers.ConnectionHandler, calDAVHandler http.Handler, authenticator httpauth.Authenticator, activeUserChecker httpauth.ActiveUserChecker, calDAVAuthenticator httpauth.CalDAVAuthenticator, calDAVRateLimiter httpauth.CalDAVRateLimiter, enabledChecker httpauth.DisabledChecker, workspaceMembershipChecker httpauth.WorkspaceMembershipChecker) (http.Handler, error) {
+func New(logger *slog.Logger, authHandler *handlers.AuthHandler, calendarHandler *handlers.CalendarHandler, eventHandler *handlers.EventHandler, attachmentHandler *handlers.AttachmentHandler, notificationHandler *handlers.NotificationHandler, appPasswordHandler *handlers.AppPasswordHandler, accountHandler *handlers.AccountHandler, userHandler *handlers.UserHandler, workspaceHandler *handlers.WorkspaceHandler, groupHandler *handlers.GroupHandler, calendarSetHandler *handlers.CalendarSetHandler, taskListHandler *handlers.TaskListHandler, taskHandler *handlers.TaskHandler, connectionHandler *handlers.ConnectionHandler, availabilityScheduleHandler *handlers.AvailabilityScheduleHandler, bookingLinkHandler *handlers.BookingLinkHandler, publicBookingHandler *handlers.PublicBookingHandler, calDAVHandler http.Handler, authenticator httpauth.Authenticator, activeUserChecker httpauth.ActiveUserChecker, calDAVAuthenticator httpauth.CalDAVAuthenticator, calDAVRateLimiter httpauth.CalDAVRateLimiter, enabledChecker httpauth.DisabledChecker, workspaceMembershipChecker httpauth.WorkspaceMembershipChecker) (http.Handler, error) {
 	r := chi.NewRouter()
 	r.Use(requestLogger(logger))
 	r.Use(middleware.Recoverer)
@@ -61,6 +61,12 @@ func New(logger *slog.Logger, authHandler *handlers.AuthHandler, calendarHandler
 				r.Get("/me", authHandler.Me)
 				r.Put("/email", authHandler.UpdateEmail)
 				r.Put("/name", authHandler.UpdateName)
+				// Handle (#321, ADR-0084): a User's public name, claimed and
+				// changed in Settings → Account. Suggest is read-only and
+				// side-effect-free, so it needs no more gating than any other
+				// authenticated GET.
+				r.Get("/handle-suggestion", authHandler.SuggestHandle)
+				r.Put("/handle", authHandler.UpdateHandle)
 				r.Put("/synced-device-reminders", authHandler.UpdateSyncedDeviceReminders)
 				r.Patch("/preferences", authHandler.UpdatePreferences)
 			})
@@ -97,6 +103,12 @@ func New(logger *slog.Logger, authHandler *handlers.AuthHandler, calendarHandler
 			// Owner-only, same posture as the colour override.
 			r.Get("/{id}/default-reminders", calendarHandler.GetDefaultReminders)
 			r.Put("/{id}/default-reminders", calendarHandler.SetDefaultReminders)
+
+			// Exposure (ADR-0080): the caller's own choice of whether this
+			// Calendar appears in their own CalDAV home-set, beside their
+			// colour override and Default reminders — open to any User with
+			// Access, not Owner-only, same posture as both.
+			r.Put("/{id}/exposure", calendarHandler.SetExposure)
 
 			// Sharing (ADR-0034): grant/revoke/list are Owner-only,
 			// enforced by CalendarService rather than here; leave needs no
@@ -235,6 +247,127 @@ func New(logger *slog.Logger, authHandler *handlers.AuthHandler, calendarHandler
 			r.Delete("/{id}/members/{userId}", groupHandler.RemoveMember)
 		})
 
+		// Calendar Sets (#301, ADR-0082): a named, private selection of the
+		// caller's active Workspace's Calendars, gated the same as Groups.
+		// Private outright — CalendarSetService itself resolves every Set by
+		// (id, caller, active workspace) and refuses with ErrNotFound rather
+		// than any authority check, so no extra middleware gate is needed
+		// beyond RequireWorkspace.
+		r.Route("/calendar-sets", func(r chi.Router) {
+			r.Use(httpauth.RequireAuth(authenticator))
+			r.Use(httpauth.RequireActiveUser(activeUserChecker))
+			r.Use(httpauth.RequireEnabledUser(enabledChecker))
+			r.Use(httpauth.RequireWorkspace(workspaceMembershipChecker))
+
+			r.Get("/", calendarSetHandler.List)
+			r.Post("/", calendarSetHandler.Create)
+			r.Patch("/{id}", calendarSetHandler.Rename)
+			r.Delete("/{id}", calendarSetHandler.Delete)
+
+			// Membership (#302, ADR-0082): add/remove a Calendar, one at a
+			// time, with immediate effect. CalendarSetService itself
+			// validates the Calendar independently of the Set — Workspace
+			// membership and caller Access — so no extra middleware gate is
+			// needed here either.
+			r.Put("/{id}/calendars/{calendarId}", calendarSetHandler.AddCalendar)
+			r.Delete("/{id}/calendars/{calendarId}", calendarSetHandler.RemoveCalendar)
+		})
+
+		// Task Lists (#317, ADR-0083): the Tasks panel's Lists filter, gated
+		// the same as Calendar Sets. Private outright — TaskListService
+		// itself resolves every Task List by (id, caller, active workspace)
+		// and refuses with ErrNotFound rather than any authority check, so
+		// no extra middleware gate is needed beyond RequireWorkspace.
+		r.Route("/task-lists", func(r chi.Router) {
+			r.Use(httpauth.RequireAuth(authenticator))
+			r.Use(httpauth.RequireActiveUser(activeUserChecker))
+			r.Use(httpauth.RequireEnabledUser(enabledChecker))
+			r.Use(httpauth.RequireWorkspace(workspaceMembershipChecker))
+
+			r.Get("/", taskListHandler.List)
+			r.Post("/", taskListHandler.Create)
+			r.Patch("/{id}", taskListHandler.Rename)
+			r.Patch("/{id}/color", taskListHandler.Recolor)
+			r.Put("/{id}/default", taskListHandler.SetDefault)
+			r.Delete("/{id}", taskListHandler.Delete)
+		})
+
+		// Tasks (#310, ADR-0083): capture-and-tick-off, gated the same as
+		// Task Lists. Private outright — TaskService itself resolves every
+		// Task by (id, caller, active workspace) and refuses with
+		// ErrNotFound rather than any authority check, so no extra
+		// middleware gate is needed beyond RequireWorkspace.
+		r.Route("/tasks", func(r chi.Router) {
+			r.Use(httpauth.RequireAuth(authenticator))
+			r.Use(httpauth.RequireActiveUser(activeUserChecker))
+			r.Use(httpauth.RequireEnabledUser(enabledChecker))
+			r.Use(httpauth.RequireWorkspace(workspaceMembershipChecker))
+
+			r.Get("/", taskHandler.List)
+			r.Get("/completed", taskHandler.ListCompleted)
+			r.Post("/", taskHandler.Create)
+			r.Patch("/{id}", taskHandler.Update)
+			r.Patch("/{id}/notes", taskHandler.UpdateNotes)
+			r.Put("/{id}/deadline", taskHandler.SetDeadline)
+			r.Delete("/{id}/deadline", taskHandler.ClearDeadline)
+			r.Put("/{id}/time-block", taskHandler.SetTimeBlock)
+			r.Delete("/{id}/time-block", taskHandler.ClearTimeBlock)
+			r.Patch("/{id}/priority", taskHandler.UpdatePriority)
+			r.Put("/{id}/task-list", taskHandler.Move)
+			r.Put("/{id}/complete", taskHandler.Complete)
+			r.Delete("/{id}/complete", taskHandler.Uncomplete)
+			r.Delete("/{id}", taskHandler.Delete)
+		})
+
+		// Availability Schedules (#320, ADR-0085): a named weekly pattern of
+		// time ranges belonging to one User, private outright and carrying no
+		// Workspace of its own — gated by RequireAuth alone, unlike Calendar
+		// Sets and Task Lists, since there is no Workspace to require.
+		// AvailabilityScheduleService itself resolves every Schedule by (id,
+		// caller) and refuses with ErrNotFound rather than any authority
+		// check, so no extra middleware gate is needed.
+		r.Route("/availability-schedules", func(r chi.Router) {
+			r.Use(httpauth.RequireAuth(authenticator))
+			r.Use(httpauth.RequireActiveUser(activeUserChecker))
+			r.Use(httpauth.RequireEnabledUser(enabledChecker))
+
+			r.Get("/", availabilityScheduleHandler.List)
+			r.Post("/", availabilityScheduleHandler.Create)
+			r.Patch("/{id}", availabilityScheduleHandler.Update)
+			r.Delete("/{id}", availabilityScheduleHandler.Delete)
+		})
+
+		// Booking Links (#322, ADR-0084, ADR-0087): a named, slug-addressed
+		// offer to be booked, scoped to (caller, active workspace) like Task
+		// Lists — BookingLinkService itself resolves every Booking Link by
+		// (id, caller, active workspace) and refuses with ErrNotFound rather
+		// than any authority check, so no extra middleware gate is needed
+		// beyond RequireWorkspace.
+		r.Route("/booking-links", func(r chi.Router) {
+			r.Use(httpauth.RequireAuth(authenticator))
+			r.Use(httpauth.RequireActiveUser(activeUserChecker))
+			r.Use(httpauth.RequireEnabledUser(enabledChecker))
+			r.Use(httpauth.RequireWorkspace(workspaceMembershipChecker))
+
+			r.Get("/", bookingLinkHandler.List)
+			r.Post("/", bookingLinkHandler.Create)
+			r.Patch("/{id}", bookingLinkHandler.Update)
+			r.Delete("/{id}", bookingLinkHandler.Delete)
+			r.Post("/{id}/duplicate", bookingLinkHandler.Duplicate)
+
+			// Slots (#323, ADR-0087): derived server-side even though this
+			// route itself is still authenticated — nothing is public yet
+			// (#322), the public page (#324) is what will eventually reach
+			// this same derivation with no Session at all.
+			r.Get("/{id}/slots", bookingLinkHandler.Slots)
+
+			// Conflict set (ADR-0087): add/remove a Calendar, one at a time,
+			// with immediate effect — the same shape Calendar Sets' own
+			// membership routes take.
+			r.Put("/{id}/conflict-set/calendars/{calendarId}", bookingLinkHandler.AddConflictCalendar)
+			r.Delete("/{id}/conflict-set/calendars/{calendarId}", bookingLinkHandler.RemoveConflictCalendar)
+		})
+
 		// Connections (#285, ADR-0050, ADR-0051): Callback sits outside
 		// RequireAuth on purpose — Google's redirect back is an
 		// unauthenticated top-level navigation carrying neither an
@@ -275,6 +408,39 @@ func New(logger *slog.Logger, authHandler *handlers.AuthHandler, calendarHandler
 			r.Put("/disabled", accountHandler.SetDisabled)
 			r.With(httpauth.RequireEnabledUser(enabledChecker)).Get("/delete-impact", accountHandler.DeleteImpact)
 			r.With(httpauth.RequireEnabledUser(enabledChecker)).Delete("/", accountHandler.Delete)
+		})
+
+		// The public Booking Link page (#324, ADR-0084, ADR-0087): the
+		// stranger-facing surface with no Session at all — no RequireAuth, no
+		// RequireWorkspace, nothing but rate limiting, enforced inside
+		// PublicBookingHandler itself rather than as middleware here, since
+		// its ceiling is IP-only and shares no shape with httpauth's
+		// Authenticator-based gates. handle/slug resolution (reserved words,
+		// Visibility, SMTP, Access) all happen inside PublicBookingService;
+		// this router only needs to know the path shape.
+		r.Route("/public", func(r chi.Router) {
+			r.Get("/{handle}/{slug}", publicBookingHandler.Get)
+			r.Get("/{handle}/{slug}/slots", publicBookingHandler.Slots)
+			// Book (#326, ADR-0087): the first public *write* — creates an
+			// Event, invites the visitor as an Attendee, and (SMTP permitting)
+			// queues their Invitation. Gated the same as the reads above:
+			// rate limiting only, enforced inside PublicBookingHandler itself.
+			r.Post("/{handle}/{slug}/book", publicBookingHandler.Book)
+
+			// Cancel (#327, ADR-0087): the signed cancel link's own
+			// destination, a top-level path rather than nested under a
+			// (handle, slug) — a cancel token names the Event directly, so
+			// there is no handle/slug to resolve through. chi ranks a
+			// static segment ahead of the dynamic {handle} route below it,
+			// so this can never be shadowed by a Handle claim (also refused
+			// outright at claim time — ReservedHandles).
+			r.Post("/cancel-booking", publicBookingHandler.Cancel)
+
+			// The public index page (#325, ADR-0084): the derived rendering
+			// of an owner's Public Booking Links at /:handle, one path
+			// segment shallower than the link routes above — no ambiguity
+			// with them, since chi dispatches on segment count.
+			r.Get("/{handle}", publicBookingHandler.Index)
 		})
 	})
 

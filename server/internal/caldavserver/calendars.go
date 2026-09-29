@@ -59,13 +59,15 @@ func (b *Backend) ListCalendars(ctx context.Context) ([]caldav.Calendar, error) 
 
 	result := make([]caldav.Calendar, 0, len(calendars))
 	for _, c := range calendars {
-		// A Linked Calendar is absent from every principal's home-set,
-		// unconditionally — not just its Owner's (ADR-0074, superseding
-		// ADR-0054): the connecting User almost certainly already syncs
-		// Google natively, and a Workspace Member it was Shared to gets the
-		// same exclusion rather than a viewer-dependent rule that would pass
-		// every test written from the Owner's seat alone.
-		if c.Source != nil && c.Source.Kind == repository.SourceKindConnection {
+		// Exposure decides whether a Calendar belongs in userID's own
+		// CalDAV home-set at all (ADR-0080, superseding ADR-0074's
+		// unconditional exclusion): resolved per Calendar and per viewer
+		// already, above, so this is a straight filter rather than a
+		// Source-kind check. A Linked Calendar's own Owner defaults to
+		// unexposed and a Workspace Member it was Shared to defaults to
+		// exposed, but either default is overridable, and every other
+		// Calendar defaults to exposed exactly as before.
+		if !c.Exposed {
 			continue
 		}
 		result = append(result, toCalDAVCalendar(userID, c.Calendar))
@@ -104,18 +106,19 @@ func (b *Backend) GetCalendar(ctx context.Context, path string) (*caldav.Calenda
 		return &caldav.Calendar{Path: attendeeCollectionPath(userID), Name: attendeeCollectionName}, nil
 	}
 
-	c, err := b.calendars.Get(ctx, userID, calendarID)
+	access, c, exposed, err := b.calendars.AccessWithExposure(ctx, userID, calendarID)
 	if errors.Is(err, repository.ErrNotFound) {
 		return nil, webdav.NewHTTPError(http.StatusNotFound, err)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("get calendar: %w", err)
 	}
-	if c.Source != nil && c.Source.Kind == repository.SourceKindConnection {
-		// Mirrors ListCalendars' own exclusion (ADR-0074) — a stale or
-		// guessed URL to a Linked Calendar 404s exactly like one that never
-		// appeared in the home-set to begin with.
-		return nil, webdav.NewHTTPError(http.StatusNotFound, fmt.Errorf("linked calendar is not exposed over caldav"))
+	if !access.CanRead() || !exposed {
+		// Mirrors ListCalendars' own condition (ADR-0080) — a stale or
+		// guessed URL to a Calendar the caller can't read, or isn't exposed
+		// to, 404s exactly like one that never appeared in the home-set to
+		// begin with.
+		return nil, webdav.NewHTTPError(http.StatusNotFound, fmt.Errorf("calendar not found"))
 	}
 
 	result := toCalDAVCalendar(userID, c)

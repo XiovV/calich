@@ -124,6 +124,7 @@ func mergeDeltaChange(base SeriesWrite, change DeltaSeriesChange) SeriesWrite {
 		merged.Start = m.Start
 		merged.End = m.End
 		merged.AllDay = m.AllDay
+		merged.Busy = m.Busy
 		merged.Tzid = m.Tzid
 		merged.Rrule = m.Rrule
 		merged.ProviderEtag = m.ProviderEtag

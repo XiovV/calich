@@ -167,7 +167,7 @@ func TestEventService_Create_InvitesExplicitUsers_WritesOneInviteNotificationEac
 		if len(notifications) != 1 {
 			t.Fatalf("expected 1 notification for member %d, got %+v", memberID, notifications)
 		}
-		if notifications[0].Kind != repository.KindInvite || notifications[0].EventID != event.ID || notifications[0].Title != event.Title {
+		if notifications[0].Kind != repository.KindInvite || notifications[0].EventID == nil || *notifications[0].EventID != event.ID || notifications[0].Title != event.Title {
 			t.Fatalf("unexpected notification for member %d: %+v", memberID, notifications[0])
 		}
 	}

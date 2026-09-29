@@ -45,6 +45,11 @@ export interface Calendar {
   // Source points at, which the sidebar's per-Connection heading re-opens
   // the Calendar picker with.
   connectionId?: number;
+  // exposed is the caller's own resolved Exposure answer (#297, ADR-0080):
+  // whether this Calendar appears in their own CalDAV home-set. Defaults to
+  // true for every Calendar except a Linked Calendar for its own Owner, who
+  // defaults to false — overridable either way, independently per caller.
+  exposed?: boolean;
 }
 
 // isBrokenSubscription reports whether calendar's last Refresh failed —
@@ -78,9 +83,12 @@ export function isSubscribedCalendar(calendar: Calendar | undefined): boolean {
 }
 
 // isLinkedCalendar reports whether calendar is a Linked Calendar (#286,
-// ADR-0052): mirrored from one calendar of a Connection, and read-only here
-// until write-back ships — see calendarReadOnlyReason. Grouped in the
-// sidebar under its Connection's heading rather than under "My calendars".
+// ADR-0052): mirrored from one calendar of a Connection. Writable or not
+// depending on what the Provider's own ACL grants the connecting account
+// (ADR-0075) — which is why writability is read from access, never from this
+// predicate; see calendarReadOnlyReason. Grouped in the sidebar under its
+// Connection's heading rather than under "My calendars", keyed on the
+// Connection's id.
 export function isLinkedCalendar(calendar: Calendar | undefined): boolean {
   return calendar?.sourceKind === "connection";
 }
@@ -162,23 +170,36 @@ export function shareCountTooltip(shareCount: number): string {
 }
 
 // CalendarPickerEmptyReason explains why the Event modal's Calendar picker
-// has no options to offer (#174) — the remedy differs by cause, so the
+// has no options to offer (#174, #305) — the remedy differs by cause, so the
 // empty state must distinguish them rather than showing one generic
 // message: "none" means create one; "hidden" means show one already owned,
 // which must never suggest creating a Calendar the caller already has;
-// "unwritable" means every checked Calendar is Subscribed or Viewer-only.
-// "hidden" wins over "unwritable" — a Calendar that's both unchecked and
-// unwritable is still reachable by checking it. Meaningful only when the
-// picker's own options (checked Calendars filtered through
-// canWriteCalendarEvents, same as here) are already empty — the caller
-// establishes that before asking why; this just distinguishes the causes.
-export type CalendarPickerEmptyReason = "none" | "hidden" | "unwritable";
+// "unwritable" means every checked Calendar is Subscribed or Viewer-only;
+// "outOfSet" means the Active Calendar Set itself has nothing in it (#305,
+// ADR-0082), whose remedy is switching to All calendars rather than either
+// of the above. "hidden" wins over "unwritable" — a Calendar that's both
+// unchecked and unwritable is still reachable by checking it. Meaningful
+// only when the picker's own options (in the Active Calendar Set, checked,
+// and writable — same as here) are already empty — the caller establishes
+// that before asking why; this just distinguishes the causes.
+export type CalendarPickerEmptyReason = "none" | "hidden" | "unwritable" | "outOfSet";
 
+// calendars is already narrowed to the Active Calendar Set's members when
+// one is active (see inScopeCalendars) — the caller does that narrowing,
+// same as it always filtered to writable/checked before asking; this
+// function only distinguishes causes over whatever universe it's given.
+// hasActiveCalendarSet is what tells "no Calendars anywhere" (none) apart
+// from "the Active Calendar Set itself has nothing" (outOfSet) when that
+// narrowed universe comes back empty — a Set holding only read-only
+// Calendars is neither: it's non-empty, so this falls through to the
+// ordinary hidden/unwritable precedence exactly as an unscoped caller would
+// (ADR-0082's "existing precedence, unchanged, over the Set's members").
 export function calendarPickerEmptyReason(
   calendars: Calendar[],
   checkedCalendarIds: Set<string>,
+  hasActiveCalendarSet: boolean,
 ): CalendarPickerEmptyReason {
-  if (calendars.length === 0) return "none";
+  if (calendars.length === 0) return hasActiveCalendarSet ? "outOfSet" : "none";
   if (getCheckedCalendars(calendars, checkedCalendarIds).length === 0) return "hidden";
   return "unwritable";
 }

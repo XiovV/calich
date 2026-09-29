@@ -1,11 +1,15 @@
 import { useEffect, useMemo, useState } from "react";
 import { Dialog } from "@base-ui/react/dialog";
-import { useCalendarsStore } from "../lib/calendarsStore";
+import { useActiveCalendarSet, useCalendarSetsStore } from "../lib/calendarSetsStore";
 import { useConnectionsStore } from "../lib/connectionsStore";
+import { useEventsStore } from "../lib/eventsStore";
+import { refetchCalendarsAndReconcile } from "../lib/shellStore";
+import { toast } from "../lib/toast";
 import { type PickerCalendar } from "../lib/connectionsApi";
 import { useWorkspacesStore } from "../lib/workspacesStore";
 import { deleteCalendarCascade } from "../lib/deleteCalendarCascade";
 import { errorMessage } from "../lib/errorMessage";
+import { AddToActiveSetCheckbox } from "../components/layout/AddToActiveSetCheckbox";
 import { Button } from "../components/ui/Button";
 import { buttonClasses } from "../components/ui/buttonClasses";
 import { Checkbox } from "../components/ui/Checkbox";
@@ -31,7 +35,7 @@ interface CalendarPickerModalProps {
 export function CalendarPickerModal({ connectionId, onClose }: CalendarPickerModalProps) {
   const listPickerCalendars = useConnectionsStore((state) => state.listPickerCalendars);
   const importCalendars = useConnectionsStore((state) => state.importCalendars);
-  const fetchCalendars = useCalendarsStore((state) => state.fetchCalendars);
+  const fetchEvents = useEventsStore((state) => state.fetchEvents);
   // The picker's own trigger — Connect's redirect landing back on a fresh
   // full-page load — is the one moment nothing here can assume the active
   // Workspace has resolved yet: AppShell's own fetchWorkspaces() fires on
@@ -39,6 +43,12 @@ export function CalendarPickerModal({ connectionId, onClose }: CalendarPickerMod
   // time, throwing "No active workspace" on the request workspaceHeaders()
   // builds before AppShell's fetch has had a chance to answer.
   const activeWorkspaceId = useWorkspacesStore((state) => state.activeWorkspaceId);
+  // Add-to-Set checkbox (#308, ADR-0082): one checkbox covers the whole
+  // batch rather than one per row, present only while a Set is active and
+  // unticked by default.
+  const activeCalendarSet = useActiveCalendarSet();
+  const addCalendarToSet = useCalendarSetsStore((state) => state.addCalendarToSet);
+  const [addToActiveSet, setAddToActiveSet] = useState(false);
 
   const [calendars, setCalendars] = useState<PickerCalendar[] | null>(null);
   const [checkedIds, setCheckedIds] = useState<Set<string>>(new Set());
@@ -154,13 +164,28 @@ export function CalendarPickerModal({ connectionId, onClose }: CalendarPickerMod
     setIsImporting(true);
     setError(null);
     try {
-      await importCalendars(connectionId, toImport);
+      const imported = await importCalendars(connectionId, toImport);
+      if (activeCalendarSet && addToActiveSet) {
+        await Promise.all(
+          imported.map((calendar) =>
+            addCalendarToSet(activeCalendarSet.id, calendar.id).catch(() =>
+              toast.error(`Failed to add "${calendar.name}" to the set.`),
+            ),
+          ),
+        );
+      }
       // The picker's whole point is calendars appearing on the grid
       // immediately (#286) — a full re-fetch, not a local append, since the
       // server resolves each new Calendar's Access/isOwner/ownerName/
       // shareCount and this is a one-time action rather than a hot path
-      // worth optimizing.
-      await fetchCalendars();
+      // worth optimizing. Reconciling (not a plain fetchCalendars) is what
+      // checks the newly-imported Calendar's toggle without a reload — the
+      // same gap ImportExportSection's ICS import closed for #229. Its
+      // Events need their own refetch alongside it, same as
+      // ImportExportSection.handleConfirmImport — otherwise the grid stays
+      // empty for the new Calendar until the next mount/focus/workspace
+      // refetch.
+      await Promise.all([refetchCalendarsAndReconcile(), fetchEvents()]);
       onClose();
     } catch (err) {
       setError(errorMessage(err));
@@ -228,6 +253,12 @@ export function CalendarPickerModal({ connectionId, onClose }: CalendarPickerMod
               ))}
             </ul>
           )}
+
+          <AddToActiveSetCheckbox
+            activeCalendarSet={activeCalendarSet}
+            checked={addToActiveSet}
+            onCheckedChange={setAddToActiveSet}
+          />
 
           <div className="mt-5 flex justify-end gap-2">
             <Dialog.Close

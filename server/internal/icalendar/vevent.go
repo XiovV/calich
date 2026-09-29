@@ -49,6 +49,7 @@ func buildVEvent(e repository.Event, uid string, recurrenceID *time.Time, recurr
 		}
 		v.Props.SetText(ical.PropColor, nearestCSS3Keyword(r, g, b))
 	}
+	v.Props.SetText(ical.PropTransparency, transpValue(e.Busy))
 
 	// recurrenceID nil: RECURRENCE-ID (below) is built separately, against
 	// recurrenceIDAnchor rather than e's own AllDay/Tzid.
@@ -79,6 +80,15 @@ func buildVEvent(e repository.Event, uid string, recurrenceID *time.Time, recurr
 	}
 
 	return v, nil
+}
+
+// transpValue renders busy as TRANSP's own text vocabulary (ADR-0086):
+// OPAQUE for Busy, TRANSPARENT for Free.
+func transpValue(busy bool) string {
+	if busy {
+		return "OPAQUE"
+	}
+	return "TRANSPARENT"
 }
 
 // appendOrganizerProp adds ORGANIZER naming e's Organizer — the User named

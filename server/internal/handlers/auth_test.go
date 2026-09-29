@@ -62,6 +62,8 @@ func newAuthTestServerWithCookieSecure(t *testing.T, smtpConfigured, imapConfigu
 	r.With(httpauth.RequireAuth(auth), httpauth.RequireActiveUser(auth), httpauth.RequireEnabledUser(auth)).Get("/api/auth/me", h.Me)
 	r.With(httpauth.RequireAuth(auth), httpauth.RequireActiveUser(auth), httpauth.RequireEnabledUser(auth)).Put("/api/auth/email", h.UpdateEmail)
 	r.With(httpauth.RequireAuth(auth), httpauth.RequireActiveUser(auth), httpauth.RequireEnabledUser(auth)).Put("/api/auth/name", h.UpdateName)
+	r.With(httpauth.RequireAuth(auth), httpauth.RequireActiveUser(auth), httpauth.RequireEnabledUser(auth)).Get("/api/auth/handle-suggestion", h.SuggestHandle)
+	r.With(httpauth.RequireAuth(auth), httpauth.RequireActiveUser(auth), httpauth.RequireEnabledUser(auth)).Put("/api/auth/handle", h.UpdateHandle)
 	r.With(httpauth.RequireAuth(auth), httpauth.RequireActiveUser(auth), httpauth.RequireEnabledUser(auth)).Put("/api/auth/synced-device-reminders", h.UpdateSyncedDeviceReminders)
 	r.With(httpauth.RequireAuth(auth), httpauth.RequireActiveUser(auth), httpauth.RequireEnabledUser(auth)).Patch("/api/auth/preferences", h.UpdatePreferences)
 
@@ -804,6 +806,162 @@ func TestUpdateName_DuplicateNameIsAllowed(t *testing.T) {
 
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("expected 200 — Name isn't unique, so sharing bob's name is allowed, got %d", resp.StatusCode)
+	}
+}
+
+// TestMe_HandleAbsentByDefault covers ADR-0084: a User who never claims a
+// Handle stays in that legal state — /me reports it as null.
+func TestMe_HandleAbsentByDefault(t *testing.T) {
+	srv := newAuthTestServer(t)
+	accessToken := authenticatedAccessToken(t, srv)
+
+	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/api/auth/me", nil)
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET /api/auth/me: %v", err)
+	}
+	defer resp.Body.Close()
+
+	var me meResponse
+	if err := json.NewDecoder(resp.Body).Decode(&me); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if me.Handle != nil {
+		t.Fatalf("expected a fresh User to have no Handle, got %+v", *me.Handle)
+	}
+}
+
+func TestUpdateHandle_ClaimsAHandle(t *testing.T) {
+	srv := newAuthTestServer(t)
+	accessToken := authenticatedAccessToken(t, srv)
+
+	body, _ := json.Marshal(updateHandleRequest{Handle: "damir"})
+	req, _ := http.NewRequest(http.MethodPut, srv.URL+"/api/auth/handle", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("PUT /api/auth/handle: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	var me meResponse
+	if err := json.NewDecoder(resp.Body).Decode(&me); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if me.Handle == nil || *me.Handle != "damir" {
+		t.Fatalf("expected handle %q, got %+v", "damir", me.Handle)
+	}
+}
+
+// TestUpdateHandle_RejectsReservedWord covers the AC's reserved-word list
+// directly at the HTTP layer — service/auth_test.go's TestUpdateHandle_
+// RejectsEveryReservedWord already covers every entry, so this only proves
+// the 400 status code makes it through respondError.
+func TestUpdateHandle_RejectsReservedWord(t *testing.T) {
+	srv := newAuthTestServer(t)
+	accessToken := authenticatedAccessToken(t, srv)
+
+	body, _ := json.Marshal(updateHandleRequest{Handle: "settings"})
+	req, _ := http.NewRequest(http.MethodPut, srv.URL+"/api/auth/handle", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("PUT /api/auth/handle: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", resp.StatusCode)
+	}
+}
+
+// TestUpdateHandle_DuplicateReturnsConflict covers ADR-0084's uniqueness at
+// the HTTP layer, mirroring TestUpdateName_DuplicateNameIsAllowed's shape
+// but asserting the opposite: unlike Name, a Handle is unique instance-wide.
+func TestUpdateHandle_DuplicateReturnsConflict(t *testing.T) {
+	g := newTestGraph(t)
+
+	users := g.UserRepo
+	auth := g.Auth
+	bootstrapUser, _, err := auth.Bootstrap(context.Background())
+	if err != nil {
+		t.Fatalf("bootstrap: %v", err)
+	}
+	bob, err := users.Create(context.Background(), "bob", "bob@example.com", "hash", false)
+	if err != nil {
+		t.Fatalf("create bob: %v", err)
+	}
+	if _, err := auth.UpdateHandle(context.Background(), bob.ID, "bob"); err != nil {
+		t.Fatalf("bob claims handle: %v", err)
+	}
+	if _, err := auth.ChangePassword(context.Background(), bootstrapUser.ID, "admin", "a-new-password"); err != nil {
+		t.Fatalf("change password: %v", err)
+	}
+
+	h := NewAuthHandler(auth, g.RateLimiter, false, false, false, true)
+	r := chi.NewRouter()
+	r.Post("/api/auth/login", h.Login)
+	r.With(httpauth.RequireAuth(auth), httpauth.RequireActiveUser(auth)).Put("/api/auth/handle", h.UpdateHandle)
+	srv := httptest.NewServer(r)
+	t.Cleanup(srv.Close)
+
+	loginResp := login(t, srv, "admin@example.com", "a-new-password")
+	defer loginResp.Body.Close()
+	accessToken := mustLoginAccessToken(t, loginResp)
+
+	body, _ := json.Marshal(updateHandleRequest{Handle: "bob"})
+	req, _ := http.NewRequest(http.MethodPut, srv.URL+"/api/auth/handle", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("PUT /api/auth/handle: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("expected 409, got %d", resp.StatusCode)
+	}
+}
+
+// TestSuggestHandle_SkipsTheBootstrapAccountsReservedLocalPart covers a real
+// edge case rather than a contrived one: the bootstrap account this whole
+// file's shared helper seeds is admin@example.com, whose local part is
+// itself a reserved word.
+func TestSuggestHandle_SkipsTheBootstrapAccountsReservedLocalPart(t *testing.T) {
+	srv := newAuthTestServer(t)
+	accessToken := authenticatedAccessToken(t, srv)
+
+	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/api/auth/handle-suggestion", nil)
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET /api/auth/handle-suggestion: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	var suggestion handleSuggestionResponse
+	if err := json.NewDecoder(resp.Body).Decode(&suggestion); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if suggestion.Handle != "admin-2" {
+		t.Fatalf("expected suggestion %q, got %q", "admin-2", suggestion.Handle)
 	}
 }
 

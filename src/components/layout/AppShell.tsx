@@ -3,11 +3,17 @@ import { startOfDay } from "date-fns";
 import { Outlet } from "react-router";
 import { TopBar } from "./TopBar";
 import { Sidebar } from "./Sidebar";
+import { TasksPanel } from "./TasksPanel";
 import { CalendarView } from "../../calendar-grid/CalendarView";
 import { EventModal } from "../../calendar-grid/EventModal";
 import { computeDefaultDraft, type DraftBlock } from "../../lib/gridTime";
 import { useEventsStore } from "../../lib/eventsStore";
-import { refetchCalendarsAndReconcile, useShellStore } from "../../lib/shellStore";
+import {
+  refetchCalendarsAndReconcile,
+  refetchTaskListsAndReconcile,
+  useShellStore,
+} from "../../lib/shellStore";
+import { useTasksStore } from "../../lib/tasksStore";
 import { useWorkspacesStore } from "../../lib/workspacesStore";
 import { occurrenceKey, type Occurrence } from "../../lib/occurrence";
 
@@ -21,6 +27,8 @@ export function AppShell() {
   const fetchEvents = useEventsStore((state) => state.fetchEvents);
   const fetchWorkspaces = useWorkspacesStore((state) => state.fetchWorkspaces);
   const activeWorkspaceId = useWorkspacesStore((state) => state.activeWorkspaceId);
+  const tasksPanelOpen = useShellStore((state) => state.tasksPanelOpen);
+  const fetchTasks = useTasksStore((state) => state.fetchTasks);
 
   useEffect(() => {
     fetchWorkspaces();
@@ -62,6 +70,15 @@ export function AppShell() {
     function refetch() {
       refetchCalendarsAndReconcile();
       fetchEvents();
+      // Fetched here rather than only inside TasksPanel's own effect: "Show
+      // tasks on calendar" (#312) renders a Deadline-only Task's chip in the
+      // all-day lane, and a Time-blocked Task's block on the hourly grid
+      // (#313), whether or not the panel is open, so the grid needs Tasks —
+      // and their Task Lists' colours, otherwise every chip/block would
+      // render in the unresolved fallback colour until the panel was opened
+      // at least once — in the store regardless.
+      fetchTasks();
+      refetchTaskListsAndReconcile();
     }
 
     if (activeWorkspaceId === null) return;
@@ -73,7 +90,7 @@ export function AppShell() {
     document.addEventListener("visibilitychange", handleVisibilityChange);
     return () =>
       document.removeEventListener("visibilitychange", handleVisibilityChange);
-  }, [fetchEvents, activeWorkspaceId]);
+  }, [fetchEvents, fetchTasks, activeWorkspaceId]);
 
   function handleCreateClick() {
     const draft = computeDefaultDraft(new Date());
@@ -99,6 +116,11 @@ export function AppShell() {
             }
           />
         </main>
+        {tasksPanelOpen && (
+          <aside className="w-80 shrink-0 border-l border-border bg-surface">
+            <TasksPanel />
+          </aside>
+        )}
       </div>
       {eventModalState?.mode === "create" && (
         <EventModal

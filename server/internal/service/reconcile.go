@@ -186,7 +186,7 @@ func seriesContentEqual(a, b SeriesWrite) bool {
 	if !a.Start.Equal(b.Start) || !a.End.Equal(b.End) {
 		return false
 	}
-	if a.AllDay != b.AllDay || a.Rrule != b.Rrule {
+	if a.AllDay != b.AllDay || a.Busy != b.Busy || a.Rrule != b.Rrule {
 		return false
 	}
 	if !stringPtrEqual(a.Tzid, b.Tzid) {
@@ -284,7 +284,7 @@ func overrideContentEqual(a, b OverrideWrite) bool {
 	if !a.Start.Equal(b.Start) || !a.End.Equal(b.End) {
 		return false
 	}
-	if a.AllDay != b.AllDay {
+	if a.AllDay != b.AllDay || a.Busy != b.Busy {
 		return false
 	}
 	if !stringPtrEqual(a.Tzid, b.Tzid) {

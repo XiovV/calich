@@ -19,3 +19,20 @@ export function timePattern(timeFormat: TimeFormat): string {
 export function formatDateTime(date: Date, timeFormat: TimeFormat): string {
   return format(date, `MMM d, yyyy, ${timePattern(timeFormat)}`);
 }
+
+// The visitor's own browser-locale 12h/24h preference, seeded once for the
+// public Booking Link page (#324) the same "detected from browser,
+// correctable on the page" way its viewer timezone is (timezones.ts'
+// detectBrowserTimeZone) — this app has no Session there to read a
+// Preference from. hourCycle is what Intl actually resolves a locale's
+// preferred clock to; hour12 alone can't distinguish h11/h12 from h23/h24,
+// but either half of that split maps onto the same 12h/24h choice this app
+// offers.
+export function detectBrowserTimeFormat(): TimeFormat {
+  try {
+    const { hourCycle } = new Intl.DateTimeFormat(undefined, { hour: "numeric" }).resolvedOptions();
+    return hourCycle === "h23" || hourCycle === "h24" ? "24h" : "12h";
+  } catch {
+    return "12h";
+  }
+}

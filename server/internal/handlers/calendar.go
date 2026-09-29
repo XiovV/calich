@@ -93,16 +93,20 @@ type calendarResponse struct {
 	// ShareCount is how many Shares the Calendar carries — whether more
 	// than one person would be notified (#111).
 	ShareCount int `json:"shareCount"`
+	// Exposed is the caller's own resolved Exposure answer (ADR-0080):
+	// whether this Calendar appears in their own CalDAV home-set. Read-only
+	// here — set via PUT .../exposure.
+	Exposed bool `json:"exposed"`
 }
 
-func toCalendarResponse(c repository.Calendar, isOwner bool, ownerName string, shareCount int) calendarResponse {
+func toCalendarResponse(c repository.Calendar, isOwner bool, ownerName string, shareCount int, exposed bool) calendarResponse {
 	// respondWithOwnership's callers (Create, Update, Subscribe) always hand
 	// back the caller's own Calendar, so Access is Owner — except a just-
 	// Subscribed Calendar, whose Source clamps it to Viewer even for its
 	// Owner (ADR-0032, ADR-0052) — ResolveAccess applied here exactly as it
 	// is for every other caller, since c is always its own Owner's Calendar.
 	access := service.ResolveAccess(c.UserID, c, nil)
-	response := calendarResponse{ID: c.ID, Name: c.Name, Color: c.Color, Access: access.String(), IsOwner: isOwner, OwnerName: ownerName, ShareCount: shareCount}
+	response := calendarResponse{ID: c.ID, Name: c.Name, Color: c.Color, Access: access.String(), IsOwner: isOwner, OwnerName: ownerName, ShareCount: shareCount, Exposed: exposed}
 	if c.Source != nil {
 		response.LastSyncedAt = c.Source.LastSyncedAt
 		response.ErrorClass = c.Source.ErrorClass
@@ -122,7 +126,7 @@ func toCalendarResponse(c repository.Calendar, isOwner bool, ownerName string, s
 }
 
 func toCalendarWithAccessResponse(c service.CalendarWithAccess) calendarResponse {
-	response := toCalendarResponse(c.Calendar, c.IsOwner, c.OwnerName, c.ShareCount)
+	response := toCalendarResponse(c.Calendar, c.IsOwner, c.OwnerName, c.ShareCount, c.Exposed)
 	response.Access = c.Access.String()
 	// c.Color is the caller's resolved display colour (ADR-0038) — their
 	// own override if they've set one, otherwise the Calendar's own,
@@ -144,7 +148,12 @@ func (h *CalendarHandler) respondWithOwnership(w http.ResponseWriter, r *http.Re
 		httpresponse.Error(w, http.StatusInternalServerError, "internal_error", failMsg)
 		return false
 	}
-	httpresponse.JSON(w, status, toCalendarResponse(calendar, isOwner, ownerName, shareCount))
+	exposed, err := h.calendars.ResolveExposure(r.Context(), userID, calendar, isOwner)
+	if err != nil {
+		httpresponse.Error(w, http.StatusInternalServerError, "internal_error", failMsg)
+		return false
+	}
+	httpresponse.JSON(w, status, toCalendarResponse(calendar, isOwner, ownerName, shareCount, exposed))
 	return true
 }
 
@@ -158,6 +167,11 @@ var calendarWriteErrors = []errorCase{
 var calendarNotFoundErrors = []errorCase{
 	{repository.ErrNotFound, notFound("calendar not found")},
 }
+
+// calendarDeleteErrors is Delete's own rendering: calendarNotFoundErrors
+// plus ErrCalendarReferenced (#322, ADR-0087) — refusing to delete a
+// Calendar a live Booking Link still writes into.
+var calendarDeleteErrors = alsoHandling(calendarNotFoundErrors, errorCase{service.ErrCalendarReferenced, conflict("calendar_referenced", service.ErrCalendarReferenced.Error())})
 
 // workspaceMembershipErrors renders service.ErrNotWorkspaceMember as a 403 —
 // the caller's active Workspace, resolved from the X-Workspace-Id header,
@@ -443,7 +457,7 @@ func (h *CalendarHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 
 	err := h.calendars.Delete(r.Context(), userID, id)
-	if respondError(w, err, calendarNotFoundErrors, "failed to delete calendar") {
+	if respondError(w, err, calendarDeleteErrors, "failed to delete calendar") {
 		return
 	}
 

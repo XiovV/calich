@@ -40,7 +40,11 @@ import {
   resolveMaster,
   type Occurrence,
 } from "../lib/occurrence";
-import { resolveColor, type EditScope } from "../lib/recurrenceScope";
+import {
+  defaultBusyForAllDay,
+  resolveColor,
+  type EditScope,
+} from "../lib/recurrenceScope";
 import type { MasterFieldChanges } from "../lib/seriesOperation";
 import {
   planEventSave,
@@ -71,6 +75,8 @@ import {
   type CalendarPickerEmptyReason,
 } from "../lib/calendar";
 import { resolveOccurrenceColor, toOpaqueHex } from "../lib/calendarColors";
+import { inScopeCalendars } from "../lib/calendarSetScope";
+import { useActiveCalendarSet } from "../lib/calendarSetsStore";
 import { ColorSwatchPicker } from "../components/layout/ColorSwatchPicker";
 import { CalendarModal } from "../components/layout/CalendarModal";
 import { useShellStore } from "../lib/shellStore";
@@ -112,6 +118,8 @@ const CALENDAR_EMPTY_STATE_COPY: Record<CalendarPickerEmptyReason, string> = {
     "Your calendars are all hidden. Show one in the sidebar to add events to it.",
   unwritable:
     "You don't have a calendar you can add events to — everything you can see is shared with view-only access.",
+  outOfSet:
+    "This calendar set has nothing you can add events to. Switch to All calendars to see the rest of your calendars.",
 };
 
 type EventModalProps =
@@ -132,6 +140,9 @@ interface InitialFormState {
   /** The stored rule when `repeat` is "custom"; undefined otherwise. */
   customRule: string | undefined;
   allDay: boolean;
+  /** Whether this Event consumes the time it occupies (ADR-0086) — a timed
+   * Event defaults to Busy, an all-day one to Free. */
+  busy: boolean;
   reminders: Reminder[];
   description: string;
   location: string;
@@ -190,6 +201,8 @@ function deriveInitialFormState(
       repeat,
       customRule: repeat === "custom" ? rrule : undefined,
       allDay: Boolean(event.allDay),
+      // Absent means Busy, matching RFC 5545's own default (ADR-0086).
+      busy: event.busy ?? true,
       reminders: event.reminders ?? [],
       description: event.description ?? "",
       location: event.location ?? "",
@@ -208,6 +221,11 @@ function deriveInitialFormState(
     repeat: "none",
     customRule: undefined,
     allDay: false,
+    // A brand-new draft always opens timed (see `allDay: false` above), so
+    // its own default is Busy; the all-day-defaults-Free departure
+    // (ADR-0086) takes effect the moment the User checks "All day" — see
+    // handleAllDayChange below.
+    busy: defaultBusyForAllDay(false),
     reminders: [],
     description: "",
     location: "",
@@ -271,6 +289,7 @@ export function EventModal(props: EventModalProps) {
   const { mode, onClose } = props;
 
   const checkedCalendarIds = useShellStore((state) => state.checkedCalendarIds);
+  const activeCalendarSet = useActiveCalendarSet();
   const events = useEventsStore((state) => state.events);
   const fetchEvents = useEventsStore((state) => state.fetchEvents);
   const addEvent = useEventsStore((state) => state.addEvent);
@@ -302,10 +321,17 @@ export function EventModal(props: EventModalProps) {
   // (#111, ADR-0034) — a Subscribed Calendar (Refresh is its only
   // legitimate writer, #84, ADR-0032) and a Calendar the caller has no more
   // than Viewer Access to both never appear as Calendar picker options,
-  // whether checked or not.
+  // whether checked or not. Deliberately unscoped by the Active Calendar
+  // Set: the eventForOptions rescue just below still needs to find an
+  // edited Event's own Calendar here even if it has since fallen out of
+  // the Set, the same grace it already gets for falling out of checked.
   const writableCalendars = calendars.filter((c) => canWriteCalendarEvents(c));
+  // The picker itself narrows to in-Set, checked, writable (#305,
+  // ADR-0082) — a second way of not seeing a Calendar, exactly like
+  // unchecked, so defaultCalendarId below falls inside the Active Calendar
+  // Set by construction rather than needing its own Set-awareness.
   const checkedCalendars = getCheckedCalendars(
-    writableCalendars,
+    inScopeCalendars(writableCalendars, activeCalendarSet),
     checkedCalendarIds,
   );
   // An event's calendar may have been unchecked (hidden) since it was created —
@@ -369,13 +395,22 @@ export function EventModal(props: EventModalProps) {
   const showAttachmentUploader =
     mode === "edit" && calendarHasOtherRecipients(editedCalendar);
 
-  // #174: when no Calendar is a valid write target, the picker's empty
-  // state names why instead of rendering an empty dropdown next to a
+  // #174, #305: when no Calendar is a valid write target, the picker's
+  // empty state names why instead of rendering an empty dropdown next to a
   // silently disabled Save — the remedy differs per reason (create one,
-  // show one, or neither applies).
+  // show one, switch to All calendars, or neither applies). calendars is
+  // narrowed to the Active Calendar Set's own membership here, exactly as
+  // ADR-0082 asks — a Set that's itself empty must report "outOfSet"
+  // regardless of what the caller owns outside it, which is why this
+  // passes the narrowed list rather than the full one calendarOptions
+  // above deliberately doesn't (see its own comment).
   const calendarEmptyReason =
     calendarOptions.length === 0
-      ? calendarPickerEmptyReason(calendars, checkedCalendarIds)
+      ? calendarPickerEmptyReason(
+          inScopeCalendars(calendars, activeCalendarSet),
+          checkedCalendarIds,
+          activeCalendarSet !== null,
+        )
       : undefined;
   // Whether the Calendar row is actually rendering its empty-state branch
   // (#193) — calendarEmptyReason alone is a bad proxy for this: it's
@@ -410,6 +445,9 @@ export function EventModal(props: EventModalProps) {
         reminderCount: initial.reminders.length,
         attachmentCount: master?.attachments?.length ?? 0,
         attendeeCount: master?.attendeeCount ?? 0,
+        // The all-day-based default is Busy for timed, Free for all-day
+        // (ADR-0086) — an Event that departs from it is worth surfacing.
+        busyDiffersFromDefault: initial.busy !== defaultBusyForAllDay(initial.allDay),
       }),
   );
 
@@ -473,6 +511,12 @@ export function EventModal(props: EventModalProps) {
     ? calendarId
     : "";
   const [allDay, setAllDay] = useState(initial.allDay);
+  const [busy, setBusy] = useState(initial.busy);
+  // Whether the acting User has explicitly touched Busy in this create
+  // session — once true, toggling All day no longer overrides their choice.
+  // Never consulted in edit mode, where an existing Event's Busy is never
+  // silently flipped by retoggling All day (ADR-0086).
+  const busyTouchedRef = useRef(false);
   const [repeat, setRepeat] = useState<RepeatChoice>(initial.repeat);
   const [customRule, setCustomRule] = useState<string | undefined>(
     initial.customRule,
@@ -538,6 +582,22 @@ export function EventModal(props: EventModalProps) {
         : "Custom…",
     },
   ];
+
+  // A fresh create's own Busy follows All day live, until the User touches
+  // Busy directly in More options — the all-day-defaults-Free departure
+  // (ADR-0086) applied as the form is filled in, not just at open. An
+  // edit's existing Busy is never silently flipped by retoggling All day.
+  function handleAllDayChange(checked: boolean) {
+    setAllDay(checked);
+    if (mode === "create" && !busyTouchedRef.current) {
+      setBusy(defaultBusyForAllDay(checked));
+    }
+  }
+
+  function handleBusyChange(checked: boolean) {
+    busyTouchedRef.current = true;
+    setBusy(checked);
+  }
 
   function handleRepeatChange(value: RepeatChoice) {
     // Selecting "Custom…" opens the dialog rather than committing immediately;
@@ -732,6 +792,7 @@ export function EventModal(props: EventModalProps) {
     start: startForRule,
     end: allDay ? addDays(startOfDay(day), 1) : timeStringToDate(endDay, endTime),
     allDay,
+    busy,
     rrule: repeat === "custom" ? customRule : buildRule(repeat, startForRule),
     description: description.trim(),
     location: location.trim(),
@@ -765,6 +826,7 @@ export function EventModal(props: EventModalProps) {
           start: props.occurrence.start,
           end: props.occurrence.end,
           allDay: initial.allDay,
+          busy: initial.busy,
           rrule: master?.rrule,
           description: initial.description,
           location: initial.location,
@@ -1131,7 +1193,7 @@ export function EventModal(props: EventModalProps) {
               <label className="mt-4 inline-flex cursor-pointer items-center gap-2 text-label-sm text-ink">
                 <Checkbox
                   checked={allDay}
-                  onCheckedChange={setAllDay}
+                  onCheckedChange={handleAllDayChange}
                   aria-label="All day"
                   disabled={isReadOnlyEvent}
                 />
@@ -1226,7 +1288,12 @@ export function EventModal(props: EventModalProps) {
                       <p className="text-label-sm text-ink-muted">
                         {CALENDAR_EMPTY_STATE_COPY[calendarEmptyReason]}
                       </p>
-                      {calendarEmptyReason !== "hidden" && (
+                      {/* Neither "hidden" (go show one in the sidebar) nor
+                        "outOfSet" (go switch to All calendars, #305) is
+                        remedied by creating a new Calendar — offering this
+                        button there would suggest a fix that leaves the
+                        caller exactly as stuck as before. */}
+                      {calendarEmptyReason !== "hidden" && calendarEmptyReason !== "outOfSet" && (
                         <button
                           type="button"
                           onClick={() => setIsCreateCalendarOpen(true)}
@@ -1323,6 +1390,16 @@ export function EventModal(props: EventModalProps) {
 
               {isExpanded && (
                 <>
+                  <label className="mt-4 inline-flex cursor-pointer items-center gap-2 text-label-sm text-ink">
+                    <Checkbox
+                      checked={busy}
+                      onCheckedChange={handleBusyChange}
+                      aria-label="Show as busy"
+                      disabled={isReadOnlyEvent}
+                    />
+                    Show as busy
+                  </label>
+
                   <IconFieldRow icon={<MapPin className="size-4" />}>
                     <Input
                       aria-label="Location"

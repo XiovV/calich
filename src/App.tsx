@@ -5,6 +5,9 @@ import { AcceptWorkspaceInvitePage } from "./auth/AcceptWorkspaceInvitePage";
 import { LoginPage } from "./auth/LoginPage";
 import { RegisterPage } from "./auth/RegisterPage";
 import { ProtectedRoute } from "./auth/ProtectedRoute";
+import { PublicBookingPage } from "./booking/PublicBookingPage";
+import { PublicIndexPage } from "./booking/PublicIndexPage";
+import { CancelBookingPage } from "./booking/CancelBookingPage";
 import { SettingsModal } from "./settings/SettingsModal";
 import { getSettingsSections } from "./settings/settingsSections";
 import { Toaster } from "./components/ui/Toaster";
@@ -24,6 +27,25 @@ function App() {
         <Route path="/login" element={<LoginPage />} />
         <Route path="/register" element={<RegisterPage />} />
         <Route path="/accept-workspace-invite" element={<AcceptWorkspaceInvitePage />} />
+        {/* The signed cancel link's own destination (#327, ADR-0084,
+            ADR-0087): a static segment, so it ranks above the dynamic
+            /:handle route below and can never be shadowed by a claimed
+            Handle — also refused outright at claim time (ReservedHandles). */}
+        <Route path="/cancel-booking" element={<CancelBookingPage />} />
+        {/* The public Booking Link page (#324, ADR-0084, ADR-0087): a
+            stranger with no Session opens /:handle/:slug — sibling to the
+            routes above, deliberately outside ProtectedRoute below. A
+            claimed Handle can never collide with a literal route (the
+            reserved-word registry the backend enforces at claim time), and
+            React Router itself ranks a static segment above a dynamic one at
+            the same depth, so "/settings/account" et al. are never shadowed. */}
+        <Route path="/:handle/:slug" element={<PublicBookingPage />} />
+        {/* The public index page (#325, ADR-0084, ADR-0087): the derived
+            rendering of an owner's Public Booking Links at /:handle, one
+            path segment shallower than the route above — React Router
+            ranks it as a distinct, less-specific match, so the two never
+            shadow each other. */}
+        <Route path="/:handle" element={<PublicIndexPage />} />
         <Route
           path="/"
           element={

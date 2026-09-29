@@ -56,6 +56,7 @@ const { groupsApi } = await import("../lib/groupsApi");
 const { workspaceMembersApi } = await import("../lib/workspaceMembersApi");
 const { useAuthStore } = await import("../lib/authStore");
 const { useCalendarsStore } = await import("../lib/calendarsStore");
+const { useCalendarSetsStore } = await import("../lib/calendarSetsStore");
 const { useEventsStore } = await import("../lib/eventsStore");
 const { useShellStore } = await import("../lib/shellStore");
 const { EventModal } = await import("./EventModal");
@@ -92,6 +93,7 @@ const user: User = {
   timeFormat: "24h",
   workingHoursStart: null,
   workingHoursEnd: null,
+  handle: null,
 };
 
 const DAY = new Date(2026, 7, 3);
@@ -115,7 +117,9 @@ function seed(events: Event[], calendars: Calendar[] = [owned]) {
   useCalendarsStore.setState({ calendars });
   useShellStore.setState({
     checkedCalendarIds: new Set(calendars.map((c) => c.id)),
+    activeCalendarSetId: null,
   });
+  useCalendarSetsStore.setState({ calendarSets: [] });
   useEventsStore.setState({ events });
   useAuthStore.setState({
     status: "authenticated",
@@ -185,6 +189,71 @@ describe("EventModal — create", () => {
       expect.objectContaining({ title: "Retro", calendarId: "cal-1" }),
     );
     expect(onClose).toHaveBeenCalled();
+  });
+});
+
+// #319, ADR-0086: a timed create defaults to Busy, an all-day one to Free —
+// applied live as the form is filled in, until the User overrides it
+// directly in More options.
+describe("EventModal — Busy defaults on create (ADR-0086)", () => {
+  it("defaults a fresh timed create to Busy", async () => {
+    renderCreate();
+
+    await userEvent.type(screen.getByLabelText("Title"), "Standup");
+    await userEvent.click(saveButton());
+
+    expect(eventsApi.create).toHaveBeenCalledWith(
+      "token-123",
+      expect.objectContaining({ allDay: false, busy: true }),
+    );
+  });
+
+  it("defaults a fresh all-day create to Free", async () => {
+    renderCreate();
+
+    await userEvent.type(screen.getByLabelText("Title"), "Holiday");
+    await userEvent.click(screen.getByRole("checkbox", { name: /All day/ }));
+    await userEvent.click(saveButton());
+
+    expect(eventsApi.create).toHaveBeenCalledWith(
+      "token-123",
+      expect.objectContaining({ allDay: true, busy: false }),
+    );
+  });
+
+  it("flips the live default back to Busy when All day is unchecked again", async () => {
+    renderCreate();
+
+    await userEvent.type(screen.getByLabelText("Title"), "Holiday");
+    await userEvent.click(screen.getByRole("checkbox", { name: /All day/ }));
+    await userEvent.click(screen.getByRole("checkbox", { name: /All day/ }));
+    await userEvent.click(saveButton());
+
+    expect(eventsApi.create).toHaveBeenCalledWith(
+      "token-123",
+      expect.objectContaining({ allDay: false, busy: true }),
+    );
+  });
+
+  it("keeps an explicit Busy choice once the User touches it, even after All day is toggled again", async () => {
+    renderCreate();
+
+    await userEvent.type(screen.getByLabelText("Title"), "Holiday");
+    // Checking All day live-syncs Busy to Free.
+    await userEvent.click(screen.getByRole("checkbox", { name: /All day/ }));
+    await userEvent.click(screen.getByRole("button", { name: "More options" }));
+    // The User overrides it back to Busy directly.
+    await userEvent.click(screen.getByRole("checkbox", { name: /Show as busy/ }));
+    // Toggling All day off and back on again must not re-derive Busy now
+    // that the User has touched it.
+    await userEvent.click(screen.getByRole("checkbox", { name: /All day/ }));
+    await userEvent.click(screen.getByRole("checkbox", { name: /All day/ }));
+    await userEvent.click(saveButton());
+
+    expect(eventsApi.create).toHaveBeenCalledWith(
+      "token-123",
+      expect.objectContaining({ allDay: true, busy: true }),
+    );
   });
 });
 
@@ -294,6 +363,75 @@ describe("EventModal — creating a calendar from the empty state (#233)", () =>
     expect(
       screen.getByRole("button", { name: "Create a calendar" }),
     ).toBeInTheDocument();
+  });
+});
+
+// #305, ADR-0082: a second way of not seeing a Calendar — the picker
+// narrows to the Active Calendar Set on top of checked/writable, and its
+// own empty state ("outOfSet") never suggests creating a new Calendar,
+// since the remedy is switching Sets, not owning more Calendars.
+describe("EventModal — the Calendar picker narrows to the Active Calendar Set (#305)", () => {
+  const teamRoom: Calendar = {
+    id: "cal-3",
+    name: "Team room",
+    color: "#2ECC71FF",
+    access: "owner",
+    isOwner: true,
+  };
+
+  it("explains an empty Active Calendar Set as 'outOfSet', with no Create-a-calendar remedy", () => {
+    seed([], [owned]);
+    useCalendarSetsStore.setState({
+      calendarSets: [{ id: 1, name: "Empty set", calendarIds: [] }],
+    });
+    useShellStore.setState({ activeCalendarSetId: 1 });
+    renderCreate();
+
+    expect(
+      screen.getByText(
+        "This calendar set has nothing you can add events to. Switch to All calendars to see the rest of your calendars.",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Create a calendar" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("reports 'unwritable', not 'outOfSet', when a non-empty Set holds only a read-only Calendar", () => {
+    seed([], [viewerOnly]);
+    useCalendarSetsStore.setState({
+      calendarSets: [{ id: 1, name: "Shared", calendarIds: ["cal-2"] }],
+    });
+    useShellStore.setState({
+      activeCalendarSetId: 1,
+      checkedCalendarIds: new Set(["cal-2"]),
+    });
+    renderCreate();
+
+    expect(
+      screen.getByText(
+        "You don't have a calendar you can add events to — everything you can see is shared with view-only access.",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("offers only the Active Calendar Set's own members, defaulting the selection inside it", async () => {
+    seed([], [owned, teamRoom]);
+    useCalendarSetsStore.setState({
+      calendarSets: [{ id: 1, name: "Work", calendarIds: ["cal-3"] }],
+    });
+    useShellStore.setState({
+      activeCalendarSetId: 1,
+      checkedCalendarIds: new Set(["cal-1", "cal-3"]),
+    });
+    renderCreate();
+
+    const picker = screen.getByRole("combobox", { name: "Calendar" });
+    expect(picker).toHaveTextContent("Team room");
+
+    await userEvent.click(picker);
+    expect(await screen.findByRole("option", { name: "Team room" })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: "Personal" })).not.toBeInTheDocument();
   });
 });
 
@@ -524,6 +662,58 @@ describe("EventModal — an Event crossing midnight (#231)", () => {
       }),
     );
     expect(onClose).toHaveBeenCalled();
+  });
+});
+
+// #319, ADR-0086
+describe("EventModal — editing Busy", () => {
+  it("preserves an existing Free Event's Busy on an unrelated edit", async () => {
+    const event = makeEvent({ busy: false });
+    renderEdit(event);
+
+    await userEvent.clear(screen.getByLabelText("Title"));
+    await userEvent.type(screen.getByLabelText("Title"), "Standup (renamed)");
+    await userEvent.click(saveButton());
+
+    expect(eventsApi.update).toHaveBeenCalledWith(
+      "token-123",
+      "evt-1",
+      expect.objectContaining({ busy: false }),
+    );
+  });
+
+  it("auto-expands More options when Busy departs from its all-day default (ADR-0056)", () => {
+    const event = makeEvent({ busy: false });
+    renderEdit(event);
+
+    expect(
+      screen.getByRole("checkbox", { name: /Show as busy/ }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "More options" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("does not auto-expand a timed Event that's already Busy, its own default", () => {
+    renderEdit(makeEvent({ busy: true }));
+
+    expect(
+      screen.queryByRole("checkbox", { name: /Show as busy/ }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("toggling Show as busy off and saving writes Free", async () => {
+    renderEdit(makeEvent({ busy: true }));
+
+    await userEvent.click(screen.getByRole("button", { name: "More options" }));
+    await userEvent.click(screen.getByRole("checkbox", { name: /Show as busy/ }));
+    await userEvent.click(saveButton());
+
+    expect(eventsApi.update).toHaveBeenCalledWith(
+      "token-123",
+      "evt-1",
+      expect.objectContaining({ busy: false }),
+    );
   });
 });
 

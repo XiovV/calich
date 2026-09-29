@@ -3,6 +3,7 @@ package service
 import (
 	"net/mail"
 	"regexp"
+	"strconv"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -21,6 +22,102 @@ const maxNameLength = 100
 // sync request, the Email-Channel Reminder recipient (ADR-0021), and the
 // login identifier compared on every Login and AppPasswordService.Authenticate.
 const maxEmailLength = 254
+
+// maxHandleLength bounds validateHandle (#321, ADR-0084) — long enough for
+// a sanitized email local part plus a numeric disambiguation suffix,
+// short enough to stay readable in a shared URL (`/:handle`).
+const maxHandleLength = 39
+
+// handlePattern is a Handle's own character set (ADR-0084): lowercase
+// letters, digits and single hyphens between them. A Handle is a raw URL
+// path segment rather than free text — there is no encoding step between
+// what a User types and what appears in the address bar — so it excludes
+// anything that isn't safe or legible there outright, rather than escaping
+// it. The pattern itself forbids a leading, trailing, or doubled hyphen,
+// which is also what keeps sanitizeHandleBase's output always valid input
+// to this same check.
+var handlePattern = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
+
+// normalizeHandle trims and lowercases a Handle the same way normalizeEmail
+// folds an email — what makes a stored Handle comparable by plain Go string
+// equality, with idx_users_handle's own COLLATE NOCASE only helping at the
+// SQL level.
+func normalizeHandle(handle string) string {
+	return strings.ToLower(strings.TrimSpace(handle))
+}
+
+// validateHandle normalizes handle and checks it against the one set of
+// rules shared by every path that claims or changes one — AuthService.
+// UpdateHandle and SuggestHandle's own availability loop (#321, ADR-0084).
+func validateHandle(handle string) (string, error) {
+	handle = normalizeHandle(handle)
+	if handle == "" {
+		return "", ErrInvalidHandle
+	}
+	if utf8.RuneCountInString(handle) > maxHandleLength {
+		return "", ErrInvalidHandle
+	}
+	if !handlePattern.MatchString(handle) {
+		return "", ErrInvalidHandle
+	}
+	if IsReservedHandle(handle) {
+		return "", ErrHandleReserved
+	}
+	return handle, nil
+}
+
+// sanitizeHandleBase turns raw (an Email's local part) into a string
+// handlePattern would accept, without checking length or reservation —
+// SuggestHandle's own availability loop still runs the result through
+// those. Every rune outside handlePattern's charset becomes a hyphen;
+// consecutive separators (e.g. "john.doe+work" having both a dot and a
+// plus) collapse to one, and a leading or trailing one is dropped, so this
+// reads "john-doe-work" rather than "john-doe--work-".
+func sanitizeHandleBase(raw string) string {
+	lower := strings.ToLower(raw)
+	var b strings.Builder
+	lastWasHyphen := true // suppresses a leading hyphen the same way it suppresses a run of them
+	for _, r := range lower {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+			lastWasHyphen = false
+			continue
+		}
+		if !lastWasHyphen {
+			b.WriteByte('-')
+			lastWasHyphen = true
+		}
+	}
+	base := strings.TrimSuffix(b.String(), "-")
+
+	// Truncating a rune-safe base can leave a trailing hyphen (e.g. a cut
+	// landing right after "john-"); trim it again so the result always
+	// matches handlePattern on its own, before any numeric suffix is
+	// appended.
+	if utf8.RuneCountInString(base) > maxHandleLength {
+		runes := []rune(base)
+		base = strings.TrimSuffix(string(runes[:maxHandleLength]), "-")
+	}
+	return base
+}
+
+// appendHandleSuffix appends "-<suffix>" to base for SuggestHandle's
+// availability loop, truncating base first to leave exact room for the
+// marker so the result never exceeds maxHandleLength (#321). Without the
+// truncation, a base already at maxHandleLength (sanitizeHandleBase's own
+// ceiling) would either produce a candidate validateHandle refuses as too
+// long, or — truncated back down naively, with no room reserved for the
+// marker — collapse straight back to the untouched, already-taken base and
+// loop forever.
+func appendHandleSuffix(base string, suffix int) string {
+	marker := "-" + strconv.Itoa(suffix)
+	maxBaseLen := maxHandleLength - len(marker)
+	if utf8.RuneCountInString(base) > maxBaseLen {
+		runes := []rune(base)
+		base = strings.TrimSuffix(string(runes[:maxBaseLen]), "-")
+	}
+	return base + marker
+}
 
 // maxPasswordBytes is bcrypt's own limit (golang.org/x/crypto/bcrypt,
 // bcrypt.go, #241) — GenerateFromPassword returns the opaque

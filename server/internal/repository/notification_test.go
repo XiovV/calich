@@ -9,8 +9,9 @@ import (
 )
 
 // newTestNotificationRepository returns a NotificationRepository plus two
-// real user ids and a real event id to satisfy notifications' foreign keys.
-func newTestNotificationRepository(t *testing.T) (repo *NotificationRepository, userID, otherUserID int64, eventID string) {
+// real user ids, a real event id, and a real calendar id to satisfy
+// notifications' foreign keys.
+func newTestNotificationRepository(t *testing.T) (repo *NotificationRepository, userID, otherUserID int64, eventID, calendarID string) {
 	t.Helper()
 
 	sqlDB, err := db.OpenInMemory()
@@ -48,11 +49,11 @@ func newTestNotificationRepository(t *testing.T) (repo *NotificationRepository, 
 	events := NewEventRepository(sqlDB)
 	mustCreateEvent(t, events, "evt-1", user.ID, cal.ID, "2026-01-01T09:00:00Z", "2026-01-01T10:00:00Z")
 
-	return NewNotificationRepository(sqlDB), user.ID, other.ID, "evt-1"
+	return NewNotificationRepository(sqlDB), user.ID, other.ID, "evt-1", cal.ID
 }
 
 func TestNotificationRepository_InsertAndListRecentByUser(t *testing.T) {
-	repo, userID, otherUserID, eventID := newTestNotificationRepository(t)
+	repo, userID, otherUserID, eventID, _ := newTestNotificationRepository(t)
 	ctx := context.Background()
 
 	occurrenceStart := time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC)
@@ -87,13 +88,13 @@ func TestNotificationRepository_InsertAndListRecentByUser(t *testing.T) {
 	if len(list) != 1 {
 		t.Fatalf("expected 1 notification for userID, got %d: %+v", len(list), list)
 	}
-	if list[0].Title != "Standup" || list[0].EventID != eventID {
+	if list[0].Title != "Standup" || list[0].EventID == nil || *list[0].EventID != eventID {
 		t.Fatalf("unexpected notification content: %+v", list[0])
 	}
 }
 
 func TestNotificationRepository_ListRecentByUserOrdersNewestFirstAndRespectsLimit(t *testing.T) {
-	repo, userID, _, eventID := newTestNotificationRepository(t)
+	repo, userID, _, eventID, _ := newTestNotificationRepository(t)
 	ctx := context.Background()
 
 	base := time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC)
@@ -116,7 +117,7 @@ func TestNotificationRepository_ListRecentByUserOrdersNewestFirstAndRespectsLimi
 }
 
 func TestNotificationRepository_MarkAllSeen(t *testing.T) {
-	repo, userID, otherUserID, eventID := newTestNotificationRepository(t)
+	repo, userID, otherUserID, eventID, _ := newTestNotificationRepository(t)
 	ctx := context.Background()
 
 	occurrenceStart := time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC)
@@ -157,7 +158,7 @@ func TestNotificationRepository_MarkAllSeen(t *testing.T) {
 // one Occurrence, so occurrence_start round-trips as nil rather than a
 // zero-value time.
 func TestNotificationRepository_InsertInviteHasNilOccurrenceStart(t *testing.T) {
-	repo, userID, _, eventID := newTestNotificationRepository(t)
+	repo, userID, _, eventID, _ := newTestNotificationRepository(t)
 	ctx := context.Background()
 
 	invitedAt := time.Date(2026, 1, 1, 8, 0, 0, 0, time.UTC)
@@ -191,7 +192,7 @@ func TestNotificationRepository_InsertInviteHasNilOccurrenceStart(t *testing.T) 
 // covers ADR-0061's "one feed" decision: reminder and invite Notifications
 // share the same table, list, and newest-first ordering.
 func TestNotificationRepository_ListRecentByUserMixesReminderAndInviteKinds(t *testing.T) {
-	repo, userID, _, eventID := newTestNotificationRepository(t)
+	repo, userID, _, eventID, _ := newTestNotificationRepository(t)
 	ctx := context.Background()
 
 	occurrenceStart := time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC)
@@ -214,5 +215,74 @@ func TestNotificationRepository_ListRecentByUserMixesReminderAndInviteKinds(t *t
 	}
 	if list[1].Kind != KindReminder {
 		t.Fatalf("expected the reminder second, got %+v", list)
+	}
+}
+
+// TestNotificationRepository_UpsertWriteBackFailureCoalescesOnCalendar covers
+// #299/ADR-0081's central property: re-raising the same Calendar's
+// Write-back failure — the shape a dead grant failing dozens of queued
+// pushes at once produces — upserts the one existing row rather than adding
+// a second, and un-seats it back to unseen even if the User had already
+// seen the first report.
+func TestNotificationRepository_UpsertWriteBackFailureCoalescesOnCalendar(t *testing.T) {
+	repo, userID, otherUserID, _, calendarID := newTestNotificationRepository(t)
+	ctx := context.Background()
+
+	first, err := repo.UpsertWriteBackFailure(ctx, userID, calendarID, `"Work" could not be synced to Google`, time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("upsert write-back failure: %v", err)
+	}
+	if first.Kind != KindWriteBackFailed {
+		t.Fatalf("expected kind %q, got %q", KindWriteBackFailed, first.Kind)
+	}
+	if first.EventID != nil {
+		t.Fatalf("expected a nil event id, got %v", first.EventID)
+	}
+	if first.CalendarID == nil || *first.CalendarID != calendarID {
+		t.Fatalf("expected calendar id %q, got %v", calendarID, first.CalendarID)
+	}
+	if first.OccurrenceStart != nil {
+		t.Fatalf("expected a nil occurrence start, got %v", first.OccurrenceStart)
+	}
+
+	if err := repo.MarkAllSeen(ctx, userID); err != nil {
+		t.Fatalf("mark all seen: %v", err)
+	}
+
+	second, err := repo.UpsertWriteBackFailure(ctx, userID, calendarID, `"Work" could not be synced to Google`, time.Date(2026, 1, 1, 9, 5, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("upsert write-back failure again: %v", err)
+	}
+	if second.ID != first.ID {
+		t.Fatalf("expected the same row id on a second failure for the same calendar, got %d then %d", first.ID, second.ID)
+	}
+	if second.Seen {
+		t.Fatalf("expected re-raising the failure to reset seen to false")
+	}
+
+	list, err := repo.ListRecentByUser(ctx, userID, 10)
+	if err != nil {
+		t.Fatalf("list recent: %v", err)
+	}
+	var writeBackFailures int
+	for _, n := range list {
+		if n.Kind == KindWriteBackFailed {
+			writeBackFailures++
+		}
+	}
+	if writeBackFailures != 1 {
+		t.Fatalf("expected exactly one coalesced write-back-failed notification, got %d in %+v", writeBackFailures, list)
+	}
+
+	// A different user's own Notifications must not coalesce with userID's.
+	if _, err := repo.UpsertWriteBackFailure(ctx, otherUserID, calendarID, `"Work" could not be synced to Google`, time.Date(2026, 1, 1, 9, 10, 0, 0, time.UTC)); err != nil {
+		t.Fatalf("upsert write-back failure for other user: %v", err)
+	}
+	otherList, err := repo.ListRecentByUser(ctx, otherUserID, 10)
+	if err != nil {
+		t.Fatalf("list recent for other user: %v", err)
+	}
+	if len(otherList) != 1 {
+		t.Fatalf("expected the other user to have their own single notification, got %+v", otherList)
 	}
 }

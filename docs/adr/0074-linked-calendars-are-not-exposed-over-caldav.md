@@ -1,6 +1,6 @@
 # A Linked Calendar is not exposed over CalDAV at all
 
-Status: accepted — supersedes ADR-0054
+Status: superseded by ADR-0080
 
 A Linked Calendar appears in **no** principal's CalDAV home-set: not its Owner's, not that of a Workspace Member it was Shared to. `ListCalendars` filters out every Calendar whose Source is a Connection, unconditionally.
 

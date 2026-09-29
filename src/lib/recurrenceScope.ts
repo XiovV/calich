@@ -19,6 +19,10 @@ export interface EventFieldChanges {
   // Absent from a drag-only edit (allDay isn't draggable yet); the caller
   // falls back to the master's own allDay in that case.
   allDay?: boolean;
+  // Absent from a drag-only edit, like allDay; the caller falls back to the
+  // reference Event's own Busy (ADR-0086). No third "reset" state — unlike
+  // color, an Event's own Busy has nothing to inherit from.
+  busy?: boolean;
   // The Anchor zone: preserved from whatever Event this change derives from
   // — no picker exists to change it explicitly yet (ADR-0019).
   tzid?: string;
@@ -55,6 +59,25 @@ export function resolveAllDay(
   master: Event,
 ): boolean | undefined {
   return changes.allDay ?? master.allDay;
+}
+
+/** The Busy value a brand-new Event gets from its own all-day-ness alone,
+ * before anything else — Busy for timed, Free for all-day (ADR-0086). Named
+ * so the Event modal's own live default (applied as the create form is
+ * filled in, until the User overrides Busy directly) states the rule once
+ * rather than re-deriving `!allDay` at each call site. */
+export function defaultBusyForAllDay(allDay: boolean): boolean {
+  return !allDay;
+}
+
+/** `changes`' busy, falling back to `reference`'s own when the edit didn't
+ * touch it (a drag-only edit, which can't yet change Busy) — mirrors
+ * resolveAllDay (ADR-0086). */
+export function resolveBusy(
+  changes: Pick<EventFieldChanges, "busy">,
+  reference: Pick<Event, "busy">,
+): boolean | undefined {
+  return changes.busy ?? reference.busy;
 }
 
 /** `changes`' description, falling back to `reference`'s own when the edit
@@ -118,6 +141,9 @@ export function makeOverride(
     start: changes.start,
     end: changes.end,
     allDay: resolveAllDay(changes, master),
+    // A fresh Override starts as a copy of the Master's Busy, same as
+    // color — settable independently once created (ADR-0086).
+    busy: resolveBusy(changes, master),
     // An Override inherits its master's Anchor zone — only an explicit zone
     // choice would change it, and no picker exists yet (ADR-0019).
     tzid: master.tzid,
@@ -219,6 +245,7 @@ export function splitFollowing(
     newMaster: {
       ...changes,
       allDay: resolveAllDay(changes, master),
+      busy: resolveBusy(changes, master),
       rrule: master.rrule,
       tzid: master.tzid,
       description: resolveDescription(changes, master),
@@ -291,6 +318,7 @@ export function hasFieldChanges(
     changes.start.getTime() !== original.start.getTime() ||
     changes.end.getTime() !== original.end.getTime() ||
     Boolean(changes.allDay) !== Boolean(original.allDay) ||
+    Boolean(changes.busy) !== Boolean(original.busy) ||
     (changes.description ?? "") !== (original.description ?? "") ||
     (changes.location ?? "") !== (original.location ?? "") ||
     (changes.url ?? "") !== (original.url ?? "") ||

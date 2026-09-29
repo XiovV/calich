@@ -11,6 +11,7 @@ package outbox
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"strings"
@@ -19,11 +20,37 @@ import (
 	"github.com/XiovV/calich/server/internal/repository"
 )
 
+// ErrPermanent marks a Send failure that no retry can fix, so Tick stops
+// immediately instead of walking the backoff schedule. A Sender wraps it
+// around a failure it has classified as structural — a Provider rejecting the
+// request itself rather than being briefly unavailable.
+//
+// Backoff exists to outlast a transient outage. Spending it on a request that
+// is *guaranteed* to be rejected the same way five times costs the only thing
+// that matters here: a permanently failed Write-back has no user-visible
+// marker until the message reaches its terminal state, so retrying a hopeless
+// push silently delays the badge that tells someone their edit never landed —
+// and a restart mid-schedule strands the row pending, where the badge never
+// arrives at all.
+var ErrPermanent = errors.New("permanent send failure")
+
+// ErrSkipped marks a Send that ended without dispatching anything — the work it
+// described no longer exists or no longer applies (ADR-0079). Tick records it
+// as OutboxStatusSkipped with the wrapped reason, never as Sent.
+//
+// Returning a bare nil for this, as the Write-back senders once did, made a
+// push that never left the building indistinguishable from one the Provider
+// accepted — and left whatever last_error a previous attempt had written
+// sitting beside the claim of success. A Sender wraps this around a reason
+// specific enough to read months later: which race happened, not that one did.
+var ErrSkipped = errors.New("send skipped")
+
 // Store is the Worker's persistence seam. Satisfied by
 // *repository.OutboxRepository.
 type Store interface {
 	ListPending(ctx context.Context, limit int) ([]repository.OutboxMessage, error)
 	MarkSent(ctx context.Context, id int64, sentAt time.Time) error
+	MarkSkipped(ctx context.Context, id int64, reason string) error
 	MarkRetry(ctx context.Context, id int64, attempts int, nextAttemptAt time.Time, lastErr string) error
 	MarkFailed(ctx context.Context, id int64, attempts int, lastErr string) error
 }
@@ -153,8 +180,19 @@ func (w *Worker) Tick(ctx context.Context) error {
 		}
 
 		if err := w.sender.Send(ctx, msg); err != nil {
+			// A skip is terminal but is not a failure: nothing was dispatched,
+			// nothing will be, and no marker is owed (ADR-0079). Checked before
+			// the retry arithmetic so it can never consume an attempt or a
+			// backoff slot.
+			if errors.Is(err, ErrSkipped) {
+				if merr := w.store.MarkSkipped(ctx, msg.ID, err.Error()); merr != nil {
+					log.Printf("outbox: mark skipped (id=%d): %v", msg.ID, merr)
+				}
+				continue
+			}
+
 			attempts := msg.Attempts + 1
-			if attempts >= maxAttemptsFor(msg.Kind) {
+			if attempts >= maxAttemptsFor(msg.Kind) || errors.Is(err, ErrPermanent) {
 				if merr := w.store.MarkFailed(ctx, msg.ID, attempts, err.Error()); merr != nil {
 					log.Printf("outbox: mark failed (id=%d): %v", msg.ID, merr)
 				}

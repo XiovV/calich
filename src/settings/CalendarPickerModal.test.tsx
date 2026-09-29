@@ -15,13 +15,30 @@ vi.mock("../lib/connectionsApi", async () => {
   };
 });
 vi.mock("../lib/calendarsApi", () => ({ calendarsApi: { list: vi.fn(), remove: vi.fn() } }));
+vi.mock("../lib/eventsApi", () => ({ eventsApi: { list: vi.fn() } }));
+vi.mock("../lib/calendarSetsApi", async () => {
+  const actual = await vi.importActual<typeof import("../lib/calendarSetsApi")>(
+    "../lib/calendarSetsApi",
+  );
+  return {
+    ...actual,
+    calendarSetsApi: { ...actual.calendarSetsApi, addCalendar: vi.fn(async () => undefined) },
+  };
+});
 
 const { connectionsApi } = await import("../lib/connectionsApi");
 const { calendarsApi } = await import("../lib/calendarsApi");
+const { eventsApi } = await import("../lib/eventsApi");
 const { useAuthStore } = await import("../lib/authStore");
 const { useCalendarsStore } = await import("../lib/calendarsStore");
+const { useEventsStore } = await import("../lib/eventsStore");
+const { useShellStore } = await import("../lib/shellStore");
 const { useWorkspacesStore } = await import("../lib/workspacesStore");
+const { useCalendarSetsStore } = await import("../lib/calendarSetsStore");
+const { calendarSetsApi } = await import("../lib/calendarSetsApi");
 const { CalendarPickerModal } = await import("./CalendarPickerModal");
+
+const workSet = { id: 1, name: "Work", calendarIds: [] };
 
 const primary = {
   id: "primary",
@@ -48,8 +65,12 @@ beforeEach(() => {
   vi.clearAllMocks();
   useAuthStore.setState({ accessToken: "token-123" });
   useCalendarsStore.setState({ calendars: [] });
+  useEventsStore.setState({ events: [] });
   useWorkspacesStore.setState({ activeWorkspaceId: 7 });
+  useShellStore.setState({ activeCalendarSetId: null });
+  useCalendarSetsStore.setState({ calendarSets: [] });
   vi.mocked(calendarsApi.list).mockResolvedValue([]);
+  vi.mocked(eventsApi.list).mockResolvedValue([]);
 });
 
 afterEach(() => {
@@ -80,6 +101,62 @@ describe("CalendarPickerModal", () => {
     await waitFor(() => expect(connectionsApi.importCalendars).toHaveBeenCalledWith("token-123", 1, ["primary"]));
     expect(calendarsApi.list).toHaveBeenCalled();
     expect(onClose).toHaveBeenCalled();
+  });
+
+  // The import created a new Linked Calendar server-side; fetchCalendars is
+  // the only way this session learns its id. Without a reconcile after it —
+  // the same gap ImportExportSection's ICS import closed for #229 — the new
+  // Calendar's toggle stayed unset until a reload.
+  it("checks the imported calendar's toggle immediately, without a reload", async () => {
+    vi.mocked(connectionsApi.listPickerCalendars).mockResolvedValue([primary]);
+    vi.mocked(connectionsApi.importCalendars).mockResolvedValue([
+      { id: "cal-1", name: "someone@gmail.com", color: "#0B8043FF" },
+    ]);
+    vi.mocked(calendarsApi.list).mockResolvedValue([
+      { id: "cal-1", name: "someone@gmail.com", color: "#0B8043FF", isOwner: true, access: "owner" },
+    ]);
+    render(<CalendarPickerModal connectionId={1} onClose={vi.fn()} />);
+
+    await screen.findByLabelText("someone@gmail.com");
+    await userEvent.click(screen.getByRole("button", { name: /Add 1 calendar/ }));
+
+    await waitFor(() =>
+      expect(useShellStore.getState().checkedCalendarIds.has("cal-1")).toBe(true),
+    );
+    expect(useShellStore.getState().knownCalendarIds.has("cal-1")).toBe(true);
+  });
+
+  // The import created a new Linked Calendar's Events server-side too;
+  // nothing refetches eventsStore after Confirm, so its Events sat missing
+  // from the grid until the next mount/focus/workspace-change refetch —
+  // visible as "alt-tab and back makes them appear".
+  it("shows the imported calendar's events immediately, without a reload", async () => {
+    vi.mocked(connectionsApi.listPickerCalendars).mockResolvedValue([primary]);
+    vi.mocked(connectionsApi.importCalendars).mockResolvedValue([
+      { id: "cal-1", name: "someone@gmail.com", color: "#0B8043FF" },
+    ]);
+    vi.mocked(calendarsApi.list).mockResolvedValue([
+      { id: "cal-1", name: "someone@gmail.com", color: "#0B8043FF", isOwner: true, access: "owner" },
+    ]);
+    vi.mocked(eventsApi.list).mockResolvedValue([
+      {
+        id: "evt-1",
+        calendarId: "cal-1",
+        title: "Google calendar event",
+        start: new Date("2026-09-08T11:15:00Z"),
+        end: new Date("2026-09-08T14:15:00Z"),
+      },
+    ]);
+    render(<CalendarPickerModal connectionId={1} onClose={vi.fn()} />);
+
+    await screen.findByLabelText("someone@gmail.com");
+    await userEvent.click(screen.getByRole("button", { name: /Add 1 calendar/ }));
+
+    await waitFor(() =>
+      expect(useEventsStore.getState().events.some((event) => event.id === "evt-1")).toBe(
+        true,
+      ),
+    );
   });
 
   it("toggling a row changes what gets imported", async () => {
@@ -203,5 +280,63 @@ describe("CalendarPickerModal", () => {
 
     expect(calendarsApi.remove).not.toHaveBeenCalled();
     expect(screen.getByLabelText("someone@gmail.com")).toBeChecked();
+  });
+
+  // #308, ADR-0082: one checkbox covers the whole batch, not one per row.
+  describe("add-to-set checkbox", () => {
+    it("is absent when on All calendars", async () => {
+      vi.mocked(connectionsApi.listPickerCalendars).mockResolvedValue([primary]);
+      render(<CalendarPickerModal connectionId={1} onClose={vi.fn()} />);
+
+      await screen.findByLabelText("someone@gmail.com");
+      expect(screen.queryByRole("checkbox", { name: /Add to/ })).not.toBeInTheDocument();
+    });
+
+    it("names the Active Calendar Set and starts unticked", async () => {
+      useShellStore.setState({ activeCalendarSetId: workSet.id });
+      useCalendarSetsStore.setState({ calendarSets: [workSet] });
+      vi.mocked(connectionsApi.listPickerCalendars).mockResolvedValue([primary, sharedIn]);
+      render(<CalendarPickerModal connectionId={1} onClose={vi.fn()} />);
+
+      await screen.findByLabelText("someone@gmail.com");
+      const checkbox = screen.getByRole("checkbox", { name: /Add to Work/ });
+      expect(checkbox).not.toBeChecked();
+    });
+
+    it("adds every calendar in the batch to the Active Calendar Set when ticked", async () => {
+      useShellStore.setState({ activeCalendarSetId: workSet.id });
+      useCalendarSetsStore.setState({ calendarSets: [workSet] });
+      vi.mocked(connectionsApi.listPickerCalendars).mockResolvedValue([primary, sharedIn]);
+      vi.mocked(connectionsApi.importCalendars).mockResolvedValue([
+        { id: "cal-1", name: "someone@gmail.com", color: "#0B8043FF" },
+        { id: "cal-2", name: "Team calendar", color: "#7627BBFF" },
+      ]);
+      render(<CalendarPickerModal connectionId={1} onClose={vi.fn()} />);
+
+      await userEvent.click(await screen.findByLabelText("Team calendar"));
+      await userEvent.click(screen.getByRole("checkbox", { name: /Add to Work/ }));
+      await userEvent.click(screen.getByRole("button", { name: /Add 2 calendars/ }));
+
+      await waitFor(() =>
+        expect(calendarSetsApi.addCalendar).toHaveBeenCalledWith("token-123", workSet.id, "cal-1"),
+      );
+      expect(calendarSetsApi.addCalendar).toHaveBeenCalledWith("token-123", workSet.id, "cal-2");
+    });
+
+    it("does not add the batch to the Set when left unticked", async () => {
+      useShellStore.setState({ activeCalendarSetId: workSet.id });
+      useCalendarSetsStore.setState({ calendarSets: [workSet] });
+      vi.mocked(connectionsApi.listPickerCalendars).mockResolvedValue([primary]);
+      vi.mocked(connectionsApi.importCalendars).mockResolvedValue([
+        { id: "cal-1", name: "someone@gmail.com", color: "#0B8043FF" },
+      ]);
+      render(<CalendarPickerModal connectionId={1} onClose={vi.fn()} />);
+
+      await screen.findByLabelText("someone@gmail.com");
+      await userEvent.click(screen.getByRole("button", { name: /Add 1 calendar/ }));
+
+      await waitFor(() => expect(connectionsApi.importCalendars).toHaveBeenCalled());
+      expect(calendarSetsApi.addCalendar).not.toHaveBeenCalled();
+    });
   });
 });

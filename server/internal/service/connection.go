@@ -78,6 +78,13 @@ type ConnectionService struct {
 	// already stores" and "apply this reconciled result" don't care which
 	// Source kind produced the incoming side.
 	events *EventService
+	// notifications is where markWriteBackPermanentlyFailed raises a
+	// coalesced-on-the-Source Notification alongside the existing per-Event
+	// marker and Source needs-attention state (#299, ADR-0081) — the same
+	// repository EventService's own Attendee-invite path writes through,
+	// threaded here directly since that path has no passthrough for an
+	// arbitrary Notification write.
+	notifications *repository.NotificationRepository
 	// encryptionKey is config.Config.ConnectionsEncryptionKey — a refresh
 	// token is encrypted under it before Upsert and never stored raw
 	// (ADR-0052).
@@ -149,13 +156,14 @@ func withConnectionRefreshInterval(d time.Duration) ConnectionOption {
 // there is exactly one place that decides whether the Google Provider is
 // usable, and Settings' Connect button (which reads the same GoogleConfigured
 // call) can never disagree with what Connect/Callback actually refuse.
-func NewConnectionService(connections *repository.ConnectionRepository, states connectStateCodec, calendars *CalendarService, events *EventService, clientID, clientSecret, encryptionKey string, configured bool, opts ...ConnectionOption) *ConnectionService {
+func NewConnectionService(connections *repository.ConnectionRepository, states connectStateCodec, calendars *CalendarService, events *EventService, notifications *repository.NotificationRepository, clientID, clientSecret, encryptionKey string, configured bool, opts ...ConnectionOption) *ConnectionService {
 	s := &ConnectionService{
 		connections:   connections,
 		states:        states,
 		google:        newGoogleClient(clientID, clientSecret),
 		calendars:     calendars,
 		events:        events,
+		notifications: notifications,
 		encryptionKey: encryptionKey,
 		configured:    configured,
 		now:           time.Now,

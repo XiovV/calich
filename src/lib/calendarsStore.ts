@@ -29,6 +29,12 @@ interface CalendarsState {
   // updateCalendar, since the colour applied is exactly the one the caller
   // just picked, with no override-vs-fallback ambiguity to resolve.
   setCalendarColor: (id: string, color: string) => Promise<void>;
+  // setCalendarExposure sets the caller's own Exposure choice on id (#297,
+  // ADR-0080), over its own endpoint — every caller writes their own row,
+  // Owner included, unlike setCalendarColor's Owner-vs-override split.
+  // Optimistic like setCalendarColor: the value applied is exactly the one
+  // the caller just chose, with nothing server-resolved to reconcile.
+  setCalendarExposure: (id: string, exposed: boolean) => Promise<void>;
   // Resolves to whether the delete actually succeeded, so callers that
   // cascade other local state off of it (e.g. deleteCalendarCascade) know
   // whether to undo that cascade too.
@@ -198,6 +204,24 @@ export const useCalendarsStore = create<CalendarsState>((set, get) => ({
       },
       calendarId: id,
       fallbackMessage: "Failed to update calendar color.",
+    });
+  },
+
+  setCalendarExposure: async (id, exposed) => {
+    const previousCalendars = get().calendars;
+    await write({
+      apply: () =>
+        set((state) => ({
+          calendars: state.calendars.map((calendar) =>
+            calendar.id === id ? { ...calendar, exposed } : calendar,
+          ),
+        })),
+      revert: () => set({ calendars: previousCalendars }),
+      dispatch: async () => {
+        await calendarsApi.setExposure(requireAccessToken(), id, exposed);
+      },
+      calendarId: id,
+      fallbackMessage: "Failed to update calendar exposure.",
     });
   },
 

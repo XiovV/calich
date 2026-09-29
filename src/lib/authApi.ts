@@ -46,6 +46,9 @@ export interface User {
   // shading — the default.
   workingHoursStart: number | null;
   workingHoursEnd: number | null;
+  // Handle (#321, ADR-0084): a User's public name — unique instance-wide,
+  // compared case-insensitively. null until claimed in Settings → Account.
+  handle: string | null;
 }
 
 export interface LoginResult {
@@ -72,6 +75,7 @@ interface MeWire {
   time_format: TimeFormat;
   working_hours_start: number | null;
   working_hours_end: number | null;
+  handle: string | null;
 }
 
 function fromMeWire(wire: MeWire): User {
@@ -89,6 +93,7 @@ function fromMeWire(wire: MeWire): User {
     timeFormat: wire.time_format,
     workingHoursStart: wire.working_hours_start,
     workingHoursEnd: wire.working_hours_end,
+    handle: wire.handle,
   };
 }
 
@@ -283,6 +288,33 @@ export const authApi = {
     if (!response.ok) throw await errorFromResponse(response);
 
     return fromMeWire(await response.json());
+  },
+
+  // Claims or changes the caller's own Handle (#321, ADR-0084).
+  async updateHandle(accessToken: string, handle: string): Promise<User> {
+    const response = await authedFetch(accessToken, "/api/auth/handle", {
+      method: "PUT",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ handle }),
+    });
+    if (!response.ok) throw await errorFromResponse(response);
+
+    return fromMeWire(await response.json());
+  },
+
+  // A Handle suggestion derived from the caller's own Email local part,
+  // already disambiguated against every claimed Handle and the reserved-word
+  // registry (#321, ADR-0084). Read-only — claiming it is a separate
+  // updateHandle call.
+  async getHandleSuggestion(accessToken: string): Promise<string> {
+    const response = await authedFetch(accessToken, "/api/auth/handle-suggestion", {
+      credentials: "include",
+    });
+    if (!response.ok) throw await errorFromResponse(response);
+
+    const body = (await response.json()) as { handle: string };
+    return body.handle;
   },
 
   async updateSyncedDeviceReminders(accessToken: string, enabled: boolean): Promise<User> {

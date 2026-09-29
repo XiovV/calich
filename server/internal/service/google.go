@@ -106,13 +106,42 @@ var errGoogleSyncTokenExpired = errors.New("google sync token expired")
 type googleHTTPError struct {
 	sentinel   error
 	statusCode int
+	// body is a bounded prefix of the failed response, empty when Google sent
+	// none. Google's 4xx bodies name the offending field — the difference
+	// between an outbox row reading "status 400" and one reading which field
+	// was wrong — so discarding them, as every call here used to, made a
+	// permanently failing push indistinguishable from a mystery.
+	body string
 }
 
 func (e *googleHTTPError) Error() string {
-	return fmt.Sprintf("%s: status %d", e.sentinel, e.statusCode)
+	if e.body == "" {
+		return fmt.Sprintf("%s: status %d", e.sentinel, e.statusCode)
+	}
+	return fmt.Sprintf("%s: status %d: %s", e.sentinel, e.statusCode, e.body)
 }
 
 func (e *googleHTTPError) Unwrap() error { return e.sentinel }
+
+// googleErrorBodyLimit bounds how much of a failed response is kept. Google's
+// own error JSON is well under this; the bound is here because a proxy or a
+// captive portal in front of Google can answer with an HTML page instead, and
+// that must not flood an outbox row's last_error or a log line.
+const googleErrorBodyLimit = 512
+
+// readGoogleErrorBody returns a bounded, single-line prefix of a failed
+// response's body and drains the rest for keep-alive reuse — the drain every
+// call site here already did, now keeping what it reads instead of discarding
+// it. Whitespace is collapsed so the result stays one line wherever it is
+// stored: last_error is read in a terminal and a grid tooltip, neither of which
+// wants Google's pretty-printed JSON. Never returns an error: this runs on a
+// path that is already failing, and a body that cannot be read is reported as
+// the status code alone rather than replacing Google's reason with an I/O one.
+func readGoogleErrorBody(body io.Reader) string {
+	buf, _ := io.ReadAll(io.LimitReader(body, googleErrorBodyLimit)) //nolint:errcheck // a partial read is still worth reporting; see doc comment
+	io.Copy(io.Discard, body)                                        //nolint:errcheck // draining for keep-alive reuse
+	return strings.Join(strings.Fields(string(buf)), " ")
+}
 
 // googleClient is every HTTP call this app makes to Google, behind one
 // overridable client and one overridable set of endpoint URLs.
@@ -187,8 +216,7 @@ func (c *googleClient) exchangeCode(ctx context.Context, code, redirectURI strin
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		io.Copy(io.Discard, resp.Body) //nolint:errcheck // draining for keep-alive reuse; the response carries nothing we need on failure
-		return googleTokens{}, fmt.Errorf("%w: token endpoint responded %d", ErrGoogleAuthFailed, resp.StatusCode)
+		return googleTokens{}, fmt.Errorf("%w: token endpoint responded %d: %s", ErrGoogleAuthFailed, resp.StatusCode, readGoogleErrorBody(resp.Body))
 	}
 
 	var body struct {
@@ -247,8 +275,7 @@ func (c *googleClient) fetchAccountEmail(ctx context.Context, accessToken string
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		io.Copy(io.Discard, resp.Body) //nolint:errcheck // draining for keep-alive reuse; the response carries nothing we need on failure
-		return "", false, fmt.Errorf("%w: userinfo endpoint responded %d", ErrGoogleAuthFailed, resp.StatusCode)
+		return "", false, fmt.Errorf("%w: userinfo endpoint responded %d: %s", ErrGoogleAuthFailed, resp.StatusCode, readGoogleErrorBody(resp.Body))
 	}
 
 	var body struct {
@@ -341,9 +368,9 @@ func (c *googleClient) listCalendarList(ctx context.Context, accessToken string)
 		}
 
 		if resp.StatusCode != http.StatusOK {
-			io.Copy(io.Discard, resp.Body) //nolint:errcheck // draining for keep-alive reuse; the response carries nothing we need on failure
+			errBody := readGoogleErrorBody(resp.Body)
 			resp.Body.Close()
-			return nil, fmt.Errorf("%w: calendar list endpoint responded %d", ErrGoogleCalendarListFailed, resp.StatusCode)
+			return nil, fmt.Errorf("%w: calendar list endpoint responded %d: %s", ErrGoogleCalendarListFailed, resp.StatusCode, errBody)
 		}
 
 		var body struct {
@@ -403,8 +430,7 @@ func (c *googleClient) getCalendarListEntry(ctx context.Context, accessToken, ca
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		io.Copy(io.Discard, resp.Body) //nolint:errcheck // draining for keep-alive reuse; the response carries nothing we need on failure
-		return googleCalendarListEntry{}, &googleHTTPError{sentinel: ErrGoogleCalendarListFailed, statusCode: resp.StatusCode}
+		return googleCalendarListEntry{}, &googleHTTPError{sentinel: ErrGoogleCalendarListFailed, statusCode: resp.StatusCode, body: readGoogleErrorBody(resp.Body)}
 	}
 
 	var item struct {
@@ -463,8 +489,7 @@ func (c *googleClient) refreshAccessToken(ctx context.Context, refreshToken stri
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		io.Copy(io.Discard, resp.Body) //nolint:errcheck // draining for keep-alive reuse; the response carries nothing we need on failure
-		return googleRefreshedTokens{}, &googleHTTPError{sentinel: ErrGoogleTokenRefreshFailed, statusCode: resp.StatusCode}
+		return googleRefreshedTokens{}, &googleHTTPError{sentinel: ErrGoogleTokenRefreshFailed, statusCode: resp.StatusCode, body: readGoogleErrorBody(resp.Body)}
 	}
 
 	var body struct {
@@ -532,6 +557,9 @@ type googleEventJSON struct {
 	Description       string                    `json:"description"`
 	Location          string                    `json:"location"`
 	ColorID           string                    `json:"colorId"`
+	// Transparency is Google's own free/busy field (ADR-0086) — "opaque",
+	// "transparent", or empty (Google's own default, "opaque").
+	Transparency      string                    `json:"transparency"`
 	Start             googleEventDateTimeJSON   `json:"start"`
 	End               googleEventDateTimeJSON   `json:"end"`
 	RecurringEventID  string                    `json:"recurringEventId"`
@@ -575,6 +603,7 @@ func toGoogleEvent(j googleEventJSON) googleEvent {
 		Description:      j.Description,
 		Location:         j.Location,
 		ColorID:          j.ColorID,
+		Transparency:     j.Transparency,
 		Start:            toGoogleEventDateTime(j.Start),
 		End:              toGoogleEventDateTime(j.End),
 		RecurringEventID: j.RecurringEventID,
@@ -644,12 +673,12 @@ func (c *googleClient) listEventChanges(ctx context.Context, accessToken, calend
 		}
 
 		if resp.StatusCode != http.StatusOK {
-			io.Copy(io.Discard, resp.Body) //nolint:errcheck // draining for keep-alive reuse; the response carries nothing we need on failure
+			errBody := readGoogleErrorBody(resp.Body)
 			resp.Body.Close()
 			if resp.StatusCode == http.StatusGone && syncToken != "" {
 				return googleEventChanges{}, errGoogleSyncTokenExpired
 			}
-			return googleEventChanges{}, &googleHTTPError{sentinel: ErrGoogleEventsFailed, statusCode: resp.StatusCode}
+			return googleEventChanges{}, &googleHTTPError{sentinel: ErrGoogleEventsFailed, statusCode: resp.StatusCode, body: errBody}
 		}
 
 		var body struct {
@@ -701,16 +730,16 @@ type googleEventPatchSourceJSON struct {
 // googleEventPatchBody is the wire shape of a Write-back PATCH request body
 // (#290, ADR-0075) — and the load-bearing type this ticket exists to build:
 // it has a field for exactly title, description, location, start, end,
-// recurrence and Event URL, and no field for attendees, conferenceData,
-// visibility, or anything else this app doesn't model. There is no
-// constructor that takes a whole repository.Event and no method that lets a
-// caller set a field this struct doesn't declare — buildGooglePatch is the
-// only function that produces one, and it reads a fixed, named set of
-// arguments, never an Event value it could forward wholesale. That is what
-// makes "a whole-Event replace is impossible to express at the Provider
-// seam" true by construction rather than by convention: there is no
-// events.update call in this file, and this type could not serialize one if
-// there were.
+// recurrence, transparency (ADR-0086) and Event URL, and no field for
+// attendees, conferenceData, visibility, or anything else this app doesn't
+// model. There is no constructor that takes a whole repository.Event and no
+// method that lets a caller set a field this struct doesn't declare —
+// buildGooglePatch is the only function that produces one, and it reads a
+// fixed, named set of arguments, never an Event value it could forward
+// wholesale. That is what makes "a whole-Event replace is impossible to
+// express at the Provider seam" true by construction rather than by
+// convention: there is no events.update call in this file, and this type
+// could not serialize one if there were.
 type googleEventPatchBody struct {
 	// ID is set only on an events.insert (#292, ADR-0077) — a client-supplied
 	// id derived from the local Event's id, so a retry after Google has
@@ -720,19 +749,82 @@ type googleEventPatchBody struct {
 	// id change on patch anyway. Not a content field — it addresses the
 	// event, it does not describe it, so it does not widen what a caller can
 	// smuggle through the field-scoped body.
-	ID          string                  `json:"id,omitempty"`
-	Summary     string                  `json:"summary"`
-	Description string                  `json:"description"`
-	Location    string                  `json:"location"`
-	Start       googleEventDateTimeJSON `json:"start"`
-	End         googleEventDateTimeJSON `json:"end"`
-	Recurrence  []string                `json:"recurrence,omitempty"`
+	ID          string                       `json:"id,omitempty"`
+	Summary     string                       `json:"summary"`
+	Description string                       `json:"description"`
+	Location    string                       `json:"location"`
+	Start       googleEventDateTimePatchJSON `json:"start"`
+	End         googleEventDateTimePatchJSON `json:"end"`
+	Recurrence  []string                     `json:"recurrence,omitempty"`
+	// Transparency is Google's own free/busy field (ADR-0086), always sent
+	// explicitly ("opaque" or "transparent") — no omitempty, since "opaque"
+	// (Busy) is the common case and must never be confused with "leave
+	// whatever's there alone".
+	Transparency string                      `json:"transparency"`
 	// Source is deliberately not ",omitempty": a nil pointer must marshal to
 	// an explicit "source":null, the PATCH request that clears Event URL at
 	// Google, rather than an absent key, which Google reads as "leave
 	// whatever's there alone" — the same reason Summary/Description/Location
 	// above carry no omitempty of their own.
 	Source *googleEventPatchSourceJSON `json:"source"`
+}
+
+// googleEventDateTimePatchJSON is googleEventDateTimeJSON's write-side
+// counterpart (ADR-0075): the same three fields, marshalled under Google's own
+// rule that `date` and `dateTime` are mutually exclusive. The two directions
+// genuinely disagree about what a zero value means — a decode wants every field
+// present and bare, an encode must send exactly one of the pair — so they are
+// separate types rather than one struct wearing tags that can only ever satisfy
+// one of them.
+//
+// Sharing the decode struct is what broke Write-back outright: with no
+// `omitempty`, every timed Event's patch shipped `"date":""` alongside its
+// populated `dateTime`, and Google rejected the whole request with 400. Every
+// push builds its boundaries here — PATCH, insert, instance patch and
+// cancellation alike — so the failure was total rather than partial, and
+// invisible to a suite that asserted which top-level keys the body carried but
+// never descended into them.
+//
+// `omitempty` alone would have fixed that 400 and left a second one behind: an
+// absent key reads to Google as "leave whatever is there alone", so editing a
+// timed Event into an all-day one would strand the old `dateTime` beside the
+// new `date` — the same forbidden pair, reached from the other direction. The
+// unused half is therefore sent as an explicit null, which is what actually
+// clears it, for the same reason googleEventPatchBody.Source above is
+// deliberately not omitempty.
+type googleEventDateTimePatchJSON struct {
+	Date     string
+	DateTime string
+	TimeZone string
+}
+
+// MarshalJSON enforces the mutually-exclusive pair at the seam — the same
+// standard ADR-0075 sets for the field-scoped patch itself, enforced where the
+// bytes are produced rather than by convention at each call site. Whichever of
+// Date/DateTime is set is emitted and the other is emitted as an explicit null,
+// so a body carrying both is not something a caller can express. A value
+// carrying neither is a bug here, not a request for Google to judge, and fails
+// before it can travel as an empty object.
+func (d googleEventDateTimePatchJSON) MarshalJSON() ([]byte, error) {
+	if (d.Date == "") == (d.DateTime == "") {
+		return nil, fmt.Errorf("google event boundary must carry exactly one of date or dateTime (date=%q, dateTime=%q)", d.Date, d.DateTime)
+	}
+
+	// TimeZone keeps an omitempty of its own: Google constrains date against
+	// dateTime, not against a zone, and a Floating Event (ADR-0019) carries no
+	// zone to send at all.
+	wire := struct {
+		Date     *string `json:"date"`
+		DateTime *string `json:"dateTime"`
+		TimeZone string  `json:"timeZone,omitempty"`
+	}{TimeZone: d.TimeZone}
+	if d.Date != "" {
+		wire.Date = &d.Date
+	}
+	if d.DateTime != "" {
+		wire.DateTime = &d.DateTime
+	}
+	return json.Marshal(wire)
 }
 
 // encodeGoogleEventDateTime is decodeGoogleTime's inverse (#290, ADR-0075):
@@ -743,12 +835,12 @@ type googleEventPatchBody struct {
 // push outright; this app's own Floating Event predates the timezone model
 // (ADR-0019) and a Linked Calendar's own Events always carry a concrete Anchor
 // zone from the Provider in practice.
-func encodeGoogleEventDateTime(t time.Time, allDay bool, tzid *string) googleEventDateTimeJSON {
+func encodeGoogleEventDateTime(t time.Time, allDay bool, tzid *string) googleEventDateTimePatchJSON {
 	if allDay {
-		return googleEventDateTimeJSON{Date: t.UTC().Format("2006-01-02")}
+		return googleEventDateTimePatchJSON{Date: t.UTC().Format("2006-01-02")}
 	}
 	if tzid == nil {
-		return googleEventDateTimeJSON{DateTime: t.UTC().Format("2006-01-02T15:04:05Z")}
+		return googleEventDateTimePatchJSON{DateTime: t.UTC().Format("2006-01-02T15:04:05Z")}
 	}
 	loc, err := time.LoadLocation(*tzid)
 	if err != nil {
@@ -756,9 +848,9 @@ func encodeGoogleEventDateTime(t time.Time, allDay bool, tzid *string) googleEve
 		// back to the UTC instant is lossy on the wall-clock but never wrong
 		// about the moment in time, and TimeZone is deliberately left empty
 		// rather than sent as a string Google itself cannot resolve either.
-		return googleEventDateTimeJSON{DateTime: t.UTC().Format("2006-01-02T15:04:05Z")}
+		return googleEventDateTimePatchJSON{DateTime: t.UTC().Format("2006-01-02T15:04:05Z")}
 	}
-	return googleEventDateTimeJSON{DateTime: t.In(loc).Format("2006-01-02T15:04:05-07:00"), TimeZone: *tzid}
+	return googleEventDateTimePatchJSON{DateTime: t.In(loc).Format("2006-01-02T15:04:05-07:00"), TimeZone: *tzid}
 }
 
 // encodeGoogleRecurrence is parseGoogleRecurrence's inverse for the one line
@@ -798,27 +890,37 @@ func googlePatchSource(eventTitle, eventURL string) *googleEventPatchSourceJSON 
 	return &googleEventPatchSourceJSON{Title: title, URL: eventURL}
 }
 
+// googleTransparency renders busy as Google's own free/busy vocabulary
+// (ADR-0086) — the outbound counterpart to googleBusy.
+func googleTransparency(busy bool) string {
+	if busy {
+		return "opaque"
+	}
+	return "transparent"
+}
+
 // buildGooglePatch is the one function that produces a googleEventPatchBody
 // (#290, ADR-0075) — the field-scoped patch compiler ADR-0075 requires be
 // enforced at the Provider seam, not by convention at each call site. Its
 // argument list is exactly ADR-0075's allow-list (title, start, end,
-// all-day, Anchor zone, recurrence rule, description, location, Event URL) and
-// nothing a caller could use to smuggle an Attendee, conferenceData, or a
-// visibility change through: those fields don't exist on this function's
-// signature, so there is nothing to pass even by mistake. An empty rrule (a
-// plain Master, or a recurring instance's own PATCH, which never carries a
-// rule of its own) omits the recurrence key entirely. Cancelled Occurrences
-// are never in scope here — they are `status: cancelled` instances, pushed by
-// CANCEL_INSTANCE (#293, ADR-0078).
-func buildGooglePatch(title string, start, end time.Time, allDay bool, tzid *string, rrule string, description, location, eventURL string) googleEventPatchBody {
+// all-day, busy, Anchor zone, recurrence rule, description, location, Event
+// URL — busy added by ADR-0086) and nothing a caller could use to smuggle an
+// Attendee, conferenceData, or a visibility change through: those fields
+// don't exist on this function's signature, so there is nothing to pass even
+// by mistake. An empty rrule (a plain Master, or a recurring instance's own
+// PATCH, which never carries a rule of its own) omits the recurrence key
+// entirely. Cancelled Occurrences are never in scope here — they are
+// `status: cancelled` instances, pushed by CANCEL_INSTANCE (#293, ADR-0078).
+func buildGooglePatch(title string, start, end time.Time, allDay bool, tzid *string, rrule string, description, location, eventURL string, busy bool) googleEventPatchBody {
 	return googleEventPatchBody{
-		Summary:     title,
-		Description: description,
-		Location:    location,
-		Start:       encodeGoogleEventDateTime(start, allDay, tzid),
-		End:         encodeGoogleEventDateTime(end, allDay, tzid),
-		Recurrence:  encodeGoogleRecurrence(rrule),
-		Source:      googlePatchSource(title, eventURL),
+		Summary:      title,
+		Description:  description,
+		Location:     location,
+		Start:        encodeGoogleEventDateTime(start, allDay, tzid),
+		End:          encodeGoogleEventDateTime(end, allDay, tzid),
+		Recurrence:   encodeGoogleRecurrence(rrule),
+		Transparency: googleTransparency(busy),
+		Source:       googlePatchSource(title, eventURL),
 	}
 }
 
@@ -863,8 +965,7 @@ func (c *googleClient) patchEvent(ctx context.Context, accessToken, calendarID, 
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		io.Copy(io.Discard, resp.Body) //nolint:errcheck // draining for keep-alive reuse; the response carries nothing we need on failure
-		return googleEventJSON{}, &googleHTTPError{sentinel: ErrGoogleWriteBackFailed, statusCode: resp.StatusCode}
+		return googleEventJSON{}, &googleHTTPError{sentinel: ErrGoogleWriteBackFailed, statusCode: resp.StatusCode, body: readGoogleErrorBody(resp.Body)}
 	}
 
 	var updated googleEventJSON
@@ -894,8 +995,7 @@ func (c *googleClient) getEvent(ctx context.Context, accessToken, calendarID, ev
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		io.Copy(io.Discard, resp.Body) //nolint:errcheck // draining for keep-alive reuse; the response carries nothing we need on failure
-		return googleEventJSON{}, &googleHTTPError{sentinel: ErrGoogleWriteBackFailed, statusCode: resp.StatusCode}
+		return googleEventJSON{}, &googleHTTPError{sentinel: ErrGoogleWriteBackFailed, statusCode: resp.StatusCode, body: readGoogleErrorBody(resp.Body)}
 	}
 
 	var event googleEventJSON
@@ -944,8 +1044,7 @@ func (c *googleClient) insertEvent(ctx context.Context, accessToken, calendarID 
 		return c.getEvent(ctx, accessToken, calendarID, body.ID)
 	}
 	if resp.StatusCode != http.StatusOK {
-		io.Copy(io.Discard, resp.Body) //nolint:errcheck // draining for keep-alive reuse; the response carries nothing we need on failure
-		return googleEventJSON{}, &googleHTTPError{sentinel: ErrGoogleWriteBackFailed, statusCode: resp.StatusCode}
+		return googleEventJSON{}, &googleHTTPError{sentinel: ErrGoogleWriteBackFailed, statusCode: resp.StatusCode, body: readGoogleErrorBody(resp.Body)}
 	}
 
 	var inserted googleEventJSON
@@ -976,13 +1075,15 @@ func (c *googleClient) deleteEvent(ctx context.Context, accessToken, calendarID,
 		return fmt.Errorf("%w: %v", ErrGoogleWriteBackFailed, err)
 	}
 	defer resp.Body.Close()
-	io.Copy(io.Discard, resp.Body) //nolint:errcheck // draining for keep-alive reuse; events.delete carries no body
+	// Drained whatever the status: a successful events.delete carries no body,
+	// and a failed one carries the reason.
+	errBody := readGoogleErrorBody(resp.Body)
 
 	switch resp.StatusCode {
 	case http.StatusOK, http.StatusNoContent, http.StatusNotFound, http.StatusGone:
 		return nil
 	default:
-		return &googleHTTPError{sentinel: ErrGoogleWriteBackFailed, statusCode: resp.StatusCode}
+		return &googleHTTPError{sentinel: ErrGoogleWriteBackFailed, statusCode: resp.StatusCode, body: errBody}
 	}
 }
 
@@ -1039,8 +1140,7 @@ func (c *googleClient) listInstances(ctx context.Context, accessToken, calendarI
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		io.Copy(io.Discard, resp.Body) //nolint:errcheck // draining for keep-alive reuse; the response carries nothing we need on failure
-		return googleEventJSON{}, &googleHTTPError{sentinel: ErrGoogleWriteBackFailed, statusCode: resp.StatusCode}
+		return googleEventJSON{}, &googleHTTPError{sentinel: ErrGoogleWriteBackFailed, statusCode: resp.StatusCode, body: readGoogleErrorBody(resp.Body)}
 	}
 
 	var body struct {
@@ -1103,8 +1203,7 @@ func (c *googleClient) cancelInstance(ctx context.Context, accessToken, calendar
 		return googleEventJSON{}, nil
 	}
 	if resp.StatusCode != http.StatusOK {
-		io.Copy(io.Discard, resp.Body) //nolint:errcheck // draining for keep-alive reuse; the response carries nothing we need on failure
-		return googleEventJSON{}, &googleHTTPError{sentinel: ErrGoogleWriteBackFailed, statusCode: resp.StatusCode}
+		return googleEventJSON{}, &googleHTTPError{sentinel: ErrGoogleWriteBackFailed, statusCode: resp.StatusCode, body: readGoogleErrorBody(resp.Body)}
 	}
 
 	var updated googleEventJSON

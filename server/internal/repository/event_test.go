@@ -176,6 +176,40 @@ func TestEventRepository_CreateAndUpdate_PersistsAllDay(t *testing.T) {
 	}
 }
 
+// TestEventRepository_CreateAndUpdate_PersistsBusy round-trips both Busy
+// (Free explicitly cleared to Busy on update) and Free (ADR-0086).
+func TestEventRepository_CreateAndUpdate_PersistsBusy(t *testing.T) {
+	repo, userID, calendarID, _ := newTestEventRepository(t)
+	ctx := context.Background()
+
+	start := time.Date(2026, 8, 4, 0, 0, 0, 0, time.UTC)
+	end := time.Date(2026, 8, 5, 0, 0, 0, 0, time.UTC)
+
+	created, err := repo.Create(ctx, "evt-1", &userID, EventFields{CalendarID: calendarID, Title: "Holiday", Start: start, End: end, AllDay: true, Busy: false}, 0)
+	if err != nil {
+		t.Fatalf("create event: %v", err)
+	}
+	if created.Busy {
+		t.Fatalf("expected created event to be Free, got %+v", created)
+	}
+
+	fetched, err := repo.GetByID(ctx, "evt-1")
+	if err != nil {
+		t.Fatalf("get by id: %v", err)
+	}
+	if fetched.Busy {
+		t.Fatalf("expected fetched event to stay Free, got %+v", fetched)
+	}
+
+	updated, err := repo.Update(ctx, "evt-1", EventFields{CalendarID: calendarID, Title: "Holiday", Start: start, End: end, AllDay: true, Busy: true}, 0, 0)
+	if err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	if !updated.Busy {
+		t.Fatalf("expected updated event to be Busy, got %+v", updated)
+	}
+}
+
 // A nil tzid (Floating Event, ADR-0019) must round-trip as nil, and a named
 // zone must round-trip verbatim through create, get, and update.
 func TestEventRepository_CreateAndUpdate_RoundTripsTzid(t *testing.T) {
@@ -814,9 +848,10 @@ func TestEventRepository_MarkWriteBackFailed_NotFound(t *testing.T) {
 	}
 }
 
-// TestEventRepository_ApplyProviderOwnedFields covers #291's conflict-retry
-// helper: RSVPStatus/ConferenceURL/GuestCount move, and nothing else does —
-// in particular the title an ordinary Update would otherwise carry.
+// TestEventRepository_ApplyProviderOwnedFields covers #291/#298's
+// conflict-retry and Refresh-reconcile helper: RSVPStatus/ConferenceURL/
+// GuestCount/ProviderColor move, and nothing else does — in particular the
+// title an ordinary Update would otherwise carry.
 func TestEventRepository_ApplyProviderOwnedFields(t *testing.T) {
 	repo, userID, calendarID, _ := newTestEventRepository(t)
 	ctx := context.Background()
@@ -824,7 +859,8 @@ func TestEventRepository_ApplyProviderOwnedFields(t *testing.T) {
 
 	rsvp := "declined"
 	conferenceURL := "https://meet.example.com/xyz"
-	if err := repo.ApplyProviderOwnedFields(ctx, "evt-1", &rsvp, &conferenceURL, 5); err != nil {
+	providerColor := "#123456"
+	if err := repo.ApplyProviderOwnedFields(ctx, "evt-1", &rsvp, &conferenceURL, 5, &providerColor); err != nil {
 		t.Fatalf("apply provider-owned fields: %v", err)
 	}
 
@@ -840,6 +876,9 @@ func TestEventRepository_ApplyProviderOwnedFields(t *testing.T) {
 	}
 	if got.GuestCount != 5 {
 		t.Fatalf("expected GuestCount applied, got %d", got.GuestCount)
+	}
+	if got.ProviderColor == nil || *got.ProviderColor != "#123456" {
+		t.Fatalf("expected ProviderColor applied, got %v", got.ProviderColor)
 	}
 	if got.Title != "evt-1" {
 		t.Fatalf("expected the title left untouched, got %q", got.Title)

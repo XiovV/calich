@@ -169,6 +169,7 @@ describe("planEventSave", () => {
           start: START,
           end: END,
           allDay: undefined,
+          busy: true,
           rrule: undefined,
           tzid: "Europe/Berlin",
           description: undefined,

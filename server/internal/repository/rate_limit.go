@@ -15,6 +15,10 @@ import (
 const (
 	RateLimitScopeAuth     = "auth"
 	RateLimitScopeRegister = "register"
+	// RateLimitScopePublicBooking is the public Booking Link page's own
+	// scope (#324, ADR-0087) — the first unauthenticated surface that reads
+	// calendar data, throttled per IP on the same terms as Register.
+	RateLimitScopePublicBooking = "public_booking"
 )
 
 // RateLimitKeyEmail and RateLimitKeyIP are the two key_type values a

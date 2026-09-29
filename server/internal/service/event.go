@@ -99,6 +99,15 @@ var (
 	// or events.patch status:cancelled), and split a series ("this and
 	// following", performed by hand — see ReparentFrom).
 	ErrLinkedCalendarWriteUnsupported = errors.New("this kind of write is not yet supported on a linked calendar")
+	// ErrLinkedCalendarWriteBackRevertUnsupported is returned by PutSeries
+	// when a CalDAV PUT to a writable Linked Calendar would revert an
+	// Override back to its Master's rule, or un-cancel an Exception (#299,
+	// ADR-0081): both are expressible at Google (patch an instance back to
+	// the master's values; patch a cancelled instance back to confirmed) but
+	// deliberately deferred, being the two rarest things a phone does.
+	// Returned before any local write, so the refused PUT leaves the stored
+	// series unchanged rather than partially applying.
+	ErrLinkedCalendarWriteBackRevertUnsupported = errors.New("restoring a cancelled or overridden occurrence is not yet supported on a linked calendar")
 	// ErrConnectionNeedsReconnect is returned by Update when write.CalendarID
 	// carries a Connection-kind Source whose Connection has moved off
 	// ConnectionStatusLive (#291, ADR-0075): a Connection that no longer
@@ -221,7 +230,7 @@ func classifyUpdate(existing repository.Event, write EventWrite) updateEffects {
 	if material {
 		newSequence++
 	}
-	contentChanged := material || existing.Title != write.Title || existing.Description != write.Description || existing.Location != write.Location || existing.URL != write.URL || !colorEqual(existing.Color, write.Color)
+	contentChanged := material || existing.Title != write.Title || existing.Description != write.Description || existing.Location != write.Location || existing.URL != write.URL || !colorEqual(existing.Color, write.Color) || existing.Busy != write.Busy
 
 	return updateEffects{
 		discardChildren: discardChildren,
@@ -453,7 +462,20 @@ type txRepos struct {
 // commits or rolls back atomically. Reads and validation belong outside fn,
 // before withTx is called (ADR-0018).
 func (s *EventService) withTx(ctx context.Context, fn func(repos txRepos) error) error {
+	return s.withTxChecked(ctx, nil, fn)
+}
+
+// withTxChecked is withTx's own body, widened with an optional preCheck that
+// runs first, inside the transaction, before fn (and before repos are even
+// built) — Create's EventWrite.PreCommitCheck's seam. withTx above is just
+// this with preCheck nil, which every caller but Create is.
+func (s *EventService) withTxChecked(ctx context.Context, preCheck func(ctx context.Context, tx *sql.Tx) error, fn func(repos txRepos) error) error {
 	return repository.WithTx(ctx, s.db, func(tx *sql.Tx) error {
+		if preCheck != nil {
+			if err := preCheck(ctx, tx); err != nil {
+				return err
+			}
+		}
 		repos := txRepos{
 			events:            s.events.WithTx(tx),
 			exceptions:        s.exceptions.WithTx(tx),
@@ -486,6 +508,12 @@ type EventWrite struct {
 	Title        string
 	Start, End   time.Time
 	AllDay       bool
+	// Busy mirrors repository.Event.Busy — iCalendar's own TRANSP (ADR-0086).
+	// A newly created timed Event is Busy, an all-day one Free; the caller
+	// (the frontend's Event modal, or a decoded import/CalDAV/Google write)
+	// always supplies a concrete value — this service never re-derives it
+	// from AllDay itself.
+	Busy         bool
 	Rrule        string
 	ParentID     *string
 	RecurrenceID *time.Time
@@ -514,6 +542,17 @@ type EventWrite struct {
 	AttendeeUserIDs  []int64
 	AttendeeGroupIDs []int64
 	AttendeeEmails   []string
+	// AllowAttendeesOnConnectionSource narrows Create's own "no Attendees on
+	// a Connection Source" guard (ADR-0052) for exactly one caller: a
+	// Booking Link's write (#326, ADR-0087), whose Book-into Calendar is a
+	// legal Book-into target even when it's a writable Linked Calendar. The
+	// visitor's Attendee row stays local-only, same as ADR-0052 already
+	// requires — nothing here mirrors it to the Provider — so it doesn't
+	// reopen the guard's own reasoning (a Linked Calendar's Events carry no
+	// Attendees this app pushes upstream); it only lets that local row and
+	// the Event's own ordinary Write-back coexist, which the guard's blanket
+	// refusal had no way to express. False (refused) on every other Create.
+	AllowAttendeesOnConnectionSource bool
 	// CopyRemindersFrom, when set, copies every User's Reminder rows from
 	// that Event onto the one Create mints, inside the same transaction
 	// (ADR-0064): ParentID for a fresh Override (its Master's Reminder set),
@@ -521,6 +560,14 @@ type EventWrite struct {
 	// so a User whose Reminder applied to the old row's future Occurrences
 	// doesn't silently lose it. Nil on every other Create.
 	CopyRemindersFrom *string
+	// PreCommitCheck, when set, runs first inside Create's own write
+	// transaction — before the Event row is even inserted — and aborts the
+	// whole write (rolling back cleanly) if it returns an error. A Booking
+	// Link's public write (#326, ADR-0087) is the only caller: it re-derives
+	// its slot here, against tx-bound repositories it builds from the *sql.Tx
+	// itself, so two visitors racing the same slot can never both win — the
+	// loser's transaction simply never inserts. Nil on every other Create.
+	PreCommitCheck func(ctx context.Context, tx *sql.Tx) error
 }
 
 // fields projects the write onto the columns the repository stores, dropping
@@ -532,6 +579,7 @@ func (w EventWrite) fields() repository.EventFields {
 		Start:        w.Start,
 		End:          w.End,
 		AllDay:       w.AllDay,
+		Busy:         w.Busy,
 		Rrule:        w.Rrule,
 		ParentID:     w.ParentID,
 		RecurrenceID: w.RecurrenceID,
@@ -583,15 +631,17 @@ func (s *EventService) Create(ctx context.Context, userID int64, id string, writ
 	// Creating an Event on a writable Linked Calendar is allowed (#292,
 	// ADR-0077): a plain Master queues an events.insert (POST), an Override —
 	// "This event" editing an as-yet-unmodified Occurrence (#293, ADR-0078) —
-	// queues an instance PATCH keyed on the Master's local id. Only an
-	// Attendee is still refused: a Linked Calendar's Events carry none this
-	// app mirrors to the Provider (ADR-0052). A read-only Connection Source is
-	// already refused above (requireWritableCalendar's Access clamp), same as
-	// a Subscription's.
+	// queues an instance PATCH keyed on the Master's local id. An Attendee is
+	// otherwise still refused: a Linked Calendar's Events carry none this app
+	// mirrors to the Provider (ADR-0052) — except a Booking Link's own write,
+	// which sets AllowAttendeesOnConnectionSource (#326, ADR-0087). A
+	// read-only Connection Source is already refused above
+	// (requireWritableCalendar's Access clamp), same as a Subscription's.
 	enqueueCreateWriteBack := false
 	enqueueInstanceWriteBack := false
 	if isConnectionSource(calendar) {
-		if len(write.AttendeeUserIDs) > 0 || len(write.AttendeeGroupIDs) > 0 || len(write.AttendeeEmails) > 0 {
+		hasAttendees := len(write.AttendeeUserIDs) > 0 || len(write.AttendeeGroupIDs) > 0 || len(write.AttendeeEmails) > 0
+		if hasAttendees && !write.AllowAttendeesOnConnectionSource {
 			return repository.Event{}, ErrLinkedCalendarWriteUnsupported
 		}
 		if err := s.requireLiveConnection(ctx, calendar); err != nil {
@@ -620,7 +670,7 @@ func (s *EventService) Create(ctx context.Context, userID int64, id string, writ
 	workspaceID := calendar.WorkspaceID
 
 	var event repository.Event
-	err = s.withTx(ctx, func(repos txRepos) error {
+	err = s.withTxChecked(ctx, write.PreCommitCheck, func(repos txRepos) error {
 		seq, err := repos.sync.NextChangeSeq(ctx)
 		if err != nil {
 			return err
@@ -908,22 +958,12 @@ func (s *EventService) Update(ctx context.Context, userID int64, id string, writ
 	// when it fires.
 	effects := classifyUpdate(existing, write)
 
-	// ProviderEtag/RSVPStatus/ConferenceURL/GuestCount/ProviderColor are a
-	// Linked Calendar's own Refresh-owned columns (#287, #289, ADR-0052,
-	// ADR-0075) — write.fields() carries none of them (every ordinary write
-	// path leaves them at zero value), and EventRepository.Update writes
-	// whatever EventFields it's given unconditionally, with no merge against
-	// the stored row. Without this, editing so much as the title of an Event
-	// on a Linked Calendar would silently null out its Provider RSVP,
-	// conference link, guest count and colour shadow. Carrying existing's
-	// values forward is a no-op for every Event this app itself owns, where
-	// both sides are already zero.
+	// write.fields() leaves ProviderEtag/RSVPStatus/ConferenceURL/GuestCount/
+	// ProviderColor at zero value, and repository.EventRepository.Update's
+	// SQL has no column for any of the five (#298) — a Linked Calendar's
+	// Refresh-owned state survives a plain field edit like this title-only
+	// one by construction, not by carrying existing's values forward here.
 	fields := write.fields()
-	fields.ProviderEtag = existing.ProviderEtag
-	fields.RSVPStatus = existing.RSVPStatus
-	fields.ConferenceURL = existing.ConferenceURL
-	fields.GuestCount = existing.GuestCount
-	fields.ProviderColor = existing.ProviderColor
 
 	// Write-back (#290, ADR-0075): an Event on a writable Linked Calendar gets
 	// its push queued in the very same transaction as the local write it

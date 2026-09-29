@@ -15,6 +15,12 @@ import (
 const (
 	OutboxStatusPending = "pending"
 	OutboxStatusSent    = "sent"
+	// OutboxStatusSkipped is terminal like Sent, but claims no delivery
+	// (ADR-0079): the message ended without ever being dispatched, and
+	// last_error carries why. Kept distinct from Sent so "did this reach the
+	// Provider?" is answerable from the row, and from Failed because a skip
+	// raises no per-Event marker — it is usually a race the User caused.
+	OutboxStatusSkipped = "skipped"
 	OutboxStatusFailed  = "failed"
 )
 
@@ -48,6 +54,14 @@ const (
 	OutboxMethodDelete         = "DELETE"
 	OutboxMethodInstance       = "INSTANCE"
 	OutboxMethodCancelInstance = "CANCEL_INSTANCE"
+	// OutboxMethodBookingNotice is a plain, pre-rendered mail notice tied to
+	// Booking Link cancellation (#327, ADR-0087): the visitor's booking
+	// confirmation (carrying the signed cancel link) and the host's
+	// cancellation notice both take this shape. Neither is an Invitation or
+	// a Cancellation in ADR-0059's sense — no METHOD:REQUEST/CANCEL card, no
+	// Attendee lifecycle — so InvitationSender relays this one verbatim
+	// rather than rendering an iCalendar part for it.
+	OutboxMethodBookingNotice = "BOOKING_NOTICE"
 )
 
 // OutboxKindMail is every row this table carried before #290: a queued
@@ -130,6 +144,18 @@ type OutboxWriteBackInstanceSnapshot struct {
 	OverrideEventID string    `json:"overrideEventId,omitempty"`
 }
 
+// OutboxBookingNoticeSnapshot is a BOOKING_NOTICE row's payload (#327,
+// ADR-0087): a subject and body already rendered by the caller at enqueue
+// time (PublicBookingService, for the visitor's confirmation and the host's
+// cancellation notice), so InvitationSender needs no Event/Attendee lookup
+// and no per-purpose formatting of its own — unlike a REQUEST, which always
+// rebuilds from live state, this is meant to say exactly what it said when
+// queued.
+type OutboxBookingNoticeSnapshot struct {
+	Subject string `json:"subject"`
+	Body    string `json:"body"`
+}
+
 // OutboxMessage is a queued Invitation or Cancellation email (ADR-0059,
 // ADR-0060, #201): written in the same transaction as the Attendee row it
 // accompanies (or, for a CANCEL, the row/Attendee-row it withdraws), so a
@@ -163,12 +189,16 @@ type OutboxMessage struct {
 	Snapshot          *OutboxCancelSnapshot
 	WriteBackDelete   *OutboxWriteBackDeleteSnapshot
 	WriteBackInstance *OutboxWriteBackInstanceSnapshot
-	Status            string
-	Attempts          int
-	NextAttemptAt     time.Time
-	LastError         string
-	CreatedAt         time.Time
-	SentAt            *time.Time
+	// BookingNotice is non-nil only for a mail BOOKING_NOTICE (#327,
+	// ADR-0087), sharing the same underlying `snapshot` column as the other
+	// three.
+	BookingNotice *OutboxBookingNoticeSnapshot
+	Status        string
+	Attempts      int
+	NextAttemptAt time.Time
+	LastError     string
+	CreatedAt     time.Time
+	SentAt        *time.Time
 }
 
 // OutboxRepository stores queued Invitation emails, drained by the
@@ -318,6 +348,33 @@ func (r *OutboxRepository) enqueueCancel(ctx context.Context, eventID string, re
 	res, err := r.db.ExecContext(ctx,
 		`INSERT INTO outbox (event_id, recipient_user_id, recipient_email, method, snapshot) VALUES (?, ?, ?, ?, ?)`,
 		eventID, recipientUserID, recipientEmail, OutboxMethodCancel, string(encoded),
+	)
+	if err != nil {
+		return OutboxMessage{}, fmt.Errorf("insert outbox message: %w", err)
+	}
+
+	id, err := res.LastInsertId()
+	if err != nil {
+		return OutboxMessage{}, fmt.Errorf("get last insert id: %w", err)
+	}
+
+	return r.Get(ctx, id)
+}
+
+// EnqueueBookingNotice writes a pending mail BOOKING_NOTICE OutboxMessage to
+// recipientEmail (#327, ADR-0087) — the visitor's booking confirmation
+// (carrying the signed cancel link) or the host's cancellation notice,
+// depending on who recipientEmail is. subject/body are rendered by the
+// caller and relayed verbatim by InvitationSender, unlike a REQUEST/CANCEL.
+func (r *OutboxRepository) EnqueueBookingNotice(ctx context.Context, eventID, recipientEmail, subject, body string) (OutboxMessage, error) {
+	encoded, err := json.Marshal(OutboxBookingNoticeSnapshot{Subject: subject, Body: body})
+	if err != nil {
+		return OutboxMessage{}, fmt.Errorf("marshal booking notice snapshot: %w", err)
+	}
+
+	res, err := r.db.ExecContext(ctx,
+		`INSERT INTO outbox (event_id, recipient_email, method, snapshot) VALUES (?, ?, ?, ?)`,
+		eventID, recipientEmail, OutboxMethodBookingNotice, string(encoded),
 	)
 	if err != nil {
 		return OutboxMessage{}, fmt.Errorf("insert outbox message: %w", err)
@@ -596,6 +653,12 @@ func scanOutboxMessage(row rowScanner) (OutboxMessage, error) {
 				return OutboxMessage{}, fmt.Errorf("unmarshal write-back instance snapshot: %w", err)
 			}
 			m.WriteBackInstance = &s
+		case m.Kind == OutboxKindMail && m.Method == OutboxMethodBookingNotice:
+			var s OutboxBookingNoticeSnapshot
+			if err := json.Unmarshal([]byte(snapshot.String), &s); err != nil {
+				return OutboxMessage{}, fmt.Errorf("unmarshal booking notice snapshot: %w", err)
+			}
+			m.BookingNotice = &s
 		default:
 			var s OutboxCancelSnapshot
 			if err := json.Unmarshal([]byte(snapshot.String), &s); err != nil {
@@ -667,6 +730,22 @@ func (r *OutboxRepository) MarkSent(ctx context.Context, id int64, sentAt time.T
 	)
 	if err != nil {
 		return fmt.Errorf("mark outbox message sent: %w", err)
+	}
+	return requireAffected(res)
+}
+
+// MarkSkipped ends a message that was never dispatched (ADR-0079), recording
+// the reason in the same last_error column a failure uses. Terminal: the Worker
+// will not consider it again. sent_at is deliberately left NULL — nothing was
+// sent, and a timestamp there would reintroduce exactly the ambiguity this
+// status exists to remove.
+func (r *OutboxRepository) MarkSkipped(ctx context.Context, id int64, reason string) error {
+	res, err := r.db.ExecContext(ctx,
+		`UPDATE outbox SET status = ?, last_error = ? WHERE id = ?`,
+		OutboxStatusSkipped, reason, id,
+	)
+	if err != nil {
+		return fmt.Errorf("mark outbox message skipped: %w", err)
 	}
 	return requireAffected(res)
 }

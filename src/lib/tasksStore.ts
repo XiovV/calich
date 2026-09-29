@@ -1,0 +1,250 @@
+import { create } from "zustand";
+import { useAuthStore } from "./authStore";
+import { makeOptimisticWrite } from "./optimisticWrite";
+import { type Task, tasksApi } from "./tasksApi";
+import type { TaskList } from "./taskListsApi";
+
+// The Tasks panel's own data source (#310, #311, ADR-0083): every
+// incomplete Task the caller owns in the active Workspace, plus a bounded
+// tail of completed ones fetched only when "Show completed" asks.
+// fetchTasks/fetchCompletedTasks/createTask and the detail surface's own
+// writes (notes, Deadline, Priority, Task List) all mirror taskListsStore's
+// server-first discipline (ADR-0067): the dialog is open to receive a
+// failure, so there's nothing to paint ahead of the server. Completion is
+// the one write that IS optimistic — the click is the feedback, and the
+// client already knows the result before asking (ADR-0067, ADR-0068).
+interface TasksState {
+  tasks: Task[];
+  completedTasks: Task[];
+  fetchTasks: () => Promise<void>;
+  fetchCompletedTasks: () => Promise<void>;
+  createTask: (title: string, taskListId: number) => Promise<Task>;
+  updateTaskNotes: (id: number, notes: string) => Promise<Task>;
+  setTaskDeadline: (id: number, due: Date) => Promise<Task>;
+  clearTaskDeadline: (id: number) => Promise<Task>;
+  setTaskTimeBlock: (id: number, start: Date, durationMinutes: number) => Promise<boolean>;
+  clearTaskTimeBlock: (id: number) => Promise<boolean>;
+  setTaskDeadlineAndClearTimeBlock: (id: number, due: Date) => Promise<boolean>;
+  updateTaskPriority: (id: number, priority: number) => Promise<Task>;
+  moveTask: (id: number, taskListId: number) => Promise<Task>;
+  deleteTask: (id: number) => Promise<void>;
+  setTaskCompleted: (id: number, completed: boolean) => Promise<boolean>;
+}
+
+// resolveQuickAddTaskListId is quick-add's own targeting rule (#310): the
+// single checked Task List when exactly one is checked in the Lists filter
+// — the filter already states the User's intent — otherwise the default
+// Task List. checkedTaskListIds is intersected with taskLists itself rather
+// than trusted alone, so a stale checked id (a Task List deleted elsewhere,
+// not yet reconciled) can't be resolved to. Returns null only if taskLists
+// carries no default at all, which never happens in practice (ADR-0083:
+// exactly one Task List per (User, Workspace) is always the default).
+export function resolveQuickAddTaskListId(
+  taskLists: TaskList[],
+  checkedTaskListIds: Set<number>,
+): number | null {
+  const checked = taskLists.filter((list) => checkedTaskListIds.has(list.id));
+  if (checked.length === 1) return checked[0].id;
+
+  return taskLists.find((list) => list.isDefault)?.id ?? null;
+}
+
+function requireAccessToken(): string {
+  const accessToken = useAuthStore.getState().accessToken;
+  if (!accessToken) throw new Error("Not authenticated.");
+  return accessToken;
+}
+
+// replaceTask swaps `updated` in for its own id, in whichever of `tasks`/
+// `completedTasks` currently holds it — a detail-surface write never knows
+// ahead of time which list its Task lives in.
+function replaceTask(set: (fn: (state: TasksState) => Partial<TasksState>) => void, updated: Task) {
+  set((state) => ({
+    tasks: state.tasks.map((t) => (t.id === updated.id ? updated : t)),
+    completedTasks: state.completedTasks.map((t) => (t.id === updated.id ? updated : t)),
+  }));
+}
+
+// Binds no Access-change policy (ADR-0067): a Task has no Calendar to name,
+// and is private outright — there is no Share whose revocation could change
+// what the caller can reach.
+const write = makeOptimisticWrite();
+
+export const useTasksStore = create<TasksState>((set, get) => ({
+  tasks: [],
+  completedTasks: [],
+
+  fetchTasks: async () => {
+    const tasks = await tasksApi.list(requireAccessToken());
+    set({ tasks });
+  },
+
+  fetchCompletedTasks: async () => {
+    const completedTasks = await tasksApi.listCompleted(requireAccessToken());
+    set({ completedTasks });
+  },
+
+  createTask: async (title, taskListId) => {
+    const created = await tasksApi.create(requireAccessToken(), title, taskListId);
+    set({ tasks: [...get().tasks, created] });
+    return created;
+  },
+
+  // The detail surface's own fields (#311): a Task may be sitting in either
+  // `tasks` or `completedTasks` depending on whether it's done, so each
+  // write replaces it in whichever of the two actually holds it, leaving
+  // the other untouched.
+  updateTaskNotes: async (id, notes) => {
+    const updated = await tasksApi.updateNotes(requireAccessToken(), id, notes);
+    replaceTask(set, updated);
+    return updated;
+  },
+
+  setTaskDeadline: async (id, due) => {
+    const updated = await tasksApi.setDeadline(requireAccessToken(), id, due);
+    replaceTask(set, updated);
+    return updated;
+  },
+
+  clearTaskDeadline: async (id) => {
+    const updated = await tasksApi.clearDeadline(requireAccessToken(), id);
+    replaceTask(set, updated);
+    return updated;
+  },
+
+  // setTaskTimeBlock is written optimistically (ADR-0067): unlike the detail
+  // surface's server-first writes, the grid drop *is* the feedback — there's
+  // no dialog left open to show a failure in, so the block paints
+  // immediately and rolls back with a toast if the server refuses. Mirrors
+  // eventsStore.updateEvent's own discipline for the same gesture on an
+  // Event.
+  setTaskTimeBlock: async (id, start, durationMinutes) => {
+    const current = get().tasks.find((t) => t.id === id) ?? get().completedTasks.find((t) => t.id === id);
+    if (!current) return false;
+
+    const updated: Task = { ...current, start, durationMinutes };
+    return write({
+      apply: () => replaceTask(set, updated),
+      revert: () => replaceTask(set, current),
+      dispatch: async () => {
+        await tasksApi.setTimeBlock(requireAccessToken(), id, start, durationMinutes);
+      },
+      fallbackMessage: `Couldn't schedule "${current.title}".`,
+    });
+  },
+
+  // clearTaskTimeBlock is the drop table's "back to panel" row and the
+  // Task's own "Unschedule" menu item (#314) — both just want the block
+  // gone. Optimistic for the same reason setTaskTimeBlock is: the grid
+  // itself (the block disappearing) is the feedback.
+  clearTaskTimeBlock: async (id) => {
+    const current = get().tasks.find((t) => t.id === id) ?? get().completedTasks.find((t) => t.id === id);
+    if (!current) return false;
+
+    const updated: Task = { ...current, start: null, durationMinutes: null };
+    return write({
+      apply: () => replaceTask(set, updated),
+      revert: () => replaceTask(set, current),
+      dispatch: async () => {
+        await tasksApi.clearTimeBlock(requireAccessToken(), id);
+      },
+      fallbackMessage: `Couldn't unschedule "${current.title}".`,
+    });
+  },
+
+  // setTaskDeadlineAndClearTimeBlock is the drop table's one row that
+  // touches both axes at once (#314): a Time block dragged into the all-day
+  // lane. Written as a single optimistic step — an in-between state where
+  // the Deadline is set but the old block still shows would have the block
+  // visibly snap back once the second write lands, which is exactly what
+  // this row exists to avoid (ADR-0083). The two API calls behind it aren't
+  // atomic on the server, so they're ordered to fail safe: clearing the
+  // block first means a dropped second call (setDeadline) leaves the server
+  // with the block already gone rather than with the new Deadline set
+  // alongside the stale block precedence would still draw on the grid —
+  // the one outcome this row exists to make unreachable.
+  setTaskDeadlineAndClearTimeBlock: async (id, due) => {
+    const current = get().tasks.find((t) => t.id === id) ?? get().completedTasks.find((t) => t.id === id);
+    if (!current) return false;
+
+    const updated: Task = { ...current, due, start: null, durationMinutes: null };
+    return write({
+      apply: () => replaceTask(set, updated),
+      revert: () => replaceTask(set, current),
+      dispatch: async () => {
+        const accessToken = requireAccessToken();
+        await tasksApi.clearTimeBlock(accessToken, id);
+        await tasksApi.setDeadline(accessToken, id, due);
+      },
+      fallbackMessage: `Couldn't reschedule "${current.title}".`,
+    });
+  },
+
+  updateTaskPriority: async (id, priority) => {
+    const updated = await tasksApi.updatePriority(requireAccessToken(), id, priority);
+    replaceTask(set, updated);
+    return updated;
+  },
+
+  moveTask: async (id, taskListId) => {
+    const updated = await tasksApi.move(requireAccessToken(), id, taskListId);
+    replaceTask(set, updated);
+    return updated;
+  },
+
+  deleteTask: async (id) => {
+    await tasksApi.remove(requireAccessToken(), id);
+    set((state) => ({
+      tasks: state.tasks.filter((t) => t.id !== id),
+      completedTasks: state.completedTasks.filter((t) => t.id !== id),
+    }));
+  },
+
+  // setTaskCompleted paints the toggle immediately and puts it back on
+  // failure (ADR-0067, ADR-0068) — no confirmation, one click either way.
+  // Completing moves the Task out of the incomplete list and into the
+  // completed one (and back, un-completing), since the two are separate
+  // fetches rather than one list filtered client-side (ADR-0083: completed
+  // Tasks are returned only when asked for).
+  setTaskCompleted: async (id, completed) => {
+    const task = get().tasks.find((t) => t.id === id) ?? get().completedTasks.find((t) => t.id === id);
+    if (!task) return false;
+
+    return write({
+      apply: () => {
+        if (completed) {
+          set((state) => ({
+            tasks: state.tasks.filter((t) => t.id !== id),
+            completedTasks: [{ ...task, completed: true }, ...state.completedTasks],
+          }));
+        } else {
+          set((state) => ({
+            completedTasks: state.completedTasks.filter((t) => t.id !== id),
+            tasks: [...state.tasks, { ...task, completed: false }],
+          }));
+        }
+      },
+      revert: () => {
+        if (completed) {
+          set((state) => ({
+            completedTasks: state.completedTasks.filter((t) => t.id !== id),
+            tasks: [...state.tasks, task],
+          }));
+        } else {
+          set((state) => ({
+            tasks: state.tasks.filter((t) => t.id !== id),
+            completedTasks: [task, ...state.completedTasks],
+          }));
+        }
+      },
+      dispatch: async () => {
+        if (completed) {
+          await tasksApi.complete(requireAccessToken(), id);
+        } else {
+          await tasksApi.uncomplete(requireAccessToken(), id);
+        }
+      },
+      fallbackMessage: completed ? "Couldn't complete the task." : "Couldn't reopen the task.",
+    });
+  },
+}));

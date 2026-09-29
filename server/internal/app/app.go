@@ -46,17 +46,23 @@ type App struct {
 	// no Invitation is ever queued.
 	Mailer *mailer.SMTPMailer
 
-	AuthHandler         *handlers.AuthHandler
-	CalendarHandler     *handlers.CalendarHandler
-	EventHandler        *handlers.EventHandler
-	AttachmentHandler   *handlers.AttachmentHandler
-	NotificationHandler *handlers.NotificationHandler
-	AppPasswordHandler  *handlers.AppPasswordHandler
-	AccountHandler      *handlers.AccountHandler
-	UserHandler         *handlers.UserHandler
-	WorkspaceHandler    *handlers.WorkspaceHandler
-	GroupHandler        *handlers.GroupHandler
-	ConnectionHandler   *handlers.ConnectionHandler
+	AuthHandler                 *handlers.AuthHandler
+	CalendarHandler             *handlers.CalendarHandler
+	EventHandler                *handlers.EventHandler
+	AttachmentHandler           *handlers.AttachmentHandler
+	NotificationHandler         *handlers.NotificationHandler
+	AppPasswordHandler          *handlers.AppPasswordHandler
+	AccountHandler              *handlers.AccountHandler
+	UserHandler                 *handlers.UserHandler
+	WorkspaceHandler            *handlers.WorkspaceHandler
+	GroupHandler                *handlers.GroupHandler
+	CalendarSetHandler          *handlers.CalendarSetHandler
+	TaskListHandler             *handlers.TaskListHandler
+	TaskHandler                 *handlers.TaskHandler
+	ConnectionHandler           *handlers.ConnectionHandler
+	AvailabilityScheduleHandler *handlers.AvailabilityScheduleHandler
+	BookingLinkHandler          *handlers.BookingLinkHandler
+	PublicBookingHandler        *handlers.PublicBookingHandler
 
 	CalDAVBackend *caldavserver.Backend
 	CalDAVHandler http.Handler
@@ -118,7 +124,13 @@ func newFromGraph(graph *service.Graph, cfg config.Config) *App {
 	a.UserHandler = handlers.NewUserHandler(a.Users)
 	a.WorkspaceHandler = handlers.NewWorkspaceHandler(a.Workspaces)
 	a.GroupHandler = handlers.NewGroupHandler(a.Groups)
+	a.CalendarSetHandler = handlers.NewCalendarSetHandler(a.CalendarSets)
+	a.TaskListHandler = handlers.NewTaskListHandler(a.TaskLists)
+	a.TaskHandler = handlers.NewTaskHandler(a.Tasks)
 	a.ConnectionHandler = handlers.NewConnectionHandler(a.Connections)
+	a.AvailabilityScheduleHandler = handlers.NewAvailabilityScheduleHandler(a.AvailabilitySchedules)
+	a.BookingLinkHandler = handlers.NewBookingLinkHandler(a.BookingLinks)
+	a.PublicBookingHandler = handlers.NewPublicBookingHandler(a.PublicBookings, a.PublicIndex, a.PublicBookingRateLimiter)
 
 	a.CalDAVBackend = caldavserver.NewBackend(a.Calendars, a.Events, a.Attachments, cfg.MaxAttachmentSize, cfg.MaxAttachmentsPerEvent)
 	a.CalDAVHandler = caldavserver.NewHTTPHandler(a.CalDAVBackend)

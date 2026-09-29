@@ -26,6 +26,7 @@ import (
 	"fmt"
 	"net/http"
 
+	"github.com/XiovV/calich/server/internal/outbox"
 	"github.com/XiovV/calich/server/internal/repository"
 )
 
@@ -102,6 +103,13 @@ func (s *ConnectionService) SendWriteBack(ctx context.Context, msg repository.Ou
 	if !s.configured {
 		return ErrGoogleNotConfigured
 	}
+	return classifyWriteBackFailure(s.dispatchWriteBack(ctx, msg))
+}
+
+// dispatchWriteBack routes msg to the sender for its Method. SendWriteBack's
+// own doc comment describes what each one does; this exists only so the
+// classification above wraps every one of them rather than each remembering to.
+func (s *ConnectionService) dispatchWriteBack(ctx context.Context, msg repository.OutboxMessage) error {
 	switch msg.Method {
 	case repository.OutboxMethodDelete:
 		return s.sendWriteBackDelete(ctx, msg)
@@ -114,6 +122,53 @@ func (s *ConnectionService) SendWriteBack(ctx context.Context, msg repository.Ou
 	}
 }
 
+// classifyWriteBackFailure marks a Google 4xx as outbox.ErrPermanent so the
+// Worker fails the message on the first response instead of walking the whole
+// backoff schedule. A 4xx says the request itself is unacceptable — a
+// malformed body, a dead grant, a calendar the account may not write, an event
+// that is gone — and none of those become acceptable by waiting.
+//
+// Three statuses stay on the retry path because they genuinely describe a
+// moment rather than the request: 408 (the request timed out), 429 (rate
+// limited, where waiting is exactly the remedy), and 412, which never reaches
+// here in the ordinary case — SendWriteBack's own bounded loop refetches and
+// re-issues it — but must not be reclassified underneath that loop if it does.
+// A 5xx or a transport error is untouched: those are the outage backoff was
+// built for.
+//
+// The cost of this is stated plainly, because it is the way the trade goes
+// wrong: a 403 raised by an ACL change that is reverted a minute later now
+// fails permanently where it might once have retried into a success. Editing
+// the Event re-enqueues the push (ADR-0077), which is the recovery, and it is
+// a better default than every genuinely hopeless push holding its Event's
+// failure marker back for thirteen minutes.
+func classifyWriteBackFailure(err error) error {
+	var httpErr *googleHTTPError
+	if !errors.As(err, &httpErr) {
+		return err
+	}
+	if httpErr.statusCode < 400 || httpErr.statusCode >= 500 {
+		return err
+	}
+	switch httpErr.statusCode {
+	case http.StatusRequestTimeout, http.StatusTooManyRequests, http.StatusPreconditionFailed:
+		return err
+	}
+	return fmt.Errorf("%w: %w", outbox.ErrPermanent, err)
+}
+
+// skipWriteBack ends a push that was never dispatched, carrying the reason
+// into the outbox row's last_error (ADR-0079). Every "nothing left to push"
+// race SendWriteBack's doc comment names returns one of these instead of the
+// bare nil it used to: nil is a claim that Google accepted the change, and
+// none of these ever asked Google anything.
+//
+// The reasons are written to be read by a person looking at a row months
+// later — which race happened, not merely that one did.
+func skipWriteBack(reason string) error {
+	return fmt.Errorf("%w: %s", outbox.ErrSkipped, reason)
+}
+
 // writeBackContext is the Calendar and Connection a push runs against, once
 // resolveWritableLinkedContext has confirmed the Calendar is still a
 // writable Linked Calendar whose Connection still exists.
@@ -123,29 +178,35 @@ type writeBackContext struct {
 	calendarID string // the Provider's own calendar id
 }
 
-// resolveWritableLinkedContext loads calendarID's Calendar and its
-// Connection, returning ok=false (and a nil error) for every "nothing left
-// to push" race SendWriteBack's own doc comment names: the Calendar gone,
-// no longer a writable Connection Source, or its Connection disconnected.
-func (s *ConnectionService) resolveWritableLinkedContext(ctx context.Context, calendarID string) (writeBackContext, bool, error) {
+// resolveWritableLinkedContext loads calendarID's Calendar and its Connection,
+// returning a skipWriteBack error for every "nothing left to push" race
+// SendWriteBack's own doc comment names: the Calendar gone, no longer a
+// writable Connection Source, or its Connection disconnected. Each of those is
+// terminal — none resolves by retrying — and none of them dispatched anything,
+// which is what separates the resulting 'skipped' row from a 'sent' one
+// (ADR-0079).
+func (s *ConnectionService) resolveWritableLinkedContext(ctx context.Context, calendarID string) (writeBackContext, error) {
 	calendar, err := s.calendars.GetByIDUnchecked(ctx, calendarID)
 	if err != nil {
 		if errors.Is(err, repository.ErrNotFound) {
-			return writeBackContext{}, false, nil
+			return writeBackContext{}, skipWriteBack("this calendar no longer exists here")
 		}
-		return writeBackContext{}, false, fmt.Errorf("load calendar for write-back: %w", err)
+		return writeBackContext{}, fmt.Errorf("load calendar for write-back: %w", err)
 	}
-	if calendar.Source == nil || calendar.Source.Kind != repository.SourceKindConnection || calendar.Source.Mode != repository.SourceModeWritable {
-		return writeBackContext{}, false, nil
+	if calendar.Source == nil || calendar.Source.Kind != repository.SourceKindConnection {
+		return writeBackContext{}, skipWriteBack("this is no longer a linked calendar")
+	}
+	if calendar.Source.Mode != repository.SourceModeWritable {
+		return writeBackContext{}, skipWriteBack("this linked calendar is no longer writable at google")
 	}
 	conn, err := s.connections.GetByID(ctx, calendar.UserID, *calendar.Source.ConnectionID)
 	if err != nil {
 		if errors.Is(err, repository.ErrNotFound) {
-			return writeBackContext{}, false, nil
+			return writeBackContext{}, skipWriteBack("this linked calendar's connection was removed")
 		}
-		return writeBackContext{}, false, fmt.Errorf("get connection: %w", err)
+		return writeBackContext{}, fmt.Errorf("get connection: %w", err)
 	}
-	return writeBackContext{calendar: calendar, conn: conn, calendarID: *calendar.Source.ExternalCalendarID}, true, nil
+	return writeBackContext{calendar: calendar, conn: conn, calendarID: *calendar.Source.ExternalCalendarID}, nil
 }
 
 // accessToken returns the Connection's cached access token, "" when it has
@@ -161,37 +222,46 @@ func (wc writeBackContext) accessToken() string {
 // for the two push kinds whose silent drop would be *undone* by the next
 // Refresh — DELETE (#292, ADR-0077) and CANCEL_INSTANCE (#293, ADR-0078) —
 // which still lists the event or occurrence Google was never told to remove.
-// So where resolveWritableLinkedContext returns ok=false for every race,
+// So where resolveWritableLinkedContext merely skips every race,
 // this one raises the Source's needs-attention marker (markWriteBackPermanentlyFailed)
 // for the two races that leave the User's intent unfulfilled — the Calendar
 // no longer writable, its Connection removed — and stays silent only for the
 // one true nothing-to-do, the Calendar itself gone. markEventID takes the
 // per-Event marker; verbing names the push for the marker's message
 // ("deleting this event", "cancelling this occurrence").
-func (s *ConnectionService) resolveDeliverableLinkedContext(ctx context.Context, calendarID, markEventID, verbing string) (writeBackContext, bool, error) {
+func (s *ConnectionService) resolveDeliverableLinkedContext(ctx context.Context, calendarID, markEventID, verbing string) (writeBackContext, error) {
 	calendar, err := s.calendars.GetByIDUnchecked(ctx, calendarID)
 	if err != nil {
 		if errors.Is(err, repository.ErrNotFound) {
-			return writeBackContext{}, false, nil
+			return writeBackContext{}, skipWriteBack("this calendar no longer exists here")
 		}
-		return writeBackContext{}, false, fmt.Errorf("load calendar for write-back: %w", err)
+		return writeBackContext{}, fmt.Errorf("load calendar for write-back: %w", err)
 	}
 	if calendar.Source == nil || calendar.Source.Kind != repository.SourceKindConnection {
-		return writeBackContext{}, false, nil
+		return writeBackContext{}, skipWriteBack("this is no longer a linked calendar")
 	}
+	// The two races that leave the User's intent unfulfilled raise the marker
+	// first and skip second: the row still claims no delivery, and the Source's
+	// needs-attention state is what actually reaches the User.
 	if calendar.Source.Mode != repository.SourceModeWritable {
-		return writeBackContext{}, false, s.markWriteBackPermanentlyFailed(ctx, calendar.UserID, markEventID, calendar.ID,
-			"this linked calendar is no longer writable, so "+verbing+" could not be pushed to google")
+		reason := "this linked calendar is no longer writable, so " + verbing + " could not be pushed to google"
+		if err := s.markWriteBackPermanentlyFailed(ctx, calendar.UserID, markEventID, calendar.ID, reason); err != nil {
+			return writeBackContext{}, err
+		}
+		return writeBackContext{}, skipWriteBack(reason)
 	}
 	conn, err := s.connections.GetByID(ctx, calendar.UserID, *calendar.Source.ConnectionID)
 	if err != nil {
 		if errors.Is(err, repository.ErrNotFound) {
-			return writeBackContext{}, false, s.markWriteBackPermanentlyFailed(ctx, calendar.UserID, markEventID, calendar.ID,
-				"this linked calendar's connection was removed, so "+verbing+" could not be pushed to google")
+			reason := "this linked calendar's connection was removed, so " + verbing + " could not be pushed to google"
+			if merr := s.markWriteBackPermanentlyFailed(ctx, calendar.UserID, markEventID, calendar.ID, reason); merr != nil {
+				return writeBackContext{}, merr
+			}
+			return writeBackContext{}, skipWriteBack(reason)
 		}
-		return writeBackContext{}, false, fmt.Errorf("get connection: %w", err)
+		return writeBackContext{}, fmt.Errorf("get connection: %w", err)
 	}
-	return writeBackContext{calendar: calendar, conn: conn, calendarID: *calendar.Source.ExternalCalendarID}, true, nil
+	return writeBackContext{calendar: calendar, conn: conn, calendarID: *calendar.Source.ExternalCalendarID}, nil
 }
 
 // failOnDeadGrant maps a mintAccessToken failure to either a permanent
@@ -215,7 +285,7 @@ func (s *ConnectionService) sendWriteBackUpsert(ctx context.Context, msg reposit
 	event, err := s.events.GetByIDUnchecked(ctx, msg.EventID)
 	if err != nil {
 		if errors.Is(err, repository.ErrNotFound) {
-			return nil
+			return skipWriteBack("this event was deleted before its change could be pushed")
 		}
 		return fmt.Errorf("load event for write-back: %w", err)
 	}
@@ -224,11 +294,11 @@ func (s *ConnectionService) sendWriteBackUpsert(ctx context.Context, msg reposit
 	if isCreate && msg.Method != repository.OutboxMethodPost {
 		// A PATCH for an Event that never reached the Provider — #290's own
 		// "never reached the Provider" no-op.
-		return nil
+		return skipWriteBack("this event was never created at google, so there was nothing to patch")
 	}
 
-	wc, ok, err := s.resolveWritableLinkedContext(ctx, event.CalendarID)
-	if err != nil || !ok {
+	wc, err := s.resolveWritableLinkedContext(ctx, event.CalendarID)
+	if err != nil {
 		return err
 	}
 
@@ -237,7 +307,7 @@ func (s *ConnectionService) sendWriteBackUpsert(ctx context.Context, msg reposit
 	// instance at Google (CANCEL_INSTANCE), and folding the same cancellations
 	// in here as EXDATE lines would double-represent them until the series
 	// drifts. buildGooglePatch's recurrence is the bare RRULE.
-	patch := buildGooglePatch(event.Title, event.Start, event.End, event.AllDay, event.Tzid, event.Rrule, event.Description, event.Location, event.URL)
+	patch := buildGooglePatch(event.Title, event.Start, event.End, event.AllDay, event.Tzid, event.Rrule, event.Description, event.Location, event.URL, event.Busy)
 	accessToken := wc.accessToken()
 
 	if isCreate {
@@ -305,7 +375,7 @@ func (s *ConnectionService) sendWriteBackUpsert(ctx context.Context, msg reposit
 		}
 		mapped := toGoogleEvent(fresh)
 		etag = googleEtag(mapped.ETag)
-		if err := s.reconcileProviderOwnedFields(ctx, event.ID, mapped); err != nil {
+		if err := s.reconcileProviderOwnedFields(ctx, event.ID, mapped, event.ProviderColor); err != nil {
 			return err
 		}
 	}
@@ -333,11 +403,11 @@ func (s *ConnectionService) sendWriteBackDelete(ctx context.Context, msg reposit
 	snap := msg.WriteBackDelete
 	if snap == nil || snap.ExternalUID == "" {
 		// The Event never reached the Provider — nothing to delete there.
-		return nil
+		return skipWriteBack("this event was never created at google, so there was nothing to delete")
 	}
 
-	wc, ok, err := s.resolveDeliverableLinkedContext(ctx, snap.CalendarID, msg.EventID, "deleting this event")
-	if err != nil || !ok {
+	wc, err := s.resolveDeliverableLinkedContext(ctx, snap.CalendarID, msg.EventID, "deleting this event")
+	if err != nil {
 		return err
 	}
 
@@ -370,18 +440,18 @@ func (s *ConnectionService) sendWriteBackDelete(ctx context.Context, msg reposit
 func (s *ConnectionService) sendWriteBackInstance(ctx context.Context, msg repository.OutboxMessage) error {
 	snap := msg.WriteBackInstance
 	if snap == nil {
-		return nil
+		return skipWriteBack("this occurrence push carried no snapshot to address")
 	}
 
-	wc, ok, err := s.resolveWritableLinkedContext(ctx, snap.CalendarID)
-	if err != nil || !ok {
+	wc, err := s.resolveWritableLinkedContext(ctx, snap.CalendarID)
+	if err != nil {
 		return err
 	}
 
 	master, err := s.events.GetByIDUnchecked(ctx, snap.MasterEventID)
 	if err != nil {
 		if errors.Is(err, repository.ErrNotFound) {
-			return nil
+			return skipWriteBack("this occurrence's series was deleted before the change could be pushed")
 		}
 		return fmt.Errorf("load master for instance write-back: %w", err)
 	}
@@ -392,7 +462,7 @@ func (s *ConnectionService) sendWriteBackInstance(ctx context.Context, msg repos
 	override, err := s.events.GetOverrideForWriteBack(ctx, snap.MasterEventID, snap.RecurrenceID)
 	if err != nil {
 		if errors.Is(err, repository.ErrNotFound) {
-			return nil
+			return skipWriteBack("this occurrence's change was undone before it could be pushed")
 		}
 		return fmt.Errorf("load override for instance write-back: %w", err)
 	}
@@ -409,7 +479,7 @@ func (s *ConnectionService) sendWriteBackInstance(ctx context.Context, msg repos
 		instance, err = s.google.listInstances(ctx, accessToken, wc.calendarID, *master.ExternalUID, originalStart)
 	}
 	if errors.Is(err, errGoogleInstanceNotFound) {
-		return nil
+		return skipWriteBack("google no longer has this occurrence of the series")
 	}
 	if err != nil {
 		return err
@@ -417,7 +487,7 @@ func (s *ConnectionService) sendWriteBackInstance(ctx context.Context, msg repos
 
 	instanceID := instance.ID
 	etag := googleEtag(instance.ETag)
-	patch := buildGooglePatch(override.Title, override.Start, override.End, override.AllDay, override.Tzid, "", override.Description, override.Location, override.URL)
+	patch := buildGooglePatch(override.Title, override.Start, override.End, override.AllDay, override.Tzid, "", override.Description, override.Location, override.URL, override.Busy)
 
 	var updated googleEventJSON
 	for attempt := 1; ; attempt++ {
@@ -446,7 +516,7 @@ func (s *ConnectionService) sendWriteBackInstance(ctx context.Context, msg repos
 		}
 		mapped := toGoogleEvent(fresh)
 		etag = googleEtag(mapped.ETag)
-		if err := s.reconcileProviderOwnedFields(ctx, override.ID, mapped); err != nil {
+		if err := s.reconcileProviderOwnedFields(ctx, override.ID, mapped, override.ProviderColor); err != nil {
 			return err
 		}
 	}
@@ -471,7 +541,7 @@ func (s *ConnectionService) sendWriteBackInstance(ctx context.Context, msg repos
 func (s *ConnectionService) sendWriteBackInstanceCancel(ctx context.Context, msg repository.OutboxMessage) error {
 	snap := msg.WriteBackInstance
 	if snap == nil {
-		return nil
+		return skipWriteBack("this cancellation carried no snapshot to address")
 	}
 
 	markEventID := snap.OverrideEventID
@@ -479,15 +549,15 @@ func (s *ConnectionService) sendWriteBackInstanceCancel(ctx context.Context, msg
 		markEventID = snap.MasterEventID
 	}
 
-	wc, ok, err := s.resolveDeliverableLinkedContext(ctx, snap.CalendarID, markEventID, "cancelling this occurrence")
-	if err != nil || !ok {
+	wc, err := s.resolveDeliverableLinkedContext(ctx, snap.CalendarID, markEventID, "cancelling this occurrence")
+	if err != nil {
 		return err
 	}
 
 	master, err := s.events.GetByIDUnchecked(ctx, snap.MasterEventID)
 	if err != nil {
 		if errors.Is(err, repository.ErrNotFound) {
-			return nil
+			return skipWriteBack("this occurrence's series was deleted before the cancellation could be pushed")
 		}
 		return fmt.Errorf("load master for instance cancel: %w", err)
 	}
@@ -507,14 +577,15 @@ func (s *ConnectionService) sendWriteBackInstanceCancel(ctx context.Context, msg
 		instance, err = s.google.listInstances(ctx, accessToken, wc.calendarID, *master.ExternalUID, originalStart)
 	}
 	if errors.Is(err, errGoogleInstanceNotFound) {
-		return nil
+		return skipWriteBack("google no longer has this occurrence of the series")
 	}
 	if err != nil {
 		return err
 	}
 	if instance.Status == googleStatusCancelled {
-		// Already cancelled at Google — the end state the User asked for.
-		return nil
+		// Already cancelled at Google — the end state the User asked for, but
+		// reached without this push dispatching anything.
+		return skipWriteBack("this occurrence was already cancelled at google")
 	}
 
 	instanceID := instance.ID
@@ -556,34 +627,63 @@ func (s *ConnectionService) sendWriteBackInstanceCancel(ctx context.Context, msg
 // pending edit about to be re-pushed with the fresh etag, or (colour)
 // governed by the until-touched rule the next ordinary Refresh already
 // re-applies within minutes, so this narrower, more time-critical path has
-// no need to duplicate it. RSVPStatus, ConferenceURL and GuestCount are the
-// Provider's alone, never this app's to have an opinion about, so they
-// always move forward unconditionally, exactly as an ordinary Refresh
-// already applies them.
-func (s *ConnectionService) reconcileProviderOwnedFields(ctx context.Context, id string, fresh googleEvent) error {
+// no need to duplicate it: providerColor is the caller's own already-stored
+// value, passed straight back rather than derived from fresh. RSVPStatus,
+// ConferenceURL and GuestCount are the Provider's alone, never this app's to
+// have an opinion about, so they always move forward unconditionally,
+// exactly as an ordinary Refresh already applies them.
+func (s *ConnectionService) reconcileProviderOwnedFields(ctx context.Context, id string, fresh googleEvent, providerColor *string) error {
 	rsvp, guestCount := googleGuestInfo(fresh.Attendees)
 	conferenceURL := googleConferenceURL(fresh.ConferenceData)
-	return s.events.ApplyProviderOwnedFields(ctx, id, rsvp, conferenceURL, guestCount)
+	return s.events.ApplyProviderOwnedFields(ctx, id, rsvp, conferenceURL, guestCount, providerColor)
 }
 
 // markWriteBackPermanentlyFailed records a Write-back push that will never
 // reach the Provider on its own (#291, ADR-0075, ADR-0076): a per-Event
-// marker (EventService.MarkWriteBackFailed) so the grid can show it, and the
+// marker (EventService.MarkWriteBackFailed) so the grid can show it, the
 // affected Linked Calendar's Source raised into needs-attention
 // (CalendarService.RecordWriteBackFailure) so the sidebar's existing
 // broken-Source badge — already rendered for a failed Refresh — picks this
-// up too. Tolerant of the Event or its Calendar having vanished since (a
-// concurrent delete, an unshared or moved Calendar): there is nothing left
-// to mark, which is success, not failure. Always returns nil on the
-// happy/tolerant path so every caller can hand it straight back to the
-// outbox Worker as "msg is handled" — retrying a push that would only ever
-// fail the same way again serves nobody.
+// up too, and a Notification (#299, ADR-0081) so a phone, which has no
+// protocol affordance to learn its own edit never reached Google, has
+// somewhere to learn it at all. Tolerant of the Event or its Calendar having
+// vanished since (a concurrent delete, an unshared or moved Calendar): there
+// is nothing left to mark, which is success, not failure. Always returns nil
+// on the happy/tolerant path so every caller can hand it straight back to
+// the outbox Worker as "msg is handled" — retrying a push that would only
+// ever fail the same way again serves nobody.
 func (s *ConnectionService) markWriteBackPermanentlyFailed(ctx context.Context, userID int64, eventID, calendarID, reason string) error {
 	if err := s.events.MarkWriteBackFailed(ctx, eventID, reason); err != nil && !errors.Is(err, repository.ErrNotFound) {
 		return fmt.Errorf("mark event write-back failed: %w", err)
 	}
 	if err := s.calendars.RecordWriteBackFailure(ctx, userID, calendarID, ErrorClassNeedsAttention, reason); err != nil && !errors.Is(err, repository.ErrNotFound) {
 		return fmt.Errorf("record write-back failure on source: %w", err)
+	}
+	if err := s.raiseWriteBackFailureNotification(ctx, userID, calendarID); err != nil {
+		return err
+	}
+	return nil
+}
+
+// raiseWriteBackFailureNotification upserts the coalesced-on-the-Source
+// Notification markWriteBackPermanentlyFailed's own doc comment describes
+// (#299, ADR-0081): re-raising the same Calendar's failure — a dead grant
+// failing every one of its queued pushes in the same instant — upserts the
+// one existing row (repository.NotificationRepository.UpsertWriteBackFailure's
+// own partial unique index) rather than adding a Notification per Event.
+// Tolerant of the Calendar having vanished since, mirroring every other step
+// markWriteBackPermanentlyFailed already takes.
+func (s *ConnectionService) raiseWriteBackFailureNotification(ctx context.Context, userID int64, calendarID string) error {
+	calendar, err := s.calendars.GetByIDUnchecked(ctx, calendarID)
+	if err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			return nil
+		}
+		return fmt.Errorf("load calendar for write-back failure notification: %w", err)
+	}
+	title := fmt.Sprintf("%q could not be synced to Google", calendar.Name)
+	if _, err := s.notifications.UpsertWriteBackFailure(ctx, userID, calendarID, title, s.now()); err != nil {
+		return fmt.Errorf("raise write-back failure notification: %w", err)
 	}
 	return nil
 }

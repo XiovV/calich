@@ -1,6 +1,6 @@
 import { Popover } from "@base-ui/react/popover";
 import { formatDistanceToNow } from "date-fns";
-import { Bell, UserPlus } from "lucide-react";
+import { AlertTriangle, Bell, UserPlus } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useAuthStore } from "../../lib/authStore";
 import type { Notification as AppNotification } from "../../lib/notification";
@@ -37,7 +37,11 @@ export function NotificationBell() {
   }
 
   function handleNotificationClick(notification: AppNotification) {
-    requestEventOpen(notification.eventId);
+    // A writeback_failed Notification concerns a Calendar, not an Event —
+    // there's nothing to open (ADR-0081). It still dismisses the popover.
+    if (notification.kind !== "writeback_failed") {
+      requestEventOpen(notification.eventId);
+    }
     setOpen(false);
   }
 
@@ -73,6 +77,9 @@ export function NotificationBell() {
                         {notification.kind === "invite" && (
                           <UserPlus className="size-3.5 shrink-0 text-ink-muted" />
                         )}
+                        {notification.kind === "writeback_failed" && (
+                          <AlertTriangle className="size-3.5 shrink-0 text-danger" />
+                        )}
                         <span className="text-body text-ink">
                           {notification.title}
                         </span>
@@ -80,7 +87,9 @@ export function NotificationBell() {
                       <p className="text-label-sm text-ink-muted">
                         {notification.kind === "invite"
                           ? "You were invited"
-                          : formatDateTime(notification.occurrenceStart, timeFormat)}{" "}
+                          : notification.kind === "writeback_failed"
+                            ? "Couldn't sync to Google"
+                            : formatDateTime(notification.occurrenceStart, timeFormat)}{" "}
                         ·{" "}
                         {formatDistanceToNow(notification.firedAt, {
                           addSuffix: true,

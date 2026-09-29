@@ -33,6 +33,19 @@ func (b *Backend) listSeriesObjects(ctx context.Context, path string, include fu
 		return nil, webdav.NewHTTPError(http.StatusNotFound, err)
 	}
 
+	// A cached or guessed path into a real Calendar must answer the same
+	// way PROPFIND discovery would once Exposure says no (ADR-0080) — the
+	// Invitations collection has no Calendar row to check this against and
+	// keeps its own presence rule (ListAttendeeOnlySeries), so it's exempt.
+	if calendarID != attendeeCollectionID {
+		if err := b.calendars.RequireExposedAccess(ctx, userID, calendarID); err != nil {
+			if errors.Is(err, repository.ErrNotFound) {
+				return nil, webdav.NewHTTPError(http.StatusNotFound, err)
+			}
+			return nil, fmt.Errorf("check calendar exposure: %w", err)
+		}
+	}
+
 	var masters []repository.Event
 	var overridesByParent map[string][]repository.Event
 	if calendarID == attendeeCollectionID {
@@ -193,6 +206,17 @@ func (b *Backend) GetCalendarObject(ctx context.Context, path string, req *calda
 			return nil, fmt.Errorf("get attendee-only series: %w", err)
 		}
 		return buildCalendarObject(ctx, userID, calendarID, master, overrides)
+	}
+
+	// Mirrors listSeriesObjects' own Exposure check (ADR-0080) — calendar-
+	// multiget resolves an object path directly rather than through a
+	// listing, so it needs the same guard against a cached or guessed path
+	// outliving Exposure being turned off.
+	if err := b.calendars.RequireExposedAccess(ctx, userID, calendarID); err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			return nil, webdav.NewHTTPError(http.StatusNotFound, err)
+		}
+		return nil, fmt.Errorf("check calendar exposure: %w", err)
 	}
 
 	master, overrides, err := b.events.GetSeries(ctx, userID, masterID)

@@ -16,6 +16,8 @@ vi.mock("../lib/authApi", async () => {
       me: vi.fn(),
       updateEmail: vi.fn(),
       updateName: vi.fn(),
+      updateHandle: vi.fn(),
+      getHandleSuggestion: vi.fn(),
     },
   };
 });
@@ -42,6 +44,7 @@ const user = {
   timeFormat: "24h" as const,
   workingHoursStart: null,
   workingHoursEnd: null,
+  handle: null,
 };
 
 beforeEach(() => {
@@ -52,6 +55,9 @@ beforeEach(() => {
     pendingEmail: null,
     accessToken: "token-123",
   });
+  // A default every test can rely on unless it overrides it — AccountSection
+  // fetches this unconditionally on mount whenever user.handle is null.
+  vi.mocked(authApi.getHandleSuggestion).mockResolvedValue("ada-2");
 });
 
 async function fillPasswordForm(current: string, next: string, confirm: string) {
@@ -318,5 +324,72 @@ describe("AccountSection — change password (#234)", () => {
     await fillPasswordForm("old-pw", "new-password", "different-password");
 
     expect(screen.getByText("Passwords don't match.")).toBeInTheDocument();
+  });
+});
+
+// #321, ADR-0084.
+describe("AccountSection — Handle", () => {
+  it("pre-fills the field with a fetched suggestion for a User with no Handle yet", async () => {
+    render(<AccountSection />);
+
+    expect(await screen.findByLabelText("Handle")).toHaveValue("ada-2");
+  });
+
+  it("claims a Handle with no warning, since nothing was published under nothing", async () => {
+    const confirmSpy = vi.spyOn(window, "confirm");
+    vi.mocked(authApi.updateHandle).mockResolvedValue({ ...user, handle: "ada" });
+    render(<AccountSection />);
+
+    const input = await screen.findByLabelText("Handle");
+    await userEvent.clear(input);
+    await userEvent.type(input, "ada");
+    await userEvent.click(screen.getAllByRole("button", { name: "Save" })[2]);
+
+    expect(confirmSpy).not.toHaveBeenCalled();
+    expect(authApi.updateHandle).toHaveBeenCalledWith("token-123", "ada");
+    expect(await screen.findByText("Saved.")).toBeInTheDocument();
+  });
+
+  it("warns before renaming an already-claimed Handle, and proceeds when confirmed", async () => {
+    useAuthStore.setState({ user: { ...user, handle: "ada" } });
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    vi.mocked(authApi.updateHandle).mockResolvedValue({ ...user, handle: "adalovelace" });
+    render(<AccountSection />);
+
+    const input = screen.getByLabelText("Handle");
+    await userEvent.clear(input);
+    await userEvent.type(input, "adalovelace");
+    await userEvent.click(screen.getAllByRole("button", { name: "Save" })[2]);
+
+    expect(window.confirm).toHaveBeenCalledWith(
+      expect.stringContaining('breaks every URL published under "ada"'),
+    );
+    expect(authApi.updateHandle).toHaveBeenCalledWith("token-123", "adalovelace");
+  });
+
+  it("does nothing when the rename warning is declined", async () => {
+    useAuthStore.setState({ user: { ...user, handle: "ada" } });
+    vi.spyOn(window, "confirm").mockReturnValue(false);
+    render(<AccountSection />);
+
+    const input = screen.getByLabelText("Handle");
+    await userEvent.clear(input);
+    await userEvent.type(input, "adalovelace");
+    await userEvent.click(screen.getAllByRole("button", { name: "Save" })[2]);
+
+    expect(authApi.updateHandle).not.toHaveBeenCalled();
+    expect(input).toHaveValue("adalovelace");
+  });
+
+  it("surfaces a taken-handle conflict inline", async () => {
+    vi.mocked(authApi.updateHandle).mockRejectedValue(new Error("handle is already taken"));
+    render(<AccountSection />);
+
+    const input = await screen.findByLabelText("Handle");
+    await userEvent.clear(input);
+    await userEvent.type(input, "bob");
+    await userEvent.click(screen.getAllByRole("button", { name: "Save" })[2]);
+
+    expect(await screen.findByText("handle is already taken")).toBeInTheDocument();
   });
 });

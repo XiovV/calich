@@ -245,7 +245,7 @@ func TestEventService_AddAttendee_WritesInviteNotification(t *testing.T) {
 	if notifications[0].Kind != repository.KindInvite {
 		t.Fatalf("expected kind %q, got %q", repository.KindInvite, notifications[0].Kind)
 	}
-	if notifications[0].EventID != event.ID || notifications[0].Title != event.Title {
+	if notifications[0].EventID == nil || *notifications[0].EventID != event.ID || notifications[0].Title != event.Title {
 		t.Fatalf("expected the notification to name the event, got %+v", notifications[0])
 	}
 	if notifications[0].OccurrenceStart != nil {

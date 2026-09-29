@@ -1,14 +1,21 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { formatDistanceToNow } from "date-fns";
 import { Menu } from "@base-ui/react/menu";
-import { MoreVertical, Plus, TriangleAlert, Users } from "lucide-react";
+import { Check, ChevronRight, Layers, MoreVertical, Plus, TriangleAlert, Users } from "lucide-react";
+import { useNavigate } from "react-router";
 import { CalendarPickerModal } from "../../settings/CalendarPickerModal";
+import { Button } from "../ui/Button";
 import { IconButton } from "../ui/IconButton";
 import { iconButtonClasses } from "../ui/iconButtonClasses";
 import { canManageCalendar, isLinkedCalendar, shareCountTooltip, type Calendar } from "../../lib/calendar";
+import { connectionGroupLabel, groupCalendarsForSidebar, UNRESOLVED_CONNECTION } from "../../lib/calendarGrouping";
 import { resolveCalendarFill } from "../../lib/calendarColors";
+import { inScopeCalendars } from "../../lib/calendarSetScope";
+import { useActiveCalendarSet, useCalendarSetsStore } from "../../lib/calendarSetsStore";
+import type { CalendarSet } from "../../lib/calendarSetsApi";
 import { useAuthStore } from "../../lib/authStore";
 import { useCalendarsStore } from "../../lib/calendarsStore";
+import { useConnectionsStore } from "../../lib/connectionsStore";
 import { useEventsStore } from "../../lib/eventsStore";
 import { useShellStore } from "../../lib/shellStore";
 import { deleteCalendarCascade } from "../../lib/deleteCalendarCascade";
@@ -27,6 +34,10 @@ import { ShareCalendarModal } from "./ShareCalendarModal";
 // The row's action menu items share this shape so every row type — a click
 // away from Edit-only, Edit+Export+Delete, or Edit+Refresh+Unsubscribe — is
 // one list instead of three near-duplicate menus (#189).
+// UNRESOLVED_CONNECTION's heading (see calendarGrouping.ts) reads "Unknown
+// account" here and offers no picker button, since there is no Connection to
+// re-open it with.
+
 const menuItemClasses =
   "flex cursor-default items-center px-3 py-1.5 text-body text-ink data-[highlighted]:bg-surface-hover data-[disabled]:pointer-events-none data-[disabled]:opacity-50";
 const destructiveMenuItemClasses =
@@ -45,6 +56,7 @@ function subscriptionErrorReason(calendar: Calendar): string | undefined {
 }
 
 export function CalendarList() {
+  const navigate = useNavigate();
   const calendars = useCalendarsStore((state) => state.calendars);
   const events = useEventsStore((state) => state.events);
   const accessToken = useAuthStore((state) => state.accessToken);
@@ -52,7 +64,31 @@ export function CalendarList() {
   const toggleCalendarChecked = useShellStore(
     (state) => state.toggleCalendarChecked,
   );
+  const setActiveCalendarSetId = useShellStore((state) => state.setActiveCalendarSetId);
+  // The row menu's own "Add to set" submenu (#307, ADR-0082) reads the same
+  // Sets the top-bar switcher lists — it relies on CalendarSetSwitcher's
+  // effect to have fetched them already, the same way it relies on some
+  // ancestor to have fetched calendars, rather than fetching a second copy.
+  const calendarSets = useCalendarSetsStore((state) => state.calendarSets);
+  const addCalendarToSet = useCalendarSetsStore((state) => state.addCalendarToSet);
+  const removeCalendarFromSet = useCalendarSetsStore((state) => state.removeCalendarFromSet);
   const refreshCalendar = useCalendarsStore((state) => state.refreshCalendar);
+  const setCalendarExposure = useCalendarsStore((state) => state.setCalendarExposure);
+  // Linked Calendars group by Connection, so the sidebar needs the
+  // Connections themselves to label each heading — it can no longer rely on
+  // the account Email riding along on every Calendar, which only the list
+  // endpoint populates (see linkedCalendarsByConnection below). Settings used
+  // to be the only place that fetched these; a User who never opens Settings
+  // would otherwise see every heading fall back to "Unknown account".
+  const connections = useConnectionsStore((state) => state.connections);
+  const fetchConnections = useConnectionsStore((state) => state.fetchConnections);
+  useEffect(() => {
+    if (!accessToken) return;
+    // A failure here costs the heading its label and nothing else, so it is
+    // swallowed rather than surfaced: the sidebar's Calendars still render,
+    // still group correctly, and still toggle.
+    fetchConnections().catch(() => {});
+  }, [accessToken, fetchConnections]);
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [isSubscribeOpen, setIsSubscribeOpen] = useState(false);
   // The Calendar picker, re-opened from a Connection's sidebar heading to
@@ -80,36 +116,36 @@ export function CalendarList() {
     summary: ExportSummary;
   } | null>(null);
   const [isConfirmingExport, setIsConfirmingExport] = useState(false);
+  // Keyed "calendarId:setId", so one Calendar's row can have several Set
+  // toggles in flight at once without disabling each other.
+  const [pendingSetToggles, setPendingSetToggles] = useState<Set<string>>(new Set());
 
-  // A Calendar shared with the viewer is grouped by whose it is, not by
-  // where its Events come from (#114) — a Subscribed or Linked Calendar
-  // someone else owns groups with the shared ones, since its Subscription/
-  // Connection controls aren't the viewer's in any case.
-  const myCalendars = calendars.filter(
-    (calendar) =>
-      canManageCalendar(calendar) && !calendar.sourceUrl && !isLinkedCalendar(calendar),
-  );
-  const subscribedCalendars = calendars.filter(
-    (calendar) => canManageCalendar(calendar) && Boolean(calendar.sourceUrl),
-  );
-  // Linked Calendars group under one heading per Connection rather than
-  // beside every other owned Calendar (#286) — the sidebar's only way to
-  // show "these came from that Google account".
-  const linkedCalendarsByConnection = new Map<
-    string,
-    { connectionId?: number; calendars: Calendar[] }
-  >();
-  for (const calendar of calendars) {
-    if (!canManageCalendar(calendar) || !isLinkedCalendar(calendar)) continue;
-    const email = calendar.connectionAccountEmail ?? "Unknown account";
-    const group = linkedCalendarsByConnection.get(email) ?? { calendars: [] };
-    group.calendars.push(calendar);
-    group.connectionId ??= calendar.connectionId;
-    linkedCalendarsByConnection.set(email, group);
-  }
-  const sharedCalendars = calendars.filter(
-    (calendar) => !canManageCalendar(calendar),
-  );
+  // Narrowed to the Active Calendar Set before grouping (#303, ADR-0082):
+  // an out-of-Set Calendar is absent from every heading below, not merely
+  // unchecked — CalendarToggle still reads off the untouched
+  // checkedCalendarIds, so a Calendar's toggle value survives switching
+  // Sets even while its row is gone. isSetActive gates whether an emptied
+  // heading below hides itself: "no Calendars at all" (today's ordinary
+  // empty state, headings stay so their Add buttons stay reachable) reads
+  // differently from "none left in this Set" (ADR-0082's "hidden rather
+  // than merely unchecked").
+  const activeCalendarSet = useActiveCalendarSet();
+  const isSetActive = activeCalendarSet !== null;
+  const visibleCalendars = inScopeCalendars(calendars, activeCalendarSet);
+  // An empty Active Calendar Set is a legitimate state (#306, ADR-0082),
+  // reached either by creating one empty or by every member falling out via
+  // cascade (a revoked Share, a deleted Calendar). Named explicitly rather
+  // than falling through to the ordinary heading logic below, which would
+  // render nothing at all and read as a loading failure. The grid renders
+  // nothing here too, via the same inScopeCalendars answer — that absence is
+  // correct and needs no message of its own.
+  const isEmptySet = isSetActive && visibleCalendars.length === 0;
+
+  // Grouped exactly as the Calendar Set membership dialog groups them
+  // (#302, ADR-0082) — see calendarGrouping.ts, the one place this logic
+  // lives.
+  const { myCalendars, subscribedCalendars, linkedByConnection: linkedCalendarsByConnection, sharedCalendars } =
+    groupCalendarsForSidebar(visibleCalendars);
 
   const deletingCalendar = calendars.find(
     (calendar) => calendar.id === deletingCalendarId,
@@ -184,6 +220,30 @@ export function CalendarList() {
       setRefreshingCalendarIds((ids) => {
         const next = new Set(ids);
         next.delete(calendar.id);
+        return next;
+      });
+    }
+  }
+
+  // Immediate effect, no save step, mirroring CalendarSetMembershipDialog
+  // (#302, #307): membership carries no Role and grants no Access, so this
+  // has nothing to do with canManageCalendar and runs identically for an
+  // owned, Subscribed, or shared-in row.
+  async function handleToggleSetMembership(calendar: Calendar, calendarSet: CalendarSet, isMember: boolean) {
+    const key = `${calendar.id}:${calendarSet.id}`;
+    setPendingSetToggles((keys) => new Set(keys).add(key));
+    try {
+      if (isMember) {
+        await removeCalendarFromSet(calendarSet.id, calendar.id);
+      } else {
+        await addCalendarToSet(calendarSet.id, calendar.id);
+      }
+    } catch {
+      toast.error(`Failed to update "${calendarSet.name}".`);
+    } finally {
+      setPendingSetToggles((keys) => {
+        const next = new Set(keys);
+        next.delete(key);
         return next;
       });
     }
@@ -328,6 +388,77 @@ export function CalendarList() {
                     Export
                   </Menu.Item>
                 )}
+                {/* Exposure (#297, ADR-0080): the one surface both the
+                    Calendar's Owner and an accessor it was Shared to reach,
+                    since an accessor has no Connection of their own under
+                    Settings to find this beside. Speaks in terms of
+                    devices, never CalDAV. */}
+                {isLinked && (
+                  <Menu.CheckboxItem
+                    checked={Boolean(calendar.exposed)}
+                    onCheckedChange={(checked) => setCalendarExposure(calendar.id, checked)}
+                    closeOnClick={false}
+                    className={menuItemClasses}
+                  >
+                    <Menu.CheckboxItemIndicator
+                      keepMounted
+                      className="mr-2 flex size-3.5 shrink-0 items-center justify-center data-[unchecked]:opacity-0"
+                    >
+                      <Check className="size-3.5" />
+                    </Menu.CheckboxItemIndicator>
+                    Show on my devices
+                  </Menu.CheckboxItem>
+                )}
+                {/* Add to set (#307, ADR-0082): every row shape gets this,
+                    since a Calendar Set is the viewer's own private view
+                    filter, not a permission — unlike Share/Refresh/Export
+                    above, it isn't gated on canManage or on origin. Absent
+                    rather than an empty submenu at zero Sets (#307's own
+                    acceptance criteria), matching this menu's habit of
+                    dropping an item entirely rather than disabling it. */}
+                {calendarSets.length > 0 && (
+                  <Menu.SubmenuRoot>
+                    <Menu.SubmenuTrigger className={`${menuItemClasses} justify-between`}>
+                      Add to set
+                      <ChevronRight className="ml-2 size-3.5 shrink-0 text-ink-muted" />
+                    </Menu.SubmenuTrigger>
+                    <Menu.Portal>
+                      <Menu.Positioner sideOffset={4} className="z-[60]">
+                        <Menu.Popup className="rounded-shell-md border border-border bg-surface py-1 shadow-elevation-2">
+                          {calendarSets.map((calendarSet) => {
+                            const isMember = calendarSet.calendarIds.includes(calendar.id);
+                            const isPending = pendingSetToggles.has(`${calendar.id}:${calendarSet.id}`);
+                            return (
+                              <Menu.CheckboxItem
+                                key={calendarSet.id}
+                                checked={isMember}
+                                disabled={isPending}
+                                closeOnClick={false}
+                                onCheckedChange={() =>
+                                  handleToggleSetMembership(calendar, calendarSet, isMember)
+                                }
+                                aria-label={
+                                  isMember
+                                    ? `Remove ${calendar.name} from ${calendarSet.name}`
+                                    : `Add ${calendar.name} to ${calendarSet.name}`
+                                }
+                                className={menuItemClasses}
+                              >
+                                <Menu.CheckboxItemIndicator
+                                  keepMounted
+                                  className="mr-2 flex size-3.5 shrink-0 items-center justify-center data-[unchecked]:opacity-0"
+                                >
+                                  <Check className="size-3.5" />
+                                </Menu.CheckboxItemIndicator>
+                                <span className="min-w-0 truncate">{calendarSet.name}</span>
+                              </Menu.CheckboxItem>
+                            );
+                          })}
+                        </Menu.Popup>
+                      </Menu.Positioner>
+                    </Menu.Portal>
+                  </Menu.SubmenuRoot>
+                )}
                 <div role="separator" className="my-1 border-t border-border" />
                 {canManage ? (
                   <Menu.Item
@@ -357,55 +488,95 @@ export function CalendarList() {
 
   return (
     <div>
-      <div className="flex items-center justify-between py-2 ps-5 pe-2">
-        <p className="text-label-sm font-medium text-ink-muted">
-          My calendars
-        </p>
-        <IconButton
-          size="tiny"
-          onClick={() => setIsCreateOpen(true)}
-          aria-label="Add calendar"
-        >
-          <Plus className="size-4" />
-        </IconButton>
-      </div>
-      <ul>{myCalendars.map(renderCalendarItem)}</ul>
+      {isEmptySet && activeCalendarSet && (
+        <div className="flex flex-col items-center gap-3 px-5 py-10 text-center">
+          <Layers className="size-8 text-ink-muted" aria-hidden="true" />
+          <p className="text-body text-ink">
+            "{activeCalendarSet.name}" has no calendars in it.
+          </p>
+          <div className="flex flex-col items-stretch gap-2">
+            <Button
+              size="small"
+              onClick={() => navigate("/settings/calendar-sets")}
+            >
+              Manage sets
+            </Button>
+            <Button
+              variant="ghost"
+              size="small"
+              onClick={() => setActiveCalendarSetId(null)}
+            >
+              Back to All calendars
+            </Button>
+          </div>
+        </div>
+      )}
 
-      <div className="flex items-center justify-between py-2 ps-5 pe-2">
-        <p className="text-label-sm font-medium text-ink-muted">
-          Subscribed calendars
-        </p>
-        <IconButton
-          size="tiny"
-          onClick={() => setIsSubscribeOpen(true)}
-          aria-label="Subscribe to a calendar"
-        >
-          <Plus className="size-4" />
-        </IconButton>
-      </div>
-      <ul>{subscribedCalendars.map(renderCalendarItem)}</ul>
+      {/* Hidden only once a Set has narrowed this heading's own group to
+          nothing (#303) — with no Set active, it stays put even at zero
+          Calendars, exactly as today, so its Add button stays reachable.
+          isEmptySet already implies myCalendars is empty here, so no
+          separate guard is needed for it. */}
+      {(!isSetActive || myCalendars.length > 0) && (
+        <>
+          <div className="flex items-center justify-between py-2 ps-5 pe-2">
+            <p className="text-label-sm font-medium text-ink-muted">
+              My calendars
+            </p>
+            <IconButton
+              size="tiny"
+              onClick={() => setIsCreateOpen(true)}
+              aria-label="Add calendar"
+            >
+              <Plus className="size-4" />
+            </IconButton>
+          </div>
+          <ul>{myCalendars.map(renderCalendarItem)}</ul>
+        </>
+      )}
+
+      {(!isSetActive || subscribedCalendars.length > 0) && (
+        <>
+          <div className="flex items-center justify-between py-2 ps-5 pe-2">
+            <p className="text-label-sm font-medium text-ink-muted">
+              Subscribed calendars
+            </p>
+            <IconButton
+              size="tiny"
+              onClick={() => setIsSubscribeOpen(true)}
+              aria-label="Subscribe to a calendar"
+            >
+              <Plus className="size-4" />
+            </IconButton>
+          </div>
+          <ul>{subscribedCalendars.map(renderCalendarItem)}</ul>
+        </>
+      )}
 
       {/* One heading per Connection, labelled with the connected account's
           Email (#286) — two connected accounts produce two separate
           headings, since each is its own Map entry. */}
-      {Array.from(linkedCalendarsByConnection.entries()).map(([accountEmail, group]) => (
-        <div key={accountEmail}>
-          <div className="flex items-center justify-between py-2 ps-5 pe-2">
-            <p className="text-label-sm font-medium text-ink-muted">{accountEmail}</p>
-            {group.connectionId !== undefined && (
-              <IconButton
-                size="tiny"
-                onClick={() => setPickerConnectionId(group.connectionId ?? null)}
-                aria-label={`Choose calendars from ${accountEmail}`}
-                title={`Choose calendars from ${accountEmail}`}
-              >
-                <Plus className="size-4" />
-              </IconButton>
-            )}
+      {Array.from(linkedCalendarsByConnection.entries()).map(([connectionId, group]) => {
+        const accountEmail = connectionGroupLabel(connectionId, group, connections);
+        return (
+          <div key={connectionId === UNRESOLVED_CONNECTION ? "unresolved-connection" : connectionId}>
+            <div className="flex items-center justify-between py-2 ps-5 pe-2">
+              <p className="text-label-sm font-medium text-ink-muted">{accountEmail}</p>
+              {connectionId !== UNRESOLVED_CONNECTION && (
+                <IconButton
+                  size="tiny"
+                  onClick={() => setPickerConnectionId(connectionId)}
+                  aria-label={`Choose calendars from ${accountEmail}`}
+                  title={`Choose calendars from ${accountEmail}`}
+                >
+                  <Plus className="size-4" />
+                </IconButton>
+              )}
+            </div>
+            <ul>{group.map(renderCalendarItem)}</ul>
           </div>
-          <ul>{group.calendars.map(renderCalendarItem)}</ul>
-        </div>
-      ))}
+        );
+      })}
 
       {sharedCalendars.length > 0 && (
         <>

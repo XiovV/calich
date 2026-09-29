@@ -9,12 +9,15 @@ package caldavserver
 import (
 	"bytes"
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
 
 	"github.com/emersion/go-ical"
+
+	"github.com/XiovV/calich/server/internal/repository"
 )
 
 // syncTokenPrefix makes a sync-token look like the opaque URI RFC 6578
@@ -109,6 +112,22 @@ func (h *dispatchHandler) handleSyncCollection(w http.ResponseWriter, r *http.Re
 	if err != nil {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
+	}
+
+	// A cached sync-collection token must stop reporting changes once
+	// Exposure says no (ADR-0080) — the same guard listSeriesObjects and
+	// GetCalendarObject apply, skipped for the Invitations collection, which
+	// has no Calendar row to check this against and already resolves an
+	// empty result for it via SyncSince's own calendarByID lookup.
+	if calendarID != attendeeCollectionID {
+		if err := h.backend.calendars.RequireExposedAccess(r.Context(), userID, calendarID); err != nil {
+			if errors.Is(err, repository.ErrNotFound) {
+				http.Error(w, "not found", http.StatusNotFound)
+				return
+			}
+			http.Error(w, "failed to check calendar exposure", http.StatusInternalServerError)
+			return
+		}
 	}
 
 	var req syncCollectionRequest

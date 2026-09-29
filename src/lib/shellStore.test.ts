@@ -5,6 +5,29 @@ describe("useShellStore", () => {
   it("defaults activeView to week", () => {
     expect(useShellStore.getState().activeView).toBe("week");
   });
+
+  // #304, ADR-0082: no Preference seeds this, unlike Default view — every
+  // reload starts on "All calendars" since the store itself re-initializes.
+  it("defaults activeCalendarSetId to null (All calendars)", () => {
+    expect(useShellStore.getState().activeCalendarSetId).toBeNull();
+  });
+
+  // #317, ADR-0083: the Tasks panel is closed by default.
+  it("defaults tasksPanelOpen to false", () => {
+    expect(useShellStore.getState().tasksPanelOpen).toBe(false);
+  });
+
+  // #316, ADR-0083: Group by resets to Task bucket on load rather than
+  // remembering the caller's last-chosen axis.
+  it("defaults tasksPanelAxis to taskBucket", () => {
+    expect(useShellStore.getState().tasksPanelAxis).toBe("taskBucket");
+  });
+
+  // #312, ADR-0083: unlike tasksPanelOpen and showCompletedTasks, this one
+  // defaults on — the calendar shows what's due unless the User turns it off.
+  it("defaults showTasksOnCalendar to true", () => {
+    expect(useShellStore.getState().showTasksOnCalendar).toBe(true);
+  });
 });
 
 describe("reconcileCheckedCalendarIds", () => {
@@ -87,5 +110,106 @@ describe("addCheckedCalendarId", () => {
     useShellStore.getState().reconcileCheckedCalendarIds(["cal-1"]);
 
     expect(useShellStore.getState().checkedCalendarIds).toEqual(new Set());
+  });
+});
+
+// #317, ADR-0083: the Lists filter's checked/known pair carries the
+// identical rule as Calendar toggle's, via the same extracted
+// reconcileCheckedIds helper — these tests mirror the Calendar ones above.
+describe("reconcileCheckedTaskListIds", () => {
+  it("checks an id it has never seen before", () => {
+    useShellStore.setState({
+      checkedTaskListIds: new Set(),
+      knownTaskListIds: new Set(),
+    });
+
+    useShellStore.getState().reconcileCheckedTaskListIds([1]);
+
+    expect(useShellStore.getState().checkedTaskListIds).toEqual(new Set([1]));
+  });
+
+  it("leaves a previously-seen, deliberately-unchecked id unchecked", () => {
+    useShellStore.setState({
+      checkedTaskListIds: new Set(),
+      knownTaskListIds: new Set([1]),
+    });
+
+    useShellStore.getState().reconcileCheckedTaskListIds([1]);
+
+    expect(useShellStore.getState().checkedTaskListIds).toEqual(new Set());
+  });
+
+  it("leaves an already-checked id checked and adds a newly-seen one alongside it", () => {
+    useShellStore.setState({
+      checkedTaskListIds: new Set([1]),
+      knownTaskListIds: new Set([1]),
+    });
+
+    useShellStore.getState().reconcileCheckedTaskListIds([1, 2]);
+
+    expect(useShellStore.getState().checkedTaskListIds).toEqual(new Set([1, 2]));
+  });
+});
+
+describe("toggleTaskListChecked", () => {
+  it("toggles an id in and out of checkedTaskListIds", () => {
+    useShellStore.setState({ checkedTaskListIds: new Set() });
+
+    useShellStore.getState().toggleTaskListChecked(1);
+    expect(useShellStore.getState().checkedTaskListIds).toEqual(new Set([1]));
+
+    useShellStore.getState().toggleTaskListChecked(1);
+    expect(useShellStore.getState().checkedTaskListIds).toEqual(new Set());
+  });
+});
+
+describe("addCheckedTaskListId", () => {
+  it("checks the id and marks it known, so a later reconcile doesn't undo a deliberate uncheck", () => {
+    useShellStore.setState({
+      checkedTaskListIds: new Set(),
+      knownTaskListIds: new Set(),
+    });
+
+    useShellStore.getState().addCheckedTaskListId(1);
+    expect(useShellStore.getState().checkedTaskListIds).toEqual(new Set([1]));
+    expect(useShellStore.getState().knownTaskListIds).toEqual(new Set([1]));
+
+    useShellStore.getState().toggleTaskListChecked(1);
+    useShellStore.getState().reconcileCheckedTaskListIds([1]);
+
+    expect(useShellStore.getState().checkedTaskListIds).toEqual(new Set());
+  });
+});
+
+describe("setTasksPanelOpen", () => {
+  it("sets tasksPanelOpen", () => {
+    useShellStore.getState().setTasksPanelOpen(true);
+    expect(useShellStore.getState().tasksPanelOpen).toBe(true);
+
+    useShellStore.getState().setTasksPanelOpen(false);
+    expect(useShellStore.getState().tasksPanelOpen).toBe(false);
+  });
+});
+
+describe("setTasksPanelAxis", () => {
+  it("sets tasksPanelAxis", () => {
+    useShellStore.getState().setTasksPanelAxis("priority");
+    expect(useShellStore.getState().tasksPanelAxis).toBe("priority");
+
+    useShellStore.getState().setTasksPanelAxis("taskList");
+    expect(useShellStore.getState().tasksPanelAxis).toBe("taskList");
+
+    useShellStore.getState().setTasksPanelAxis("taskBucket");
+    expect(useShellStore.getState().tasksPanelAxis).toBe("taskBucket");
+  });
+});
+
+describe("setShowTasksOnCalendar", () => {
+  it("sets showTasksOnCalendar", () => {
+    useShellStore.getState().setShowTasksOnCalendar(false);
+    expect(useShellStore.getState().showTasksOnCalendar).toBe(false);
+
+    useShellStore.getState().setShowTasksOnCalendar(true);
+    expect(useShellStore.getState().showTasksOnCalendar).toBe(true);
   });
 });

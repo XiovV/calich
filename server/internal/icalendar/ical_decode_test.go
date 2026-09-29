@@ -439,6 +439,57 @@ func TestParseCalendarObject_UnrecognizedColorKeyword_IsDropped(t *testing.T) {
 	}
 }
 
+// TestParseCalendarObject_Busy_RoundTrips covers ADR-0086: both TRANSP
+// values round-trip through decode losslessly.
+func TestParseCalendarObject_Busy_RoundTrips(t *testing.T) {
+	busy := repository.Event{
+		ID:        "evt-1",
+		Title:     "Meeting",
+		Busy:      true,
+		Start:     time.Date(2026, 7, 1, 15, 0, 0, 0, time.UTC),
+		End:       time.Date(2026, 7, 1, 16, 0, 0, 0, time.UTC),
+		CreatedAt: time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC),
+	}
+	if !mustParse(t, busy, nil).Master.Busy {
+		t.Fatalf("expected TRANSP:OPAQUE to decode Busy")
+	}
+
+	free := busy
+	free.Busy = false
+	if mustParse(t, free, nil).Master.Busy {
+		t.Fatalf("expected TRANSP:TRANSPARENT to decode Free")
+	}
+}
+
+// TestParseCalendarObject_NoTranspProperty_DefaultsToBusy covers RFC 5545's
+// own OPAQUE default (ADR-0086): a VEVENT with no TRANSP at all — including
+// an all-day one — decodes Busy, never re-derived to Free from AllDay. The
+// all-day-defaults-Free departure belongs to this app's own create path,
+// never to what a foreign VEVENT's absent TRANSP is read as.
+func TestParseCalendarObject_NoTranspProperty_DefaultsToBusy(t *testing.T) {
+	master := repository.Event{
+		ID:        "evt-1",
+		Title:     "Holiday",
+		AllDay:    true,
+		Start:     time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC),
+		End:       time.Date(2026, 7, 2, 0, 0, 0, 0, time.UTC),
+		CreatedAt: time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC),
+	}
+	cal, _, err := SeriesToICal(master, nil, SerializationTarget{})
+	if err != nil {
+		t.Fatalf("seriesToICal: %v", err)
+	}
+	cal.Children[0].Props.Del(ical.PropTransparency)
+
+	parsed, err := ParseCalendarObject(cal)
+	if err != nil {
+		t.Fatalf("parseCalendarObject: %v", err)
+	}
+	if !parsed.Master.Busy {
+		t.Fatalf("expected an all-day VEVENT with no TRANSP to decode Busy, got Free")
+	}
+}
+
 func TestParseCalendarObject_UnmodeledValarmAction_IsDropped(t *testing.T) {
 	master := repository.Event{
 		ID:        "evt-1",

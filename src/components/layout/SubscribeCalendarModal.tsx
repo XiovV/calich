@@ -2,11 +2,14 @@ import { useState, type KeyboardEvent } from "react";
 import { Dialog } from "@base-ui/react/dialog";
 import { format } from "date-fns";
 import { calendarsApi, type SubscriptionPreview } from "../../lib/calendarsApi";
+import { useActiveCalendarSet, useCalendarSetsStore } from "../../lib/calendarSetsStore";
 import { useCalendarsStore } from "../../lib/calendarsStore";
 import { useAuthStore } from "../../lib/authStore";
 import { useShellStore } from "../../lib/shellStore";
+import { toast } from "../../lib/toast";
 import { errorMessage } from "../../lib/errorMessage";
 import { getNextUnusedColor } from "../../lib/calendarColors";
+import { AddToActiveSetCheckbox } from "./AddToActiveSetCheckbox";
 import { ColorSwatchPicker } from "./ColorSwatchPicker";
 import { Button } from "../ui/Button";
 import { buttonClasses } from "../ui/buttonClasses";
@@ -40,6 +43,11 @@ export function SubscribeCalendarModal({ onClose }: SubscribeCalendarModalProps)
   const addCheckedCalendarId = useShellStore(
     (state) => state.addCheckedCalendarId,
   );
+  // Add-to-Set checkbox (#308, ADR-0082): same rule as the Calendar create
+  // dialog — present only while a Set is active, unticked by default.
+  const activeCalendarSet = useActiveCalendarSet();
+  const addCalendarToSet = useCalendarSetsStore((state) => state.addCalendarToSet);
+  const [addToActiveSet, setAddToActiveSet] = useState(false);
 
   const [url, setUrl] = useState("");
   const [preview, setPreview] = useState<SubscriptionPreview | null>(null);
@@ -88,6 +96,11 @@ export function SubscribeCalendarModal({ onClose }: SubscribeCalendarModalProps)
         keepAlarms,
       );
       addCheckedCalendarId(calendar.id);
+      if (activeCalendarSet && addToActiveSet) {
+        addCalendarToSet(activeCalendarSet.id, calendar.id).catch(() =>
+          toast.error("Failed to add the calendar to the set."),
+        );
+      }
       onClose();
     } catch (err) {
       setError(errorMessage(err));
@@ -193,6 +206,12 @@ export function SubscribeCalendarModal({ onClose }: SubscribeCalendarModalProps)
                     this instance will send
                   </span>
                 </label>
+
+                <AddToActiveSetCheckbox
+                  activeCalendarSet={activeCalendarSet}
+                  checked={addToActiveSet}
+                  onCheckedChange={setAddToActiveSet}
+                />
               </>
             )}
 

@@ -103,7 +103,7 @@ func (h *dispatchHandler) handlePropPatch(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	existing, err := h.backend.calendars.Get(r.Context(), userID, calendarID)
+	access, existing, exposed, err := h.backend.calendars.AccessWithExposure(r.Context(), userID, calendarID)
 	if errors.Is(err, repository.ErrNotFound) {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
@@ -112,13 +112,22 @@ func (h *dispatchHandler) handlePropPatch(w http.ResponseWriter, r *http.Request
 		http.Error(w, "failed to load calendar", http.StatusInternalServerError)
 		return
 	}
-	// h.backend.calendars.Get resolved existing via Access, which admits a
-	// Viewer or Editor too (ADR-0034) — not just the Owner. Whether that's
-	// enough to act on any given property, and whether a Subscription
-	// (ADR-0032) blocks it, is now decided per-property inside
-	// applyPropPatch: displayname and the Owner's own calendar-color stay
-	// gated exactly as before, but a non-owner's calendar-color override
-	// (ADR-0038) is neither Owner-only nor blocked by a Subscription.
+	// A cached or guessed collection path must stop accepting PROPPATCH the
+	// moment Exposure says no (ADR-0080), mirroring every other direct-path
+	// entry point (listSeriesObjects, GetCalendarObject, sync.go) — the same
+	// 404 GetCalendar's own PROPFIND lookup would already give a fresh
+	// discovery attempt.
+	if !access.CanRead() || !exposed {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	// existing was resolved via Access, which admits a Viewer or Editor too
+	// (ADR-0034) — not just the Owner. Whether that's enough to act on any
+	// given property, and whether a Subscription (ADR-0032) blocks it, is
+	// now decided per-property inside applyPropPatch: displayname and the
+	// Owner's own calendar-color stay gated exactly as before, but a
+	// non-owner's calendar-color override (ADR-0038) is neither Owner-only
+	// nor blocked by a Subscription.
 
 	body, err := io.ReadAll(r.Body)
 	if err != nil {

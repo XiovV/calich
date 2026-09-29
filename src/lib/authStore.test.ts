@@ -52,6 +52,7 @@ const adminUser = {
   timeFormat: "24h" as const,
   workingHoursStart: null,
   workingHoursEnd: null,
+  handle: null,
 };
 
 function resetStore() {

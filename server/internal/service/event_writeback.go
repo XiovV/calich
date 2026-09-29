@@ -97,12 +97,14 @@ func (s *EventService) MarkWriteBackFailed(ctx context.Context, id, reason strin
 }
 
 // ApplyProviderOwnedFields moves id's Provider-owned RSVPStatus/
-// ConferenceURL/GuestCount forward from a fresh Provider fetch (#291,
-// ADR-0075) — ConnectionService's own conflict-retry loop
-// (reconcileProviderOwnedFields) is the only caller, reached after a 412
-// forces a refetch anyway.
-func (s *EventService) ApplyProviderOwnedFields(ctx context.Context, id string, rsvpStatus, conferenceURL *string, guestCount int) error {
-	return s.events.ApplyProviderOwnedFields(ctx, id, rsvpStatus, conferenceURL, guestCount)
+// ConferenceURL/GuestCount/ProviderColor forward (#291, #298, ADR-0075).
+// Called both by upsertSeries' Refresh-reconciled update path, with the
+// Refresh's own fresh values, and by ConnectionService's conflict-retry loop
+// (reconcileProviderOwnedFields) after a 412 forces a refetch anyway, which
+// passes providerColor back unchanged since colour there is the next
+// ordinary Refresh's job, not a conflict retry's.
+func (s *EventService) ApplyProviderOwnedFields(ctx context.Context, id string, rsvpStatus, conferenceURL *string, guestCount int, providerColor *string) error {
+	return s.events.ApplyProviderOwnedFields(ctx, id, rsvpStatus, conferenceURL, guestCount, providerColor)
 }
 
 // ClearProviderIdentity strips the Provider from every Event of calendarID

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { format } from "date-fns";
 import { AttachmentIndicator } from "./AttachmentIndicator";
+import { MonthTaskChip } from "./MonthTaskChip";
 import { WriteBackErrorIndicator } from "./WriteBackErrorIndicator";
 import { occurrenceKey, type Occurrence } from "../lib/occurrence";
 import type { DraftBlock } from "../lib/gridTime";
@@ -8,6 +9,9 @@ import { canWriteCalendarEvents, getCalendarById } from "../lib/calendar";
 import { getOccurrenceBlockStyle } from "../lib/calendarColors";
 import { useCalendarsStore } from "../lib/calendarsStore";
 import { useShellStore } from "../lib/shellStore";
+import { useTaskListsStore } from "../lib/taskListsStore";
+import { getTaskListById } from "../lib/taskListsApi";
+import type { Task } from "../lib/tasksApi";
 import { computeCellDraft, computeChipCapacity } from "../lib/monthGrid";
 import { useTimePattern } from "../hooks/useTimePattern";
 
@@ -20,6 +24,12 @@ interface MonthDayCellProps {
   isToday: boolean;
   isDragHover: boolean;
   occurrences: Occurrence[];
+  /** Every Task placed on this date (#315, ADR-0083) — the caller has
+   * already applied placement precedence (Time block's date, else the
+   * Deadline's), "Show tasks on calendar" and "Show completed", the same
+   * division `TimeGrid` makes before handing `DayColumn`/`AllDayLane` their
+   * own day-scoped Task lists. */
+  tasks: Task[];
   onDraftCreated: (day: Date, draft: DraftBlock) => void;
   onOccurrenceClick: (occurrence: Occurrence) => void;
   onOccurrenceDragStart: (
@@ -27,7 +37,18 @@ interface MonthDayCellProps {
     clientX: number,
     clientY: number,
   ) => void;
+  onTaskDragStart: (task: Task, clientX: number, clientY: number) => void;
 }
+
+// One cell's chips, Occurrences and Tasks merged into a single chronological
+// list (#315) so a User planning a month sees both in the order they'd
+// actually happen that day, rather than every Occurrence before every Task
+// regardless of time. A Deadline-only Task (no Time block) sorts by its
+// Deadline instant the same way an all-day Occurrence sorts by midnight —
+// near the top, since both carry no real time of day.
+type MonthChipItem =
+  | { kind: "occurrence"; occurrence: Occurrence; time: number }
+  | { kind: "task"; task: Task; time: number };
 
 export function MonthDayCell({
   date,
@@ -35,11 +56,14 @@ export function MonthDayCell({
   isToday,
   isDragHover,
   occurrences,
+  tasks,
   onDraftCreated,
   onOccurrenceClick,
   onOccurrenceDragStart,
+  onTaskDragStart,
 }: MonthDayCellProps) {
   const calendars = useCalendarsStore((state) => state.calendars);
+  const taskLists = useTaskListsStore((state) => state.taskLists);
   const setSelectedDate = useShellStore((state) => state.setSelectedDate);
   const setActiveView = useShellStore((state) => state.setActiveView);
   const timePattern = useTimePattern();
@@ -67,13 +91,29 @@ export function MonthDayCell({
     onDraftCreated(date, computeCellDraft(date, new Date()));
   }
 
+  const chipItems: MonthChipItem[] = [
+    ...occurrences.map((occurrence) => ({
+      kind: "occurrence" as const,
+      occurrence,
+      time: occurrence.start.getTime(),
+    })),
+    // A Task here is already guaranteed to carry a Time block or a Deadline
+    // (never neither) by placement precedence — the caller only ever hands
+    // this cell a Task that fell through `taskFallsOnMonthDay`.
+    ...tasks.map((task) => ({
+      kind: "task" as const,
+      task,
+      time: (task.start ?? (task.due as Date)).getTime(),
+    })),
+  ].sort((a, b) => a.time - b.time);
+
   const { visibleCount, overflowCount } = computeChipCapacity(
-    occurrences.length,
+    chipItems.length,
     availableHeight,
     CHIP_ROW_HEIGHT_PX,
     MORE_ROW_HEIGHT_PX,
   );
-  const visibleOccurrences = occurrences.slice(0, visibleCount);
+  const visibleChipItems = chipItems.slice(0, visibleCount);
 
   return (
     <div
@@ -99,7 +139,20 @@ export function MonthDayCell({
         ref={eventsContainerRef}
         className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-hidden"
       >
-        {visibleOccurrences.map((occurrence) => {
+        {visibleChipItems.map((item) => {
+          if (item.kind === "task") {
+            return (
+              <MonthTaskChip
+                key={`task-${item.task.id}`}
+                task={item.task}
+                taskList={getTaskListById(taskLists, item.task.taskListId)}
+                timePattern={timePattern}
+                onDragStart={onTaskDragStart}
+              />
+            );
+          }
+
+          const occurrence = item.occurrence;
           const calendar = getCalendarById(
             calendars,
             occurrence.event.calendarId,

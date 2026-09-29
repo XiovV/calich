@@ -375,3 +375,23 @@ body {
   border-radius: var(--radius-shell-pill);
   background-color: var(--color-ink-muted);
 }
+
+/* The public Booking Link page's month grid (#324): a bookable day carries
+   an accent dot instead of the neutral Event-presence one above — a
+   different signal (availability, not density) on a page with no Events at
+   all. Every other day is left to react-day-picker's own `disabled` dimming. */
+.rdp-day-available {
+  position: relative;
+}
+
+.rdp-day-available::after {
+  content: "";
+  position: absolute;
+  bottom: 3px;
+  left: 50%;
+  width: 4px;
+  height: 4px;
+  transform: translateX(-50%);
+  border-radius: var(--radius-shell-pill);
+  background-color: var(--color-accent-ink);
+}

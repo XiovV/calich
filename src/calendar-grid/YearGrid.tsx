@@ -2,17 +2,18 @@ import { useShellStore } from "../lib/shellStore";
 import { useEventsStore } from "../lib/eventsStore";
 import { expandOccurrences } from "../lib/expandOccurrences";
 import { buildDaysWithEvents, buildYearMonths } from "../lib/yearGrid";
+import { useVisibleCalendarIds } from "../hooks/useVisibleCalendarIds";
 import { MiniMonth } from "./MiniMonth";
 
 /**
  * The read-only Year overview: twelve Mini-months in a 4×3 grid for the Selected
  * date's year. Expands the visible Events into Occurrences across the whole year,
- * then reduces them (checked Calendars only) to a set of day keys that drive each
- * Mini-month's Event-presence dots.
+ * then reduces them (#303: Calendars in the Active Calendar Set and checked) to
+ * a set of day keys that drive each Mini-month's Event-presence dots.
  */
 export function YearGrid() {
   const selectedDate = useShellStore((state) => state.selectedDate);
-  const checkedCalendarIds = useShellStore((state) => state.checkedCalendarIds);
+  const visibleCalendarIds = useVisibleCalendarIds();
   const events = useEventsStore((state) => state.events);
 
   const months = buildYearMonths(selectedDate);
@@ -22,7 +23,7 @@ export function YearGrid() {
     new Date(year, 0, 1),
     new Date(year + 1, 0, 1),
   );
-  const daysWithEvents = buildDaysWithEvents(occurrences, checkedCalendarIds);
+  const daysWithEvents = buildDaysWithEvents(occurrences, visibleCalendarIds);
 
   return (
     <div className="h-full overflow-auto p-4">
