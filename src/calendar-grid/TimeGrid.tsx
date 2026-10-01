@@ -11,7 +11,7 @@ import { CLICK_DISTANCE_THRESHOLD_PX, isDragGesture, type Point } from "../lib/p
 import { occurrenceKey, type Occurrence } from "../lib/occurrence";
 import { viewerZone } from "../lib/floatingTime";
 import { useShellStore } from "../lib/shellStore";
-import { taskDeadlineFallsOnDay, taskPlacement } from "../lib/taskScheduling";
+import { taskDeadlineFallsOnDay, visibleCalendarTasks } from "../lib/taskScheduling";
 import { taskDropIntent } from "../lib/taskDropIntent";
 import { getTaskTimeBlockDaySegments, taskTimeBlockEnd } from "../lib/taskTimeBlockSegments";
 import { useTaskListsStore } from "../lib/taskListsStore";
@@ -299,34 +299,26 @@ export function TimeGrid({
   const allDayOccurrences = allOccurrences.filter((occurrence) => occurrence.event.allDay);
   const visibleOccurrences = allOccurrences.filter((occurrence) => !occurrence.event.allDay);
 
-  // Deadline-only Tasks share the all-day lane with all-day Occurrences
-  // (#312, ADR-0083): "Show tasks on calendar" gates the feature outright,
-  // and "Show completed" (mirroring TasksPanel's own visibleTasks) decides
-  // whether a completed Task's chip is among them — completing one never
-  // removes it, only that switch does.
+  // Task visibility (#312/#313, ADR-0083), shared with MonthGrid via
+  // `visibleCalendarTasks` (#338) rather than computed separately here: a
+  // Deadline-only Task additionally needs "Show completed" to show a
+  // completed chip, where a Time-blocked one never does — completing one
+  // must never make it vanish from under the cursor. This grid still does
+  // its own per-day narrowing: `deadlineTasks` to the days actually shown
+  // (the all-day lane's own window), `gridTasks` left for DayColumn to split
+  // per day the same way it already does for `visibleOccurrences`.
   const zone = viewerZone();
-  const candidateTasks = showTasksOnCalendar
-    ? [...tasks, ...(showCompletedTasks ? completedTasks : [])]
-    : [];
-  const deadlineTasks = candidateTasks.filter((task) => {
-    if (taskPlacement(task) !== "allDay" || !task.due) return false;
+  const { gridTasks, deadlineTasks: deadlineCandidates } = visibleCalendarTasks(
+    tasks,
+    completedTasks,
+    showTasksOnCalendar,
+    showCompletedTasks,
+  );
+  const deadlineTasks = deadlineCandidates.filter((task) => {
+    if (!task.due) return false;
     const due = task.due;
     return daysToShow.some((day) => taskDeadlineFallsOnDay(due, day, zone));
   });
-
-  // Time-blocked Tasks render on the hourly grid — placement precedence's
-  // `grid` surface (#313, ADR-0083). Unlike `deadlineTasks`, this is never
-  // gated by "Show completed": the AC is that a completed block "stays in
-  // place ... rather than being removed from under the cursor", full stop —
-  // completing one must never make it vanish, which excluding it whenever
-  // "Show completed" happens to be off (the default) would do. "Show tasks
-  // on calendar" still gates the whole feature outright. DayColumn itself
-  // narrows this list to whichever day's block actually touches it, the same
-  // division it already makes for the full `visibleOccurrences` list handed
-  // to every column.
-  const gridTasks = showTasksOnCalendar
-    ? [...tasks, ...completedTasks].filter((task) => taskPlacement(task) === "grid")
-    : [];
 
   useEffect(() => {
     const interval = setInterval(

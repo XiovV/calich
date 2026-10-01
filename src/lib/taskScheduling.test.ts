@@ -9,6 +9,7 @@ import {
   taskPlacement,
   tasksByPriorityLevel,
   tasksByTaskList,
+  visibleCalendarTasks,
   type PlaceableTask,
   type SchedulableTask,
 } from "./taskScheduling";
@@ -241,6 +242,53 @@ describe("taskFallsOnMonthDay", () => {
     const start = fromZonedTime(new Date(2026, 8, 15, 14, 0), "America/New_York");
     const day = fromZonedTime(new Date(2026, 8, 16, 0, 0), "America/New_York");
     expect(taskFallsOnMonthDay(placeable({ start }), day, "America/New_York")).toBe(false);
+  });
+});
+
+describe("visibleCalendarTasks", () => {
+  function placeable(overrides: Partial<PlaceableTask> = {}): PlaceableTask {
+    return { start: null, due: null, ...overrides };
+  }
+
+  it("is empty on both pools when Show tasks on calendar is off", () => {
+    const blocked = placeable({ start: new Date(2026, 8, 15) });
+    const deadline = placeable({ due: new Date(2026, 8, 15) });
+
+    const result = visibleCalendarTasks([blocked, deadline], [], false, true);
+
+    expect(result.gridTasks).toEqual([]);
+    expect(result.deadlineTasks).toEqual([]);
+  });
+
+  it("splits incomplete Tasks into Time-blocked and Deadline-only pools", () => {
+    const blocked = placeable({ start: new Date(2026, 8, 15) });
+    const deadline = placeable({ due: new Date(2026, 8, 15) });
+    const undated = placeable();
+
+    const result = visibleCalendarTasks([blocked, deadline, undated], [], true, true);
+
+    expect(result.gridTasks).toEqual([blocked]);
+    expect(result.deadlineTasks).toEqual([deadline]);
+  });
+
+  it("always includes a completed Time-blocked Task, regardless of Show completed", () => {
+    const completedBlock = placeable({ start: new Date(2026, 8, 15) });
+
+    const shown = visibleCalendarTasks([], [completedBlock], true, false);
+    const stillShown = visibleCalendarTasks([], [completedBlock], true, true);
+
+    expect(shown.gridTasks).toEqual([completedBlock]);
+    expect(stillShown.gridTasks).toEqual([completedBlock]);
+  });
+
+  it("includes a completed Deadline-only Task only when Show completed is on", () => {
+    const completedDeadline = placeable({ due: new Date(2026, 8, 15) });
+
+    const hidden = visibleCalendarTasks([], [completedDeadline], true, false);
+    const shown = visibleCalendarTasks([], [completedDeadline], true, true);
+
+    expect(hidden.deadlineTasks).toEqual([]);
+    expect(shown.deadlineTasks).toEqual([completedDeadline]);
   });
 });
 

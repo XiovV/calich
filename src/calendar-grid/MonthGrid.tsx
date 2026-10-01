@@ -11,7 +11,7 @@ import { buildMonthGrid, getOccurrencesForDay } from "../lib/monthGrid";
 import { computeMoveToDate } from "../lib/gridTime";
 import { viewerZone } from "../lib/floatingTime";
 import { taskDropIntent } from "../lib/taskDropIntent";
-import { taskFallsOnMonthDay, taskPlacement } from "../lib/taskScheduling";
+import { taskFallsOnMonthDay, visibleCalendarTasks } from "../lib/taskScheduling";
 import { taskTimeBlockEnd } from "../lib/taskTimeBlockSegments";
 import type { Task } from "../lib/tasksApi";
 import { useVisibleOccurrences } from "../hooks/useVisibleOccurrences";
@@ -84,22 +84,19 @@ export function MonthGrid({ onDraftCreated, onOccurrenceClick }: MonthGridProps)
     windowEnd.getTime(),
   );
 
-  // Month task chips (#315, ADR-0083): the same "Show tasks on calendar" /
-  // "Show completed" split TimeGrid already makes for its own gridTasks
-  // (Time-blocked) and deadlineTasks (Deadline-only) lists — a completed
-  // Time-blocked Task never disappears once "Show tasks on calendar" is on
-  // (only that switch hides it), where a completed Deadline-only one
-  // additionally needs "Show completed". Month draws both surfaces as one
-  // chip, so the two lists are merged once here rather than kept apart the
-  // way DayColumn/AllDayLane keep them.
-  const gridPlacedTasks = showTasksOnCalendar
-    ? [...tasks, ...completedTasks].filter((task) => taskPlacement(task) === "grid")
-    : [];
-  const deadlinePlacedTasks = showTasksOnCalendar
-    ? [...tasks, ...(showCompletedTasks ? completedTasks : [])].filter(
-        (task) => taskPlacement(task) === "allDay",
-      )
-    : [];
+  // Month task chips (#315, ADR-0083), sharing TimeGrid's visibility rule via
+  // `visibleCalendarTasks` (#338) rather than computing it separately: a
+  // completed Time-blocked Task never disappears once "Show tasks on
+  // calendar" is on (only that switch hides it), where a completed
+  // Deadline-only one additionally needs "Show completed". Month draws both
+  // surfaces as one chip, so the two pools are merged once here rather than
+  // kept apart the way DayColumn/AllDayLane keep them.
+  const { gridTasks: gridPlacedTasks, deadlineTasks: deadlinePlacedTasks } = visibleCalendarTasks(
+    tasks,
+    completedTasks,
+    showTasksOnCalendar,
+    showCompletedTasks,
+  );
   const monthTasks = [...gridPlacedTasks, ...deadlinePlacedTasks];
   const zone = viewerZone();
 
