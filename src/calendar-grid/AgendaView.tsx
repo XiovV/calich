@@ -13,6 +13,7 @@ import { useVisibleOccurrences } from "../hooks/useVisibleOccurrences";
 import { NOW_REFRESH_INTERVAL_MS } from "../lib/gridTime";
 import type { Occurrence } from "../lib/occurrence";
 import { AgendaEventRow } from "./AgendaEventRow";
+import { AgendaGapRow } from "./AgendaGapRow";
 import { AgendaNowLineRow } from "./AgendaNowLineRow";
 
 interface AgendaViewProps {
@@ -82,14 +83,18 @@ export function AgendaView({ onOccurrenceClick }: AgendaViewProps) {
             )}
             {(item.rows.length > 0 || item.nowLine) && (
               <div className="flex flex-col">
-                {item.rows.map((row, index) => (
-                  <Fragment key={row.key}>
-                    {item.nowLine?.index === index && (
-                      <AgendaNowLineRow label={item.nowLine.label} />
-                    )}
-                    <AgendaEventRow row={row} onClick={() => onOccurrenceClick(row.occurrence)} />
-                  </Fragment>
-                ))}
+                {item.rows.map((row, index) => {
+                  const gap = item.gaps.find((candidate) => candidate.beforeIndex === index);
+                  return (
+                    <Fragment key={row.key}>
+                      {item.nowLine?.index === index && (
+                        <AgendaNowLineRow label={item.nowLine.label} />
+                      )}
+                      {gap && <AgendaGapRow label={gap.label} />}
+                      <AgendaEventRow row={row} onClick={() => onOccurrenceClick(row.occurrence)} />
+                    </Fragment>
+                  );
+                })}
                 {item.nowLine?.index === item.rows.length && (
                   <AgendaNowLineRow label={item.nowLine.label} />
                 )}

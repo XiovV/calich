@@ -1,7 +1,13 @@
 import { addDays, format, isSameDay, startOfDay } from "date-fns";
 import { getCalendarById, type Calendar } from "./calendar";
 import { resolveOccurrenceColor } from "./calendarColors";
+import { formatDragDuration } from "./dragReadout";
 import { occurrenceKey, type Occurrence } from "./occurrence";
+
+// A Gap's shown duration must be at least this long (#334) — shorter ones
+// are dropped so back-to-back rows with a sliver between them don't fill
+// the list with noise.
+const AGENDA_GAP_MIN_MINUTES = 30;
 
 // Agenda's tracer-bullet window (#330): the list always begins at today and
 // runs for a fixed 15 days (today plus the next 14) — infinite scroll,
@@ -41,6 +47,16 @@ export interface AgendaNowLine {
   label: string;
 }
 
+// AgendaGapRow is a muted "free" row the view inserts immediately before
+// `rows[beforeIndex]` (#334) — the same before-this-row convention as
+// `AgendaNowLine.index`. A Gap only ever sits between two timed rows, so
+// `beforeIndex` is always a valid index into `rows`, never `rows.length`.
+export interface AgendaGapRow {
+  key: string;
+  beforeIndex: number;
+  label: string;
+}
+
 export interface AgendaDayGroup {
   kind: "day";
   date: Date;
@@ -50,6 +66,9 @@ export interface AgendaDayGroup {
   // Only set for today's group (#332) — every other group is entirely in
   // the future, so no now-line ever applies to it.
   nowLine: AgendaNowLine | null;
+  // Gaps between this day's timed rows (#334) — see the Gap entry in
+  // CONTEXT.md. Computed for every day, not only today.
+  gaps: AgendaGapRow[];
 }
 
 export interface AgendaEmptyRun {
@@ -137,6 +156,56 @@ function computeNowLine(rows: AgendaRow[], now: Date, timePattern: string): Agen
   };
 }
 
+// computeGapRows finds this day's Gaps (#334, CONTEXT.md's Gap entry): a
+// stretch covered by no timed row, whatever its Busy value — all-day rows
+// never bound one. Covered intervals merge (the running latest end, as in
+// computeOverlapFlags), so a Gap starts at the latest end so far rather
+// than the row directly above, and none is ever placed before the day's
+// first timed row or after its last.
+//
+// On today, the Gap immediately after the now-line additionally clips its
+// start to `now` and reads "… free until HH:MM" instead of "… free" — but
+// only when nothing is in progress, i.e. `now` itself falls inside the gap.
+// `rows` must already be in display order (compareOccurrences), so
+// index-aligned with `beforeIndex`.
+function computeGapRows(
+  rows: AgendaRow[],
+  isToday: boolean,
+  now: Date,
+  timePattern: string,
+): AgendaGapRow[] {
+  const gaps: AgendaGapRow[] = [];
+  let latestEnd: Date | null = null;
+
+  rows.forEach((row, index) => {
+    if (row.allDay) return;
+
+    if (latestEnd !== null && row.occurrence.start > latestEnd) {
+      let gapStart = latestEnd;
+      let untilLabel: string | null = null;
+      if (isToday && gapStart <= now && now < row.occurrence.start) {
+        gapStart = now;
+        untilLabel = format(row.occurrence.start, timePattern);
+      }
+
+      const minutes = Math.round((row.occurrence.start.getTime() - gapStart.getTime()) / 60_000);
+      if (minutes >= AGENDA_GAP_MIN_MINUTES) {
+        gaps.push({
+          key: `gap-${row.key}`,
+          beforeIndex: index,
+          label: untilLabel
+            ? `${formatDragDuration(minutes)} free until ${untilLabel}`
+            : `${formatDragDuration(minutes)} free`,
+        });
+      }
+    }
+
+    if (latestEnd === null || row.occurrence.end > latestEnd) latestEnd = row.occurrence.end;
+  });
+
+  return gaps;
+}
+
 // Order within a day group (#330): all-day rows first, then timed rows by
 // start and then end.
 function compareOccurrences(a: Occurrence, b: Occurrence): number {
@@ -208,6 +277,7 @@ export function buildAgenda(
       eventCount: dayOccurrences.length,
       rows,
       nowLine: isToday ? computeNowLine(rows, now, timePattern) : null,
+      gaps: computeGapRows(rows, isToday, now, timePattern),
     };
   });
 

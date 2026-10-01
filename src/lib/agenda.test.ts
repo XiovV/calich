@@ -411,6 +411,171 @@ describe("buildAgenda", () => {
       expect(byId.timed.overlaps).toBe(false);
     });
   });
+
+  describe("gaps (#334)", () => {
+    function gapLabels(group: AgendaDayGroup | undefined): string[] {
+      return (group?.gaps ?? []).map((gap) => gap.label);
+    }
+
+    it("emits a plain Gap between two rows with a stretch between them", () => {
+      const first = makeOccurrence({
+        id: "first",
+        start: new Date(2026, 9, 1, 10, 0),
+        end: new Date(2026, 9, 1, 10, 30),
+      });
+      const second = makeOccurrence({
+        id: "second",
+        start: new Date(2026, 9, 1, 11, 30),
+        end: new Date(2026, 9, 1, 12, 0),
+      });
+      // NOW is 09:00 — before both rows, so this Gap (10:30-11:30) has
+      // nothing to do with "now".
+      const items = buildAgenda([first, second], CALENDARS, NOW, "HH:mm");
+      const today = dayGroups(items).find((group) => group.isToday);
+      const byId = Object.fromEntries(today!.rows.map((row, index) => [row.occurrence.event.id, index]));
+      expect(gapLabels(today)).toEqual(["1h free"]);
+      expect(today?.gaps[0].beforeIndex).toBe(byId.second);
+    });
+
+    it("hides a Gap under the 30-minute floor and shows one at exactly 30 minutes", () => {
+      const first = makeOccurrence({
+        id: "first",
+        start: new Date(2026, 9, 1, 10, 0),
+        end: new Date(2026, 9, 1, 10, 30),
+      });
+      const secondAt29 = makeOccurrence({
+        id: "second",
+        start: new Date(2026, 9, 1, 10, 59),
+        end: new Date(2026, 9, 1, 11, 29),
+      });
+      const hidden = buildAgenda([first, secondAt29], CALENDARS, NOW, "HH:mm");
+      expect(gapLabels(dayGroups(hidden).find((group) => group.isToday))).toEqual([]);
+
+      const secondAt30 = makeOccurrence({
+        id: "second",
+        start: new Date(2026, 9, 1, 11, 0),
+        end: new Date(2026, 9, 1, 11, 30),
+      });
+      const shown = buildAgenda([first, secondAt30], CALENDARS, NOW, "HH:mm");
+      expect(gapLabels(dayGroups(shown).find((group) => group.isToday))).toEqual(["30m free"]);
+    });
+
+    it("merges across overlapping rows, starting the Gap at the latest end so far", () => {
+      // "wide" runs 10:00-12:00, "narrow" is nested inside it (10:30-10:45).
+      // The Gap after them must start at 12:00 (wide's end), not 10:45.
+      const wide = makeOccurrence({
+        id: "wide",
+        start: new Date(2026, 9, 1, 10, 0),
+        end: new Date(2026, 9, 1, 12, 0),
+      });
+      const narrow = makeOccurrence({
+        id: "narrow",
+        start: new Date(2026, 9, 1, 10, 30),
+        end: new Date(2026, 9, 1, 10, 45),
+      });
+      const after = makeOccurrence({
+        id: "after",
+        start: new Date(2026, 9, 1, 12, 45),
+        end: new Date(2026, 9, 1, 13, 0),
+      });
+      const items = buildAgenda([wide, narrow, after], CALENDARS, NOW, "HH:mm");
+      const today = dayGroups(items).find((group) => group.isToday);
+      expect(gapLabels(today)).toEqual(["45m free"]);
+    });
+
+    it("treats a Free Event as bounding a Gap exactly like a Busy one", () => {
+      const free = makeOccurrence({
+        id: "free",
+        busy: false,
+        start: new Date(2026, 9, 1, 10, 0),
+        end: new Date(2026, 9, 1, 10, 30),
+      });
+      const next = makeOccurrence({
+        id: "next",
+        start: new Date(2026, 9, 1, 11, 0),
+        end: new Date(2026, 9, 1, 11, 30),
+      });
+      const items = buildAgenda([free, next], CALENDARS, NOW, "HH:mm");
+      const today = dayGroups(items).find((group) => group.isToday);
+      expect(gapLabels(today)).toEqual(["30m free"]);
+    });
+
+    it("never lets an all-day row bound a Gap", () => {
+      const allDay = makeOccurrence({
+        id: "all-day",
+        allDay: true,
+        start: new Date(2026, 9, 1, 0, 0),
+        end: new Date(2026, 9, 2, 0, 0),
+      });
+      const first = makeOccurrence({
+        id: "first",
+        start: new Date(2026, 9, 1, 10, 0),
+        end: new Date(2026, 9, 1, 10, 30),
+      });
+      const second = makeOccurrence({
+        id: "second",
+        start: new Date(2026, 9, 1, 11, 0),
+        end: new Date(2026, 9, 1, 11, 30),
+      });
+      const items = buildAgenda([allDay, first, second], CALENDARS, NOW, "HH:mm");
+      const today = dayGroups(items).find((group) => group.isToday);
+      // Only the Gap between "first" and "second" — the all-day row, though
+      // it sits above "first", never opens or closes one of its own.
+      expect(gapLabels(today)).toEqual(["30m free"]);
+    });
+
+    it("never shows a Gap before a day's first row or after its last", () => {
+      const only = makeOccurrence({
+        id: "only",
+        start: new Date(2026, 9, 1, 10, 0),
+        end: new Date(2026, 9, 1, 10, 30),
+      });
+      const items = buildAgenda([only], CALENDARS, NOW, "HH:mm");
+      const today = dayGroups(items).find((group) => group.isToday);
+      // NOW (09:00) is well before "only" and the day runs well past its
+      // 10:30 end, yet neither edge produces a Gap.
+      expect(gapLabels(today)).toEqual([]);
+    });
+
+    it("shows the 'free until' Gap under the now-line when nothing is in progress", () => {
+      const next = makeOccurrence({
+        id: "next",
+        start: new Date(2026, 9, 1, 11, 24),
+        end: new Date(2026, 9, 1, 11, 54),
+      });
+      // An earlier, already-finished row establishes the day's first bound
+      // so the Gap isn't suppressed as "before the day's first row".
+      const earlier = makeOccurrence({
+        id: "earlier",
+        start: new Date(2026, 9, 1, 7, 0),
+        end: new Date(2026, 9, 1, 7, 30),
+      });
+      const items = buildAgenda([earlier, next], CALENDARS, NOW, "HH:mm");
+      const today = dayGroups(items).find((group) => group.isToday);
+      // NOW is 09:00, "next" starts 11:24 — 2h 24m free until 11:24.
+      expect(gapLabels(today)).toEqual(["2h 24m free until 11:24"]);
+      expect(today?.nowLine?.index).toBe(1);
+      expect(today?.gaps[0].beforeIndex).toBe(1);
+    });
+
+    it("shows no 'free until' Gap while something is in progress, running from its end as usual", () => {
+      const inProgress = makeOccurrence({
+        id: "in-progress",
+        start: new Date(2026, 9, 1, 8, 30),
+        end: new Date(2026, 9, 1, 9, 30),
+      });
+      const next = makeOccurrence({
+        id: "next",
+        start: new Date(2026, 9, 1, 11, 0),
+        end: new Date(2026, 9, 1, 11, 30),
+      });
+      const items = buildAgenda([inProgress, next], CALENDARS, NOW, "HH:mm");
+      const today = dayGroups(items).find((group) => group.isToday);
+      // The Gap runs from the in-progress row's end (09:30) to "next"
+      // (11:00) — plain wording, not "until", since it isn't anchored at now.
+      expect(gapLabels(today)).toEqual(["1h 30m free"]);
+    });
+  });
 });
 
 describe("agendaEventCountLabel", () => {
