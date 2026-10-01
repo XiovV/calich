@@ -1,5 +1,5 @@
 import { Video } from "lucide-react";
-import { agendaSecondLineText, type AgendaRow } from "../lib/agenda";
+import { agendaDayLabelPrefix, agendaSecondLineText, type AgendaRow } from "../lib/agenda";
 import { toOpaqueHex } from "../lib/calendarColors";
 
 interface AgendaEventRowProps {
@@ -34,7 +34,7 @@ export function AgendaEventRow({ row, onClick }: AgendaEventRowProps) {
             )}
           </span>
           <span className="flex items-center gap-1 truncate text-label-sm text-ink-muted">
-            {row.dayLabel && <span className="shrink-0">{row.dayLabel} ·</span>}
+            {row.dayLabel && <span className="shrink-0">{agendaDayLabelPrefix(row)}</span>}
             {row.hasConferenceUrl && <Video className="size-3 shrink-0" />}
             {agendaSecondLineText(row)}
           </span>

@@ -2,6 +2,7 @@ import { isSameDay } from "date-fns";
 import { describe, expect, it } from "vitest";
 import {
   AGENDA_WINDOW_DAYS,
+  agendaDayLabelPrefix,
   agendaEventCountLabel,
   agendaSecondLineText,
   buildAgenda,
@@ -746,6 +747,16 @@ describe("agendaSecondLineText", () => {
 
   it("appends the Location when one is set", () => {
     expect(agendaSecondLineText({ calendarName: "Work", location: "Room 2" })).toBe("Work · Room 2");
+  });
+});
+
+describe("agendaDayLabelPrefix", () => {
+  it("is empty for a row with no Day label", () => {
+    expect(agendaDayLabelPrefix({ dayLabel: null })).toBe("");
+  });
+
+  it("is the Day label followed by a separator", () => {
+    expect(agendaDayLabelPrefix({ dayLabel: "Day 2 of 3" })).toBe("Day 2 of 3 ·");
   });
 });
 

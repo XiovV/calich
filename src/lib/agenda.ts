@@ -295,6 +295,14 @@ export function agendaSecondLineText(row: Pick<AgendaRow, "calendarName" | "loca
   return row.location ? `${row.calendarName} · ${row.location}` : row.calendarName;
 }
 
+// agendaDayLabelPrefix is a multi-day row's "Day N of M ·" lead-in, ahead of
+// the second line's video icon/Calendar name (#335) — "" when the row isn't
+// part of a multi-day Occurrence, matching agendaSecondLineText's convention
+// of owning this text so the component only handles conditional rendering.
+export function agendaDayLabelPrefix(row: Pick<AgendaRow, "dayLabel">): string {
+  return row.dayLabel ? `${row.dayLabel} ·` : "";
+}
+
 // formatAgendaEmptyRunLabel is a collapsed run of empty days' muted row text,
 // e.g. "Sat, Oct 3 – Mon, Oct 5 · Nothing scheduled", collapsing to a single
 // date when the run is only one day long (#330).
