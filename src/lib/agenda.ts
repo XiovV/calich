@@ -1,8 +1,9 @@
-import { addDays, format, isSameDay, startOfDay } from "date-fns";
+import { addDays, differenceInCalendarDays, format, isSameDay, startOfDay } from "date-fns";
 import { getCalendarById, type Calendar } from "./calendar";
 import { resolveOccurrenceColor } from "./calendarColors";
 import { formatDragDuration } from "./dragReadout";
 import { occurrenceKey, type Occurrence } from "./occurrence";
+import { getDaySegments, type OccurrenceDaySegment } from "./occurrenceSegments";
 
 // A Gap's shown duration must be at least this long (#334) — shorter ones
 // are dropped so back-to-back rows with a sliver between them don't fill
@@ -10,9 +11,9 @@ import { occurrenceKey, type Occurrence } from "./occurrence";
 const AGENDA_GAP_MIN_MINUTES = 30;
 
 // Agenda's tracer-bullet window (#330): the list always begins at today and
-// runs for a fixed 15 days (today plus the next 14) — infinite scroll,
-// gaps/overlaps, the now-line, multi-day segments and Tasks are later
-// tickets that extend buildAgenda (#329's Implementation Decisions).
+// runs for a fixed 15 days (today plus the next 14) — infinite scroll and
+// Tasks are later tickets that extend buildAgenda (#329's Implementation
+// Decisions).
 export const AGENDA_WINDOW_DAYS = 15;
 
 export interface AgendaRow {
@@ -20,6 +21,10 @@ export interface AgendaRow {
   occurrence: Occurrence;
   allDay: boolean;
   timeLabel: string;
+  // "Day N of M" when this row is one day of a multi-day Occurrence
+  // (midnight-crossing timed, or a multi-day All-day Event), else null
+  // (#335). Rendered ahead of the second line's video icon/Calendar name.
+  dayLabel: string | null;
   title: string;
   /** The resolved render color: the Event's own override, else its
    * Calendar's color as resolved for the viewer (ADR-0043, ADR-0038). */
@@ -30,12 +35,21 @@ export interface AgendaRow {
   // The grid's own dimming rule (#332, EventBlock's `isPast`): the
   // Occurrence's end has passed. An in-progress row (started, not yet
   // ended) is therefore not dimmed — that's what marks it current — and an
-  // all-day row is never dimmed, whatever day it's on.
+  // all-day row is never dimmed, whatever day it's on. Always the
+  // Occurrence's *true* end, even on a midnight-crossing row's first day
+  // (#335) — never the day's clipped segment end.
   dimmed: boolean;
   // #333: this row starts before the latest end among the earlier timed
   // rows of its day. States a fact about the list, not a scheduling
   // conflict — Busy plays no part, and an all-day row is never flagged.
   overlaps: boolean;
+  // This day's clipped portion of the Occurrence's span (#335) — what
+  // Gaps/Overlaps are computed from, so a multi-day Occurrence's later days
+  // (clipped to start at that day's midnight) don't drag their true start
+  // into a day they don't belong to. Equal to `occurrence.start`/`.end` for
+  // a same-day Occurrence.
+  segmentStart: Date;
+  segmentEnd: Date;
 }
 
 // AgendaNowLine marks where today's amber now-line sits within its group's
@@ -99,21 +113,62 @@ function resolveRowCalendarName(occurrence: Occurrence, calendars: Calendar[]): 
   );
 }
 
-function buildRow(
+// occurrenceDaySpan is the number of calendar days an Occurrence touches
+// (#335) — M in "Day N of M". A same-day Occurrence (including one ending
+// exactly at midnight, which `occurrenceIntersectsDay` already excludes from
+// the next day) is 1. `end` is exclusive, so the last touched moment is 1ms
+// before it.
+function occurrenceDaySpan(occurrence: Occurrence): number {
+  const lastTouchedMoment = new Date(occurrence.end.getTime() - 1);
+  return differenceInCalendarDays(lastTouchedMoment, occurrence.start) + 1;
+}
+
+// occurrenceDayIndex is N in "Day N of M" — `day`'s 1-based position among
+// the calendar days the Occurrence touches (#335).
+function occurrenceDayIndex(occurrence: Occurrence, day: Date): number {
+  return differenceInCalendarDays(day, occurrence.start) + 1;
+}
+
+// buildRow's time label for a single day of a (possibly multi-day)
+// Occurrence (#335): an all-day row always reads "All day"; a same-day timed
+// row keeps its full range; a multi-day timed row's first day shows its full
+// true range (not clipped to midnight), its last day "Until HH:MM" (its true
+// end), and every day between "All day" — sorted among the timed rows
+// regardless (see `compareSegments`), since it's an Occurrence segment, not
+// an All-day Event.
+function buildTimeLabel(
   occurrence: Occurrence,
+  allDay: boolean,
+  dayIndex: number,
+  totalDays: number,
+  timePattern: string,
+): string {
+  if (allDay) return "All day";
+  if (totalDays === 1 || dayIndex === 1) {
+    return `${format(occurrence.start, timePattern)} – ${format(occurrence.end, timePattern)}`;
+  }
+  if (dayIndex === totalDays) return `Until ${format(occurrence.end, timePattern)}`;
+  return "All day";
+}
+
+function buildRow(
+  segment: OccurrenceDaySegment,
+  day: Date,
   calendars: Calendar[],
   timePattern: string,
   now: Date,
   overlaps: boolean,
 ): AgendaRow {
+  const occurrence = segment.occurrence;
   const allDay = Boolean(occurrence.event.allDay);
+  const totalDays = occurrenceDaySpan(occurrence);
+  const dayIndex = occurrenceDayIndex(occurrence, day);
   return {
     key: occurrenceKey(occurrence),
     occurrence,
     allDay,
-    timeLabel: allDay
-      ? "All day"
-      : `${format(occurrence.start, timePattern)} – ${format(occurrence.end, timePattern)}`,
+    timeLabel: buildTimeLabel(occurrence, allDay, dayIndex, totalDays, timePattern),
+    dayLabel: totalDays > 1 ? `Day ${dayIndex} of ${totalDays}` : null,
     title: occurrence.event.title,
     color: resolveRowColor(occurrence, calendars),
     calendarName: resolveRowCalendarName(occurrence, calendars),
@@ -121,6 +176,8 @@ function buildRow(
     hasConferenceUrl: Boolean(occurrence.event.conferenceUrl),
     dimmed: !allDay && occurrence.end < now,
     overlaps,
+    segmentStart: segment.start,
+    segmentEnd: segment.end,
   };
 }
 
@@ -130,26 +187,31 @@ function buildRow(
 // whichever earlier row reaches furthest. All-day rows never count toward an
 // overlap and are never themselves flagged. Busy plays no part: this states
 // a fact about list order ("this starts before the one above has ended"),
-// not a scheduling conflict. `occurrences` must already be in display order
-// (compareOccurrences), so index-aligned with the rows built from it.
-function computeOverlapFlags(occurrences: Occurrence[]): boolean[] {
+// not a scheduling conflict. Measured on each segment's day-clipped bounds
+// (#335), so a multi-day Occurrence's portion on this day is what counts,
+// not its true (possibly other-day) start. `segments` must already be in
+// display order (compareSegments), so index-aligned with the rows built
+// from it.
+function computeOverlapFlags(segments: OccurrenceDaySegment[]): boolean[] {
   let latestEnd: Date | null = null;
-  return occurrences.map((occurrence) => {
-    if (occurrence.event.allDay) return false;
-    const overlaps = latestEnd !== null && occurrence.start < latestEnd;
-    if (latestEnd === null || occurrence.end > latestEnd) latestEnd = occurrence.end;
+  return segments.map((segment) => {
+    if (segment.occurrence.event.allDay) return false;
+    const overlaps = latestEnd !== null && segment.start < latestEnd;
+    if (latestEnd === null || segment.end > latestEnd) latestEnd = segment.end;
     return overlaps;
   });
 }
 
 // computeNowLine places today's now-line immediately before the first row
-// that hasn't started yet (start is still ahead of `now`), or at the end of
-// the group once every row has started — `rows` is already in display order
-// (all-day first, so an all-day row's midnight start always counts as
+// that hasn't started yet (its start is still ahead of `now`), or at the end
+// of the group once every row has started — `rows` is already in display
+// order (all-day first, so an all-day row's midnight start always counts as
 // started and never traps the line above it), so a plain `findIndex`
-// suffices (#332).
+// suffices (#332). Measured against each row's day segment (#335): a later
+// day of a multi-day Occurrence is clipped to start at that day's midnight,
+// which has necessarily already passed once that day is reached.
 function computeNowLine(rows: AgendaRow[], now: Date, timePattern: string): AgendaNowLine {
-  const index = rows.findIndex((row) => row.occurrence.start > now);
+  const index = rows.findIndex((row) => row.segmentStart > now);
   return {
     index: index === -1 ? rows.length : index,
     label: format(now, timePattern),
@@ -161,12 +223,14 @@ function computeNowLine(rows: AgendaRow[], now: Date, timePattern: string): Agen
 // never bound one. Covered intervals merge (the running latest end, as in
 // computeOverlapFlags), so a Gap starts at the latest end so far rather
 // than the row directly above, and none is ever placed before the day's
-// first timed row or after its last.
+// first timed row or after its last. Measured on each row's day segment
+// (#335), so a multi-day Occurrence's portion on this day is what a Gap
+// runs against.
 //
 // On today, the Gap immediately after the now-line additionally clips its
 // start to `now` and reads "… free until HH:MM" instead of "… free" — but
 // only when nothing is in progress, i.e. `now` itself falls inside the gap.
-// `rows` must already be in display order (compareOccurrences), so
+// `rows` must already be in display order (compareSegments), so
 // index-aligned with `beforeIndex`.
 function computeGapRows(
   rows: AgendaRow[],
@@ -180,15 +244,15 @@ function computeGapRows(
   rows.forEach((row, index) => {
     if (row.allDay) return;
 
-    if (latestEnd !== null && row.occurrence.start > latestEnd) {
+    if (latestEnd !== null && row.segmentStart > latestEnd) {
       let gapStart = latestEnd;
       let untilLabel: string | null = null;
-      if (isToday && gapStart <= now && now < row.occurrence.start) {
+      if (isToday && gapStart <= now && now < row.segmentStart) {
         gapStart = now;
-        untilLabel = format(row.occurrence.start, timePattern);
+        untilLabel = format(row.segmentStart, timePattern);
       }
 
-      const minutes = Math.round((row.occurrence.start.getTime() - gapStart.getTime()) / 60_000);
+      const minutes = Math.round((row.segmentStart.getTime() - gapStart.getTime()) / 60_000);
       if (minutes >= AGENDA_GAP_MIN_MINUTES) {
         gaps.push({
           key: `gap-${row.key}`,
@@ -200,17 +264,19 @@ function computeGapRows(
       }
     }
 
-    if (latestEnd === null || row.occurrence.end > latestEnd) latestEnd = row.occurrence.end;
+    if (latestEnd === null || row.segmentEnd > latestEnd) latestEnd = row.segmentEnd;
   });
 
   return gaps;
 }
 
 // Order within a day group (#330): all-day rows first, then timed rows by
-// start and then end.
-function compareOccurrences(a: Occurrence, b: Occurrence): number {
-  const allDayA = Boolean(a.event.allDay);
-  const allDayB = Boolean(b.event.allDay);
+// start and then end — each segment's day-clipped bounds (#335), so a later
+// day of a multi-day Occurrence (clipped to that day's midnight) sorts as if
+// it started then, not at its true, other-day start.
+function compareSegments(a: OccurrenceDaySegment, b: OccurrenceDaySegment): number {
+  const allDayA = Boolean(a.occurrence.event.allDay);
+  const allDayB = Boolean(b.occurrence.event.allDay);
   if (allDayA !== allDayB) return allDayA ? -1 : 1;
   if (a.start.getTime() !== b.start.getTime()) return a.start.getTime() - b.start.getTime();
   return a.end.getTime() - b.end.getTime();
@@ -263,18 +329,19 @@ export function buildAgenda(
 
   const dayGroups: AgendaDayGroup[] = days.map((date) => {
     const isToday = isSameDay(date, today);
-    const dayOccurrences = occurrences
-      .filter((occurrence) => isSameDay(occurrence.start, date))
-      .sort(compareOccurrences);
-    const overlapFlags = computeOverlapFlags(dayOccurrences);
-    const rows = dayOccurrences.map((occurrence, index) =>
-      buildRow(occurrence, calendars, timePattern, now, overlapFlags[index]),
+    // A multi-day Occurrence yields a segment on every day it touches
+    // (#335), so it appears — and counts toward `eventCount` — in each of
+    // those days' groups, not only the one its start falls on.
+    const daySegments = getDaySegments(occurrences, date).sort(compareSegments);
+    const overlapFlags = computeOverlapFlags(daySegments);
+    const rows = daySegments.map((segment, index) =>
+      buildRow(segment, date, calendars, timePattern, now, overlapFlags[index]),
     );
     return {
       kind: "day",
       date,
       isToday,
-      eventCount: dayOccurrences.length,
+      eventCount: daySegments.length,
       rows,
       nowLine: isToday ? computeNowLine(rows, now, timePattern) : null,
       gaps: computeGapRows(rows, isToday, now, timePattern),

@@ -1,3 +1,4 @@
+import { isSameDay } from "date-fns";
 import { describe, expect, it } from "vitest";
 import {
   AGENDA_WINDOW_DAYS,
@@ -34,6 +35,10 @@ function makeOccurrence(overrides: Partial<Event> = {}): Occurrence {
 
 function dayGroups(items: ReturnType<typeof buildAgenda>): AgendaDayGroup[] {
   return items.filter((item): item is AgendaDayGroup => item.kind === "day");
+}
+
+function findDay(items: ReturnType<typeof buildAgenda>, date: Date): AgendaDayGroup | undefined {
+  return dayGroups(items).find((group) => isSameDay(group.date, date));
 }
 
 describe("buildAgenda", () => {
@@ -574,6 +579,154 @@ describe("buildAgenda", () => {
       // The Gap runs from the in-progress row's end (09:30) to "next"
       // (11:00) — plain wording, not "until", since it isn't anchored at now.
       expect(gapLabels(today)).toEqual(["1h 30m free"]);
+    });
+  });
+
+  describe("midnight-crossing and multi-day Occurrences (#335)", () => {
+    it("has no Day label for a same-day Occurrence", () => {
+      const occurrence = makeOccurrence();
+      const items = buildAgenda([occurrence], CALENDARS, NOW, "HH:mm");
+      const today = dayGroups(items).find((group) => group.isToday);
+      expect(today?.rows[0].dayLabel).toBeNull();
+    });
+
+    it("splits a two-day overnight Occurrence: full range on day 1, 'Until' on day 2", () => {
+      const overnight = makeOccurrence({
+        id: "overnight",
+        start: new Date(2026, 9, 1, 22, 0), // today, 22:00
+        end: new Date(2026, 9, 2, 2, 0), // tomorrow, 02:00
+      });
+      const items = buildAgenda([overnight], CALENDARS, NOW, "HH:mm");
+      const day1 = findDay(items, new Date(2026, 9, 1));
+      const day2 = findDay(items, new Date(2026, 9, 2));
+
+      expect(day1?.rows).toHaveLength(1);
+      expect(day1?.rows[0].timeLabel).toBe("22:00 – 02:00");
+      expect(day1?.rows[0].dayLabel).toBe("Day 1 of 2");
+      expect(day1?.eventCount).toBe(1);
+
+      expect(day2?.rows).toHaveLength(1);
+      expect(day2?.rows[0].timeLabel).toBe("Until 02:00");
+      expect(day2?.rows[0].dayLabel).toBe("Day 2 of 2");
+      expect(day2?.eventCount).toBe(1);
+    });
+
+    it("splits a three-day timed Occurrence across all three days with Day N of M labels", () => {
+      const conference = makeOccurrence({
+        id: "conference",
+        start: new Date(2026, 9, 1, 9, 0),
+        end: new Date(2026, 9, 3, 17, 0),
+      });
+      const items = buildAgenda([conference], CALENDARS, NOW, "HH:mm");
+      const day1 = findDay(items, new Date(2026, 9, 1));
+      const day2 = findDay(items, new Date(2026, 9, 2));
+      const day3 = findDay(items, new Date(2026, 9, 3));
+
+      expect(day1?.rows[0].timeLabel).toBe("09:00 – 17:00");
+      expect(day1?.rows[0].dayLabel).toBe("Day 1 of 3");
+
+      // The middle day reads "All day" but stays a timed row (#335) — it is
+      // not an All-day Event, so it must keep sorting among timed rows.
+      expect(day2?.rows[0].timeLabel).toBe("All day");
+      expect(day2?.rows[0].dayLabel).toBe("Day 2 of 3");
+      expect(day2?.rows[0].allDay).toBe(false);
+
+      expect(day3?.rows[0].timeLabel).toBe("Until 17:00");
+      expect(day3?.rows[0].dayLabel).toBe("Day 3 of 3");
+
+      // Header counts include the Occurrence on every day it appears (#335).
+      expect(day1?.eventCount).toBe(1);
+      expect(day2?.eventCount).toBe(1);
+      expect(day3?.eventCount).toBe(1);
+    });
+
+    it("sorts a multi-day timed Occurrence's middle-day row among timed rows, not with All-day Events", () => {
+      const conference = makeOccurrence({
+        id: "conference",
+        start: new Date(2026, 9, 1, 9, 0),
+        end: new Date(2026, 9, 3, 17, 0),
+      });
+      const allDayEvent = makeOccurrence({
+        id: "all-day",
+        allDay: true,
+        start: new Date(2026, 9, 2, 0, 0),
+        end: new Date(2026, 9, 3, 0, 0),
+      });
+      const items = buildAgenda([conference, allDayEvent], CALENDARS, NOW, "HH:mm");
+      const day2 = findDay(items, new Date(2026, 9, 2));
+      expect(day2?.rows.map((row) => row.occurrence.event.id)).toEqual(["all-day", "conference"]);
+      expect(day2?.rows[1].timeLabel).toBe("All day");
+      expect(day2?.rows[1].allDay).toBe(false);
+    });
+
+    it("repeats a three-day All-day Event in every day it touches with Day N of M", () => {
+      const trip = makeOccurrence({
+        id: "trip",
+        allDay: true,
+        start: new Date(2026, 9, 1, 0, 0),
+        end: new Date(2026, 9, 4, 0, 0), // exclusive end: touches Oct 1-3
+      });
+      const items = buildAgenda([trip], CALENDARS, NOW, "HH:mm");
+      const expectations: [Date, string][] = [
+        [new Date(2026, 9, 1), "Day 1 of 3"],
+        [new Date(2026, 9, 2), "Day 2 of 3"],
+        [new Date(2026, 9, 3), "Day 3 of 3"],
+      ];
+      for (const [date, dayLabel] of expectations) {
+        const group = findDay(items, date);
+        expect(group?.rows).toHaveLength(1);
+        expect(group?.rows[0].timeLabel).toBe("All day");
+        expect(group?.rows[0].dayLabel).toBe(dayLabel);
+        expect(group?.eventCount).toBe(1);
+      }
+    });
+
+    it("computes a later day's Gaps and Overlaps from only that day's covered portion", () => {
+      // The conference's third-day segment covers Wed 00:00-17:00 (#335): no
+      // Gap can precede it (it's the day's first row), and a 10:00 meeting
+      // that day starts inside its covered stretch, so it is badged
+      // Overlaps rather than separated by a Gap.
+      const conference = makeOccurrence({
+        id: "conference",
+        start: new Date(2026, 9, 1, 9, 0),
+        end: new Date(2026, 9, 3, 17, 0),
+      });
+      const meeting = makeOccurrence({
+        id: "meeting",
+        start: new Date(2026, 9, 3, 10, 0),
+        end: new Date(2026, 9, 3, 10, 30),
+      });
+      const items = buildAgenda([conference, meeting], CALENDARS, NOW, "HH:mm");
+      const day3 = findDay(items, new Date(2026, 9, 3));
+
+      expect(day3?.gaps).toEqual([]);
+      const byId = Object.fromEntries(day3!.rows.map((row) => [row.occurrence.event.id, row]));
+      expect(byId.conference.overlaps).toBe(false);
+      expect(byId.meeting.overlaps).toBe(true);
+    });
+
+    it("never dims the overnight Occurrence's first-day row while today, no matter how late", () => {
+      const overnight = makeOccurrence({
+        id: "overnight",
+        start: new Date(2026, 9, 1, 22, 0),
+        end: new Date(2026, 9, 2, 2, 0),
+      });
+      const items = buildAgenda([overnight], CALENDARS, new Date(2026, 9, 1, 23, 30), "HH:mm");
+      const day1 = findDay(items, new Date(2026, 9, 1));
+      expect(day1?.rows[0].dimmed).toBe(false);
+    });
+
+    it("dims the overnight Occurrence's last-day row only once its true end has passed", () => {
+      const overnight = makeOccurrence({
+        id: "overnight",
+        start: new Date(2026, 9, 1, 22, 0),
+        end: new Date(2026, 9, 2, 2, 0),
+      });
+      const stillRunning = buildAgenda([overnight], CALENDARS, new Date(2026, 9, 2, 1, 0), "HH:mm");
+      expect(findDay(stillRunning, new Date(2026, 9, 2))?.rows[0].dimmed).toBe(false);
+
+      const ended = buildAgenda([overnight], CALENDARS, new Date(2026, 9, 2, 3, 0), "HH:mm");
+      expect(findDay(ended, new Date(2026, 9, 2))?.rows[0].dimmed).toBe(true);
     });
   });
 });
