@@ -4,10 +4,14 @@ import {
   AGENDA_WINDOW_DAYS,
   agendaDayLabelPrefix,
   agendaEventCountLabel,
+  agendaSearchLimit,
   agendaSecondLineText,
   buildAgenda,
+  findAgendaItemForDate,
   formatAgendaEmptyRunLabel,
+  formatAgendaEndOfListLabel,
   type AgendaDayGroup,
+  type AgendaItem,
 } from "./agenda";
 import type { Calendar } from "./calendar";
 import type { Event } from "./event";
@@ -61,39 +65,54 @@ describe("buildAgenda", () => {
   });
 
   it("collapses a run of consecutive empty days into one item", () => {
-    // Only today (Oct 1) and Oct 10 have Occurrences; every day in between
-    // and after must collapse into runs.
-    const occurrence = makeOccurrence({
-      start: new Date(2026, 9, 10, 9, 0),
-      end: new Date(2026, 9, 10, 9, 30),
-    });
-    const items = buildAgenda([occurrence], CALENDARS, NOW, "HH:mm");
+    // Today (Oct 1), Oct 10 and Oct 15 (the window's last day) have
+    // Occurrences; every day in between must collapse into runs. Closing the
+    // window with content on its last day keeps this test about ordinary
+    // in-window collapsing rather than #336's load-through, which is
+    // covered separately below.
+    const occurrences = [
+      makeOccurrence({
+        id: "middle",
+        start: new Date(2026, 9, 10, 9, 0),
+        end: new Date(2026, 9, 10, 9, 30),
+      }),
+      makeOccurrence({
+        id: "closer",
+        start: new Date(2026, 9, 15, 9, 0),
+        end: new Date(2026, 9, 15, 9, 30),
+      }),
+    ];
+    const items = buildAgenda(occurrences, CALENDARS, NOW, "HH:mm");
 
     // today (day group) + run Oct 2-9 (empty) + Oct 10 (day group) + run
-    // Oct 11-15 (empty, the window's last day is Oct 15 for a 15-day span
-    // starting Oct 1).
-    expect(items.map((item) => item.kind)).toEqual(["day", "emptyRun", "day", "emptyRun"]);
+    // Oct 11-14 (empty) + Oct 15 (day group, the window's last day).
+    expect(items.map((item) => item.kind)).toEqual(["day", "emptyRun", "day", "emptyRun", "day"]);
 
     const [, firstRun, , secondRun] = items;
     if (firstRun.kind !== "emptyRun" || secondRun.kind !== "emptyRun") throw new Error("expected runs");
     expect(firstRun.startDate).toEqual(new Date(2026, 9, 2));
     expect(firstRun.endDate).toEqual(new Date(2026, 9, 9));
     expect(secondRun.startDate).toEqual(new Date(2026, 9, 11));
-    expect(secondRun.endDate).toEqual(new Date(2026, 9, 15));
+    expect(secondRun.endDate).toEqual(new Date(2026, 9, 14));
   });
 
   it("never folds today into a run even when both neighbors are empty", () => {
-    const items = buildAgenda([], CALENDARS, NOW, "HH:mm");
-    // today, then one run covering the remaining 14 days.
-    expect(items.map((item) => item.kind)).toEqual(["day", "emptyRun"]);
+    // Closing the window with content on its last day isolates this test's
+    // own rule from #336's load-through (covered separately below).
+    const closer = makeOccurrence({
+      start: new Date(2026, 9, 15, 9, 0),
+      end: new Date(2026, 9, 15, 9, 30),
+    });
+    const items = buildAgenda([closer], CALENDARS, NOW, "HH:mm");
+    // today, then one run covering the days between, then the closer.
+    expect(items.map((item) => item.kind)).toEqual(["day", "emptyRun", "day"]);
   });
 
-  it("spans exactly AGENDA_WINDOW_DAYS days", () => {
-    const items = buildAgenda([], CALENDARS, NOW, "HH:mm");
-    expect(dayGroups(items)).toHaveLength(1); // today, its own group even though empty
-    const run = items.find((item) => item.kind === "emptyRun");
-    if (run?.kind !== "emptyRun") throw new Error("expected a run");
-    expect(run.endDate).toEqual(new Date(2026, 9, 1 + AGENDA_WINDOW_DAYS - 1));
+  it("defaults the window to AGENDA_WINDOW_DAYS", () => {
+    const occurrence = makeOccurrence();
+    const withDefault = buildAgenda([occurrence], CALENDARS, NOW, "HH:mm");
+    const withExplicitWindow = buildAgenda([occurrence], CALENDARS, NOW, "HH:mm", AGENDA_WINDOW_DAYS);
+    expect(withDefault).toEqual(withExplicitWindow);
   });
 
   it("orders all-day rows before timed rows on the same day", () => {
@@ -730,6 +749,105 @@ describe("buildAgenda", () => {
       expect(findDay(ended, new Date(2026, 9, 2))?.rows[0].dimmed).toBe(true);
     });
   });
+
+  describe("infinite scroll (#336)", () => {
+    it("loads straight through an empty stretch to the next row, past the requested window", () => {
+      // Only today and day 40 (well past the 15-day requested window) have
+      // Occurrences — the empty stretch between them must still render as a
+      // single row rather than stopping at the window boundary.
+      const far = makeOccurrence({
+        start: new Date(2026, 10, 10, 9, 0), // Nov 10 — 40 days after Oct 1
+        end: new Date(2026, 10, 10, 9, 30),
+      });
+      const items = buildAgenda([far], CALENDARS, NOW, "HH:mm", AGENDA_WINDOW_DAYS);
+
+      expect(items.map((item) => item.kind)).toEqual(["day", "emptyRun", "day"]);
+      const [today, run, farDay] = items;
+      if (run.kind !== "emptyRun" || farDay.kind !== "day") throw new Error("expected run then day");
+      expect(today.kind).toBe("day");
+      expect(run.startDate).toEqual(new Date(2026, 9, 2));
+      expect(run.endDate).toEqual(new Date(2026, 10, 9));
+      expect(farDay.date).toEqual(new Date(2026, 10, 10));
+    });
+
+    it("never produces two consecutive empty-run rows, however many requested-window boundaries it crosses", () => {
+      // Content at today, day 10 and day 30 spans several 14-day chunks —
+      // every empty stretch between them, whether inside or past the
+      // requested window, must collapse to exactly one row each.
+      const occurrences = [
+        makeOccurrence({
+          id: "ten",
+          start: new Date(2026, 9, 10, 9, 0),
+          end: new Date(2026, 9, 10, 9, 30),
+        }),
+        makeOccurrence({
+          id: "thirty",
+          start: new Date(2026, 9, 30, 9, 0),
+          end: new Date(2026, 9, 30, 9, 30),
+        }),
+      ];
+      const items = buildAgenda(occurrences, CALENDARS, NOW, "HH:mm", 45);
+
+      // Nothing lies beyond day 30 within the year, so the run past it (also
+      // crossing the 45-day window boundary) loads through all the way to
+      // the end-of-list item rather than stopping as a dangling run.
+      expect(items.map((item) => item.kind)).toEqual([
+        "day",
+        "emptyRun",
+        "day",
+        "emptyRun",
+        "day",
+        "endOfList",
+      ]);
+      for (let i = 0; i < items.length - 1; i++) {
+        expect(items[i].kind === "emptyRun" && items[i + 1].kind === "emptyRun").toBe(false);
+      }
+    });
+
+    it("renders identically whether a later row was already in the requested window or had to be loaded through to", () => {
+      // Day 10 sits inside both an 11-day and a 20-day window; day 25 sits
+      // past both, so both windows must load through the same stretch to
+      // reach it. Either window size should land on the exact same list.
+      const occurrences = [
+        makeOccurrence({
+          id: "ten",
+          start: new Date(2026, 9, 10, 9, 0),
+          end: new Date(2026, 9, 10, 9, 30),
+        }),
+        makeOccurrence({
+          id: "closer",
+          start: new Date(2026, 9, 25, 9, 0),
+          end: new Date(2026, 9, 25, 9, 30),
+        }),
+      ];
+      const narrow = buildAgenda(occurrences, CALENDARS, NOW, "HH:mm", 11);
+      const wide = buildAgenda(occurrences, CALENDARS, NOW, "HH:mm", 20);
+      expect(narrow).toEqual(wide);
+    });
+
+    it("ends the list when nothing lies within a year of the requested window, without a dangling run", () => {
+      const items = buildAgenda([], CALENDARS, NOW, "HH:mm", AGENDA_WINDOW_DAYS);
+
+      expect(items.map((item) => item.kind)).toEqual(["day", "endOfList"]);
+      const [, endOfList] = items;
+      if (endOfList.kind !== "endOfList") throw new Error("expected an end-of-list item");
+      // windowEnd (Oct 16, 2026) + 1 year = Oct 16, 2027; the last day
+      // actually searched is the day before that.
+      expect(endOfList.afterDate).toEqual(new Date(2027, 9, 15));
+    });
+
+    it("keeps loading when something eventually lies within the year, rather than ending early", () => {
+      const justInTime = makeOccurrence({
+        start: new Date(2027, 9, 15, 9, 0), // the last day the lookahead reaches
+        end: new Date(2027, 9, 15, 9, 30),
+      });
+      const items = buildAgenda([justInTime], CALENDARS, NOW, "HH:mm", AGENDA_WINDOW_DAYS);
+      expect(items.map((item) => item.kind)).toEqual(["day", "emptyRun", "day"]);
+      const last = items[items.length - 1];
+      if (last.kind !== "day") throw new Error("expected a day group");
+      expect(last.date).toEqual(new Date(2027, 9, 15));
+    });
+  });
 });
 
 describe("agendaEventCountLabel", () => {
@@ -777,5 +895,78 @@ describe("formatAgendaEmptyRunLabel", () => {
       endDate: new Date(2026, 9, 5),
     });
     expect(label).toBe("Sat, Oct 3 – Mon, Oct 5 · Nothing scheduled");
+  });
+});
+
+describe("formatAgendaEndOfListLabel", () => {
+  it("formats the terminal row's text", () => {
+    const label = formatAgendaEndOfListLabel({ kind: "endOfList", afterDate: new Date(2027, 9, 15) });
+    expect(label).toBe("Nothing scheduled after Oct 15, 2027");
+  });
+});
+
+describe("findAgendaItemForDate (#336)", () => {
+  function buildSample(): AgendaItem[] {
+    const occurrences = [
+      makeOccurrence({
+        id: "ten",
+        start: new Date(2026, 9, 10, 9, 0),
+        end: new Date(2026, 9, 10, 9, 30),
+      }),
+      makeOccurrence({
+        id: "closer",
+        start: new Date(2026, 9, 15, 9, 0),
+        end: new Date(2026, 9, 15, 9, 30),
+      }),
+    ];
+    return buildAgenda(occurrences, CALENDARS, NOW, "HH:mm");
+  }
+
+  it("finds a date's own day group", () => {
+    const items = buildSample();
+    const found = findAgendaItemForDate(items, new Date(2026, 9, 10));
+    expect(found?.kind).toBe("day");
+  });
+
+  it("finds the collapsed run a date without its own group falls inside", () => {
+    const items = buildSample();
+    const found = findAgendaItemForDate(items, new Date(2026, 9, 12));
+    expect(found?.kind).toBe("emptyRun");
+    if (found?.kind !== "emptyRun") throw new Error("expected a run");
+    expect(found.startDate <= new Date(2026, 9, 12)).toBe(true);
+    expect(found.endDate >= new Date(2026, 9, 12)).toBe(true);
+  });
+
+  it("returns undefined for a date outside every rendered item", () => {
+    const items = buildSample();
+    const found = findAgendaItemForDate(items, new Date(2030, 0, 1));
+    expect(found).toBeUndefined();
+  });
+
+  it("falls back to the end-of-list item for a date inside the run that was discarded in favor of it", () => {
+    // Nothing beyond today, so the list ends in endOfList rather than an
+    // emptyRun — a mini-calendar click on, say, Dec 15 (grown into the
+    // window but with no row of its own) must still resolve to something
+    // scrollable (#336).
+    const items = buildAgenda([], CALENDARS, NOW, "HH:mm", 76); // windowDays reaching Dec 15
+    const last = items[items.length - 1];
+    if (last.kind !== "endOfList") throw new Error("expected an end-of-list item");
+
+    const found = findAgendaItemForDate(items, new Date(2026, 11, 15));
+    expect(found).toBe(last);
+  });
+});
+
+describe("agendaSearchLimit (#336)", () => {
+  it("is one year past the requested window's end", () => {
+    expect(agendaSearchLimit(NOW, AGENDA_WINDOW_DAYS)).toEqual(new Date(2027, 9, 16));
+  });
+
+  it("matches the endOfList item's afterDate plus one day, for the same window", () => {
+    const items = buildAgenda([], CALENDARS, NOW, "HH:mm", AGENDA_WINDOW_DAYS);
+    const last = items[items.length - 1];
+    if (last.kind !== "endOfList") throw new Error("expected an end-of-list item");
+    const searchLimit = agendaSearchLimit(NOW, AGENDA_WINDOW_DAYS);
+    expect(last.afterDate.getTime()).toBe(searchLimit.getTime() - 86_400_000);
   });
 });

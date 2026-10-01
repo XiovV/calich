@@ -1,4 +1,4 @@
-import { addDays, differenceInCalendarDays, format, isSameDay, startOfDay } from "date-fns";
+import { addDays, addYears, differenceInCalendarDays, format, isSameDay, startOfDay } from "date-fns";
 import { getCalendarById, type Calendar } from "./calendar";
 import { resolveOccurrenceColor } from "./calendarColors";
 import { formatDragDuration } from "./dragReadout";
@@ -10,11 +10,25 @@ import { getDaySegments, type OccurrenceDaySegment } from "./occurrenceSegments"
 // the list with noise.
 const AGENDA_GAP_MIN_MINUTES = 30;
 
-// Agenda's tracer-bullet window (#330): the list always begins at today and
-// runs for a fixed 15 days (today plus the next 14) — infinite scroll and
-// Tasks are later tickets that extend buildAgenda (#329's Implementation
-// Decisions).
+// AGENDA_WINDOW_DAYS is Agenda's initial window (#330): the list always
+// begins at today and starts out covering today plus the next 14 days.
+// Reaching the list's bottom grows the window by AGENDA_LOAD_CHUNK_DAYS at a
+// time (#336) — both are day-counts from today, kept as session state in
+// shellStore, rather than fixed dates, so the window keeps the same shape
+// as "today" rolls forward across a session left open overnight.
 export const AGENDA_WINDOW_DAYS = 15;
+
+// AGENDA_LOAD_CHUNK_DAYS is how far each further load extends the window
+// once the list's bottom is reached (#336).
+export const AGENDA_LOAD_CHUNK_DAYS = 14;
+
+// agendaSearchLimit is how far past the requested window buildAgenda will
+// ever look for the next row (#336) — exported so the caller can size its
+// occurrence query to match exactly what buildAgenda might search, rather
+// than each independently re-deriving the one-year rule.
+export function agendaSearchLimit(now: Date, windowDays: number): Date {
+  return addYears(addDays(startOfDay(now), windowDays), 1);
+}
 
 export interface AgendaRow {
   key: string;
@@ -91,7 +105,16 @@ export interface AgendaEmptyRun {
   endDate: Date;
 }
 
-export type AgendaItem = AgendaDayGroup | AgendaEmptyRun;
+// AgendaEndOfList is the list's terminal item (#336): the one-year lookahead
+// past the requested window found nothing, so there is nothing left to load.
+// `afterDate` is the last day actually searched, read by
+// formatAgendaEndOfListLabel as "Nothing scheduled after <date>".
+export interface AgendaEndOfList {
+  kind: "endOfList";
+  afterDate: Date;
+}
+
+export type AgendaItem = AgendaDayGroup | AgendaEmptyRun | AgendaEndOfList;
 
 // resolveRowColor mirrors EventModal's attendeeOnlyCalendarColor fallback
 // (ADR-0046): when the viewer has no calendarsStore entry for this Event's
@@ -314,47 +337,63 @@ export function formatAgendaEmptyRunLabel(run: AgendaEmptyRun): string {
   return `${start} – ${format(run.endDate, "EEE, MMM d")} · Nothing scheduled`;
 }
 
+// formatAgendaEndOfListLabel is the terminal row's text (#336) — the
+// one-year lookahead past the requested window found nothing, and the list
+// stops extending.
+export function formatAgendaEndOfListLabel(item: AgendaEndOfList): string {
+  return `Nothing scheduled after ${format(item.afterDate, "MMM d, yyyy")}`;
+}
+
+// findAgendaItemForDate locates whichever rendered item a given date falls
+// under — its own day group, the collapsed run it was folded into, or the
+// terminal end-of-list item when the run that would have covered it was
+// discarded in favor of that single row (#336) — so a mini-calendar click
+// can scroll the list to it. A date genuinely outside every rendered item
+// (e.g. past the one-year cap) returns undefined.
+export function findAgendaItemForDate(
+  items: AgendaItem[],
+  date: Date,
+): AgendaDayGroup | AgendaEmptyRun | AgendaEndOfList | undefined {
+  const day = startOfDay(date);
+  for (const item of items) {
+    if (item.kind === "day" && isSameDay(item.date, day)) return item;
+    if (item.kind === "emptyRun" && item.startDate <= day && day <= item.endDate) return item;
+  }
+  const last = items[items.length - 1];
+  return last?.kind === "endOfList" ? last : undefined;
+}
+
 /**
  * The Agenda view's single source of rules (#330, ADR per #329): `occurrences`
  * (already narrowed to what the grid would show — the Active Calendar Set
  * intersected with checked, per `useVisibleOccurrences`) and `now` in, an
- * ordered list of day groups and collapsed empty runs out. The React view is
- * a thin renderer of this list.
+ * ordered list of day groups, collapsed empty runs and (possibly) a
+ * terminal end-of-list item out. The React view is a thin renderer of this
+ * list.
  *
- * The window is fixed at `AGENDA_WINDOW_DAYS` starting today — this ticket's
- * tracer-bullet scope has no infinite scroll, so `occurrences` outside that
- * window (if any slip through) are simply never grouped, since no day in
- * `days` can match them.
+ * `windowDays` is the requested window's size in days from today —
+ * `AGENDA_WINDOW_DAYS` by default, grown by the caller as the list's bottom
+ * is reached (#336). When the days right before that boundary are empty,
+ * this keeps walking past it in search of the next row to load straight
+ * through to — at most a year past the boundary — rather than stopping on
+ * an empty stretch; `occurrences` must therefore cover whatever of that
+ * year's worth of days might actually be searched, not just the nominal
+ * window. If nothing is found within that year, the list ends with a single
+ * terminal item instead of an open-ended empty run.
  */
 export function buildAgenda(
   occurrences: Occurrence[],
   calendars: Calendar[],
   now: Date,
   timePattern: string,
+  windowDays: number = AGENDA_WINDOW_DAYS,
 ): AgendaItem[] {
   const today = startOfDay(now);
-  const days = Array.from({ length: AGENDA_WINDOW_DAYS }, (_, index) => addDays(today, index));
-
-  const dayGroups: AgendaDayGroup[] = days.map((date) => {
-    const isToday = isSameDay(date, today);
-    // A multi-day Occurrence yields a segment on every day it touches
-    // (#335), so it appears — and counts toward `eventCount` — in each of
-    // those days' groups, not only the one its start falls on.
-    const daySegments = getDaySegments(occurrences, date).sort(compareSegments);
-    const overlapFlags = computeOverlapFlags(daySegments);
-    const rows = daySegments.map((segment, index) =>
-      buildRow(segment, date, calendars, timePattern, now, overlapFlags[index]),
-    );
-    return {
-      kind: "day",
-      date,
-      isToday,
-      eventCount: daySegments.length,
-      rows,
-      nowLine: isToday ? computeNowLine(rows, now, timePattern) : null,
-      gaps: computeGapRows(rows, isToday, now, timePattern),
-    };
-  });
+  const windowEnd = addDays(today, windowDays);
+  // The one-year lookahead is anchored to this call's windowEnd — the
+  // boundary actually requested — so a later call with a grown windowDays
+  // gets its own fresh year to search (#336).
+  const searchLimit = agendaSearchLimit(now, windowDays);
 
   const items: AgendaItem[] = [];
   let runStart: Date | null = null;
@@ -368,18 +407,53 @@ export function buildAgenda(
     runEnd = null;
   }
 
-  for (const group of dayGroups) {
-    // Today is always its own group, even when empty (#330) — it never
-    // folds into a collapsed run.
-    if (!group.isToday && group.rows.length === 0) {
-      if (!runStart) runStart = group.date;
-      runEnd = group.date;
+  for (let date = today; date < searchLimit; date = addDays(date, 1)) {
+    // Past what was actually requested, with no open run chasing the next
+    // row to load through to: the window ends cleanly here (#336).
+    if (date >= windowEnd && runStart === null) return items;
+
+    const isToday = isSameDay(date, today);
+    // A multi-day Occurrence yields a segment on every day it touches
+    // (#335), so it appears — and counts toward `eventCount` — in each of
+    // those days' groups, not only the one its start falls on.
+    const daySegments = getDaySegments(occurrences, date).sort(compareSegments);
+
+    if (daySegments.length === 0 && !isToday) {
+      // Today is always its own group, even when empty (#330) — it never
+      // folds into a run. Every other empty day joins or opens one, whether
+      // that run sits inside the requested window or is being extended past
+      // it in search of the next row (#336) — recomputing fresh from today
+      // each time means two runs can never end up adjacent in the output.
+      if (!runStart) runStart = date;
+      runEnd = date;
       continue;
     }
-    flushRun();
-    items.push(group);
-  }
-  flushRun();
 
+    flushRun();
+    const overlapFlags = computeOverlapFlags(daySegments);
+    const rows = daySegments.map((segment, index) =>
+      buildRow(segment, date, calendars, timePattern, now, overlapFlags[index]),
+    );
+    items.push({
+      kind: "day",
+      date,
+      isToday,
+      eventCount: daySegments.length,
+      rows,
+      nowLine: isToday ? computeNowLine(rows, now, timePattern) : null,
+      gaps: computeGapRows(rows, isToday, now, timePattern),
+    });
+
+    // Found the next row while loading through an empty stretch past the
+    // window (#336): stop right here rather than continuing to walk all the
+    // way to searchLimit.
+    if (date >= windowEnd) return items;
+  }
+
+  // Walked all the way to the one-year cap while still searching for the
+  // next row past the window (#336). The open run is discarded in favor of
+  // this single terminal item, so a calendar with nothing ahead ends
+  // cleanly rather than trailing off as an endless empty stretch.
+  items.push({ kind: "endOfList", afterDate: addDays(searchLimit, -1) });
   return items;
 }

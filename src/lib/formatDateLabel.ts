@@ -12,20 +12,26 @@ function formatWeekLabel(date: Date, weekStartsOn: WeekStartsOn): string {
   return `${format(start, "MMM d")} – ${format(end, "MMM d, yyyy")}`;
 }
 
-// formatAgendaLabel is the loaded span, e.g. "Sep 30 – Oct 14, 2026" (#330).
-// `today` stands in for `date` here: Agenda isn't driven by the Selected
-// date (CONTEXT.md's Active view), so the caller passes the anchor it
-// actually uses — today — rather than selectedDate.
-function formatAgendaLabel(today: Date): string {
+// formatAgendaLabel is the loaded span, e.g. "Sep 30 – Oct 14, 2026" (#330),
+// growing as the list's window does (#336). `today` stands in for `date`
+// here: Agenda isn't driven by the Selected date (CONTEXT.md's Active
+// view), so the caller passes the anchor it actually uses — today — rather
+// than selectedDate.
+function formatAgendaLabel(today: Date, windowDays: number): string {
   const start = startOfDay(today);
-  const end = addDays(start, AGENDA_WINDOW_DAYS - 1);
+  const end = addDays(start, windowDays - 1);
   if (isSameMonth(start, end)) {
     return `${format(start, "MMM d")} – ${format(end, "d, yyyy")}`;
   }
   return `${format(start, "MMM d")} – ${format(end, "MMM d, yyyy")}`;
 }
 
-export function formatDateLabel(date: Date, view: ActiveView, weekStartsOn: WeekStartsOn): string {
+export function formatDateLabel(
+  date: Date,
+  view: ActiveView,
+  weekStartsOn: WeekStartsOn,
+  agendaWindowDays: number = AGENDA_WINDOW_DAYS,
+): string {
   switch (view) {
     case "day":
       return format(date, "MMMM d, yyyy");
@@ -36,6 +42,6 @@ export function formatDateLabel(date: Date, view: ActiveView, weekStartsOn: Week
     case "week":
       return formatWeekLabel(date, weekStartsOn);
     case "agenda":
-      return formatAgendaLabel(date);
+      return formatAgendaLabel(date, agendaWindowDays);
   }
 }

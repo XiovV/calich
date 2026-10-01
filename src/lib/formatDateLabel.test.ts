@@ -45,4 +45,9 @@ describe("formatDateLabel", () => {
     const result = formatDateLabel(new Date(2026, 9, 1), "agenda", 0);
     expect(result).toBe("Oct 1 – 15, 2026");
   });
+
+  it("grows the agenda-view span to cover a wider loaded window (#336)", () => {
+    const result = formatDateLabel(new Date(2026, 9, 1), "agenda", 0, 29);
+    expect(result).toBe("Oct 1 – 29, 2026");
+  });
 });

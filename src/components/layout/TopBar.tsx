@@ -20,6 +20,7 @@ export function TopBar() {
   const activeView = useShellStore((state) => state.activeView);
   const setSelectedDate = useShellStore((state) => state.setSelectedDate);
   const scrollAgendaToTop = useShellStore((state) => state.scrollAgendaToTop);
+  const agendaWindowDays = useShellStore((state) => state.agendaWindowDays);
   const tasksPanelOpen = useShellStore((state) => state.tasksPanelOpen);
   const setTasksPanelOpen = useShellStore((state) => state.setTasksPanelOpen);
   const weekStartsOn = useWeekStartsOn();
@@ -67,7 +68,7 @@ export function TopBar() {
       )}
 
       <span className="text-heading text-ink">
-        {formatDateLabel(isAgenda ? new Date() : selectedDate, activeView, weekStartsOn)}
+        {formatDateLabel(isAgenda ? new Date() : selectedDate, activeView, weekStartsOn, agendaWindowDays)}
       </span>
 
       <div className="ml-auto flex items-center gap-2">
