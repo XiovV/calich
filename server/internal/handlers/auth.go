@@ -127,7 +127,7 @@ var updateHandleErrors = []errorCase{
 
 var updatePreferencesErrors = []errorCase{
 	{service.ErrInvalidWeekStart, badRequest("week_start must be between 0 and 6")},
-	{service.ErrInvalidDefaultView, badRequest("default_view must be one of day, week, month, year")},
+	{service.ErrInvalidDefaultView, badRequest(service.ErrInvalidDefaultView.Error())},
 	{service.ErrInvalidTimeFormat, badRequest("time_format must be one of 12h, 24h")},
 	{service.ErrInvalidWorkingHours, badRequest("working_hours_start and working_hours_end must both be set (0-1439 minutes since midnight, start < end) or both be null")},
 }
