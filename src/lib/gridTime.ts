@@ -2,6 +2,9 @@ import { addDays, differenceInCalendarDays } from "date-fns";
 
 export const PIXELS_PER_HOUR = 48;
 export const HOURS_IN_DAY = 24;
+// Shared by TimeGrid's current-time line and Agenda's now-line/dimming
+// (#332) so both views refresh `now` on the same cadence.
+export const NOW_REFRESH_INTERVAL_MS = 60_000;
 
 export function timeToY(date: Date, pixelsPerHour: number): number {
   const hours = date.getHours() + date.getMinutes() / 60;

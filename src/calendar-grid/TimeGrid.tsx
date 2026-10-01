@@ -20,6 +20,7 @@ import type { Task } from "../lib/tasksApi";
 import { useTasksStore } from "../lib/tasksStore";
 import { resolveGridDropTime, isPointOverTasksPanel } from "./gridDropTargets";
 import {
+  NOW_REFRESH_INTERVAL_MS,
   PIXELS_PER_HOUR,
   computeMoveToDate,
   computeMovedEventTimes,
@@ -38,8 +39,6 @@ import { ScopePicker } from "./ScopePicker";
 import { TaskDragPreview } from "./TaskDragPreview";
 import { useOccurrenceDragCommit } from "./useOccurrenceDragCommit";
 import { GRID_Z_HEADER } from "./gridStacking";
-
-const NOW_REFRESH_INTERVAL_MS = 60_000;
 
 interface TimeGridProps {
   daysToShow: Date[];

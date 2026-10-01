@@ -188,6 +188,123 @@ describe("buildAgenda", () => {
     const today = dayGroups(items).find((group) => group.isToday);
     expect(today?.eventCount).toBe(2);
   });
+
+  describe("now-line", () => {
+    it("places the now-line before the first row that hasn't started yet (all-upcoming)", () => {
+      const first = makeOccurrence({
+        id: "first",
+        start: new Date(2026, 9, 1, 10, 0),
+        end: new Date(2026, 9, 1, 10, 30),
+      });
+      const second = makeOccurrence({
+        id: "second",
+        start: new Date(2026, 9, 1, 11, 0),
+        end: new Date(2026, 9, 1, 11, 30),
+      });
+      const items = buildAgenda([first, second], CALENDARS, NOW, "HH:mm");
+      const today = dayGroups(items).find((group) => group.isToday);
+      // NOW is 09:00 — both rows start after it, so the line sits before index 0.
+      expect(today?.nowLine).toEqual({ index: 0, label: "09:00" });
+    });
+
+    it("places the now-line at the end of the group once every row has started (all-past)", () => {
+      const past = makeOccurrence({
+        id: "past",
+        start: new Date(2026, 9, 1, 7, 0),
+        end: new Date(2026, 9, 1, 7, 30),
+      });
+      const items = buildAgenda([past], CALENDARS, NOW, "HH:mm");
+      const today = dayGroups(items).find((group) => group.isToday);
+      expect(today?.nowLine).toEqual({ index: 1, label: "09:00" });
+    });
+
+    it("places the now-line between an in-progress row and the ones after it", () => {
+      const inProgress = makeOccurrence({
+        id: "in-progress",
+        start: new Date(2026, 9, 1, 8, 30),
+        end: new Date(2026, 9, 1, 9, 30),
+      });
+      const upcoming = makeOccurrence({
+        id: "upcoming",
+        start: new Date(2026, 9, 1, 11, 0),
+        end: new Date(2026, 9, 1, 11, 30),
+      });
+      const items = buildAgenda([inProgress, upcoming], CALENDARS, NOW, "HH:mm");
+      const today = dayGroups(items).find((group) => group.isToday);
+      expect(today?.rows.map((row) => row.occurrence.event.id)).toEqual(["in-progress", "upcoming"]);
+      expect(today?.nowLine).toEqual({ index: 1, label: "09:00" });
+    });
+
+    it("sits in the empty group when today has nothing scheduled", () => {
+      const items = buildAgenda([], CALENDARS, NOW, "HH:mm");
+      const today = dayGroups(items).find((group) => group.isToday);
+      expect(today?.rows).toEqual([]);
+      expect(today?.nowLine).toEqual({ index: 0, label: "09:00" });
+    });
+
+    it("formats the label using the given time pattern", () => {
+      const items = buildAgenda([], CALENDARS, NOW, "h:mm a");
+      const today = dayGroups(items).find((group) => group.isToday);
+      expect(today?.nowLine?.label).toBe("9:00 AM");
+    });
+
+    it("is null for non-today groups", () => {
+      const occurrence = makeOccurrence({
+        start: new Date(2026, 9, 10, 9, 0),
+        end: new Date(2026, 9, 10, 9, 30),
+      });
+      const items = buildAgenda([occurrence], CALENDARS, NOW, "HH:mm");
+      const futureDay = dayGroups(items).find((group) => !group.isToday && group.rows.length > 0);
+      expect(futureDay?.nowLine).toBeNull();
+    });
+  });
+
+  describe("dimming", () => {
+    it("dims a row whose end has passed", () => {
+      const past = makeOccurrence({
+        id: "past",
+        start: new Date(2026, 9, 1, 7, 0),
+        end: new Date(2026, 9, 1, 7, 30),
+      });
+      const items = buildAgenda([past], CALENDARS, NOW, "HH:mm");
+      const today = dayGroups(items).find((group) => group.isToday);
+      expect(today?.rows[0].dimmed).toBe(true);
+    });
+
+    it("does not dim an in-progress row (started, not yet ended)", () => {
+      const inProgress = makeOccurrence({
+        id: "in-progress",
+        start: new Date(2026, 9, 1, 8, 30),
+        end: new Date(2026, 9, 1, 9, 30),
+      });
+      const items = buildAgenda([inProgress], CALENDARS, NOW, "HH:mm");
+      const today = dayGroups(items).find((group) => group.isToday);
+      expect(today?.rows[0].dimmed).toBe(false);
+    });
+
+    it("does not dim an upcoming row", () => {
+      const upcoming = makeOccurrence({
+        id: "upcoming",
+        start: new Date(2026, 9, 1, 11, 0),
+        end: new Date(2026, 9, 1, 11, 30),
+      });
+      const items = buildAgenda([upcoming], CALENDARS, NOW, "HH:mm");
+      const today = dayGroups(items).find((group) => group.isToday);
+      expect(today?.rows[0].dimmed).toBe(false);
+    });
+
+    it("never dims today's all-day row, however long ago it started", () => {
+      const allDay = makeOccurrence({
+        id: "all-day",
+        allDay: true,
+        start: new Date(2026, 9, 1, 0, 0),
+        end: new Date(2026, 9, 2, 0, 0),
+      });
+      const items = buildAgenda([allDay], CALENDARS, NOW, "HH:mm");
+      const today = dayGroups(items).find((group) => group.isToday);
+      expect(today?.rows[0].dimmed).toBe(false);
+    });
+  });
 });
 
 describe("agendaEventCountLabel", () => {

@@ -21,6 +21,20 @@ export interface AgendaRow {
   calendarName: string;
   location?: string;
   hasConferenceUrl: boolean;
+  // The grid's own dimming rule (#332, EventBlock's `isPast`): the
+  // Occurrence's end has passed. An in-progress row (started, not yet
+  // ended) is therefore not dimmed — that's what marks it current — and an
+  // all-day row is never dimmed, whatever day it's on.
+  dimmed: boolean;
+}
+
+// AgendaNowLine marks where today's amber now-line sits within its group's
+// `rows` (#332): immediately before `index`, or at the end of the group
+// (`index === rows.length`) once every row has started — including the
+// empty-today case, where `index` is always 0.
+export interface AgendaNowLine {
+  index: number;
+  label: string;
 }
 
 export interface AgendaDayGroup {
@@ -29,6 +43,9 @@ export interface AgendaDayGroup {
   isToday: boolean;
   eventCount: number;
   rows: AgendaRow[];
+  // Only set for today's group (#332) — every other group is entirely in
+  // the future, so no now-line ever applies to it.
+  nowLine: AgendaNowLine | null;
 }
 
 export interface AgendaEmptyRun {
@@ -59,7 +76,7 @@ function resolveRowCalendarName(occurrence: Occurrence, calendars: Calendar[]): 
   );
 }
 
-function buildRow(occurrence: Occurrence, calendars: Calendar[], timePattern: string): AgendaRow {
+function buildRow(occurrence: Occurrence, calendars: Calendar[], timePattern: string, now: Date): AgendaRow {
   const allDay = Boolean(occurrence.event.allDay);
   return {
     key: occurrenceKey(occurrence),
@@ -73,6 +90,21 @@ function buildRow(occurrence: Occurrence, calendars: Calendar[], timePattern: st
     calendarName: resolveRowCalendarName(occurrence, calendars),
     location: occurrence.event.location,
     hasConferenceUrl: Boolean(occurrence.event.conferenceUrl),
+    dimmed: !allDay && occurrence.end < now,
+  };
+}
+
+// computeNowLine places today's now-line immediately before the first row
+// that hasn't started yet (start is still ahead of `now`), or at the end of
+// the group once every row has started — `rows` is already in display order
+// (all-day first, so an all-day row's midnight start always counts as
+// started and never traps the line above it), so a plain `findIndex`
+// suffices (#332).
+function computeNowLine(rows: AgendaRow[], now: Date, timePattern: string): AgendaNowLine {
+  const index = rows.findIndex((row) => row.occurrence.start > now);
+  return {
+    index: index === -1 ? rows.length : index,
+    label: format(now, timePattern),
   };
 }
 
@@ -132,15 +164,18 @@ export function buildAgenda(
   const days = Array.from({ length: AGENDA_WINDOW_DAYS }, (_, index) => addDays(today, index));
 
   const dayGroups: AgendaDayGroup[] = days.map((date) => {
+    const isToday = isSameDay(date, today);
     const dayOccurrences = occurrences
       .filter((occurrence) => isSameDay(occurrence.start, date))
       .sort(compareOccurrences);
+    const rows = dayOccurrences.map((occurrence) => buildRow(occurrence, calendars, timePattern, now));
     return {
       kind: "day",
       date,
-      isToday: isSameDay(date, today),
+      isToday,
       eventCount: dayOccurrences.length,
-      rows: dayOccurrences.map((occurrence) => buildRow(occurrence, calendars, timePattern)),
+      rows,
+      nowLine: isToday ? computeNowLine(rows, now, timePattern) : null,
     };
   });
 

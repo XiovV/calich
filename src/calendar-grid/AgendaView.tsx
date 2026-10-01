@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import { addDays, format, startOfDay } from "date-fns";
 import {
   AGENDA_WINDOW_DAYS,
@@ -10,8 +10,10 @@ import { useCalendarsStore } from "../lib/calendarsStore";
 import { useShellStore } from "../lib/shellStore";
 import { useTimePattern } from "../hooks/useTimePattern";
 import { useVisibleOccurrences } from "../hooks/useVisibleOccurrences";
+import { NOW_REFRESH_INTERVAL_MS } from "../lib/gridTime";
 import type { Occurrence } from "../lib/occurrence";
 import { AgendaEventRow } from "./AgendaEventRow";
+import { AgendaNowLineRow } from "./AgendaNowLineRow";
 
 interface AgendaViewProps {
   onOccurrenceClick: (occurrence: Occurrence) => void;
@@ -29,7 +31,14 @@ export function AgendaView({ onOccurrenceClick }: AgendaViewProps) {
   const scrollToTopSignal = useShellStore((state) => state.agendaScrollToTopSignal);
 
   const containerRef = useRef<HTMLDivElement>(null);
-  const now = new Date();
+  // Live now-line/dimming (#332): refreshed on the same interval as the
+  // grid's CurrentTimeLine, so rows cross the line and dim without a reload.
+  const [now, setNow] = useState(() => new Date());
+  useEffect(() => {
+    const interval = setInterval(() => setNow(new Date()), NOW_REFRESH_INTERVAL_MS);
+    return () => clearInterval(interval);
+  }, []);
+
   const windowStart = startOfDay(now);
   const windowEnd = addDays(windowStart, AGENDA_WINDOW_DAYS);
 
@@ -68,17 +77,22 @@ export function AgendaView({ onOccurrenceClick }: AgendaViewProps) {
                 · {agendaEventCountLabel(item.eventCount)}
               </span>
             </div>
-            {item.rows.length === 0 ? (
+            {item.rows.length === 0 && (
               <p className="px-2 py-1.5 text-label-sm text-ink-muted">Nothing scheduled</p>
-            ) : (
+            )}
+            {(item.rows.length > 0 || item.nowLine) && (
               <div className="flex flex-col">
-                {item.rows.map((row) => (
-                  <AgendaEventRow
-                    key={row.key}
-                    row={row}
-                    onClick={() => onOccurrenceClick(row.occurrence)}
-                  />
+                {item.rows.map((row, index) => (
+                  <Fragment key={row.key}>
+                    {item.nowLine?.index === index && (
+                      <AgendaNowLineRow label={item.nowLine.label} />
+                    )}
+                    <AgendaEventRow row={row} onClick={() => onOccurrenceClick(row.occurrence)} />
+                  </Fragment>
                 ))}
+                {item.nowLine?.index === item.rows.length && (
+                  <AgendaNowLineRow label={item.nowLine.label} />
+                )}
               </div>
             )}
           </div>
