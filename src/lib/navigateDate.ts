@@ -16,5 +16,10 @@ export function navigateDate(
       return addMonths(date, amount);
     case "year":
       return addYears(date, amount);
+    // ‹ / › are hidden in Agenda (#330) — it isn't driven by the Selected
+    // date at all — so this is never actually reached from the UI. Handled
+    // only so the switch stays exhaustive over ActiveView.
+    case "agenda":
+      return date;
   }
 }

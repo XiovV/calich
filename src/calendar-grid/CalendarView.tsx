@@ -6,6 +6,7 @@ import type { DraftBlock } from "../lib/gridTime";
 import { TimeGrid } from "./TimeGrid";
 import { MonthGrid } from "./MonthGrid";
 import { YearGrid } from "./YearGrid";
+import { AgendaView } from "./AgendaView";
 
 interface CalendarViewProps {
   onDraftCreated: (day: Date, draft: DraftBlock) => void;
@@ -45,5 +46,7 @@ export function CalendarView({ onDraftCreated, onOccurrenceClick }: CalendarView
       );
     case "year":
       return <YearGrid />;
+    case "agenda":
+      return <AgendaView onOccurrenceClick={onOccurrenceClick} />;
   }
 }

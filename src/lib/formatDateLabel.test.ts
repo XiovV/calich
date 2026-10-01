@@ -34,4 +34,15 @@ describe("formatDateLabel", () => {
     const result = formatDateLabel(new Date(2026, 7, 2), "week", 1);
     expect(result).toBe("Jul 27 – Aug 2, 2026");
   });
+
+  it("formats an agenda-view date as the loaded 15-day span, spanning months", () => {
+    // Sep 30, 2026 plus 14 days lands on Oct 14.
+    const result = formatDateLabel(new Date(2026, 8, 30), "agenda", 0);
+    expect(result).toBe("Sep 30 – Oct 14, 2026");
+  });
+
+  it("formats an agenda-view span that stays within one month", () => {
+    const result = formatDateLabel(new Date(2026, 9, 1), "agenda", 0);
+    expect(result).toBe("Oct 1 – 15, 2026");
+  });
 });

@@ -1,0 +1,173 @@
+import { addDays, format, isSameDay, startOfDay } from "date-fns";
+import { getCalendarById, type Calendar } from "./calendar";
+import { resolveOccurrenceColor } from "./calendarColors";
+import { occurrenceKey, type Occurrence } from "./occurrence";
+
+// Agenda's tracer-bullet window (#330): the list always begins at today and
+// runs for a fixed 15 days (today plus the next 14) — infinite scroll,
+// gaps/overlaps, the now-line, multi-day segments and Tasks are later
+// tickets that extend buildAgenda (#329's Implementation Decisions).
+export const AGENDA_WINDOW_DAYS = 15;
+
+export interface AgendaRow {
+  key: string;
+  occurrence: Occurrence;
+  allDay: boolean;
+  timeLabel: string;
+  title: string;
+  /** The resolved render color: the Event's own override, else its
+   * Calendar's color as resolved for the viewer (ADR-0043, ADR-0038). */
+  color: string;
+  calendarName: string;
+  location?: string;
+  hasConferenceUrl: boolean;
+}
+
+export interface AgendaDayGroup {
+  kind: "day";
+  date: Date;
+  isToday: boolean;
+  eventCount: number;
+  rows: AgendaRow[];
+}
+
+export interface AgendaEmptyRun {
+  kind: "emptyRun";
+  startDate: Date;
+  endDate: Date;
+}
+
+export type AgendaItem = AgendaDayGroup | AgendaEmptyRun;
+
+// resolveRowColor mirrors EventModal's attendeeOnlyCalendarColor fallback
+// (ADR-0046): when the viewer has no calendarsStore entry for this Event's
+// Calendar (visible only as an Attendee), the wire-provided calendarColor
+// stands in so the row still renders its real color instead of the generic
+// unresolved gray.
+function resolveRowColor(occurrence: Occurrence, calendars: Calendar[]): string {
+  const calendar = getCalendarById(calendars, occurrence.event.calendarId);
+  const fallback =
+    calendar ?? (occurrence.event.calendarColor ? { color: occurrence.event.calendarColor } : undefined);
+  return resolveOccurrenceColor(occurrence.event, fallback);
+}
+
+function resolveRowCalendarName(occurrence: Occurrence, calendars: Calendar[]): string {
+  return (
+    getCalendarById(calendars, occurrence.event.calendarId)?.name ??
+    occurrence.event.calendarName ??
+    "Unknown"
+  );
+}
+
+function buildRow(occurrence: Occurrence, calendars: Calendar[], timePattern: string): AgendaRow {
+  const allDay = Boolean(occurrence.event.allDay);
+  return {
+    key: occurrenceKey(occurrence),
+    occurrence,
+    allDay,
+    timeLabel: allDay
+      ? "All day"
+      : `${format(occurrence.start, timePattern)} – ${format(occurrence.end, timePattern)}`,
+    title: occurrence.event.title,
+    color: resolveRowColor(occurrence, calendars),
+    calendarName: resolveRowCalendarName(occurrence, calendars),
+    location: occurrence.event.location,
+    hasConferenceUrl: Boolean(occurrence.event.conferenceUrl),
+  };
+}
+
+// Order within a day group (#330): all-day rows first, then timed rows by
+// start and then end.
+function compareOccurrences(a: Occurrence, b: Occurrence): number {
+  const allDayA = Boolean(a.event.allDay);
+  const allDayB = Boolean(b.event.allDay);
+  if (allDayA !== allDayB) return allDayA ? -1 : 1;
+  if (a.start.getTime() !== b.start.getTime()) return a.start.getTime() - b.start.getTime();
+  return a.end.getTime() - b.end.getTime();
+}
+
+// agendaEventCountLabel is a day group header's pluralized count, e.g.
+// "1 event" / "3 events" (#330).
+export function agendaEventCountLabel(count: number): string {
+  return `${count} ${count === 1 ? "event" : "events"}`;
+}
+
+// agendaSecondLineText is a row's muted second line, minus the video icon
+// (a component concern, driven by AgendaRow.hasConferenceUrl): the Calendar
+// name, plus the Location when one is set (#330).
+export function agendaSecondLineText(row: Pick<AgendaRow, "calendarName" | "location">): string {
+  return row.location ? `${row.calendarName} · ${row.location}` : row.calendarName;
+}
+
+// formatAgendaEmptyRunLabel is a collapsed run of empty days' muted row text,
+// e.g. "Sat, Oct 3 – Mon, Oct 5 · Nothing scheduled", collapsing to a single
+// date when the run is only one day long (#330).
+export function formatAgendaEmptyRunLabel(run: AgendaEmptyRun): string {
+  const start = format(run.startDate, "EEE, MMM d");
+  if (isSameDay(run.startDate, run.endDate)) {
+    return `${start} · Nothing scheduled`;
+  }
+  return `${start} – ${format(run.endDate, "EEE, MMM d")} · Nothing scheduled`;
+}
+
+/**
+ * The Agenda view's single source of rules (#330, ADR per #329): `occurrences`
+ * (already narrowed to what the grid would show — the Active Calendar Set
+ * intersected with checked, per `useVisibleOccurrences`) and `now` in, an
+ * ordered list of day groups and collapsed empty runs out. The React view is
+ * a thin renderer of this list.
+ *
+ * The window is fixed at `AGENDA_WINDOW_DAYS` starting today — this ticket's
+ * tracer-bullet scope has no infinite scroll, so `occurrences` outside that
+ * window (if any slip through) are simply never grouped, since no day in
+ * `days` can match them.
+ */
+export function buildAgenda(
+  occurrences: Occurrence[],
+  calendars: Calendar[],
+  now: Date,
+  timePattern: string,
+): AgendaItem[] {
+  const today = startOfDay(now);
+  const days = Array.from({ length: AGENDA_WINDOW_DAYS }, (_, index) => addDays(today, index));
+
+  const dayGroups: AgendaDayGroup[] = days.map((date) => {
+    const dayOccurrences = occurrences
+      .filter((occurrence) => isSameDay(occurrence.start, date))
+      .sort(compareOccurrences);
+    return {
+      kind: "day",
+      date,
+      isToday: isSameDay(date, today),
+      eventCount: dayOccurrences.length,
+      rows: dayOccurrences.map((occurrence) => buildRow(occurrence, calendars, timePattern)),
+    };
+  });
+
+  const items: AgendaItem[] = [];
+  let runStart: Date | null = null;
+  let runEnd: Date | null = null;
+
+  function flushRun() {
+    if (runStart && runEnd) {
+      items.push({ kind: "emptyRun", startDate: runStart, endDate: runEnd });
+    }
+    runStart = null;
+    runEnd = null;
+  }
+
+  for (const group of dayGroups) {
+    // Today is always its own group, even when empty (#330) — it never
+    // folds into a collapsed run.
+    if (!group.isToday && group.rows.length === 0) {
+      if (!runStart) runStart = group.date;
+      runEnd = group.date;
+      continue;
+    }
+    flushRun();
+    items.push(group);
+  }
+  flushRun();
+
+  return items;
+}

@@ -41,4 +41,9 @@ describe("navigateDate", () => {
     const result = navigateDate(new Date(2026, 7, 2), "year", "prev");
     expect(result).toEqual(new Date(2025, 7, 2));
   });
+
+  it("leaves the date unchanged in agenda view (‹ / › are hidden there)", () => {
+    const result = navigateDate(new Date(2026, 7, 2), "agenda", "next");
+    expect(result).toEqual(new Date(2026, 7, 2));
+  });
 });

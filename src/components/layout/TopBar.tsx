@@ -19,12 +19,16 @@ export function TopBar() {
   const selectedDate = useShellStore((state) => state.selectedDate);
   const activeView = useShellStore((state) => state.activeView);
   const setSelectedDate = useShellStore((state) => state.setSelectedDate);
+  const scrollAgendaToTop = useShellStore((state) => state.scrollAgendaToTop);
   const tasksPanelOpen = useShellStore((state) => state.tasksPanelOpen);
   const setTasksPanelOpen = useShellStore((state) => state.setTasksPanelOpen);
   const weekStartsOn = useWeekStartsOn();
   const version = useVersion();
+  const isAgenda = activeView === "agenda";
 
-  const goToToday = () => setSelectedDate(new Date());
+  // Agenda isn't driven by the Selected date (CONTEXT.md's Active view), so
+  // Today scrolls its list to the top instead of moving selectedDate (#330).
+  const goToToday = () => (isAgenda ? scrollAgendaToTop() : setSelectedDate(new Date()));
   const goToPrevious = () =>
     setSelectedDate(navigateDate(selectedDate, activeView, "prev"));
   const goToNext = () =>
@@ -51,17 +55,19 @@ export function TopBar() {
         Today
       </Button>
 
-      <div className="flex items-center gap-1">
-        <IconButton onClick={goToPrevious} aria-label="Previous period">
-          <ChevronLeft className="size-5" />
-        </IconButton>
-        <IconButton onClick={goToNext} aria-label="Next period">
-          <ChevronRight className="size-5" />
-        </IconButton>
-      </div>
+      {!isAgenda && (
+        <div className="flex items-center gap-1">
+          <IconButton onClick={goToPrevious} aria-label="Previous period">
+            <ChevronLeft className="size-5" />
+          </IconButton>
+          <IconButton onClick={goToNext} aria-label="Next period">
+            <ChevronRight className="size-5" />
+          </IconButton>
+        </div>
+      )}
 
       <span className="text-heading text-ink">
-        {formatDateLabel(selectedDate, activeView, weekStartsOn)}
+        {formatDateLabel(isAgenda ? new Date() : selectedDate, activeView, weekStartsOn)}
       </span>
 
       <div className="ml-auto flex items-center gap-2">

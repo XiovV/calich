@@ -3,7 +3,7 @@ import { useCalendarsStore } from "./calendarsStore";
 import { useTaskListsStore } from "./taskListsStore";
 import { reconcileCheckedIds } from "./reconcileCheckedIds";
 
-export type ActiveView = "day" | "week" | "month" | "year";
+export type ActiveView = "day" | "week" | "month" | "year" | "agenda";
 
 // TasksPanelAxis is the Tasks panel's "Group by" choice (#316, ADR-0083):
 // which heading the panel currently arranges its Tasks under. Named around
@@ -60,8 +60,14 @@ interface ShellState {
   // cleared once AppShell has resolved it into an opened EventModal — a
   // one-shot request, not an ongoing "which event is open" record.
   requestedEventId: string | null;
+  // agendaScrollToTopSignal is Agenda's Today button (#330): incremented
+  // rather than tracked as a boolean so a second press while already
+  // scrolled to the top still fires AgendaView's effect — selectedDate
+  // plays no part since Agenda doesn't key off it.
+  agendaScrollToTopSignal: number;
   requestEventOpen: (eventId: string) => void;
   clearRequestedEventOpen: () => void;
+  scrollAgendaToTop: () => void;
   setSelectedDate: (date: Date) => void;
   setActiveView: (view: ActiveView) => void;
   setActiveCalendarSetId: (id: number | null) => void;
@@ -118,8 +124,11 @@ export const useShellStore = create<ShellState>((set) => ({
   showCompletedTasks: false,
   showTasksOnCalendar: true,
   requestedEventId: null,
+  agendaScrollToTopSignal: 0,
   requestEventOpen: (eventId) => set({ requestedEventId: eventId }),
   clearRequestedEventOpen: () => set({ requestedEventId: null }),
+  scrollAgendaToTop: () =>
+    set((state) => ({ agendaScrollToTopSignal: state.agendaScrollToTopSignal + 1 })),
   setSelectedDate: (date) => set({ selectedDate: date }),
   setActiveView: (view) => set({ activeView: view }),
   setActiveCalendarSetId: (id) => set({ activeCalendarSetId: id }),
