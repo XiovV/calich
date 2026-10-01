@@ -26,6 +26,10 @@ export interface AgendaRow {
   // ended) is therefore not dimmed — that's what marks it current — and an
   // all-day row is never dimmed, whatever day it's on.
   dimmed: boolean;
+  // #333: this row starts before the latest end among the earlier timed
+  // rows of its day. States a fact about the list, not a scheduling
+  // conflict — Busy plays no part, and an all-day row is never flagged.
+  overlaps: boolean;
 }
 
 // AgendaNowLine marks where today's amber now-line sits within its group's
@@ -76,7 +80,13 @@ function resolveRowCalendarName(occurrence: Occurrence, calendars: Calendar[]): 
   );
 }
 
-function buildRow(occurrence: Occurrence, calendars: Calendar[], timePattern: string, now: Date): AgendaRow {
+function buildRow(
+  occurrence: Occurrence,
+  calendars: Calendar[],
+  timePattern: string,
+  now: Date,
+  overlaps: boolean,
+): AgendaRow {
   const allDay = Boolean(occurrence.event.allDay);
   return {
     key: occurrenceKey(occurrence),
@@ -91,7 +101,26 @@ function buildRow(occurrence: Occurrence, calendars: Calendar[], timePattern: st
     location: occurrence.event.location,
     hasConferenceUrl: Boolean(occurrence.event.conferenceUrl),
     dimmed: !allDay && occurrence.end < now,
+    overlaps,
   };
+}
+
+// computeOverlapFlags flags a timed row when it starts before the latest end
+// among the earlier timed rows of its day (#333) — the running latest end,
+// not simply the row directly above, so a three-row cluster measures against
+// whichever earlier row reaches furthest. All-day rows never count toward an
+// overlap and are never themselves flagged. Busy plays no part: this states
+// a fact about list order ("this starts before the one above has ended"),
+// not a scheduling conflict. `occurrences` must already be in display order
+// (compareOccurrences), so index-aligned with the rows built from it.
+function computeOverlapFlags(occurrences: Occurrence[]): boolean[] {
+  let latestEnd: Date | null = null;
+  return occurrences.map((occurrence) => {
+    if (occurrence.event.allDay) return false;
+    const overlaps = latestEnd !== null && occurrence.start < latestEnd;
+    if (latestEnd === null || occurrence.end > latestEnd) latestEnd = occurrence.end;
+    return overlaps;
+  });
 }
 
 // computeNowLine places today's now-line immediately before the first row
@@ -168,7 +197,10 @@ export function buildAgenda(
     const dayOccurrences = occurrences
       .filter((occurrence) => isSameDay(occurrence.start, date))
       .sort(compareOccurrences);
-    const rows = dayOccurrences.map((occurrence) => buildRow(occurrence, calendars, timePattern, now));
+    const overlapFlags = computeOverlapFlags(dayOccurrences);
+    const rows = dayOccurrences.map((occurrence, index) =>
+      buildRow(occurrence, calendars, timePattern, now, overlapFlags[index]),
+    );
     return {
       kind: "day",
       date,

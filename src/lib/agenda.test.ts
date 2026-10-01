@@ -305,6 +305,112 @@ describe("buildAgenda", () => {
       expect(today?.rows[0].dimmed).toBe(false);
     });
   });
+
+  describe("overlaps (#333)", () => {
+    it("flags the second of two overlapping rows, not the first", () => {
+      const first = makeOccurrence({
+        id: "first",
+        start: new Date(2026, 9, 1, 10, 0),
+        end: new Date(2026, 9, 1, 11, 0),
+      });
+      const second = makeOccurrence({
+        id: "second",
+        start: new Date(2026, 9, 1, 10, 30),
+        end: new Date(2026, 9, 1, 11, 30),
+      });
+      const items = buildAgenda([first, second], CALENDARS, NOW, "HH:mm");
+      const today = dayGroups(items).find((group) => group.isToday);
+      const byId = Object.fromEntries(today!.rows.map((row) => [row.occurrence.event.id, row]));
+      expect(byId.first.overlaps).toBe(false);
+      expect(byId.second.overlaps).toBe(true);
+    });
+
+    it("measures a three-row cluster against the latest end so far, not the row directly above", () => {
+      // "wide" runs 10:00-12:00. "narrow" runs 10:30-10:45, nested entirely
+      // inside "wide". "after" starts at 11:30 — before "wide"'s end (12:00)
+      // but after "narrow"'s end (10:45), so it must be measured against the
+      // latest end so far (wide's), not the row directly above it (narrow's).
+      const wide = makeOccurrence({
+        id: "wide",
+        start: new Date(2026, 9, 1, 10, 0),
+        end: new Date(2026, 9, 1, 12, 0),
+      });
+      const narrow = makeOccurrence({
+        id: "narrow",
+        start: new Date(2026, 9, 1, 10, 30),
+        end: new Date(2026, 9, 1, 10, 45),
+      });
+      const after = makeOccurrence({
+        id: "after",
+        start: new Date(2026, 9, 1, 11, 30),
+        end: new Date(2026, 9, 1, 12, 30),
+      });
+      const items = buildAgenda([wide, narrow, after], CALENDARS, NOW, "HH:mm");
+      const today = dayGroups(items).find((group) => group.isToday);
+      expect(today?.rows.map((row) => row.occurrence.event.id)).toEqual(["wide", "narrow", "after"]);
+      const byId = Object.fromEntries(today!.rows.map((row) => [row.occurrence.event.id, row]));
+      expect(byId.wide.overlaps).toBe(false);
+      expect(byId.narrow.overlaps).toBe(true);
+      expect(byId.after.overlaps).toBe(true);
+    });
+
+    it("does not flag back-to-back rows whose start equals the previous end", () => {
+      const first = makeOccurrence({
+        id: "first",
+        start: new Date(2026, 9, 1, 10, 0),
+        end: new Date(2026, 9, 1, 11, 0),
+      });
+      const second = makeOccurrence({
+        id: "second",
+        start: new Date(2026, 9, 1, 11, 0),
+        end: new Date(2026, 9, 1, 12, 0),
+      });
+      const items = buildAgenda([first, second], CALENDARS, NOW, "HH:mm");
+      const today = dayGroups(items).find((group) => group.isToday);
+      const byId = Object.fromEntries(today!.rows.map((row) => [row.occurrence.event.id, row]));
+      expect(byId.first.overlaps).toBe(false);
+      expect(byId.second.overlaps).toBe(false);
+    });
+
+    it("flags a Free Event overlapping another row — Busy plays no part", () => {
+      const busy = makeOccurrence({
+        id: "busy",
+        start: new Date(2026, 9, 1, 10, 0),
+        end: new Date(2026, 9, 1, 11, 0),
+      });
+      const free = makeOccurrence({
+        id: "free",
+        busy: false,
+        start: new Date(2026, 9, 1, 10, 30),
+        end: new Date(2026, 9, 1, 11, 30),
+      });
+      const items = buildAgenda([busy, free], CALENDARS, NOW, "HH:mm");
+      const today = dayGroups(items).find((group) => group.isToday);
+      const byId = Object.fromEntries(today!.rows.map((row) => [row.occurrence.event.id, row]));
+      expect(byId.free.overlaps).toBe(true);
+    });
+
+    it("never flags an all-day row, and all-day rows never count toward an overlap", () => {
+      const allDay = makeOccurrence({
+        id: "all-day",
+        allDay: true,
+        start: new Date(2026, 9, 1, 0, 0),
+        end: new Date(2026, 9, 2, 0, 0),
+      });
+      const timed = makeOccurrence({
+        id: "timed",
+        start: new Date(2026, 9, 1, 10, 0),
+        end: new Date(2026, 9, 1, 11, 0),
+      });
+      const items = buildAgenda([allDay, timed], CALENDARS, NOW, "HH:mm");
+      const today = dayGroups(items).find((group) => group.isToday);
+      const byId = Object.fromEntries(today!.rows.map((row) => [row.occurrence.event.id, row]));
+      expect(byId["all-day"].overlaps).toBe(false);
+      // "timed" is the first timed row of the day — nothing timed precedes
+      // it, so it is unflagged regardless of the all-day row sitting above it.
+      expect(byId.timed.overlaps).toBe(false);
+    });
+  });
 });
 
 describe("agendaEventCountLabel", () => {

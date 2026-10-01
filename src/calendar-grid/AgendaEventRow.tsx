@@ -25,7 +25,14 @@ export function AgendaEventRow({ row, onClick }: AgendaEventRowProps) {
         />
         <span className="min-w-0 flex-1">
           <span className="block text-label-sm text-ink-muted">{row.timeLabel}</span>
-          <span className="block truncate text-body text-ink">{row.title}</span>
+          <span className="flex min-w-0 items-center gap-1.5">
+            <span className="truncate text-body text-ink">{row.title}</span>
+            {row.overlaps && (
+              <span className="shrink-0 rounded-full bg-warning/10 px-1.5 py-0.5 text-label-sm text-warning">
+                Overlaps
+              </span>
+            )}
+          </span>
           <span className="flex items-center gap-1 truncate text-label-sm text-ink-muted">
             {row.hasConferenceUrl && <Video className="size-3 shrink-0" />}
             {agendaSecondLineText(row)}
