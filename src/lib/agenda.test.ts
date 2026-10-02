@@ -4,23 +4,32 @@ import {
   AGENDA_WINDOW_DAYS,
   agendaDayLabelPrefix,
   agendaEventCountLabel,
+  agendaHeaderLabel,
   agendaSearchLimit,
   agendaSecondLineText,
+  agendaTaskCountLabel,
   buildAgenda,
   findAgendaItemForDate,
   formatAgendaEmptyRunLabel,
   formatAgendaEndOfListLabel,
   type AgendaDayGroup,
   type AgendaItem,
+  type AgendaTaskInput,
 } from "./agenda";
 import type { Calendar } from "./calendar";
 import type { Event } from "./event";
+import { viewerZone } from "./floatingTime";
 import type { Occurrence } from "./occurrence";
+import type { TaskList } from "./taskListsApi";
+import type { Task } from "./tasksApi";
 
 const NOW = new Date(2026, 9, 1, 9, 0); // Thu, Oct 1, 2026, 09:00
 
 const WORK_CALENDAR: Calendar = { id: "cal-work", name: "Work", color: "#3F51B5FF" };
 const CALENDARS = [WORK_CALENDAR];
+
+const CHORES_TASK_LIST: TaskList = { id: 1, name: "Chores", color: "#16A34AFF", isDefault: true };
+const TASK_LISTS = [CHORES_TASK_LIST];
 
 function makeEvent(overrides: Partial<Event> = {}): Event {
   return {
@@ -36,6 +45,39 @@ function makeEvent(overrides: Partial<Event> = {}): Event {
 function makeOccurrence(overrides: Partial<Event> = {}): Occurrence {
   const event = makeEvent(overrides);
   return { event, start: event.start, end: event.end };
+}
+
+function makeTask(overrides: Partial<Task> = {}): Task {
+  return {
+    id: 1,
+    taskListId: CHORES_TASK_LIST.id,
+    title: "Water the plants",
+    notes: "",
+    due: null,
+    start: null,
+    durationMinutes: null,
+    priority: 0,
+    completed: false,
+    createdAt: new Date(2026, 0, 1),
+    ...overrides,
+  };
+}
+
+// taskInput is buildAgenda's taskInput argument, defaulting every field a
+// given test doesn't care about — gridTasks/deadlineTasks empty, this
+// suite's one Task List, and `viewerZone()` (the machine's own zone) rather
+// than a fixed one, so a Task fixture's `due`/`start` — plain local
+// `new Date(y, m, d, h, mi)` construction, the same as every Occurrence
+// fixture above — lands on the calendar day its local fields already read,
+// whatever zone the suite happens to run in.
+function taskInput(overrides: Partial<AgendaTaskInput> = {}): AgendaTaskInput {
+  return {
+    gridTasks: [],
+    deadlineTasks: [],
+    taskLists: TASK_LISTS,
+    viewerZone: viewerZone(),
+    ...overrides,
+  };
 }
 
 function dayGroups(items: ReturnType<typeof buildAgenda>): AgendaDayGroup[] {
@@ -129,7 +171,7 @@ describe("buildAgenda", () => {
     });
     const items = buildAgenda([timed, allDay], CALENDARS, NOW, "HH:mm");
     const today = dayGroups(items).find((group) => group.isToday);
-    expect(today?.rows.map((row) => row.occurrence.event.id)).toEqual(["all-day", "timed"]);
+    expect(today?.rows.map((row) => row.occurrence!.event.id)).toEqual(["all-day", "timed"]);
   });
 
   it("orders timed rows by start then end", () => {
@@ -150,7 +192,7 @@ describe("buildAgenda", () => {
     });
     const items = buildAgenda([later, longer, shorter], CALENDARS, NOW, "HH:mm");
     const today = dayGroups(items).find((group) => group.isToday);
-    expect(today?.rows.map((row) => row.occurrence.event.id)).toEqual(["shorter", "longer", "later"]);
+    expect(today?.rows.map((row) => row.occurrence!.event.id)).toEqual(["shorter", "longer", "later"]);
   });
 
   it("labels an all-day row 'All day' and a timed row with its formatted range", () => {
@@ -162,7 +204,7 @@ describe("buildAgenda", () => {
     });
     const items = buildAgenda([allDay, timed], CALENDARS, NOW, "HH:mm");
     const today = dayGroups(items).find((group) => group.isToday);
-    const byId = Object.fromEntries(today!.rows.map((row) => [row.occurrence.event.id, row]));
+    const byId = Object.fromEntries(today!.rows.map((row) => [row.occurrence!.event.id, row]));
     expect(byId["all-day"].timeLabel).toBe("All day");
     expect(byId["timed"].timeLabel).toBe("14:00 – 14:30");
   });
@@ -202,7 +244,7 @@ describe("buildAgenda", () => {
     const without = makeOccurrence({ id: "without" });
     const items = buildAgenda([withConference, without], CALENDARS, NOW, "HH:mm");
     const today = dayGroups(items).find((group) => group.isToday);
-    const byId = Object.fromEntries(today!.rows.map((row) => [row.occurrence.event.id, row]));
+    const byId = Object.fromEntries(today!.rows.map((row) => [row.occurrence!.event.id, row]));
     expect(byId.with.hasConferenceUrl).toBe(true);
     expect(byId.without.hasConferenceUrl).toBe(false);
   });
@@ -256,7 +298,7 @@ describe("buildAgenda", () => {
       });
       const items = buildAgenda([inProgress, upcoming], CALENDARS, NOW, "HH:mm");
       const today = dayGroups(items).find((group) => group.isToday);
-      expect(today?.rows.map((row) => row.occurrence.event.id)).toEqual(["in-progress", "upcoming"]);
+      expect(today?.rows.map((row) => row.occurrence!.event.id)).toEqual(["in-progress", "upcoming"]);
       expect(today?.nowLine).toEqual({ index: 1, label: "09:00" });
     });
 
@@ -345,7 +387,7 @@ describe("buildAgenda", () => {
       });
       const items = buildAgenda([first, second], CALENDARS, NOW, "HH:mm");
       const today = dayGroups(items).find((group) => group.isToday);
-      const byId = Object.fromEntries(today!.rows.map((row) => [row.occurrence.event.id, row]));
+      const byId = Object.fromEntries(today!.rows.map((row) => [row.occurrence!.event.id, row]));
       expect(byId.first.overlaps).toBe(false);
       expect(byId.second.overlaps).toBe(true);
     });
@@ -372,8 +414,8 @@ describe("buildAgenda", () => {
       });
       const items = buildAgenda([wide, narrow, after], CALENDARS, NOW, "HH:mm");
       const today = dayGroups(items).find((group) => group.isToday);
-      expect(today?.rows.map((row) => row.occurrence.event.id)).toEqual(["wide", "narrow", "after"]);
-      const byId = Object.fromEntries(today!.rows.map((row) => [row.occurrence.event.id, row]));
+      expect(today?.rows.map((row) => row.occurrence!.event.id)).toEqual(["wide", "narrow", "after"]);
+      const byId = Object.fromEntries(today!.rows.map((row) => [row.occurrence!.event.id, row]));
       expect(byId.wide.overlaps).toBe(false);
       expect(byId.narrow.overlaps).toBe(true);
       expect(byId.after.overlaps).toBe(true);
@@ -392,7 +434,7 @@ describe("buildAgenda", () => {
       });
       const items = buildAgenda([first, second], CALENDARS, NOW, "HH:mm");
       const today = dayGroups(items).find((group) => group.isToday);
-      const byId = Object.fromEntries(today!.rows.map((row) => [row.occurrence.event.id, row]));
+      const byId = Object.fromEntries(today!.rows.map((row) => [row.occurrence!.event.id, row]));
       expect(byId.first.overlaps).toBe(false);
       expect(byId.second.overlaps).toBe(false);
     });
@@ -411,7 +453,7 @@ describe("buildAgenda", () => {
       });
       const items = buildAgenda([busy, free], CALENDARS, NOW, "HH:mm");
       const today = dayGroups(items).find((group) => group.isToday);
-      const byId = Object.fromEntries(today!.rows.map((row) => [row.occurrence.event.id, row]));
+      const byId = Object.fromEntries(today!.rows.map((row) => [row.occurrence!.event.id, row]));
       expect(byId.free.overlaps).toBe(true);
     });
 
@@ -429,7 +471,7 @@ describe("buildAgenda", () => {
       });
       const items = buildAgenda([allDay, timed], CALENDARS, NOW, "HH:mm");
       const today = dayGroups(items).find((group) => group.isToday);
-      const byId = Object.fromEntries(today!.rows.map((row) => [row.occurrence.event.id, row]));
+      const byId = Object.fromEntries(today!.rows.map((row) => [row.occurrence!.event.id, row]));
       expect(byId["all-day"].overlaps).toBe(false);
       // "timed" is the first timed row of the day — nothing timed precedes
       // it, so it is unflagged regardless of the all-day row sitting above it.
@@ -457,7 +499,7 @@ describe("buildAgenda", () => {
       // nothing to do with "now".
       const items = buildAgenda([first, second], CALENDARS, NOW, "HH:mm");
       const today = dayGroups(items).find((group) => group.isToday);
-      const byId = Object.fromEntries(today!.rows.map((row, index) => [row.occurrence.event.id, index]));
+      const byId = Object.fromEntries(today!.rows.map((row, index) => [row.occurrence!.event.id, index]));
       expect(gapLabels(today)).toEqual(["1h free"]);
       expect(today?.gaps[0].beforeIndex).toBe(byId.second);
     });
@@ -674,7 +716,7 @@ describe("buildAgenda", () => {
       });
       const items = buildAgenda([conference, allDayEvent], CALENDARS, NOW, "HH:mm");
       const day2 = findDay(items, new Date(2026, 9, 2));
-      expect(day2?.rows.map((row) => row.occurrence.event.id)).toEqual(["all-day", "conference"]);
+      expect(day2?.rows.map((row) => row.occurrence!.event.id)).toEqual(["all-day", "conference"]);
       expect(day2?.rows[1].timeLabel).toBe("All day");
       expect(day2?.rows[1].allDay).toBe(false);
     });
@@ -720,7 +762,7 @@ describe("buildAgenda", () => {
       const day3 = findDay(items, new Date(2026, 9, 3));
 
       expect(day3?.gaps).toEqual([]);
-      const byId = Object.fromEntries(day3!.rows.map((row) => [row.occurrence.event.id, row]));
+      const byId = Object.fromEntries(day3!.rows.map((row) => [row.occurrence!.event.id, row]));
       expect(byId.conference.overlaps).toBe(false);
       expect(byId.meeting.overlaps).toBe(true);
     });
@@ -746,6 +788,317 @@ describe("buildAgenda", () => {
       expect(findDay(stillRunning, new Date(2026, 9, 2))?.rows[0].dimmed).toBe(false);
 
       const ended = buildAgenda([overnight], CALENDARS, new Date(2026, 9, 2, 3, 0), "HH:mm");
+      expect(findDay(ended, new Date(2026, 9, 2))?.rows[0].dimmed).toBe(true);
+    });
+  });
+
+  describe("Tasks (#337)", () => {
+    it("renders a Time-blocked Task as a timed row in its Task List's color", () => {
+      const task = makeTask({
+        title: "Water the plants",
+        start: new Date(2026, 9, 1, 10, 0),
+        durationMinutes: 30,
+      });
+      const items = buildAgenda(
+        [],
+        CALENDARS,
+        NOW,
+        "HH:mm",
+        AGENDA_WINDOW_DAYS,
+        taskInput({ gridTasks: [task] }),
+      );
+      const today = dayGroups(items).find((group) => group.isToday);
+      expect(today?.rows).toHaveLength(1);
+      const row = today!.rows[0];
+      expect(row.kind).toBe("task");
+      expect(row.task).toBe(task);
+      expect(row.occurrence).toBeNull();
+      expect(row.allDay).toBe(false);
+      expect(row.timeLabel).toBe("10:00 – 10:30");
+      expect(row.title).toBe("Water the plants");
+      expect(row.color).toBe(CHORES_TASK_LIST.color);
+      expect(row.calendarName).toBe(CHORES_TASK_LIST.name);
+      expect(row.completed).toBe(false);
+    });
+
+    it("counts a Time-blocked Task toward the day's task count, not its event count", () => {
+      const task = makeTask({ start: new Date(2026, 9, 1, 10, 0), durationMinutes: 30 });
+      const items = buildAgenda(
+        [],
+        CALENDARS,
+        NOW,
+        "HH:mm",
+        AGENDA_WINDOW_DAYS,
+        taskInput({ gridTasks: [task] }),
+      );
+      const today = dayGroups(items).find((group) => group.isToday);
+      expect(today?.eventCount).toBe(0);
+      expect(today?.taskCount).toBe(1);
+    });
+
+    it("orders a Deadline-only Task's 'Due' row after every all-day Occurrence, ahead of timed rows", () => {
+      const allDayEvent = makeOccurrence({
+        id: "trip",
+        allDay: true,
+        start: new Date(2026, 9, 1, 0, 0),
+        end: new Date(2026, 9, 2, 0, 0),
+      });
+      const timed = makeOccurrence({
+        id: "standup",
+        start: new Date(2026, 9, 1, 10, 0),
+        end: new Date(2026, 9, 1, 10, 30),
+      });
+      const task = makeTask({ title: "File taxes", due: new Date(2026, 9, 1, 17, 0) });
+      const items = buildAgenda(
+        [allDayEvent, timed],
+        CALENDARS,
+        NOW,
+        "HH:mm",
+        AGENDA_WINDOW_DAYS,
+        taskInput({ deadlineTasks: [task] }),
+      );
+      const today = dayGroups(items).find((group) => group.isToday);
+      expect(today?.rows.map((row) => ({ kind: row.kind, allDay: row.allDay, timeLabel: row.timeLabel }))).toEqual([
+        { kind: "occurrence", allDay: true, timeLabel: "All day" },
+        { kind: "task", allDay: true, timeLabel: "Due" },
+        { kind: "occurrence", allDay: false, timeLabel: "10:00 – 10:30" },
+      ]);
+    });
+
+    it("counts a Deadline-only Task toward the day's task count, not its event count", () => {
+      const task = makeTask({ due: new Date(2026, 9, 1, 17, 0) });
+      const items = buildAgenda(
+        [],
+        CALENDARS,
+        NOW,
+        "HH:mm",
+        AGENDA_WINDOW_DAYS,
+        taskInput({ deadlineTasks: [task] }),
+      );
+      const today = dayGroups(items).find((group) => group.isToday);
+      expect(today?.eventCount).toBe(0);
+      expect(today?.taskCount).toBe(1);
+    });
+
+    it("keeps a day with only a Task from folding into an empty run", () => {
+      const task = makeTask({ due: new Date(2026, 9, 5, 0, 0) });
+      const items = buildAgenda(
+        [],
+        CALENDARS,
+        NOW,
+        "HH:mm",
+        AGENDA_WINDOW_DAYS,
+        taskInput({ deadlineTasks: [task] }),
+      );
+      const day5 = findDay(items, new Date(2026, 9, 5));
+      expect(day5).toBeDefined();
+      expect(day5?.rows).toHaveLength(1);
+      expect(day5?.rows[0].kind).toBe("task");
+    });
+
+    it("renders no Task rows when no taskInput is given", () => {
+      const items = buildAgenda([], CALENDARS, NOW, "HH:mm");
+      const today = dayGroups(items).find((group) => group.isToday);
+      expect(today?.rows).toEqual([]);
+      expect(today?.taskCount).toBe(0);
+    });
+
+    it("excludes a completed Time-blocked Task's row from bounding a Gap", () => {
+      const completedTask = makeTask({
+        start: new Date(2026, 9, 1, 10, 0),
+        durationMinutes: 30, // 10:00-10:30, completed
+        completed: true,
+      });
+      const next = makeOccurrence({
+        id: "next",
+        start: new Date(2026, 9, 1, 11, 0),
+        end: new Date(2026, 9, 1, 11, 30),
+      });
+      const items = buildAgenda(
+        [next],
+        CALENDARS,
+        NOW,
+        "HH:mm",
+        AGENDA_WINDOW_DAYS,
+        taskInput({ gridTasks: [completedTask] }),
+      );
+      const today = dayGroups(items).find((group) => group.isToday);
+      // Had the completed Task's row bounded a Gap the way an incomplete one
+      // does, a "30m free" Gap would run from its 10:30 end to "next"'s 11:00
+      // start — instead "next" is the day's first *boundable* row, so no Gap
+      // precedes it at all.
+      expect(today?.gaps).toEqual([]);
+    });
+
+    it("excludes a completed Time-blocked Task's row from counting toward an Overlap", () => {
+      const completedTask = makeTask({
+        start: new Date(2026, 9, 1, 10, 0),
+        durationMinutes: 60, // 10:00-11:00, completed
+        completed: true,
+      });
+      const next = makeOccurrence({
+        id: "next",
+        start: new Date(2026, 9, 1, 10, 30), // starts inside the completed Task's span
+        end: new Date(2026, 9, 1, 11, 0),
+      });
+      const items = buildAgenda(
+        [next],
+        CALENDARS,
+        NOW,
+        "HH:mm",
+        AGENDA_WINDOW_DAYS,
+        taskInput({ gridTasks: [completedTask] }),
+      );
+      const today = dayGroups(items).find((group) => group.isToday);
+      const eventRow = today!.rows.find((row) => row.kind === "occurrence")!;
+      expect(eventRow.overlaps).toBe(false);
+    });
+
+    it("shows a completed Time-blocked Task's row in the list, struck through via `completed`", () => {
+      const completedTask = makeTask({
+        start: new Date(2026, 9, 1, 10, 0),
+        durationMinutes: 30,
+        completed: true,
+      });
+      const items = buildAgenda(
+        [],
+        CALENDARS,
+        NOW,
+        "HH:mm",
+        AGENDA_WINDOW_DAYS,
+        taskInput({ gridTasks: [completedTask] }),
+      );
+      const today = dayGroups(items).find((group) => group.isToday);
+      expect(today?.rows).toHaveLength(1);
+      expect(today?.rows[0].completed).toBe(true);
+    });
+
+    it("has an incomplete Time-blocked Task's row bound a Gap, same as a timed Occurrence", () => {
+      const task = makeTask({ start: new Date(2026, 9, 1, 10, 0), durationMinutes: 30 });
+      const next = makeOccurrence({
+        id: "next",
+        start: new Date(2026, 9, 1, 11, 0),
+        end: new Date(2026, 9, 1, 11, 30),
+      });
+      const items = buildAgenda(
+        [next],
+        CALENDARS,
+        NOW,
+        "HH:mm",
+        AGENDA_WINDOW_DAYS,
+        taskInput({ gridTasks: [task] }),
+      );
+      const today = dayGroups(items).find((group) => group.isToday);
+      expect(today?.gaps.map((gap) => gap.label)).toEqual(["30m free"]);
+    });
+
+    it("has an incomplete Time-blocked Task's row count toward an Overlap, same as a timed Occurrence", () => {
+      const task = makeTask({ start: new Date(2026, 9, 1, 10, 0), durationMinutes: 60 }); // 10:00-11:00
+      const later = makeOccurrence({
+        id: "later",
+        start: new Date(2026, 9, 1, 10, 30),
+        end: new Date(2026, 9, 1, 11, 30),
+      });
+      const items = buildAgenda(
+        [later],
+        CALENDARS,
+        NOW,
+        "HH:mm",
+        AGENDA_WINDOW_DAYS,
+        taskInput({ gridTasks: [task] }),
+      );
+      const today = dayGroups(items).find((group) => group.isToday);
+      const taskRow = today!.rows.find((row) => row.kind === "task")!;
+      const eventRow = today!.rows.find((row) => row.kind === "occurrence")!;
+      expect(taskRow.overlaps).toBe(false); // the day's first boundable row
+      expect(eventRow.overlaps).toBe(true); // starts before the Task's own end
+    });
+
+    it("flags a Time-blocked Task's own row when it starts before an earlier row's end", () => {
+      const earlier = makeOccurrence({
+        id: "earlier",
+        start: new Date(2026, 9, 1, 10, 0),
+        end: new Date(2026, 9, 1, 11, 0),
+      });
+      const task = makeTask({ start: new Date(2026, 9, 1, 10, 30), durationMinutes: 30 });
+      const items = buildAgenda(
+        [earlier],
+        CALENDARS,
+        NOW,
+        "HH:mm",
+        AGENDA_WINDOW_DAYS,
+        taskInput({ gridTasks: [task] }),
+      );
+      const today = dayGroups(items).find((group) => group.isToday);
+      const taskRow = today!.rows.find((row) => row.kind === "task")!;
+      expect(taskRow.overlaps).toBe(true);
+    });
+
+    it("splits a two-day overnight Time-blocked Task: full range on day 1, 'Until' on day 2", () => {
+      const overnightTask = makeTask({
+        start: new Date(2026, 9, 1, 22, 0), // today, 22:00
+        durationMinutes: 4 * 60, // ends tomorrow, 02:00
+      });
+      const items = buildAgenda(
+        [],
+        CALENDARS,
+        NOW,
+        "HH:mm",
+        AGENDA_WINDOW_DAYS,
+        taskInput({ gridTasks: [overnightTask] }),
+      );
+      const day1 = findDay(items, new Date(2026, 9, 1));
+      const day2 = findDay(items, new Date(2026, 9, 2));
+
+      expect(day1?.rows).toHaveLength(1);
+      expect(day1?.rows[0].timeLabel).toBe("22:00 – 02:00");
+      expect(day1?.rows[0].dayLabel).toBe("Day 1 of 2");
+
+      expect(day2?.rows).toHaveLength(1);
+      expect(day2?.rows[0].timeLabel).toBe("Until 02:00");
+      expect(day2?.rows[0].dayLabel).toBe("Day 2 of 2");
+    });
+
+    it("never dims an overnight Time-blocked Task's first-day row while today, no matter how late", () => {
+      const overnightTask = makeTask({
+        start: new Date(2026, 9, 1, 22, 0),
+        durationMinutes: 4 * 60, // ends tomorrow, 02:00
+      });
+      const items = buildAgenda(
+        [],
+        CALENDARS,
+        new Date(2026, 9, 1, 23, 30), // today, 23:30 — past midnight is still ahead
+        "HH:mm",
+        AGENDA_WINDOW_DAYS,
+        taskInput({ gridTasks: [overnightTask] }),
+      );
+      const day1 = findDay(items, new Date(2026, 9, 1));
+      expect(day1?.rows[0].dimmed).toBe(false);
+    });
+
+    it("dims an overnight Time-blocked Task's last-day row only once its true end has passed", () => {
+      const overnightTask = makeTask({
+        start: new Date(2026, 9, 1, 22, 0),
+        durationMinutes: 4 * 60, // ends tomorrow, 02:00
+      });
+      const stillRunning = buildAgenda(
+        [],
+        CALENDARS,
+        new Date(2026, 9, 2, 1, 0), // 02:00's true end hasn't passed yet
+        "HH:mm",
+        AGENDA_WINDOW_DAYS,
+        taskInput({ gridTasks: [overnightTask] }),
+      );
+      expect(findDay(stillRunning, new Date(2026, 9, 2))?.rows[0].dimmed).toBe(false);
+
+      const ended = buildAgenda(
+        [],
+        CALENDARS,
+        new Date(2026, 9, 2, 3, 0),
+        "HH:mm",
+        AGENDA_WINDOW_DAYS,
+        taskInput({ gridTasks: [overnightTask] }),
+      );
       expect(findDay(ended, new Date(2026, 9, 2))?.rows[0].dimmed).toBe(true);
     });
   });
@@ -855,6 +1208,32 @@ describe("agendaEventCountLabel", () => {
     expect(agendaEventCountLabel(0)).toBe("0 events");
     expect(agendaEventCountLabel(1)).toBe("1 event");
     expect(agendaEventCountLabel(2)).toBe("2 events");
+  });
+});
+
+describe("agendaTaskCountLabel (#337)", () => {
+  it("pluralizes correctly", () => {
+    expect(agendaTaskCountLabel(0)).toBe("0 tasks");
+    expect(agendaTaskCountLabel(1)).toBe("1 task");
+    expect(agendaTaskCountLabel(2)).toBe("2 tasks");
+  });
+});
+
+describe("agendaHeaderLabel (#337)", () => {
+  it("joins both counts when both are nonzero", () => {
+    expect(agendaHeaderLabel(2, 1)).toBe("2 events · 1 task");
+  });
+
+  it("omits the Task part when there are no Tasks", () => {
+    expect(agendaHeaderLabel(2, 0)).toBe("2 events");
+  });
+
+  it("omits the Event part when there are no Events", () => {
+    expect(agendaHeaderLabel(0, 1)).toBe("1 task");
+  });
+
+  it("falls back to '0 events' when both counts are zero", () => {
+    expect(agendaHeaderLabel(0, 0)).toBe("0 events");
   });
 });
 

@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useRef, useState } from "react";
 import { format, startOfDay } from "date-fns";
 import {
-  agendaEventCountLabel,
+  agendaHeaderLabel,
   agendaSearchLimit,
   buildAgenda,
   findAgendaItemForDate,
@@ -10,17 +10,23 @@ import {
   type AgendaItem,
 } from "../lib/agenda";
 import { useCalendarsStore } from "../lib/calendarsStore";
+import { viewerZone } from "../lib/floatingTime";
 import { useShellStore } from "../lib/shellStore";
 import { useTimePattern } from "../hooks/useTimePattern";
 import { useVisibleOccurrences } from "../hooks/useVisibleOccurrences";
 import { NOW_REFRESH_INTERVAL_MS } from "../lib/gridTime";
 import type { Occurrence } from "../lib/occurrence";
+import { useTaskListsStore } from "../lib/taskListsStore";
+import { visibleCalendarTasks } from "../lib/taskScheduling";
+import type { Task } from "../lib/tasksApi";
+import { useTasksStore } from "../lib/tasksStore";
 import { AgendaEventRow } from "./AgendaEventRow";
 import { AgendaGapRow } from "./AgendaGapRow";
 import { AgendaNowLineRow } from "./AgendaNowLineRow";
 
 interface AgendaViewProps {
   onOccurrenceClick: (occurrence: Occurrence) => void;
+  onTaskClick: (task: Task) => void;
 }
 
 // How far below the viewport the sentinel still counts as "near the
@@ -45,7 +51,7 @@ function agendaItemKey(item: AgendaItem): string {
  * grouping, ordering, labelling and loading lives there; this component
  * only decides when to ask for more and where to scroll.
  */
-export function AgendaView({ onOccurrenceClick }: AgendaViewProps) {
+export function AgendaView({ onOccurrenceClick, onTaskClick }: AgendaViewProps) {
   const calendars = useCalendarsStore((state) => state.calendars);
   const timePattern = useTimePattern();
   const scrollToTopSignal = useShellStore((state) => state.agendaScrollToTopSignal);
@@ -53,6 +59,11 @@ export function AgendaView({ onOccurrenceClick }: AgendaViewProps) {
   const growAgendaWindow = useShellStore((state) => state.growAgendaWindow);
   const scrollTargetDate = useShellStore((state) => state.agendaScrollTargetDate);
   const scrollTargetSignal = useShellStore((state) => state.agendaScrollTargetSignal);
+  const taskLists = useTaskListsStore((state) => state.taskLists);
+  const tasks = useTasksStore((state) => state.tasks);
+  const completedTasks = useTasksStore((state) => state.completedTasks);
+  const showTasksOnCalendar = useShellStore((state) => state.showTasksOnCalendar);
+  const showCompletedTasks = useShellStore((state) => state.showCompletedTasks);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const sentinelRef = useRef<HTMLDivElement>(null);
@@ -73,7 +84,22 @@ export function AgendaView({ onOccurrenceClick }: AgendaViewProps) {
   const searchLimit = agendaSearchLimit(now, windowDays);
 
   const visibleOccurrences = useVisibleOccurrences(windowStart.getTime(), searchLimit.getTime());
-  const items = buildAgenda(visibleOccurrences, calendars, now, timePattern, windowDays);
+  // Task visibility (#312/#313, ADR-0083), shared with Day/Week and Month
+  // via `visibleCalendarTasks` (#338) rather than computed separately here
+  // — Agenda then does its own per-day narrowing inside buildAgenda, the
+  // same as it already does for `visibleOccurrences`.
+  const { gridTasks, deadlineTasks } = visibleCalendarTasks(
+    tasks,
+    completedTasks,
+    showTasksOnCalendar,
+    showCompletedTasks,
+  );
+  const items = buildAgenda(visibleOccurrences, calendars, now, timePattern, windowDays, {
+    gridTasks,
+    deadlineTasks,
+    taskLists,
+    viewerZone: viewerZone(),
+  });
   const ended = items[items.length - 1]?.kind === "endOfList";
   // Read fresh inside the IntersectionObserver callback below, which is set
   // up once and outlives any single render (#336) — a plain state/prop
@@ -157,7 +183,7 @@ export function AgendaView({ onOccurrenceClick }: AgendaViewProps) {
                 <span className="font-medium text-ink">{format(item.date, "EEE, MMM d")}</span>
               )}
               <span className="text-label-sm text-ink-muted">
-                · {agendaEventCountLabel(item.eventCount)}
+                · {agendaHeaderLabel(item.eventCount, item.taskCount)}
               </span>
             </div>
             {item.rows.length === 0 && (
@@ -173,7 +199,14 @@ export function AgendaView({ onOccurrenceClick }: AgendaViewProps) {
                         <AgendaNowLineRow label={item.nowLine.label} />
                       )}
                       {gap && <AgendaGapRow label={gap.label} />}
-                      <AgendaEventRow row={row} onClick={() => onOccurrenceClick(row.occurrence)} />
+                      <AgendaEventRow
+                        row={row}
+                        onClick={() =>
+                          row.kind === "task" && row.task
+                            ? onTaskClick(row.task)
+                            : row.occurrence && onOccurrenceClick(row.occurrence)
+                        }
+                      />
                     </Fragment>
                   );
                 })}
