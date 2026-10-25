@@ -142,3 +142,25 @@ func TestPropfind_CurrentUserPrivilegeSet_LinkedCalendarViewerShareIsReadOnly(t 
 		t.Fatalf("expected a Linked Calendar's Viewer Share privilege set to still grant read, got:\n%s", body)
 	}
 }
+
+// The principal advertises the caller's own Email as a mailto: address in
+// calendar-user-address-set (RFC 6638), the address the codec writes into
+// ORGANIZER, so a native client recognises its own meetings.
+func TestPropfind_CalendarUserAddressSet_PrincipalAdvertisesOwnEmail(t *testing.T) {
+	env := newTestCalDAVEnv(t)
+
+	body := `<?xml version="1.0" encoding="UTF-8"?>
+<d:propfind xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav">
+  <d:prop><c:calendar-user-address-set/></d:prop>
+</d:propfind>`
+	resp := propfind(t, env.srv, principalPath(env.userID), "admin@example.com", env.appPasswordSecret, "0", body)
+	defer resp.Body.Close()
+
+	got := readBody(t, resp)
+	if !strings.Contains(got, "<href xmlns=\"DAV:\">mailto:admin@example.com</href>") {
+		t.Fatalf("expected calendar-user-address-set to carry mailto:admin@example.com, got:\n%s", got)
+	}
+	if !strings.Contains(got, "200 OK") {
+		t.Fatalf("expected the calendar-user-address-set propstat to be 200 OK, got:\n%s", got)
+	}
+}

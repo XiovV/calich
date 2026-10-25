@@ -11,6 +11,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"html"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -32,6 +33,27 @@ var propfindPatches = []propfindPatch{
 	{trigger: "managed-attachments-server-URL", apply: applyManagedAttachmentsURLPatch},
 	{trigger: "max-attachment-size", apply: applyMaxAttachmentSizePatch},
 	{trigger: "max-attachments-per-resource", apply: applyMaxAttachmentsPerResourcePatch},
+	{trigger: "calendar-user-address-set", apply: applyCalendarUserAddressSetPatch},
+}
+
+// applyCalendarUserAddressSetPatch advertises RFC 6638's
+// calendar-user-address-set on the caller's own principal — their Email as a
+// mailto: address, plus the principal's own href — which go-webdav never
+// emits. It is how a native client recognises itself in the ORGANIZER the
+// codec writes (ADR-0062): without it, macOS Calendar shows the caller's own
+// meeting as organised by a stranger.
+func applyCalendarUserAddressSetPatch(ctx context.Context, h *dispatchHandler, userID int64, body []byte) []byte {
+	target := principalPath(userID)
+	return injectPropertyTreeRawOrUnchanged(ctx, body, "calendar-user-address-set", caldavNamespace, func(ctx context.Context, href string) (string, bool) {
+		if href != target {
+			return "", false
+		}
+		email, err := h.backend.calendars.UserEmail(ctx, userID)
+		if err != nil {
+			return "", false
+		}
+		return fmt.Sprintf(`<href xmlns=%q>mailto:%s</href><href xmlns=%q>%s</href>`, davNamespace, html.EscapeString(email), davNamespace, target), true
+	})
 }
 
 // calendarColorNamespace is the Apple/DAVx⁵ calendar-color extension's

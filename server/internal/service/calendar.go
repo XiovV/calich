@@ -1322,3 +1322,13 @@ func (s *CalendarService) EnsureDefaults(ctx context.Context, userID, workspaceI
 
 	return nil
 }
+
+// UserEmail returns userID's Email, the address the CalDAV principal
+// advertises in calendar-user-address-set.
+func (s *CalendarService) UserEmail(ctx context.Context, userID int64) (string, error) {
+	user, err := s.users.GetByID(ctx, userID)
+	if err != nil {
+		return "", err
+	}
+	return user.Email, nil
+}
