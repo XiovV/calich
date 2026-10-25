@@ -36,8 +36,6 @@ const preview: SubscriptionPreview = {
   name: "Holidays",
   color: "#8E44ADFF",
   eventCount: 3,
-  rangeStart: null,
-  rangeEnd: null,
 };
 
 beforeEach(() => {
