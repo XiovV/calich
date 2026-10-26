@@ -133,7 +133,7 @@ type eventResponse struct {
 	End        string `json:"end"`
 	// AllDay flags this Event as occupying whole dates rather than a time
 	// range — see ADR-0017 and CONTEXT.md's All-day Event.
-	AllDay bool   `json:"allDay,omitempty"`
+	AllDay bool `json:"allDay,omitempty"`
 	// Busy is iCalendar's own TRANSP (ADR-0086): whether this Event consumes
 	// the time it occupies. No omitempty — Free (false) is a meaningful,
 	// common value on an all-day Event, and omitting it would be
@@ -362,12 +362,12 @@ func parseOptionalTimeParam(w http.ResponseWriter, r *http.Request, name string)
 // so their format can branch on AllDay (ADR-0017) — parseEventTimes turns them
 // into instants once the body has decoded.
 type createEventRequest struct {
-	ID           string     `json:"id"`
-	CalendarID   string     `json:"calendarId"`
-	Title        string     `json:"title"`
-	Start        string     `json:"start"`
-	End          string     `json:"end"`
-	AllDay       bool       `json:"allDay,omitempty"`
+	ID         string `json:"id"`
+	CalendarID string `json:"calendarId"`
+	Title      string `json:"title"`
+	Start      string `json:"start"`
+	End        string `json:"end"`
+	AllDay     bool   `json:"allDay,omitempty"`
 	// Busy mirrors eventResponse.Busy (ADR-0086) — the frontend always sends
 	// it explicitly, deciding the create-time default (Busy for a timed
 	// Event, Free for an all-day one) itself. A pointer so a caller that
@@ -498,11 +498,11 @@ func (h *EventHandler) Get(w http.ResponseWriter, r *http.Request) {
 // updateEventRequest is the PATCH /api/events/{id} body. Start and End are
 // strings for the same reason as createEventRequest's (ADR-0017).
 type updateEventRequest struct {
-	CalendarID  string  `json:"calendarId"`
-	Title       string  `json:"title"`
-	Start       string  `json:"start"`
-	End         string  `json:"end"`
-	AllDay      bool    `json:"allDay,omitempty"`
+	CalendarID string `json:"calendarId"`
+	Title      string `json:"title"`
+	Start      string `json:"start"`
+	End        string `json:"end"`
+	AllDay     bool   `json:"allDay,omitempty"`
 	// Busy mirrors createEventRequest.Busy (ADR-0086).
 	Busy        *bool   `json:"busy,omitempty"`
 	Rrule       string  `json:"rrule"`

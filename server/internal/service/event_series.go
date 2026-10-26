@@ -314,12 +314,12 @@ type SeriesWrite struct {
 	// all-day-defaults-Free departure applies only to a brand-new Event this
 	// app itself creates, never to one whose own transparency a source
 	// already stated.
-	Busy                              bool
-	Tzid                              *string
-	Rrule                             string
-	Reminders                         []repository.Reminder
-	Exdates                           []time.Time
-	Overrides                         []OverrideWrite
+	Busy      bool
+	Tzid      *string
+	Rrule     string
+	Reminders []repository.Reminder
+	Exdates   []time.Time
+	Overrides []OverrideWrite
 	// Color mirrors EventWrite.Color — the Master's own color override, nil
 	// meaning "inherit the Calendar's color" (ADR-0043).
 	Color *string
@@ -372,9 +372,9 @@ type OverrideWrite struct {
 	AllDay                            bool
 	// Busy mirrors SeriesWrite.Busy, scoped to this Override alone (ADR-0086)
 	// — settable independently of its Master's, like Color.
-	Busy                              bool
-	Tzid                              *string
-	Reminders                         []repository.Reminder
+	Busy      bool
+	Tzid      *string
+	Reminders []repository.Reminder
 	// ExternalUID mirrors SeriesWrite.ExternalUID — an Override shares its
 	// Master's foreign UID (#83, ADR-0033).
 	ExternalUID string
