@@ -504,10 +504,10 @@ func (s *EventService) withTxChecked(ctx context.Context, preCheck func(ctx cont
 // ParentID and RecurrenceID anchor an Override to the Occurrence it replaces
 // and are fixed when it is created: Create reads them, Update ignores them.
 type EventWrite struct {
-	CalendarID   string
-	Title        string
-	Start, End   time.Time
-	AllDay       bool
+	CalendarID string
+	Title      string
+	Start, End time.Time
+	AllDay     bool
 	// Busy mirrors repository.Event.Busy — iCalendar's own TRANSP (ADR-0086).
 	// A newly created timed Event is Busy, an all-day one Free; the caller
 	// (the frontend's Event modal, or a decoded import/CalDAV/Google write)

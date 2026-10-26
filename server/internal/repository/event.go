@@ -185,10 +185,10 @@ func (r *EventRepository) WithTx(tx *sql.Tx) *EventRepository {
 // They are set on insert only: Update leaves those columns alone, since an
 // Override's anchoring never moves (ADR-0016).
 type EventFields struct {
-	CalendarID   string
-	Title        string
-	Start, End   time.Time
-	AllDay       bool
+	CalendarID string
+	Title      string
+	Start, End time.Time
+	AllDay     bool
 	// Busy mirrors Event.Busy — iCalendar's own TRANSP (ADR-0086).
 	Busy         bool
 	Rrule        string

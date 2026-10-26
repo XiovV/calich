@@ -32,9 +32,9 @@ type ParsedEvent struct {
 	// VEVENT carrying no TRANSP at all, honoured verbatim rather than
 	// re-derived from AllDay. An imported or CalDAV-written all-day Event
 	// marked OPAQUE stays Busy.
-	Busy                              bool
-	Tzid                              *string
-	Reminders                         []repository.Reminder
+	Busy      bool
+	Tzid      *string
+	Reminders []repository.Reminder
 	// Color is the exact hex this VEVENT's COLOR keyword decodes to, nil if
 	// it carries none (ADR-0043) — lossless in this direction, since a CSS3
 	// keyword has an exact defined RGB.

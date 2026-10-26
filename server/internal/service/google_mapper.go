@@ -56,7 +56,7 @@ type googleEvent struct {
 	// ColorID is Google's own per-event colour id ("1".."11"), empty when the
 	// event carries no colour. Mapped to a hex inbound (#289, ADR-0075) and
 	// shadow-tracked; never sent back.
-	ColorID           string
+	ColorID string
 	// Transparency is Google's own free/busy field ("opaque" or
 	// "transparent", empty meaning Google's own default of "opaque") — the
 	// Provider's counterpart to iCalendar's TRANSP (ADR-0086).

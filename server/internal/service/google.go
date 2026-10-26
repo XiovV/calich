@@ -550,13 +550,13 @@ func (c *googleClient) eventsURLFor(calendarID string) string {
 // off Google's response before toGoogleEvent narrows it to what
 // google_mapper.go actually consumes.
 type googleEventJSON struct {
-	ID                string                    `json:"id"`
-	ETag              string                    `json:"etag"`
-	Status            string                    `json:"status"`
-	Summary           string                    `json:"summary"`
-	Description       string                    `json:"description"`
-	Location          string                    `json:"location"`
-	ColorID           string                    `json:"colorId"`
+	ID          string `json:"id"`
+	ETag        string `json:"etag"`
+	Status      string `json:"status"`
+	Summary     string `json:"summary"`
+	Description string `json:"description"`
+	Location    string `json:"location"`
+	ColorID     string `json:"colorId"`
 	// Transparency is Google's own free/busy field (ADR-0086) — "opaque",
 	// "transparent", or empty (Google's own default, "opaque").
 	Transparency      string                    `json:"transparency"`
@@ -760,7 +760,7 @@ type googleEventPatchBody struct {
 	// explicitly ("opaque" or "transparent") — no omitempty, since "opaque"
 	// (Busy) is the common case and must never be confused with "leave
 	// whatever's there alone".
-	Transparency string                      `json:"transparency"`
+	Transparency string `json:"transparency"`
 	// Source is deliberately not ",omitempty": a nil pointer must marshal to
 	// an explicit "source":null, the PATCH request that clears Event URL at
 	// Google, rather than an absent key, which Google reads as "leave
