@@ -65,8 +65,8 @@ var (
 	// outside the date-fns weekStartsOn range (ADR-0039).
 	ErrInvalidWeekStart = errors.New("week_start must be between 0 and 6")
 	// ErrInvalidDefaultView is returned by UpdatePreferences for a Default
-	// view outside day/week/month/year (ADR-0039).
-	ErrInvalidDefaultView = errors.New("default_view must be one of day, week, month, year")
+	// view outside day/week/month/year/agenda (ADR-0039).
+	ErrInvalidDefaultView = errors.New("default_view must be one of day, week, month, year, agenda")
 	// ErrInvalidTimeFormat is returned by UpdatePreferences for a Time format
 	// other than 12h/24h (ADR-0039).
 	ErrInvalidTimeFormat = errors.New("time_format must be one of 12h, 24h")
@@ -98,10 +98,11 @@ var (
 
 // validDefaultViews are the Active views a Default view may seed (ADR-0039).
 var validDefaultViews = map[string]bool{
-	"day":   true,
-	"week":  true,
-	"month": true,
-	"year":  true,
+	"day":    true,
+	"week":   true,
+	"month":  true,
+	"year":   true,
+	"agenda": true,
 }
 
 // validTimeFormats are the Time format values a Preference may take (ADR-0039).

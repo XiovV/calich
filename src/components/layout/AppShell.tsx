@@ -4,6 +4,7 @@ import { Outlet } from "react-router";
 import { TopBar } from "./TopBar";
 import { Sidebar } from "./Sidebar";
 import { TasksPanel } from "./TasksPanel";
+import { TaskDetailModal } from "./TaskDetailModal";
 import { CalendarView } from "../../calendar-grid/CalendarView";
 import { EventModal } from "../../calendar-grid/EventModal";
 import { computeDefaultDraft, type DraftBlock } from "../../lib/gridTime";
@@ -13,6 +14,7 @@ import {
   refetchTaskListsAndReconcile,
   useShellStore,
 } from "../../lib/shellStore";
+import type { Task } from "../../lib/tasksApi";
 import { useTasksStore } from "../../lib/tasksStore";
 import { useWorkspacesStore } from "../../lib/workspacesStore";
 import { occurrenceKey, type Occurrence } from "../../lib/occurrence";
@@ -24,11 +26,26 @@ type EventModalState =
 
 export function AppShell() {
   const [eventModalState, setEventModalState] = useState<EventModalState>(null);
+  // Agenda's own Task detail opening (#337): holds the id rather than the
+  // Task object itself, re-deriving `openTask` below on every render, so an
+  // edit made inside TaskDetailModal (which replaces the Task in the store)
+  // is reflected back into the same lookup — the same freshness TasksPanel's
+  // own `openTask` gets, though that one re-derives from a held Task object
+  // rather than a bare id.
+  const [selectedTaskId, setSelectedTaskId] = useState<number | null>(null);
   const fetchEvents = useEventsStore((state) => state.fetchEvents);
   const fetchWorkspaces = useWorkspacesStore((state) => state.fetchWorkspaces);
   const activeWorkspaceId = useWorkspacesStore((state) => state.activeWorkspaceId);
   const tasksPanelOpen = useShellStore((state) => state.tasksPanelOpen);
   const fetchTasks = useTasksStore((state) => state.fetchTasks);
+  const tasks = useTasksStore((state) => state.tasks);
+  const completedTasks = useTasksStore((state) => state.completedTasks);
+  const openTask =
+    selectedTaskId !== null
+      ? (tasks.find((task) => task.id === selectedTaskId) ??
+        completedTasks.find((task) => task.id === selectedTaskId) ??
+        null)
+      : null;
 
   useEffect(() => {
     fetchWorkspaces();
@@ -114,6 +131,7 @@ export function AppShell() {
             onOccurrenceClick={(occurrence) =>
               setEventModalState({ mode: "edit", occurrence })
             }
+            onTaskClick={(task: Task) => setSelectedTaskId(task.id)}
           />
         </main>
         {tasksPanelOpen && (
@@ -138,6 +156,9 @@ export function AppShell() {
           occurrence={eventModalState.occurrence}
           onClose={() => setEventModalState(null)}
         />
+      )}
+      {openTask && (
+        <TaskDetailModal key={openTask.id} task={openTask} onClose={() => setSelectedTaskId(null)} />
       )}
       <Outlet />
     </div>

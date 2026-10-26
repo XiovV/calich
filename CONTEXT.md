@@ -5,7 +5,7 @@ Domain vocabulary for the calendar app — navigation chrome, view state, and th
 ## Language
 
 **Active view**:
-The granularity at which the calendar is currently displayed — Day, Week, Month, or Year. Drives the main content grid (later) and the top bar's date label format. Starts each Session at the User's Default view.
+The granularity at which the calendar is currently displayed — Day, Week, Month, Year, or Agenda. Drives the main content grid (later) and the top bar's date label format. Starts each Session at the User's Default view. Agenda is the one Active view the Selected date does not drive: it always begins at today, because it answers "what do I have on now" rather than "what is on the date I'm looking at".
 _Avoid_: mode, display mode
 
 **Selected date**:
@@ -120,6 +120,10 @@ _Avoid_: month thumbnail, small calendar
 **Event-presence dot**:
 The marker on a Mini-month day indicating it has at least one visible Event. A density hint only — it carries no Calendar color and no count.
 _Avoid_: event indicator, badge
+
+**Gap**:
+A stretch of one day in the Agenda view that neither a timed Occurrence nor an incomplete Task's Time block covers, shown as a muted row between the rows either side of it — or, on today, between now and the next one. Means "nothing scheduled here", not "available": every timed Occurrence bounds one whatever its Busy value, so a Free Event's row never sits inside a Gap claiming to be empty. A completed Task's Time block still shows but bounds nothing, that time no longer being committed — the same reason it leaves the Conflict set alone. Overlapping Occurrences merge, so a Gap runs from the latest end so far rather than from the row above it. All-day Occurrences never bound one, and none is drawn before a day's first Occurrence or after its last — that would need a day boundary, and Working hours deliberately carries no availability meaning to supply one. Too-short ones are not shown. Computed at render, never stored.
+_Avoid_: free time (collides with Busy's Free, which is a different question), free slot, slot (that is a Booking Link's), availability
 
 **Anchor zone**:
 The IANA timezone an Event's wall-clock is defined in, stored as the `tzid` on the Event (the `TZID` a CalDAV client sends). Drives Recurrence rule expansion and DST — "every Mon 10:00 Europe/Berlin" fires at 10:00 Berlin wall-clock across a DST change. Belongs to the Event and is preserved when the Event is edited; only an explicit zone choice changes it. `Etc/UTC` means an absolute instant; absent means a Floating Event. See ADR-0019.

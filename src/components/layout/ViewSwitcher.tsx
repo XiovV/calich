@@ -6,6 +6,7 @@ const VIEW_OPTIONS: { value: ActiveView; label: string }[] = [
   { value: "week", label: "Week" },
   { value: "month", label: "Month" },
   { value: "year", label: "Year" },
+  { value: "agenda", label: "Agenda" },
 ];
 
 export function ViewSwitcher() {

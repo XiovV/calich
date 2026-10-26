@@ -1377,6 +1377,24 @@ func TestUpdatePreferences_SetsDefaultView(t *testing.T) {
 	}
 }
 
+func TestUpdatePreferences_SetsDefaultViewToAgenda(t *testing.T) {
+	svc := newTestAuthService(t, "admin", "admin")
+	ctx := context.Background()
+	user, _, err := svc.Bootstrap(ctx)
+	if err != nil {
+		t.Fatalf("bootstrap: %v", err)
+	}
+
+	defaultView := "agenda"
+	updated, err := svc.UpdatePreferences(ctx, user.ID, PreferencesUpdate{DefaultView: &defaultView})
+	if err != nil {
+		t.Fatalf("update preferences: %v", err)
+	}
+	if updated.DefaultView != "agenda" {
+		t.Fatalf("expected default_view \"agenda\" to be stored, got %q", updated.DefaultView)
+	}
+}
+
 func TestUpdatePreferences_RejectsInvalidDefaultView(t *testing.T) {
 	svc := newTestAuthService(t, "admin", "admin")
 	ctx := context.Background()

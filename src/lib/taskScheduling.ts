@@ -107,6 +107,48 @@ function instantFallsOnDay(instant: Date, day: Date, viewerZone: string): boolea
 }
 
 /**
+ * `visibleCalendarTasks`'s result: the two placement-filtered pools a grid
+ * draws from, each still spanning every day the grid knows about — a caller
+ * narrows to one day itself (`taskDeadlineFallsOnDay`/`taskFallsOnMonthDay`),
+ * since that windowing differs per grid and isn't part of the visibility
+ * rule.
+ */
+export interface VisibleCalendarTasks<T> {
+  /** Time-blocked Tasks (`taskPlacement` = `"grid"`) — hourly-grid-bound. */
+  gridTasks: T[];
+  /** Deadline-only Tasks (`taskPlacement` = `"allDay"`) — all-day-lane-bound. */
+  deadlineTasks: T[];
+}
+
+/**
+ * The Task visibility rule the Day/Week and Month grids both draw from
+ * (#312/#313/#315, ADR-0083; shared out in #338 so Agenda can reuse it
+ * rather than growing a third copy): "Show tasks on calendar" gates the
+ * whole feature outright, and only a Deadline-only Task additionally checks
+ * "Show completed" — a Time-blocked one is shown whether or not it's
+ * complete regardless of that switch, because completing one must never
+ * make it vanish from under the cursor. Returns both pools unfiltered by
+ * day; a grid narrows to a specific day itself.
+ */
+export function visibleCalendarTasks<T extends PlaceableTask>(
+  tasks: T[],
+  completedTasks: T[],
+  showTasksOnCalendar: boolean,
+  showCompletedTasks: boolean,
+): VisibleCalendarTasks<T> {
+  if (!showTasksOnCalendar) return { gridTasks: [], deadlineTasks: [] };
+
+  const gridTasks = [...tasks, ...completedTasks].filter(
+    (task) => taskPlacement(task) === "grid",
+  );
+  const deadlineTasks = [...tasks, ...(showCompletedTasks ? completedTasks : [])].filter(
+    (task) => taskPlacement(task) === "allDay",
+  );
+
+  return { gridTasks, deadlineTasks };
+}
+
+/**
  * Whether `task` should render on `day` in Month view (#315, ADR-0083):
  * placement precedence's Time-block-first, Deadline-second rule, collapsed
  * to a single day test since Month draws both surfaces as one chip rather

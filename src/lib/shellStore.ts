@@ -1,9 +1,11 @@
+import { differenceInCalendarDays, startOfDay } from "date-fns";
 import { create } from "zustand";
+import { AGENDA_LOAD_CHUNK_DAYS, AGENDA_WINDOW_DAYS } from "./agenda";
 import { useCalendarsStore } from "./calendarsStore";
 import { useTaskListsStore } from "./taskListsStore";
 import { reconcileCheckedIds } from "./reconcileCheckedIds";
 
-export type ActiveView = "day" | "week" | "month" | "year";
+export type ActiveView = "day" | "week" | "month" | "year" | "agenda";
 
 // TasksPanelAxis is the Tasks panel's "Group by" choice (#316, ADR-0083):
 // which heading the panel currently arranges its Tasks under. Named around
@@ -60,8 +62,35 @@ interface ShellState {
   // cleared once AppShell has resolved it into an opened EventModal — a
   // one-shot request, not an ongoing "which event is open" record.
   requestedEventId: string | null;
+  // agendaScrollToTopSignal is Agenda's Today button (#330): incremented
+  // rather than tracked as a boolean so a second press while already
+  // scrolled to the top still fires AgendaView's effect — selectedDate
+  // plays no part since Agenda doesn't key off it.
+  agendaScrollToTopSignal: number;
+  // agendaWindowDays is Agenda's loaded window size, as a day-count from
+  // today (#336) — AGENDA_WINDOW_DAYS to start, growing by
+  // AGENDA_LOAD_CHUNK_DAYS each time the list's bottom is reached, or
+  // jumping ahead to cover a mini-calendar date clicked at or after today.
+  // A day-count rather than an absolute Date so the window keeps the same
+  // shape as "today" rolls forward across a session left open overnight.
+  agendaWindowDays: number;
+  // agendaScrollTargetDate/agendaScrollTargetSignal are AgendaView's "scroll
+  // to this date" request (#336) — the counterpart to
+  // agendaScrollToTopSignal above, set by a mini-calendar click at or after
+  // today. AgendaView's effect keys off the signal rather than the date, so
+  // clicking the same date twice in a row still re-fires it.
+  agendaScrollTargetDate: Date | null;
+  agendaScrollTargetSignal: number;
   requestEventOpen: (eventId: string) => void;
   clearRequestedEventOpen: () => void;
+  scrollAgendaToTop: () => void;
+  // growAgendaWindow extends the loaded window by one chunk (#336) — called
+  // when Agenda's list scrolls near its bottom.
+  growAgendaWindow: () => void;
+  // requestAgendaScrollToDate both grows the window enough to cover `date`
+  // (if it doesn't already) and fires the scroll-target signal (#336) — the
+  // mini-calendar's "jump to this day" action.
+  requestAgendaScrollToDate: (date: Date) => void;
   setSelectedDate: (date: Date) => void;
   setActiveView: (view: ActiveView) => void;
   setActiveCalendarSetId: (id: number | null) => void;
@@ -118,8 +147,25 @@ export const useShellStore = create<ShellState>((set) => ({
   showCompletedTasks: false,
   showTasksOnCalendar: true,
   requestedEventId: null,
+  agendaScrollToTopSignal: 0,
+  agendaWindowDays: AGENDA_WINDOW_DAYS,
+  agendaScrollTargetDate: null,
+  agendaScrollTargetSignal: 0,
   requestEventOpen: (eventId) => set({ requestedEventId: eventId }),
   clearRequestedEventOpen: () => set({ requestedEventId: null }),
+  scrollAgendaToTop: () =>
+    set((state) => ({ agendaScrollToTopSignal: state.agendaScrollToTopSignal + 1 })),
+  growAgendaWindow: () =>
+    set((state) => ({ agendaWindowDays: state.agendaWindowDays + AGENDA_LOAD_CHUNK_DAYS })),
+  requestAgendaScrollToDate: (date) =>
+    set((state) => {
+      const requiredDays = differenceInCalendarDays(startOfDay(date), startOfDay(new Date())) + 1;
+      return {
+        agendaWindowDays: Math.max(state.agendaWindowDays, requiredDays),
+        agendaScrollTargetDate: date,
+        agendaScrollTargetSignal: state.agendaScrollTargetSignal + 1,
+      };
+    }),
   setSelectedDate: (date) => set({ selectedDate: date }),
   setActiveView: (view) => set({ activeView: view }),
   setActiveCalendarSetId: (id) => set({ activeCalendarSetId: id }),
