@@ -463,9 +463,28 @@ func New(logger *slog.Logger, authHandler *handlers.AuthHandler, calendarHandler
 	if err != nil {
 		return nil, fmt.Errorf("build spa handler: %w", err)
 	}
-	r.Handle("/*", spaHandler)
+	r.Handle("/*", calDAVRootRedirect(spaHandler))
 
 	return r, nil
+}
+
+// calDAVRootRedirect sends a WebDAV request against the server root on to
+// /.well-known/caldav, which authenticates and redirects to the caller's
+// principal. macOS Calendar can fall back to polling "/" as its principal;
+// without this, the SPA answered that PROPFIND with index.html and the
+// client reported "The request to the server failed". Everything else
+// (including GET /) reaches next unchanged.
+func calDAVRootRedirect(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/" {
+			switch r.Method {
+			case "PROPFIND", "REPORT", http.MethodOptions:
+				http.Redirect(w, r, "/.well-known/caldav", http.StatusPermanentRedirect)
+				return
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func requestLogger(logger *slog.Logger) func(http.Handler) http.Handler {

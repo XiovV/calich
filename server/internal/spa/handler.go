@@ -1,6 +1,9 @@
 // Package spa serves an embedded single-page-app build: existing files are
 // served directly, and any other path falls back to index.html so
-// client-side routing survives a refresh or deep link.
+// client-side routing survives a refresh or deep link. Only GET and HEAD
+// are answered: any other method gets 405, so a stray WebDAV probe (a
+// PROPFIND that missed /dav) sees a clear failure instead of a 200 HTML
+// page it can't parse.
 package spa
 
 import (
@@ -19,6 +22,12 @@ func New(distFS fs.FS) (http.Handler, error) {
 	fileServer := http.FileServerFS(distFS)
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			w.Header().Set("Allow", "GET, HEAD")
+			http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+			return
+		}
+
 		path := strings.TrimPrefix(r.URL.Path, "/")
 		if path == "" {
 			path = "index.html"
