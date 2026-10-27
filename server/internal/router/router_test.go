@@ -107,3 +107,73 @@ func TestRouter_VersionIsPublicAndNotShadowedBySPACatchAll(t *testing.T) {
 		t.Fatalf("expected a non-empty version label, got %#v", body)
 	}
 }
+
+// macOS Calendar can end up polling the server root as its principal: a
+// PROPFIND or OPTIONS on "/" must be sent into CalDAV discovery rather than
+// answered with index.html, which the client reports as "The request to the
+// server failed". GET / still serves the SPA.
+func TestRouter_DAVRequestOnRootRedirectsToWellKnown(t *testing.T) {
+	r := newTestRouter(t)
+
+	srv := httptest.NewServer(r)
+	defer srv.Close()
+
+	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
+	}}
+
+	for _, method := range []string{"PROPFIND", "REPORT", http.MethodOptions} {
+		req, err := http.NewRequest(method, srv.URL+"/", nil)
+		if err != nil {
+			t.Fatalf("build %s /: %v", method, err)
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatalf("%s /: %v", method, err)
+		}
+		resp.Body.Close()
+
+		if resp.StatusCode != http.StatusPermanentRedirect {
+			t.Fatalf("%s /: expected 308, got %d", method, resp.StatusCode)
+		}
+		if got := resp.Header.Get("Location"); got != "/.well-known/caldav" {
+			t.Fatalf("%s /: expected Location /.well-known/caldav, got %q", method, got)
+		}
+	}
+
+	resp, err := client.Get(srv.URL + "/")
+	if err != nil {
+		t.Fatalf("GET /: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /: expected 200 (SPA), got %d", resp.StatusCode)
+	}
+}
+
+// Following the root redirect with no credentials must land on the CalDAV
+// auth challenge, not the SPA — that 401 is what makes a native client send
+// its App password and rediscover its principal.
+func TestRouter_RootPropfindReachesCalDAVAuthChallenge(t *testing.T) {
+	r := newTestRouter(t)
+
+	srv := httptest.NewServer(r)
+	defer srv.Close()
+
+	req, err := http.NewRequest("PROPFIND", srv.URL+"/", nil)
+	if err != nil {
+		t.Fatalf("build PROPFIND /: %v", err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("PROPFIND /: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected 401 from /.well-known/caldav, got %d", resp.StatusCode)
+	}
+	if resp.Header.Get("WWW-Authenticate") == "" {
+		t.Fatalf("expected a WWW-Authenticate challenge")
+	}
+}

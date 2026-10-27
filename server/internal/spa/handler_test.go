@@ -93,3 +93,38 @@ func TestNew_MissingIndexHTML(t *testing.T) {
 		t.Fatalf("expected an error when index.html is missing")
 	}
 }
+
+func TestHandler_RejectsNonGetMethods(t *testing.T) {
+	h, err := New(testFS())
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	for _, method := range []string{"PROPFIND", http.MethodPost, http.MethodOptions} {
+		req := httptest.NewRequest(method, "/.well-known/carddav", nil)
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusMethodNotAllowed {
+			t.Fatalf("%s: expected 405, got %d", method, rec.Code)
+		}
+		if got := rec.Header().Get("Allow"); got != "GET, HEAD" {
+			t.Fatalf("%s: expected Allow: GET, HEAD, got %q", method, got)
+		}
+	}
+}
+
+func TestHandler_ServesHead(t *testing.T) {
+	h, err := New(testFS())
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodHead, "/week", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+}
